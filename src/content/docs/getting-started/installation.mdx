@@ -1,0 +1,274 @@
+---
+title: Installation
+description: Step-by-step guide to installing and configuring Sanctum on your Mac Mini hub node.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+This guide walks through setting up a Sanctum hub node on a Mac Mini. By the end, you will have the config directory, instance configuration, generated LaunchAgents, and the dashboard running.
+
+<Aside type="note">
+  Make sure you have completed all the [Requirements](/getting-started/requirements/) before starting. You will need Homebrew, Node.js 22+, Python 3, Docker Desktop, and UTM installed.
+</Aside>
+
+## Create the Sanctum Home Directory
+
+<Steps>
+
+1. **Create the directory structure.**
+
+   Sanctum stores all configuration, templates, and runtime data under `~/.sanctum`.
+
+   ```bash
+   mkdir -p ~/.sanctum/{templates/launchagents,tests,lib,scripts}
+   ```
+
+2. **Copy the example configuration.**
+
+   The example file is an annotated template that documents every available option.
+
+   ```bash
+   cp ~/.sanctum/instance.yaml.example ~/.sanctum/instance.yaml
+   ```
+
+   <Aside type="tip">
+     If you are setting up from a fresh clone, the example file is included in the Sanctum repository under `config/instance.yaml.example`.
+   </Aside>
+
+3. **Set your node identity.**
+
+   Each node needs a single-line identity file that tells the system which node it is.
+
+   ```bash
+   echo "your-home-name" > ~/.sanctum/.node_id
+   ```
+
+   Use a short, lowercase slug. This value must match a key under the `nodes` section of your `instance.yaml`.
+
+</Steps>
+
+## Configure instance.yaml
+
+Open `~/.sanctum/instance.yaml` in your editor. The file is organized into these top-level sections:
+
+```yaml
+# Instance identity
+instance:
+  name: "Your Home Name"
+  slug: "your-home-name"
+
+# Node topology
+nodes:
+  your-home-name:
+    type: hub
+    host: 192.168.1.10
+    # ...
+
+# Services and their ports
+services:
+  gateway:
+    enabled: true
+    port: 18789
+  homeassistant:
+    enabled: true
+    port: 8123
+  # ...
+
+# VM configuration
+vm:
+  ip: 10.10.10.10
+  bridge_ip: 10.10.10.1
+  ssh_user: ubuntu
+  # ...
+
+# Secret management
+secrets:
+  backend: keychain  # "keychain" on Mac, "sops" on VM
+  rotation_day: 1    # Day of month for auto-rotation
+```
+
+<Aside type="caution">
+  Do not put actual secrets (API keys, tokens, passwords) in `instance.yaml`. The config file references secret names that are resolved at runtime from macOS Keychain or SOPS-encrypted files. See the [Secrets Management](/guides/secrets/) guide for details.
+</Aside>
+
+### Key Sections to Edit
+
+At minimum, configure the following for your environment:
+
+| Section | What to Set |
+|---------|-------------|
+| `instance.name` | Human-readable name for your home |
+| `instance.slug` | URL-safe lowercase slug |
+| `nodes` | At least one hub node with its LAN IP |
+| `services` | Enable or disable services based on what you need |
+| `vm.ip` | Your VM's static IP (default: `10.10.10.10`) |
+
+## Install the Shell Library
+
+The shell library provides helper functions used by scripts and LaunchAgents.
+
+<Steps>
+
+1. **Source the library in your shell profile.**
+
+   Add this line to your `~/.zshrc` (or `~/.bashrc`):
+
+   ```bash
+   source ~/.sanctum/lib/config.sh
+   ```
+
+2. **Reload your shell.**
+
+   ```bash
+   source ~/.zshrc
+   ```
+
+3. **Verify the library is loaded.**
+
+   ```bash
+   sanctum_get instance.slug
+   ```
+
+   This should print your instance slug. If it does, the config library is working.
+
+</Steps>
+
+The shell library provides these functions:
+
+| Function | Purpose |
+|----------|---------|
+| `sanctum_get <key>` | Read a value from instance.yaml |
+| `sanctum_slug` | Shortcut for the instance slug |
+| `sanctum_home` | Returns the Sanctum home directory path |
+| `sanctum_vm_ssh <command>` | Run a command on the VM via SSH |
+| `sanctum_enabled <service>` | Check if a service is enabled |
+| `sanctum_expand <template>` | Expand `{{PLACEHOLDER}}` variables in a template |
+
+## Generate LaunchAgents
+
+Sanctum uses macOS LaunchAgents to manage services. Rather than maintaining individual plist files by hand, you generate them from templates.
+
+<Steps>
+
+1. **Review the templates.**
+
+   Templates live in `~/.sanctum/templates/launchagents/`. Each template uses `{{PLACEHOLDER}}` syntax for values pulled from `instance.yaml` and macOS Keychain.
+
+2. **Run the generator.**
+
+   ```bash
+   # Preview what will be generated (no files written)
+   bash ~/.sanctum/generate-plists.sh --dry-run
+
+   # Generate for real
+   bash ~/.sanctum/generate-plists.sh
+   ```
+
+   The generator does the following:
+   - Reads each template from `~/.sanctum/templates/launchagents/`
+   - Expands placeholders with values from `instance.yaml`
+   - Pulls tokens from macOS Keychain where referenced
+   - Skips templates for disabled services
+   - Writes rendered plists to `~/Library/LaunchAgents/`
+
+3. **Load the generated agents.**
+
+   ```bash
+   # Load all Sanctum LaunchAgents
+   for plist in ~/Library/LaunchAgents/com.sanctum.*.plist; do
+     launchctl load "$plist"
+   done
+   ```
+
+</Steps>
+
+<Aside type="tip">
+  Always run with `--dry-run` first to verify the output before writing plists. The dry run prints each rendered plist to stdout without touching the filesystem.
+</Aside>
+
+## Set Up the Dashboard
+
+The dashboard is a web interface that displays the status of all services, nodes, and agents.
+
+<Steps>
+
+1. **Install dependencies.**
+
+   ```bash
+   cd ~/.sanctum/dashboard
+   npm install
+   ```
+
+2. **Build and start.**
+
+   <Tabs>
+     <TabItem label="Development">
+       ```bash
+       npm run dev
+       ```
+       The dashboard will be available at `http://localhost:3001`.
+     </TabItem>
+     <TabItem label="Production">
+       ```bash
+       npm run build
+       npm start
+       ```
+       In production, the dashboard LaunchAgent handles startup automatically. The generator creates the appropriate plist if the dashboard service is enabled in `instance.yaml`.
+     </TabItem>
+   </Tabs>
+
+3. **Verify the config endpoint.**
+
+   The dashboard serves instance configuration (with secrets excluded) at its API endpoint:
+
+   ```bash
+   curl -s http://localhost:3001/api/config | python3 -m json.tool
+   ```
+
+   You should see your instance configuration as JSON.
+
+</Steps>
+
+## Set Up the VM
+
+If you plan to run VM workloads (agent orchestration, knowledge graph), set up the Ubuntu VM.
+
+<Steps>
+
+1. **Create the VM in UTM.**
+
+   Use the settings from the [Requirements](/getting-started/requirements/) page. Install Ubuntu 24.04 LTS with SSH enabled.
+
+2. **Configure networking.**
+
+   The Mac needs to set the bridge IP each time the VM starts. This is handled by the UTM autostart LaunchAgent, which runs:
+
+   ```bash
+   sudo ifconfig bridge100 10.10.10.1/24
+   ```
+
+   A sudoers entry at `/etc/sudoers.d/vmnet-bridge` allows this without a password prompt.
+
+3. **Set the VM's static IP.**
+
+   Inside the VM, configure a static IP of `10.10.10.10` on the vmnet interface using netplan or your preferred method.
+
+4. **Test connectivity.**
+
+   ```bash
+   # From Mac
+   ssh ubuntu@10.10.10.10
+
+   # From VM
+   ping 10.10.10.1
+   ```
+
+</Steps>
+
+<Aside type="caution">
+  The VM uses Host Only networking and cannot reach the internet directly. All package installation and updates must be done through the Mac (via apt proxy, pre-downloaded packages, or rsync).
+</Aside>
+
+## Next Steps
+
+With the base installation complete, proceed to [First Run](/getting-started/first-run/) to verify everything is working and complete initial setup.

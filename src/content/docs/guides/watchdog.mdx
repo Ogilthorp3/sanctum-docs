@@ -1,0 +1,141 @@
+---
+title: Health Monitoring & Watchdog
+description: Automated health monitoring with self-healing capabilities and configurable notification routing.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The watchdog is Sanctum's automated health monitoring system. It runs on a fixed schedule, detects failures, attempts self-healing through the service-doctor, and delivers notifications through multiple channels.
+
+## How It Works
+
+<Steps>
+1. **Check health** — The watchdog runs the full health test suite against all monitored services.
+2. **Evaluate failures** — Any failing checks are collected with their severity and diagnostic output.
+3. **Auto-fix** — If `auto_fix` is enabled, the watchdog invokes `service-doctor --fix` for each failing service.
+4. **Settle delay** — Waits for the configured `settle_delay` period to allow services to stabilize after repair.
+5. **Re-check** — Runs the health suite again to confirm whether repairs succeeded.
+6. **Notify** — Sends notifications for any services that remain in a failed state after the fix attempt.
+</Steps>
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│ Health Check │────→│ Failures?    │─No─→│ All Clear   │
+└─────────────┘     └──────────────┘     └─────────────┘
+                           │ Yes
+                           ▼
+                    ┌──────────────┐
+                    │ service-     │
+                    │ doctor --fix │
+                    └──────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐
+                    │ Settle Delay │
+                    └──────────────┘
+                           │
+                           ▼
+                    ┌──────────────┐     ┌─────────────┐
+                    │ Re-check     │─OK─→│ Fixed       │
+                    └──────────────┘     └─────────────┘
+                           │ Still failing
+                           ▼
+                    ┌──────────────┐
+                    │ Notify       │
+                    └──────────────┘
+```
+
+## Schedule
+
+The watchdog runs every 10 minutes via a LaunchAgent:
+
+| Property         | Value                          |
+|------------------|--------------------------------|
+| Label            | `com.sanctum.watchdog`        |
+| StartInterval    | 600 (seconds)                  |
+| RunAtLoad        | true                           |
+
+The first execution occurs at LaunchAgent load time (typically at login or boot), then repeats at the configured interval.
+
+## Notification Deduplication
+
+To avoid flooding notification channels during extended outages, the watchdog implements deduplication. When a service fails and a notification is sent, subsequent failures of the **same service** are suppressed for the duration of the `dedup_window`.
+
+The dedup state is tracked in memory between invocations using a timestamp file. Each service failure is keyed by service name and the dedup window is evaluated against the last notification time for that key.
+
+```
+First failure of "openclaw-gateway" → Notify ✓
+Same failure 5 min later             → Suppressed (within 30 min window)
+Same failure 35 min later            → Notify ✓ (window expired)
+Different service fails               → Notify ✓ (independent key)
+```
+
+<Aside type="caution">
+  If the watchdog process itself fails, there is no meta-monitor. The LaunchAgent will restart it on the next interval, but a gap in monitoring may occur. Check the watchdog's own logs if you suspect missed alerts.
+</Aside>
+
+## Configuration
+
+All watchdog settings live in `instance.yaml` under the `services.watchdog` key:
+
+```yaml
+services:
+  watchdog:
+    enabled: true
+    settle_delay: 30        # seconds to wait after fix attempt
+    auto_fix: true           # enable service-doctor auto-repair
+    dedup_window: 1800       # seconds (30 min) to suppress repeat alerts
+```
+
+| Setting        | Type    | Default | Description                                        |
+|----------------|---------|---------|----------------------------------------------------|
+| `enabled`      | boolean | true    | Enable or disable the watchdog entirely             |
+| `settle_delay` | number  | 30      | Seconds to wait after repair before re-checking     |
+| `auto_fix`     | boolean | true    | Whether to invoke service-doctor on failures        |
+| `dedup_window` | number  | 1800    | Seconds to suppress duplicate notifications         |
+
+## Notification Channels
+
+The watchdog delivers alerts through three independent channels. All channels fire in parallel when a notification is triggered.
+
+### macOS Notifications
+
+Uses `osascript` to display a native macOS notification with the service name and failure summary. These appear in Notification Center and are useful when physically at the machine.
+
+### Dashboard Banner
+
+Writes alert data to the health API, which the command center dashboard polls. Active alerts appear as a banner at the top of the dashboard with severity coloring and a timestamp.
+
+### Signal Messenger
+
+Sends a message to a configured Signal group using the apple-toolkit skill's Signal integration. This provides mobile-reachable alerts for critical failures when away from the LAN.
+
+## Service Doctor Integration
+
+The `service-doctor` skill is the repair engine invoked by the watchdog. It knows how to restart LaunchAgents, restart systemd services on the VM via SSH, restart Docker containers, and reset network interfaces.
+
+When `auto_fix` is enabled, the watchdog passes each failing service to service-doctor with the `--fix` flag. The doctor applies the appropriate repair action based on the service type and returns a success or failure status.
+
+<Aside type="tip">
+  You can run `service-doctor --fix` manually at any time to repair a specific service without waiting for the watchdog cycle.
+</Aside>
+
+## Health Test Suite
+
+The test suite covers all critical Sanctum subsystems:
+
+| Test                  | What It Checks                                      |
+|-----------------------|-----------------------------------------------------|
+| VM reachable          | SSH connectivity to 10.10.10.10                     |
+| Bridge100 IP          | bridge100 interface has IP 10.10.10.1               |
+| Gateway (Mac)         | Port 18789 responds                                 |
+| Gateway (VM)          | Port on VM responds via SSH                         |
+| Home Assistant        | Port 8123 returns HTTP 200                          |
+| Docker running        | Docker daemon is responsive                         |
+| Tailscale connected   | `tailscale status` succeeds                         |
+| Cloudflare tunnel     | Tunnel process is alive                             |
+| LM Studio            | Port 1234 responds with model list                  |
+| XTTS server          | Port 8020 responds                                  |
+| Firewalla bridge     | Port 18094 responds                                 |
+
+Tests return structured results with pass/fail status, latency, and diagnostic messages that feed into both the notification system and the dashboard.

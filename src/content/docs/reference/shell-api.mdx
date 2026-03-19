@@ -1,0 +1,489 @@
+---
+title: Shell API Reference
+description: Complete reference for the sanctum_* shell functions provided by config.sh and notify.sh.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Sanctum shell library provides a set of `sanctum_*` functions for reading instance configuration, querying node topology, and interacting with the Sanctum infrastructure from Bash scripts and LaunchAgent wrappers.
+
+## Setup
+
+Source the config library at the top of any script:
+
+```bash
+source ~/.sanctum/lib/config.sh
+```
+
+For notification support, also source:
+
+```bash
+source ~/.sanctum/lib/notify.sh
+```
+
+<Aside type="note" title="Backwards Compatibility">
+All functions are also available under the legacy `fos_*` prefix. For example, `fos_get` is an alias for `sanctum_get`, `fos_enabled` for `sanctum_enabled`, and so on. The `fos_*` aliases will remain indefinitely but new code should use `sanctum_*`.
+</Aside>
+
+---
+
+## Config Functions
+
+### sanctum_get
+
+Read any value from the instance config using dot-notation path.
+
+```bash
+sanctum_get <key_path>
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `key_path` | Dot-delimited path into `instance.yaml` |
+
+**Returns:** The value as a string. Empty string if the key does not exist.
+
+```bash
+# Read a scalar value
+port=$(sanctum_get services.gateway.port)
+echo "$port"  # 18789
+
+# Read the instance slug
+sanctum_get instance.slug  # haus
+
+# Read a nested value
+sanctum_get network.vm_ip  # 10.10.10.10
+```
+
+---
+
+### sanctum_enabled
+
+Check whether a config path evaluates to `true`.
+
+```bash
+sanctum_enabled <key_path>
+```
+
+**Returns:** Exit code 0 if the value is `true`, non-zero otherwise.
+
+```bash
+if sanctum_enabled services.gateway.enabled; then
+  echo "Gateway is active"
+fi
+
+if sanctum_enabled services.signal_bridge.enabled; then
+  echo "Signal bridge is active"
+else
+  echo "Signal bridge is disabled"
+fi
+```
+
+---
+
+### sanctum_expand
+
+Expand `{{PLACEHOLDER}}` tokens in a string using values from the instance config. Used primarily by `generate-plists.sh` for template rendering.
+
+```bash
+sanctum_expand <template_string>
+```
+
+```bash
+expanded=$(sanctum_expand "User is {{users.mac}} at {{network.lan_ip}}")
+echo "$expanded"  # User is bert at 192.168.1.10
+```
+
+---
+
+### sanctum_home
+
+Return the Sanctum home directory.
+
+```bash
+sanctum_home
+```
+
+**Returns:** The path to `~/.sanctum`.
+
+```bash
+config_dir=$(sanctum_home)
+echo "$config_dir"  # /Users/neo/.sanctum
+```
+
+---
+
+### sanctum_slug
+
+Return the instance slug.
+
+```bash
+sanctum_slug
+```
+
+```bash
+sanctum_slug  # haus
+```
+
+---
+
+### sanctum_name
+
+Return the human-readable instance name.
+
+```bash
+sanctum_name
+```
+
+```bash
+sanctum_name  # Manoir Nepveu
+```
+
+---
+
+## Network Functions
+
+### sanctum_vm_ip
+
+Return the VM IP address.
+
+```bash
+sanctum_vm_ip
+```
+
+```bash
+sanctum_vm_ip  # 10.10.10.10
+```
+
+---
+
+### sanctum_mac_ip
+
+Return the Mac bridge IP (the Mac-side IP on the host-only network).
+
+```bash
+sanctum_mac_ip
+```
+
+```bash
+sanctum_mac_ip  # 10.10.10.1
+```
+
+---
+
+### sanctum_vm_ssh
+
+Return the SSH alias for connecting to the VM.
+
+```bash
+sanctum_vm_ssh
+```
+
+```bash
+ssh $(sanctum_vm_ssh) 'uptime'
+# equivalent to: ssh openclaw 'uptime'
+```
+
+---
+
+### sanctum_vm_user
+
+Return the VM username.
+
+```bash
+sanctum_vm_user
+```
+
+```bash
+sanctum_vm_user  # ubuntu
+```
+
+---
+
+## Identity Functions
+
+### sanctum_whoami
+
+Return the current node identity (read from `~/.sanctum/.node_id`).
+
+```bash
+sanctum_whoami
+```
+
+```bash
+sanctum_whoami  # manoir
+```
+
+---
+
+### sanctum_is_node
+
+Check if the current machine is a specific node.
+
+```bash
+sanctum_is_node <node_id>
+```
+
+**Returns:** Exit code 0 if the current node matches, non-zero otherwise.
+
+```bash
+if sanctum_is_node manoir; then
+  echo "Running on the hub"
+fi
+```
+
+---
+
+### sanctum_my_type
+
+Return the node type of the current machine.
+
+```bash
+sanctum_my_type
+```
+
+```bash
+sanctum_my_type  # hub
+```
+
+---
+
+## Node Topology Functions
+
+These functions query the `nodes` section of the instance config. They accept a `<node_id>` argument (e.g., `manoir`, `chalet`).
+
+### sanctum_node_type
+
+Return the type of a node.
+
+```bash
+sanctum_node_type <node_id>
+```
+
+```bash
+sanctum_node_type manoir   # hub
+sanctum_node_type chalet   # satellite
+```
+
+---
+
+### sanctum_node_host
+
+Return the LAN hostname or IP of a node.
+
+```bash
+sanctum_node_host <node_id>
+```
+
+```bash
+sanctum_node_host manoir  # 192.168.1.10
+sanctum_node_host chalet  # chalet.local
+```
+
+---
+
+### sanctum_node_ts_ip
+
+Return the Tailscale IP of a node.
+
+```bash
+sanctum_node_ts_ip <node_id>
+```
+
+```bash
+sanctum_node_ts_ip manoir  # 100.0.0.25
+```
+
+---
+
+### sanctum_node_ts_name
+
+Return the Tailscale device name of a node.
+
+```bash
+sanctum_node_ts_name <node_id>
+```
+
+```bash
+sanctum_node_ts_name manoir  # berts-mac-mini-m4-pro
+```
+
+---
+
+### sanctum_node_user
+
+Return the SSH username for a node.
+
+```bash
+sanctum_node_user <node_id>
+```
+
+```bash
+sanctum_node_user manoir  # bert
+```
+
+---
+
+### sanctum_node_online
+
+Check if a node is reachable (via Tailscale ping or LAN ping).
+
+```bash
+sanctum_node_online <node_id>
+```
+
+**Returns:** Exit code 0 if the node responds, non-zero otherwise.
+
+```bash
+if sanctum_node_online chalet; then
+  echo "Chalet is reachable"
+fi
+```
+
+---
+
+### sanctum_node_ssh
+
+SSH to a node over the LAN.
+
+```bash
+sanctum_node_ssh <node_id> [command...]
+```
+
+```bash
+# Interactive shell
+sanctum_node_ssh chalet
+
+# Run a remote command
+sanctum_node_ssh chalet 'uptime'
+```
+
+---
+
+### sanctum_node_ssh_ts
+
+SSH to a node over Tailscale (for remote/off-LAN access).
+
+```bash
+sanctum_node_ssh_ts <node_id> [command...]
+```
+
+```bash
+sanctum_node_ssh_ts chalet 'df -h'
+```
+
+---
+
+### sanctum_node_vm_ssh
+
+SSH to the VM on a specific node (if that node has a VM).
+
+```bash
+sanctum_node_vm_ssh <node_id> [command...]
+```
+
+```bash
+sanctum_node_vm_ssh manoir 'systemctl --user status openclaw-gateway'
+```
+
+---
+
+### sanctum_node_enabled
+
+Check if a specific service is enabled on a node.
+
+```bash
+sanctum_node_enabled <node_id> <service_name>
+```
+
+**Returns:** Exit code 0 if the service is enabled on that node.
+
+```bash
+if sanctum_node_enabled chalet home_assistant; then
+  echo "Chalet runs HA"
+fi
+```
+
+---
+
+### sanctum_node_service
+
+Get a service config value for a specific node.
+
+```bash
+sanctum_node_service <node_id> <service_name> <key>
+```
+
+```bash
+sanctum_node_service manoir gateway port  # 18789
+```
+
+---
+
+### sanctum_node_hub
+
+Return the node ID of the hub node.
+
+```bash
+sanctum_node_hub
+```
+
+```bash
+hub=$(sanctum_node_hub)
+echo "$hub"  # manoir
+```
+
+---
+
+## Notification Functions
+
+Source `~/.sanctum/lib/notify.sh` for notification support.
+
+### sanctum_notify
+
+Send a notification through configured channels (macOS Notification Center, agent message, etc.).
+
+```bash
+sanctum_notify <title> <message> [priority]
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `title` | Notification title |
+| `message` | Notification body |
+| `priority` | Optional: `low`, `normal` (default), `high` |
+
+```bash
+source ~/.sanctum/lib/notify.sh
+
+sanctum_notify "Backup Complete" "All files backed up successfully"
+sanctum_notify "Disk Warning" "Boot volume is 90% full" high
+```
+
+---
+
+## Complete Script Example
+
+```bash
+#!/bin/bash
+source ~/.sanctum/lib/config.sh
+source ~/.sanctum/lib/notify.sh
+
+echo "Instance: $(sanctum_name) [$(sanctum_slug)]"
+echo "Node: $(sanctum_whoami) ($(sanctum_my_type))"
+echo "VM: $(sanctum_vm_user)@$(sanctum_vm_ip)"
+
+if sanctum_enabled services.gateway.enabled; then
+  port=$(sanctum_get services.gateway.port)
+  echo "Gateway running on port $port"
+fi
+
+hub=$(sanctum_node_hub)
+echo "Hub node: $hub ($(sanctum_node_host $hub))"
+
+if sanctum_node_online chalet; then
+  sanctum_notify "Chalet Status" "Chalet node is online"
+else
+  sanctum_notify "Chalet Status" "Chalet node is offline" high
+fi
+```

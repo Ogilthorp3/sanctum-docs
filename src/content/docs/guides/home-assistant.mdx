@@ -1,0 +1,165 @@
+---
+title: Home Assistant Integration
+description: Running Home Assistant in Docker on the Mac Mini with HomeKit, Sonos, and remote access via Cloudflare tunnel.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Home Assistant is Sanctum's home automation hub. It runs as a Docker container on the Mac Mini with bridge networking, integrating Sonos speakers, HomeKit devices, and providing remote access through a Cloudflare tunnel.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│ Mac Mini                                      │
+│                                               │
+│  ┌─────────────────────────────────────────┐  │
+│  │ Docker (bridge network)                 │  │
+│  │                                         │  │
+│  │  ┌─────────────────────────────────┐    │  │
+│  │  │ Home Assistant Container        │    │  │
+│  │  │  Port 8123 → Web UI            │    │  │
+│  │  │  Port 21063 → HomeKit Bridge   │    │  │
+│  │  │  SSH agent → VM access         │    │  │
+│  │  └─────────────────────────────────┘    │  │
+│  └─────────────────────────────────────────┘  │
+│                                               │
+│  Cloudflare Tunnel → ha.nepveu.name           │
+└──────────────────────────────────────────────┘
+```
+
+HA was migrated from the VM to Mac Docker because SLIRP networking on the VM proved unreliable for the number of integrations and real-time device communication required.
+
+## Docker Configuration
+
+The container uses bridge networking rather than `--network=host` because host networking is not supported on macOS Docker.
+
+### Key Settings
+
+| Setting           | Value                                            |
+|-------------------|--------------------------------------------------|
+| Image             | `ghcr.io/home-assistant/home-assistant:stable`   |
+| Network mode      | bridge                                           |
+| Web UI port       | 8123                                             |
+| HomeKit port      | 21063                                            |
+| Config directory   | `~/.openclaw/homeassistant/`                     |
+| Restart policy    | unless-stopped                                   |
+
+### Compose File
+
+The `compose.yaml` at `~/.openclaw/homeassistant/` defines the container with these essential directives:
+
+- **Port mappings**: 8123:8123 (web), 21063:21063 (HomeKit)
+- **Volume mount**: Local config directory into `/config`
+- **Extra hosts**: `host.docker.internal:host-gateway` for reaching Mac services from inside the container
+- **SSH agent socket**: `/run/host-services/ssh-auth.sock` mounted for agent forwarding to the VM
+
+Docker Desktop is configured with auto-start enabled, ensuring HA comes up after a reboot without manual intervention.
+
+## Sonos Integration
+
+Sanctum manages 10 Sonos speakers. Because the HA container runs in bridge networking mode, mDNS/SSDP discovery does not work. All speakers must be configured as known hosts in `configuration.yaml`.
+
+```yaml
+sonos:
+  media_player:
+    hosts:
+      - 192.168.1.101
+      - 192.168.1.102
+      # ... all 10 speaker IPs
+```
+
+<Aside type="caution">
+  If a Sonos speaker changes IP address (e.g., after a router reboot), it will become unreachable until the `configuration.yaml` is updated with the new IP. Use Firewalla DHCP reservations to keep speaker IPs stable.
+</Aside>
+
+### Text-to-Speech on Sonos
+
+The XTTS-v2 TTS server runs on the Mac (port 8020, using MPS GPU acceleration). To play speech on Sonos speakers, use the `media_player.play_media` service with a `media-source://tts/` URI and the `announce: true` flag.
+
+<Aside type="note">
+  The `tts.speak` service does not dispatch audio to Sonos. Always use `media_player.play_media` with a TTS media source URI for Sonos announcements.
+</Aside>
+
+## SSH Agent Forwarding
+
+The HA container needs SSH access to the VM for certain automations and scripts. This is accomplished by mounting the Mac's SSH agent socket into the container.
+
+The SSH agent socket at `/run/host-services/ssh-auth.sock` is mapped as a volume in the compose file. Scripts inside the container can then SSH to `ubuntu@10.10.10.10` using the Mac's loaded SSH keys without storing any private keys in the container.
+
+SSH wrapper scripts live at `~/.openclaw/ha-scripts/` and exec SSH directly to the VM with agent forwarding enabled.
+
+## Network Configuration
+
+The `configuration.yaml` includes network-specific settings for the bridge networking environment:
+
+```yaml
+homeassistant:
+  internal_url: "http://192.168.1.10:8123"
+  external_url: "https://ha.nepveu.name"
+
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 172.16.0.0/12
+    - 192.168.64.0/20
+```
+
+The trusted proxies cover Docker's internal bridge subnets, allowing HA to correctly identify client IPs when accessed through the Cloudflare tunnel or Docker's bridge network.
+
+## Remote Access
+
+External access to HA is provided through a Cloudflare tunnel running as a LaunchAgent on the Mac.
+
+| Component            | Details                               |
+|----------------------|---------------------------------------|
+| Tunnel name          | haus                         |
+| LaunchAgent          | `com.cloudflare.tunnel`               |
+| External URL         | `https://ha.nepveu.name`              |
+| Route                | `ha.nepveu.name` to `localhost:8123`  |
+| DNS                  | Cloudflare managed (nepveu.name)      |
+
+The tunnel provides HTTPS termination and Cloudflare Zero Trust access controls without exposing any ports to the public internet.
+
+## HomeKit Bridge
+
+The HomeKit bridge runs on port 21063, allowing Apple Home app control of HA-managed devices.
+
+| Setting        | Value       |
+|----------------|-------------|
+| Port           | 21063       |
+| Pairing code   | 840-97-709  |
+
+HomeKit entities are configured within HA's integration settings. The bridge exposes selected devices to Apple Home while keeping the full HA device list available through the web UI.
+
+## Management
+
+### Starting and Stopping
+
+```bash
+# Start HA
+cd ~/.openclaw/homeassistant && docker compose up -d
+
+# Stop HA
+cd ~/.openclaw/homeassistant && docker compose down
+
+# View logs
+docker logs -f homeassistant
+
+# Restart
+cd ~/.openclaw/homeassistant && docker compose restart
+```
+
+### Rollback
+
+If the Mac Docker instance has issues, a rollback path exists to the VM:
+
+<Steps>
+1. Stop the Mac container: `docker compose down`
+2. SSH to the VM: `ssh openclaw`
+3. Start the VM instance: `~/.openclaw/ha-docker.sh recreate`
+</Steps>
+
+<Aside type="note">
+  The VM still has a preserved HA configuration at `~/.openclaw/homeassistant/`. The VM instance is stopped but not removed, making rollback straightforward.
+</Aside>

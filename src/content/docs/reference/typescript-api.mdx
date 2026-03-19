@@ -1,0 +1,424 @@
+---
+title: TypeScript API Reference
+description: Reference for the Sanctum TypeScript configuration module used by the command center and dashboard.
+---
+
+The TypeScript config module at `command-center/lib/config.ts` provides typed access to the Sanctum instance configuration. It reads from the same `~/.sanctum/instance.yaml` file as the shell library and is used by the command center dashboard and any Node.js tooling.
+
+## Import
+
+```typescript
+import {
+  get,
+  getConfig,
+  isEnabled,
+  expand,
+  slug,
+  name,
+  vmSsh,
+  whoami,
+  isNode,
+  myNodeType,
+  nodeGet,
+  nodeSsh,
+  nodeSshTs,
+  nodeVmSsh,
+  getNodes,
+  getNodesByType,
+  isNodeOnline,
+  isNodeServiceEnabled,
+  nodeService,
+  nodeHub,
+  getSatellites,
+} from './lib/config';
+```
+
+---
+
+## Config Access
+
+### get()
+
+Read any value from the instance config by dot-notation path.
+
+```typescript
+function get(keyPath: string): string | undefined
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `keyPath` | `string` | Dot-delimited path into the config |
+
+```typescript
+const port = get('services.gateway.port');
+// "18789"
+
+const vmIp = get('network.vm_ip');
+// "10.10.10.10"
+
+const tz = get('instance.timezone');
+// "America/Montreal"
+```
+
+---
+
+### getConfig()
+
+Return the entire parsed configuration object.
+
+```typescript
+function getConfig(): SanctumConfig
+```
+
+```typescript
+const config = getConfig();
+console.log(config.instance.name);
+// "Manoir Nepveu"
+```
+
+---
+
+### isEnabled()
+
+Check whether a config path evaluates to `true`.
+
+```typescript
+function isEnabled(keyPath: string): boolean
+```
+
+```typescript
+if (isEnabled('services.gateway.enabled')) {
+  console.log('Gateway is active');
+}
+
+if (isEnabled('services.signal_bridge.enabled')) {
+  // ...
+}
+```
+
+---
+
+### expand()
+
+Expand `{{PLACEHOLDER}}` tokens in a template string using config values.
+
+```typescript
+function expand(template: string): string
+```
+
+```typescript
+const result = expand('SSH to {{network.vm_ip}} as {{users.vm}}');
+// "SSH to 10.10.10.10 as ubuntu"
+```
+
+---
+
+## Identity
+
+### slug()
+
+Return the instance slug.
+
+```typescript
+function slug(): string
+```
+
+```typescript
+slug();
+// "haus"
+```
+
+---
+
+### name()
+
+Return the human-readable instance name.
+
+```typescript
+function name(): string
+```
+
+```typescript
+name();
+// "Manoir Nepveu"
+```
+
+---
+
+### vmSsh()
+
+Return the SSH alias for the VM connection.
+
+```typescript
+function vmSsh(): string
+```
+
+```typescript
+vmSsh();
+// "openclaw"
+```
+
+---
+
+### whoami()
+
+Return the current node identity (read from `~/.sanctum/.node_id`).
+
+```typescript
+function whoami(): string
+```
+
+```typescript
+whoami();
+// "manoir"
+```
+
+---
+
+### isNode()
+
+Check if the current machine matches a given node identifier.
+
+```typescript
+function isNode(nodeId: string): boolean
+```
+
+```typescript
+if (isNode('manoir')) {
+  console.log('Running on the hub');
+}
+```
+
+---
+
+### myNodeType()
+
+Return the node type of the current machine.
+
+```typescript
+function myNodeType(): 'hub' | 'satellite' | 'mobile' | 'sensor'
+```
+
+```typescript
+myNodeType();
+// "hub"
+```
+
+---
+
+## Node Topology
+
+### nodeGet()
+
+Read a config value for a specific node.
+
+```typescript
+function nodeGet(nodeId: string, keyPath: string): string | undefined
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `nodeId` | `string` | Node identifier (e.g., `"manoir"`, `"chalet"`) |
+| `keyPath` | `string` | Dot-delimited path within the node config |
+
+```typescript
+nodeGet('manoir', 'tailscale_ip');
+// "100.0.0.25"
+
+nodeGet('chalet', 'type');
+// "satellite"
+
+nodeGet('manoir', 'host');
+// "192.168.1.10"
+```
+
+---
+
+### getNodes()
+
+Return all node IDs defined in the config.
+
+```typescript
+function getNodes(): string[]
+```
+
+```typescript
+getNodes();
+// ["manoir", "chalet"]
+```
+
+---
+
+### getNodesByType()
+
+Return node IDs filtered by type.
+
+```typescript
+function getNodesByType(type: string): string[]
+```
+
+```typescript
+getNodesByType('hub');
+// ["manoir"]
+
+getNodesByType('satellite');
+// ["chalet"]
+```
+
+---
+
+### getSatellites()
+
+Convenience function to return all satellite node IDs.
+
+```typescript
+function getSatellites(): string[]
+```
+
+```typescript
+getSatellites();
+// ["chalet"]
+```
+
+---
+
+### nodeHub()
+
+Return the node ID of the hub node.
+
+```typescript
+function nodeHub(): string
+```
+
+```typescript
+nodeHub();
+// "manoir"
+```
+
+---
+
+### isNodeOnline()
+
+Check if a node is reachable (async, uses ping/Tailscale check).
+
+```typescript
+async function isNodeOnline(nodeId: string): Promise<boolean>
+```
+
+```typescript
+const online = await isNodeOnline('chalet');
+if (online) {
+  console.log('Chalet is reachable');
+}
+```
+
+---
+
+### nodeSsh()
+
+Return the SSH connection string for a node over LAN.
+
+```typescript
+function nodeSsh(nodeId: string): string
+```
+
+```typescript
+nodeSsh('manoir');
+// "neo@192.168.1.10"
+```
+
+---
+
+### nodeSshTs()
+
+Return the SSH connection string for a node over Tailscale.
+
+```typescript
+function nodeSshTs(nodeId: string): string
+```
+
+```typescript
+nodeSshTs('chalet');
+// "neo@100.0.0.32"
+```
+
+---
+
+### nodeVmSsh()
+
+Return the SSH connection string for the VM on a specific node.
+
+```typescript
+function nodeVmSsh(nodeId: string): string
+```
+
+```typescript
+nodeVmSsh('manoir');
+// "ubuntu@10.10.10.10"
+```
+
+---
+
+## Node Services
+
+### isNodeServiceEnabled()
+
+Check if a service is enabled on a specific node.
+
+```typescript
+function isNodeServiceEnabled(nodeId: string, service: string): boolean
+```
+
+```typescript
+isNodeServiceEnabled('manoir', 'gateway');
+// true
+
+isNodeServiceEnabled('chalet', 'vm');
+// false
+```
+
+---
+
+### nodeService()
+
+Get a service config value for a node.
+
+```typescript
+function nodeService(nodeId: string, service: string, key: string): string | undefined
+```
+
+```typescript
+nodeService('manoir', 'gateway', 'port');
+// "18789"
+```
+
+---
+
+## Dashboard Integration
+
+The command center dashboard serves the instance config (with secrets excluded) at the `/api/config` endpoint:
+
+```typescript
+// server/index.ts
+import { getConfig, slug } from '../lib/config';
+
+app.get('/api/config', (req, res) => {
+  const config = getConfig();
+  // Strip secrets section before serving
+  const { secrets, ...safeConfig } = config;
+  res.json(safeConfig);
+});
+```
+
+Both `vite.config.ts` and `server/index.ts` read ports, paths, and SSH targets from the config module rather than using hardcoded values:
+
+```typescript
+// vite.config.ts
+import { get } from './lib/config';
+
+export default defineConfig({
+  server: {
+    port: Number(get('services.dashboard.dev_port')) || 3002,
+  },
+});
+```

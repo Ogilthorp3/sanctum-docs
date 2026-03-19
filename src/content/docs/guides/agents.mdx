@@ -1,0 +1,139 @@
+---
+title: AI Agent System
+description: Multi-agent architecture with specialized roles, model fallback chains, and cross-instance communication.
+---
+
+import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
+
+Sanctum runs a multi-agent AI system split across two platforms. Five specialized agents operate on the VM, and one agent runs on the Mac. Each agent has a defined role, access to shared skills, and participates in a coordinated intelligence network.
+
+## Agent Roster
+
+### VM Agents
+
+The VM hosts five agents, each with a distinct specialization:
+
+| Agent      | Role        | Responsibilities                                           |
+|------------|-------------|------------------------------------------------------------|
+| **Yoda**   | Main        | General intelligence, coordination, primary user interface  |
+| **Windu**  | Security    | Network monitoring, threat assessment, security briefings   |
+| **Qui-Gon**| Efficiency  | Resource optimization, automation suggestions, cost analysis|
+| **Cilghal**| Health      | Genomic analysis, health monitoring, wellness insights      |
+| **Mundi**  | Finance     | Financial tracking, budget analysis, investment monitoring  |
+
+All VM agents run through the OpenClaw gateway as a systemd user service. The gateway manages agent lifecycle, message routing, and plugin access.
+
+### Mac Agent
+
+| Agent       | Role | Responsibilities                              |
+|-------------|------|-----------------------------------------------|
+| **Jocasta** | CRM  | Contact management, relationship intelligence |
+
+Jocasta runs through the DenchClaw gateway on the Mac (port 18789) with its own configuration profile. It has direct access to Mac-native services and the Affinity CRM integration.
+
+## Model Configuration
+
+Agents use a tiered model strategy with automatic fallback to maintain availability during outages or rate limits.
+
+### Primary Model
+
+All agents default to **Claude** as the primary model via the Anthropic API. This provides the highest quality reasoning for complex tasks.
+
+### Fallback Chain
+
+When the primary model is unavailable, agents fall through a chain of alternatives via OpenRouter and local LLMs:
+
+<Steps>
+1. **Claude** (Anthropic API) — primary
+2. **Qwen 3.5 Plus** (OpenRouter) — first fallback
+3. **DeepSeek V3.2** (OpenRouter) — second fallback
+4. **MiniMax M2.5** (OpenRouter) — third fallback, with Presidio PII scrubbing
+5. **Local LLM** (LM Studio, port 1234) — final fallback, fully offline
+</Steps>
+
+<Aside type="note">
+  OpenRouter fallbacks that route through non-US providers use Presidio PII scrubbing to strip personally identifiable information before the prompt leaves the local network.
+</Aside>
+
+### Local Models
+
+LM Studio runs on the Mac Mini (port 1234) serving local models for offline operation and low-latency tasks:
+
+| Model                  | Use Case                    |
+|------------------------|-----------------------------|
+| Qwen 3.5 35B (A3B)    | General reasoning fallback  |
+
+The Council-27B MLX server (port 8899) provides a Qwen 3.5 27B model with LoRA adapters fine-tuned for each of the six agents, enabling personalized responses at the local tier.
+
+### LiteLLM Proxy
+
+A LiteLLM proxy (port 4001) provides an additional fallback path. When Anthropic returns billing errors, requests are automatically rerouted to OpenRouter through the proxy.
+
+## Gateway Architecture
+
+Each platform runs its own gateway instance:
+
+| Platform | Gateway     | Port  | Bind     | Config Location     |
+|----------|-------------|-------|----------|---------------------|
+| Mac      | DenchClaw   | 18789 | LAN      | `~/.openclaw/`      |
+| VM       | OpenClaw    | varies| LAN      | `~/.openclaw/`      |
+
+The VM gateway runs as a systemd user service with linger enabled, starting automatically at boot. It uses a SOPS wrapper script to decrypt secrets before launch.
+
+The Mac gateway runs as a LaunchAgent. Both gateways use the same OpenClaw codebase but with independent configurations.
+
+## Council Bridge
+
+The Council Bridge enables communication between Jocasta (Mac) and Yoda (VM). Since gateways block plaintext WebSocket connections to non-loopback IPs, all cross-instance communication routes through SSH.
+
+### Mac to VM
+
+```
+Jocasta → SSH to ubuntu@10.10.10.10 →
+  openclaw agent --agent main --message "..."
+```
+
+### VM to Mac
+
+```
+Yoda → SSH to neo@10.10.10.1 →
+  PATH=<node path> openclaw agent --agent main --message "..."
+```
+
+<Aside type="caution">
+  VM-to-Mac SSH requires an explicit PATH prefix because the fnm-managed Node.js installation is not in the default SSH PATH. The bridge handles this automatically.
+</Aside>
+
+The bridge skill maintains a heartbeat every 2 hours to confirm bidirectional connectivity. If the heartbeat fails, an alert is raised through the watchdog system.
+
+## Plugins
+
+Agents have access to shared plugins that extend their capabilities:
+
+| Plugin         | Description                                          |
+|----------------|------------------------------------------------------|
+| **Supermemory**| Persistent memory across conversations               |
+| **Neo4j KG**   | Knowledge graph via Graphiti (port 18093)            |
+
+Plugins are configured at the gateway level and available to all agents on that gateway instance.
+
+## Skills System
+
+Agents access executable skills from the shared skills repository. Skills provide domain-specific tools that agents can invoke during conversations. See the [Skills Development](/guides/skills/) guide for details on the skill system architecture.
+
+Skills are loaded from:
+- The built-in skills directory in the OpenClaw installation
+- Extra skills directories configured in `openclaw.json` (pointing to `~/Projects/openclaw-skills`)
+
+## Holocron Chat Interface
+
+The Holocron is a family-facing chat interface running on the Mac at port 19001. It uses a separate DenchClaw profile (`~/.openclaw-dench/`) with token authentication and LAN binding.
+
+| Setting    | Value                                    |
+|------------|------------------------------------------|
+| Port       | 19001                                    |
+| Hostname   | `holocron` (Firewalla DNS), `holocron.local` (mDNS) |
+| Auth       | Token-based                              |
+| Access     | `http://holocron/` from LAN              |
+
+The Holocron provides a simplified interface for household members to interact with the agent system without needing direct gateway access.

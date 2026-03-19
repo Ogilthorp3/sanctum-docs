@@ -1,0 +1,374 @@
+---
+title: instance.yaml Reference
+description: Complete configuration reference for the Sanctum instance configuration file.
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+The central configuration file for a Sanctum instance lives at `~/.sanctum/instance.yaml`. Every instance-specific value is defined here — services, networking, paths, family members, node topology, and secrets references.
+
+A JSON cache is auto-regenerated at `~/.sanctum/.instance.json` whenever the YAML changes, via `lib/yaml2json.py`.
+
+## Minimal Example
+
+```yaml
+instance:
+  slug: haus
+  name: Manoir Nepveu
+  timezone: America/Montreal
+
+users:
+  mac: bert
+  vm: ubuntu
+
+network:
+  vm_ip: 10.10.10.10
+  mac_bridge_ip: 10.10.10.1
+  bridge_interface: bridge100
+  vm_ssh_alias: openclaw
+  lan_ip: 192.168.1.10
+```
+
+---
+
+## instance
+
+Top-level identity for this Sanctum deployment.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `slug` | `string` | Yes | URL-safe identifier used in hostnames, paths, and DNS. Example: `haus` |
+| `name` | `string` | Yes | Human-readable display name. Example: `Manoir Nepveu` |
+| `timezone` | `string` | Yes | IANA timezone for scheduling and logs. Example: `America/Montreal` |
+
+```yaml
+instance:
+  slug: haus
+  name: Manoir Nepveu
+  timezone: America/Montreal
+```
+
+---
+
+## users
+
+OS-level usernames on the Mac host and the VM.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `mac` | `string` | Yes | macOS username on the host machine |
+| `vm` | `string` | Yes | Linux username inside the VM |
+
+```yaml
+users:
+  mac: bert
+  vm: ubuntu
+```
+
+---
+
+## network
+
+Networking topology between the Mac host, the VM, and the LAN.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `vm_ip` | `string` | Yes | Static IP of the VM on the host-only network |
+| `mac_bridge_ip` | `string` | Yes | Mac-side IP on the bridge interface |
+| `bridge_interface` | `string` | Yes | macOS bridge interface name (e.g., `bridge100`) |
+| `vm_ssh_alias` | `string` | Yes | SSH config alias for the VM (e.g., `openclaw`) |
+| `lan_ip` | `string` | Yes | Mac Mini IP on the local network |
+
+```yaml
+network:
+  vm_ip: 10.10.10.10
+  mac_bridge_ip: 10.10.10.1
+  bridge_interface: bridge100
+  vm_ssh_alias: openclaw
+  lan_ip: 192.168.1.10
+```
+
+---
+
+## paths
+
+Filesystem paths used by Sanctum tools, scripts, and backup routines.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `openclaw_config` | `string` | Yes | Agent config directory. Default: `~/.openclaw` |
+| `openclaw_skills` | `string` | Yes | Shared skills repo checkout |
+| `logs` | `string` | Yes | Centralized log directory |
+| `projects` | `string` | Yes | Projects root (Mac side) |
+| `backups` | `string` | Yes | Backup destination directory |
+
+```yaml
+paths:
+  openclaw_config: /Users/neo/.openclaw
+  openclaw_skills: /Users/neo/Projects/openclaw-skills
+  logs: /Users/neo/.sanctum/logs
+  projects: /Users/neo/Projects
+  backups: /Users/neo/.sanctum/backups
+```
+
+---
+
+## services
+
+Each service has at minimum an `enabled` boolean flag. Services that listen on a port include a `port` key (or multiple port keys). The `enabled` flag controls whether `generate-plists.sh` renders and loads the corresponding LaunchAgent.
+
+### Service Table
+
+| Service | Key | Default Port(s) | Description |
+|---------|-----|-----------------|-------------|
+| Gateway | `gateway` | `18789` | OpenClaw/DenchClaw agent gateway |
+| Home Assistant | `home_assistant` | `8123` | Home automation hub (Docker) |
+| Dashboard | `dashboard` | `3001`, `3002` | Command center web UI |
+| Firewalla Bridge | `firewalla` | `18094` | Firewalla P2P bridge |
+| VM | `vm` | — | UTM virtual machine |
+| Voice Agent | `voice_agent` | — | Yoda voice interaction agent |
+| XTTS | `xtts` | — | Text-to-speech server |
+| MLX Server | `mlx_server` | — | Council MLX model server |
+| Cloudflare Tunnel | `cloudflare` | — | Cloudflare Zero Trust tunnel |
+| iCloud Filer | `icloud_filer` | — | Automatic iCloud filing daemon |
+| Health Center | `health_center` | — | Health monitoring dashboard |
+| Tailscale | `tailscale` | — | Mesh VPN |
+| LM Studio | `lmstudio` | `1234` | Local LLM inference server |
+| Watchdog | `watchdog` | — | Service health monitoring |
+| Kiwix | `kiwix` | `8888` | Offline library server |
+| Signal Bridge | `signal_bridge` | — | Signal messaging bridge |
+| LiteLLM Proxy | `litellm` | `4000`, `4001` | LLM fallback proxy |
+
+### Full Example
+
+```yaml
+services:
+  gateway:
+    enabled: true
+    port: 18789
+
+  home_assistant:
+    enabled: true
+    port: 8123
+
+  dashboard:
+    enabled: true
+    port: 3001
+    dev_port: 3002
+
+  firewalla:
+    enabled: true
+    port: 18094
+
+  vm:
+    enabled: true
+
+  voice_agent:
+    enabled: true
+
+  xtts:
+    enabled: true
+
+  mlx_server:
+    enabled: true
+
+  cloudflare:
+    enabled: true
+
+  icloud_filer:
+    enabled: true
+
+  health_center:
+    enabled: true
+
+  tailscale:
+    enabled: true
+
+  lmstudio:
+    enabled: true
+    port: 1234
+
+  watchdog:
+    enabled: true
+
+  kiwix:
+    enabled: true
+    port: 8888
+
+  signal_bridge:
+    enabled: false
+
+  litellm:
+    enabled: true
+    port: 4000
+    admin_port: 4001
+```
+
+### Checking Service Status
+
+From the shell library:
+
+```bash
+source ~/.sanctum/lib/config.sh
+
+if sanctum_enabled services.gateway; then
+  echo "Gateway is enabled on port $(sanctum_get services.gateway.port)"
+fi
+```
+
+From TypeScript:
+
+```typescript
+import { isEnabled, get } from './lib/config';
+
+if (isEnabled('services.gateway')) {
+  const port = get('services.gateway.port');
+}
+```
+
+---
+
+## secrets
+
+References to external secret stores. Sanctum never stores secrets in `instance.yaml` directly.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `keychain_account` | `string` | macOS Keychain account name for stored tokens |
+| `onepassword_vault` | `string` | 1Password vault name for credentials |
+| `sops_file` | `string` | Path to SOPS-encrypted secrets file on the VM |
+
+```yaml
+secrets:
+  keychain_account: sanctum
+  onepassword_vault: FamilyOS
+  sops_file: /home/ubuntu/.openclaw/secrets.enc.yaml
+```
+
+---
+
+## home_assistant
+
+Configuration specific to the Home Assistant integration.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `sonos_speakers` | `list` | Known Sonos speaker IPs (required for bridge networking) |
+| `cameras` | `list` | Camera integration entries |
+| `hvac` | `map` | HVAC zone definitions |
+
+```yaml
+home_assistant:
+  sonos_speakers:
+    - 192.168.1.101
+    - 192.168.1.102
+    - 192.168.1.103
+    - 192.168.1.104
+    - 192.168.1.105
+    - 192.168.1.106
+    - 192.168.1.107
+    - 192.168.1.108
+    - 192.168.1.109
+    - 192.168.1.110
+
+  cameras:
+    - name: front_door
+      type: blink
+
+  hvac:
+    main_floor:
+      type: ecobee
+```
+
+---
+
+## family
+
+Defines the family members known to the instance. Used by agents for personalization and access control.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `members` | `list` | List of family member objects |
+| `members[].name` | `string` | Display name |
+| `members[].role` | `string` | Role within the household |
+
+```yaml
+family:
+  members:
+    - name: Bertrand
+      role: admin
+    - name: Partner
+      role: member
+```
+
+---
+
+## nodes
+
+Multi-site node topology. Each node represents a physical location running Sanctum infrastructure.
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `<node_id>` | `map` | Node identifier (e.g., `manoir`, `chalet`) |
+| `.type` | `string` | Node type: `hub`, `satellite`, `mobile`, or `sensor` |
+| `.host` | `string` | LAN hostname or IP |
+| `.tailscale_ip` | `string` | Tailscale mesh IP |
+| `.tailscale_name` | `string` | Tailscale device name |
+| `.user` | `string` | SSH username on this node |
+| `.services` | `map` | Per-node service overrides (enabled flags) |
+
+```yaml
+nodes:
+  manoir:
+    type: hub
+    host: 192.168.1.10
+    tailscale_ip: 100.0.0.25
+    tailscale_name: berts-mac-mini-m4-pro
+    user: bert
+    services:
+      gateway:
+        enabled: true
+      home_assistant:
+        enabled: true
+      vm:
+        enabled: true
+
+  chalet:
+    type: satellite
+    host: chalet.local
+    tailscale_ip: 100.0.0.32
+    tailscale_name: berts-mac-mini-chalet
+    user: bert
+    services:
+      gateway:
+        enabled: true
+      home_assistant:
+        enabled: true
+      vm:
+        enabled: false
+```
+
+### Node Types
+
+| Type | Description |
+|------|-------------|
+| `hub` | Primary site with full infrastructure (VM, all services) |
+| `satellite` | Secondary site with reduced stack (no VM, lighter services) |
+| `mobile` | Laptop or portable device |
+| `sensor` | Headless monitoring device |
+
+---
+
+## Example Config File
+
+An annotated example is available at `~/.sanctum/instance.yaml.example` and can be used as a starting point for new instances.
+
+---
+
+## JSON Cache
+
+The YAML config is automatically converted to a flat JSON cache at `~/.sanctum/.instance.json`. This cache is used by the shell and TypeScript libraries for fast key lookups. If you edit `instance.yaml` manually, regenerate the cache:
+
+```bash
+python3 ~/.sanctum/lib/yaml2json.py
+```

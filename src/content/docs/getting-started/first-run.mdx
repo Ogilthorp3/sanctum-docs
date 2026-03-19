@@ -1,0 +1,223 @@
+---
+title: First Run
+description: Verify your Sanctum installation, run the test suite, and confirm all services are healthy.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+After completing the [Installation](/getting-started/installation/), follow this guide to verify that everything is running correctly and complete the initial setup.
+
+## Run the Test Suite
+
+Sanctum includes a test suite that validates your configuration, checks service health, and reports any issues.
+
+<Steps>
+
+1. **Execute the full test suite.**
+
+   ```bash
+   bash ~/.sanctum/tests/run-all.sh
+   ```
+
+   The suite runs checks in order:
+   - Configuration validation (instance.yaml syntax, required keys)
+   - Node identity verification (.node_id exists and matches config)
+   - LaunchAgent status (loaded and running)
+   - Service health (port reachability, HTTP endpoints)
+   - VM connectivity (SSH, bridge network)
+   - Dashboard availability
+
+2. **Review the output.**
+
+   Each check prints a status line:
+
+   ```
+   [PASS] instance.yaml is valid
+   [PASS] node_id "your-home-name" matches config
+   [PASS] com.sanctum.gateway is running
+   [PASS] Gateway responding on port 18789
+   [FAIL] com.sanctum.voice-agent is not running
+   ```
+
+   Address any `[FAIL]` lines before continuing.
+
+3. **Re-run after fixes.**
+
+   If you needed to fix anything, run the suite again to confirm a clean pass:
+
+   ```bash
+   bash ~/.sanctum/tests/run-all.sh
+   ```
+
+</Steps>
+
+<Aside type="tip">
+  You can run individual test groups by passing a filter argument. For example, `bash ~/.sanctum/tests/run-all.sh services` runs only the service health checks.
+</Aside>
+
+## Verify LaunchAgents
+
+Check that all expected Sanctum LaunchAgents are loaded and running.
+
+```bash
+launchctl list | grep sanctum
+```
+
+You should see entries for each enabled service. A typical hub node might show:
+
+```
+-     0     com.sanctum.gateway
+-     0     com.sanctum.dashboard
+-     0     com.sanctum.homeassistant
+-     0     com.sanctum.firewalla-bridge
+-     0     com.sanctum.voice-agent
+-     0     com.sanctum.utm-autostart
+-     0     com.sanctum.watchdog
+-     0     com.sanctum.cloudflare-tunnel
+```
+
+The second column is the exit status. A `0` indicates the service exited cleanly (or is still running). A non-zero value suggests a startup failure.
+
+<Tabs>
+  <TabItem label="Troubleshooting">
+    If a LaunchAgent is missing from the list, load it manually:
+
+    ```bash
+    launchctl load ~/Library/LaunchAgents/com.sanctum.<service>.plist
+    ```
+
+    If it exits immediately with a non-zero status, check its log output:
+
+    ```bash
+    # Most LaunchAgents log to the system log
+    log show --predicate 'process == "sanctum"' --last 5m
+
+    # Or check the specific stdout/stderr files defined in the plist
+    cat /tmp/com.sanctum.<service>.stdout.log
+    cat /tmp/com.sanctum.<service>.stderr.log
+    ```
+  </TabItem>
+  <TabItem label="Common Issues">
+    | Symptom | Cause | Fix |
+    |---------|-------|-----|
+    | Agent not in list | Plist not loaded | `launchctl load ~/Library/LaunchAgents/com.sanctum.*.plist` |
+    | Exit status 78 | Configuration error | Check instance.yaml for the affected service |
+    | Exit status 127 | Binary not found | Verify `node`, `python3`, or other binaries are in the plist PATH |
+    | Agent loads but port unreachable | Firewall or binding issue | Check if another process is using the port with `lsof -i :<port>` |
+  </TabItem>
+</Tabs>
+
+## Open the Dashboard
+
+Navigate to the dashboard in your browser.
+
+<Steps>
+
+1. **Access the dashboard.**
+
+   ```
+   http://localhost:3001
+   ```
+
+   If you configured a hostname alias (such as a DNS entry or mDNS broadcast), you can use that instead:
+
+   ```
+   http://your-home-name
+   ```
+
+2. **Verify service status.**
+
+   The dashboard home screen shows the health of all enabled services. Each service tile displays:
+   - Service name and port
+   - Status indicator (green = healthy, red = down, yellow = degraded)
+   - Uptime since last restart
+
+3. **Check the config endpoint.**
+
+   Confirm the dashboard is reading your configuration correctly:
+
+   ```bash
+   curl -s http://localhost:3001/api/config | python3 -m json.tool
+   ```
+
+   The response should include your instance name, slug, and the list of enabled services. Secrets are excluded from this endpoint.
+
+</Steps>
+
+## Verify Node Identity
+
+Confirm that your node identity is correctly configured.
+
+```bash
+cat ~/.sanctum/.node_id
+```
+
+This should print the slug you set during installation (for example, `your-home-name`). Verify that it matches a key in the `nodes` section of `instance.yaml`:
+
+```bash
+sanctum_get nodes.$(cat ~/.sanctum/.node_id).type
+```
+
+This should print `hub` for a hub node. If the command returns nothing or an error, double-check that your `.node_id` value matches the YAML key exactly.
+
+## Verify VM Connectivity
+
+If you set up the Ubuntu VM, confirm the Mac-to-VM link is working.
+
+<Steps>
+
+1. **Check the bridge interface.**
+
+   ```bash
+   ifconfig bridge100
+   ```
+
+   You should see `10.10.10.1` assigned to the interface. If the interface does not exist, verify that UTM is running and the VM is started.
+
+2. **Test SSH.**
+
+   ```bash
+   ssh ubuntu@10.10.10.10 'hostname && uptime'
+   ```
+
+   This should print the VM hostname and uptime without prompting for a password (assuming SSH key auth is configured).
+
+3. **Check VM services.**
+
+   ```bash
+   ssh ubuntu@10.10.10.10 'systemctl --user status sanctum-gateway'
+   ```
+
+   The gateway service on the VM should show `active (running)`.
+
+</Steps>
+
+## Enable the Watchdog
+
+The watchdog monitors all services and performs automatic remediation when it detects failures. It runs on a timer (default: every 10 minutes) and is managed by its own LaunchAgent.
+
+Verify the watchdog is loaded:
+
+```bash
+launchctl list | grep com.sanctum.watchdog
+```
+
+The watchdog writes a health report after each run. Check the latest report:
+
+```bash
+cat /tmp/sanctum-watchdog-latest.log
+```
+
+<Aside type="caution">
+  The watchdog will attempt to restart failed services automatically. If you are still in the process of configuring services, you may want to delay loading the watchdog LaunchAgent until your initial setup is complete to avoid interference.
+</Aside>
+
+## What Comes Next
+
+With a verified installation, you are ready to start using Sanctum. Here are recommended next steps:
+
+- **[Architecture Overview](/architecture/overview/)** -- Understand how the platform components fit together.
+- **Configure agents** -- Set up AI agents for security, efficiency, health, and finance.
+- **Add a satellite node** -- Extend the platform to a second location.
+- **Set up secret rotation** -- Enable automatic monthly token rotation.
+- **Customize the dashboard** -- Add or remove panels based on your enabled services.

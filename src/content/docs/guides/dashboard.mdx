@@ -1,0 +1,139 @@
+---
+title: Command Center Dashboard
+description: Real-time monitoring dashboard for Sanctum services, infrastructure, and network status.
+---
+
+import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
+
+The command center dashboard is the primary interface for monitoring and managing a Sanctum instance. It provides real-time visibility into service health, VM status, Docker containers, network peers, and AI model availability.
+
+## Architecture
+
+The dashboard runs a **Vite + React** frontend served by an **Express** backend on port 3001. A reverse proxy LaunchDaemon forwards port 80 to 3001, enabling clean browser access via the instance hostname.
+
+```
+Browser → http://haus (port 80)
+       → socat LaunchDaemon (port 80 → 3001)
+       → Express backend (port 3001)
+       → Vite/React frontend
+```
+
+<Aside type="tip">
+  The browser alias relies on Firewalla local DNS and an mDNS broadcast LaunchAgent. Both must be running for hostname resolution on the LAN.
+</Aside>
+
+## Dashboard Panels
+
+The dashboard renders conditionally based on services enabled in `instance.yaml`. Each panel polls its data source independently.
+
+### Service Health
+
+Displays the status of every LaunchAgent and systemd unit tracked by the health subsystem. Services are grouped by category (core, AI, network, monitoring) with color-coded indicators:
+
+- **Green** — running, passed last health check
+- **Yellow** — running, degraded (e.g., high memory usage)
+- **Red** — stopped or failing health checks
+- **Grey** — disabled in configuration
+
+### VM Status
+
+Shows the Ubuntu VM state as reported by UTM, including CPU core count, memory allocation, disk usage, and network connectivity on the bridge100 interface.
+
+### Docker Containers
+
+Lists all Docker containers with their image, status, port mappings, and resource consumption. The Home Assistant container is highlighted when present.
+
+### LaunchAgents
+
+Enumerates all Sanctum-managed LaunchAgents with their loaded/running state, PID, last exit status, and any recent restart events.
+
+### Tailscale Peers
+
+Renders the Tailscale network topology showing all connected devices, their IP addresses, online status, and last seen timestamps.
+
+### LM Studio Models
+
+Queries LM Studio on port 1234 for loaded and available models, displaying model name, parameter count, quantization level, and VRAM usage.
+
+### Alerts
+
+Shows active and recent alerts from the watchdog system with severity, source, message, and timestamp. Alerts can be acknowledged directly from the panel.
+
+## API Endpoints
+
+The Express backend exposes several endpoints consumed by the frontend and available for external tooling.
+
+### GET /api/health/status
+
+Returns the current health status of all monitored services.
+
+```json
+{
+  "status": "degraded",
+  "services": {
+    "openclaw-gateway": { "status": "running", "pid": 1234, "uptime": "4d 12h" },
+    "home-assistant": { "status": "running", "pid": 5678, "uptime": "2d 8h" },
+    "utm-vm": { "status": "running", "cpu": "8 cores", "memory": "12GB" }
+  },
+  "timestamp": "2026-03-19T14:30:00Z"
+}
+```
+
+### GET /api/config
+
+Serves the instance configuration from `instance.yaml` with secrets excluded. Used by the frontend to determine which panels to render and how to label the instance.
+
+### GET /api/alerts
+
+Returns active alerts with optional query parameters for filtering by severity and time range.
+
+| Parameter  | Type   | Description                        |
+|------------|--------|------------------------------------|
+| `severity` | string | Filter: `critical`, `warning`, `info` |
+| `since`    | string | ISO 8601 timestamp for lower bound |
+| `limit`    | number | Maximum results (default: 50)      |
+
+### GET /api/health/tests
+
+Runs the full health test suite on demand and returns results. This is the same suite executed by the watchdog on its periodic schedule.
+
+## Proxied Services
+
+The dashboard backend proxies requests to services that are not directly accessible from the browser.
+
+### Firewalla
+
+Firewalla API calls are proxied through the Express backend, which handles the cloud authentication handshake and local P2P connection on port 8833. The frontend never communicates with Firewalla directly.
+
+### Home Assistant
+
+HA API requests are forwarded to `localhost:8123` through the backend, which injects long-lived access tokens stored in the Keychain. This avoids exposing HA tokens to the browser.
+
+## Configuration
+
+Dashboard behavior is driven by `instance.yaml`:
+
+```yaml
+services:
+  command-center:
+    enabled: true
+    port: 3001
+    bind: lan
+```
+
+The `bind: lan` directive restricts the Express server to the LAN interface. The socat LaunchDaemon handles port 80 forwarding separately.
+
+## LaunchAgent
+
+The dashboard runs as a persistent LaunchAgent:
+
+| Property       | Value                          |
+|----------------|--------------------------------|
+| Label          | `com.manoir.command-center`    |
+| RunAtLoad      | true                           |
+| KeepAlive      | false                          |
+| Port           | 3001                           |
+
+<Aside type="note">
+  The reverse proxy from port 80 to 3001 runs as a **LaunchDaemon** (`com.manoir.dench-proxy`) because binding to port 80 requires root privileges.
+</Aside>

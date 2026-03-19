@@ -1,0 +1,269 @@
+---
+title: Services
+description: Complete catalog of every Sanctum service, organized by category with ports, LaunchAgent names, and configuration.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Every Sanctum service has an `enabled` flag in `instance.yaml`. Disabled services are skipped by the plist generator, excluded from the dashboard, and ignored by the watchdog. This page is the authoritative catalog of all services in the platform.
+
+## Core Services
+
+The foundation of a Sanctum instance. These services are expected to run on every hub node.
+
+| Service | Port | LaunchAgent / Unit | Description |
+|---------|------|--------------------|-------------|
+| DenchClaw Gateway | 18789 | `ai.openclaw.gateway` | Mac-side agent gateway. Runs Jocasta (household management agent) and exposes the agent API. |
+| Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
+| Command Center | 3001 | `com.manoir.command-center` | Web dashboard for service status, agent activity, and system health. |
+| Health Center | -- | `com.manoir.health-center` | Health monitoring dashboard for family wellness data. |
+| Holocron (Dench) | 19001 | `ai.openclaw.dench` | Family chat interface. Bound to LAN, token-authenticated. Accessible at `http://holocron/`. |
+| Dench Proxy | 80 | `com.manoir.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 19001. |
+
+<Aside type="tip">
+  The Dench Proxy is a **LaunchDaemon**, not a LaunchAgent. It runs as root to bind to port 80 and lives in `/Library/LaunchDaemons/`.
+</Aside>
+
+### Config Example
+
+```yaml
+services:
+  gateway:
+    enabled: true
+    port: 18789
+  home_assistant:
+    enabled: true
+    port: 8123
+    homekit_port: 21063
+  dashboard:
+    enabled: true
+    port: 3001
+```
+
+## AI Services
+
+Local inference and voice services that take advantage of Apple Silicon hardware on the Mac Mini.
+
+| Service | Port | LaunchAgent | Description |
+|---------|------|-------------|-------------|
+| LM Studio | 1234 | `com.manoir.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
+| Council-27B MLX | 8899 | `com.sanctum.council-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
+| XTTS TTS Server | 8020 | `com.yoda.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
+| Voice Agent | 8090 | `com.yoda.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
+| LiteLLM Proxy | 4000 / 4001 | `com.sanctum.litellm-proxy` | LLM routing proxy with automatic fallback chain. Falls back from Anthropic to OpenRouter models on billing errors. KeepAlive enabled. |
+
+### Model Hierarchy
+
+The AI services form a fallback chain for inference:
+
+```
+Request
+  |
+  +-- Primary: anthropic/claude-opus-4-6
+  |     (via direct API)
+  |
+  +-- Fallback 1: LM Studio (local, port 1234)
+  |     Qwen 3.5 35B
+  |
+  +-- Fallback 2: Council-27B MLX (local, port 8899)
+  |     Qwen 3.5 27B 4-bit + LoRA
+  |
+  +-- Fallback 3: OpenRouter
+        Qwen 3.5 Plus -> DeepSeek V3.2 -> MiniMax M2.5
+```
+
+<Aside>
+  LiteLLM handles the fallback routing automatically. The proxy also applies Presidio PII scrubbing before sending requests to external providers via OpenRouter.
+</Aside>
+
+### Config Example
+
+```yaml
+services:
+  lm_studio:
+    enabled: true
+    port: 1234
+  council_mlx:
+    enabled: true
+    port: 8899
+  voice_agent:
+    enabled: true
+    port: 8090
+  tts:
+    enabled: true
+    port: 8020
+  litellm:
+    enabled: true
+    port: 4000
+    admin_port: 4001
+```
+
+## Network Services
+
+Bridges and tunnels that connect Sanctum to network devices and the outside world.
+
+| Service | Port | LaunchAgent | Description |
+|---------|------|-------------|-------------|
+| Firewalla Bridge | 18094 | `com.openclaw.firewalla-bridge` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
+| Orbi Bridge | 18080 / 18085 | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
+| Cloudflare Tunnel | -- | `com.cloudflare.tunnel` | Named tunnel `haus`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
+| HA SSH Tunnel | 18092 | `com.user.ha-ssh-tunnel` | SSH tunnel forwarding port 18092 to the VM for Home Assistant integrations. |
+| Health SSH Tunnel | 18095 | `com.user.health-ssh-tunnel` | SSH tunnel forwarding port 18095 to the VM for the health data ingester. KeepAlive enabled. |
+| mDNS Alias (manoir) | -- | `com.manoir.mdns-alias` | Broadcasts `haus.local` via mDNS for LAN discovery. KeepAlive enabled. |
+| mDNS Alias (holocron) | -- | `com.manoir.mdns-dench` | Broadcasts `holocron.local` via mDNS for the chat interface. KeepAlive enabled. |
+
+### Tunnel Routes
+
+| Subdomain | Local Target | Purpose |
+|-----------|-------------|---------|
+| `health.nepveu.name` | `localhost:18095` | Health data ingestion endpoint |
+| `ha.nepveu.name` | `localhost:8123` | Home Assistant remote access |
+
+<Aside type="caution">
+  The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. Keys are stored at `~/.sanctum/firewalla/keys/`.
+</Aside>
+
+### Config Example
+
+```yaml
+services:
+  firewalla_bridge:
+    enabled: true
+    port: 18094
+  orbi_bridge:
+    enabled: true
+    port: 18080
+    admin_port: 18085
+  cloudflare_tunnel:
+    enabled: true
+    tunnel_name: haus
+```
+
+## System Services
+
+Background agents that maintain the health, security, and data integrity of the instance.
+
+| Service | Port | LaunchAgent | Description |
+|---------|------|-------------|-------------|
+| Watchdog | -- | `com.sanctum.watchdog` | Runs every 600 seconds. Checks all enabled services and auto-heals failures via `service-doctor`. |
+| Secret Rotation | -- | `com.sanctum.rotate-secrets` | Runs on the 1st of each month at 3:30 AM. Rotates gateway tokens and updates Keychain entries. |
+| iCloud Filer | -- | `com.manoir.icloud-filer` | Auto-filing daemon. Organizes documents from iCloud Drive into structured folders. KeepAlive enabled. |
+| iCloud Backup | -- | `com.openclaw.icloud-backup` | Periodic backup of Sanctum configuration and data to iCloud Drive. |
+| UTM Autostart | -- | `com.user.utm-autostart` | Launches UTM on login, starts the Ubuntu VM, and sets the bridge100 interface IP to 10.10.10.1. |
+| Music Cleanup | -- | `com.manoir.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
+| Kiwix | 8888 | `com.manoir.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
+
+### Config Example
+
+```yaml
+services:
+  watchdog:
+    enabled: true
+    settle_delay: 15
+    auto_fix: true
+    dedup_window: 1800
+  secret_rotation:
+    enabled: true
+    schedule: "0 3:30 1 * *"
+  icloud_filer:
+    enabled: true
+  kiwix:
+    enabled: true
+    port: 8888
+```
+
+## VM Services
+
+These services run on the Ubuntu VM (`10.10.10.10`) and are managed by systemd, not macOS LaunchAgents.
+
+| Service | Port | Systemd Unit | Description |
+|---------|------|-------------|-------------|
+| OpenClaw Gateway | 18789 | `openclaw-gateway.service` (user) | VM agent gateway with 1.5 GB heap. Runs 5 agents: Yoda (main), Windu (security), Qui-Gon (efficiency), Cilghal (health), Mundi (finance). |
+| Docker | -- | `docker.service` | Container runtime for any VM-side containers. |
+| SSH | 22 | `ssh.socket` | Remote access. Key-only auth with PQ key exchange enabled. |
+
+### Agent Details
+
+| Agent | Role | Specialization |
+|-------|------|---------------|
+| **Yoda** | Main | Primary household agent. General queries, orchestration, task delegation. |
+| **Windu** | Security | Network monitoring, threat analysis, Firewalla integration, daily security briefings. |
+| **Qui-Gon** | Efficiency | Energy optimization, automation suggestions, system performance tuning. |
+| **Cilghal** | Health | Family health tracking, genome analysis, supplement protocols. |
+| **Mundi** | Finance | Budget tracking, investment monitoring, expense categorization. |
+
+The gateway uses SOPS+age encryption for secrets. The `sops-start.sh` wrapper decrypts environment variables at startup and never writes plaintext to disk.
+
+<Aside>
+  The VM has no direct internet access. All external API calls route through Mac-side proxies or SSH tunnels. Skills sync from the Mac via rsync every 30 minutes.
+</Aside>
+
+### VM Gateway Management
+
+```bash
+# Restart the VM gateway
+ssh ubuntu@10.10.10.10 'systemctl --user restart openclaw-gateway'
+
+# Check status
+ssh ubuntu@10.10.10.10 'systemctl --user status openclaw-gateway'
+
+# View logs
+ssh ubuntu@10.10.10.10 'journalctl --user -u openclaw-gateway -f'
+```
+
+## Service Lifecycle
+
+Every service follows the same lifecycle through the configuration system:
+
+<Tabs>
+  <TabItem label="Enable">
+    Set `enabled: true` in `instance.yaml`, run `generate-plists.sh`, then load the LaunchAgent:
+
+    ```bash
+    launchctl load ~/Library/LaunchAgents/com.sanctum.service-name.plist
+    ```
+  </TabItem>
+  <TabItem label="Disable">
+    Set `enabled: false` in `instance.yaml`, unload the LaunchAgent, then regenerate plists:
+
+    ```bash
+    launchctl unload ~/Library/LaunchAgents/com.sanctum.service-name.plist
+    ~/.sanctum/generate-plists.sh
+    ```
+  </TabItem>
+  <TabItem label="Health Check">
+    The watchdog checks enabled services every 10 minutes. A service is considered healthy if its port responds (for port-based services) or its process is running (for background agents).
+
+    ```bash
+    # Manual health check
+    sanctum_enabled gateway && curl -sf http://localhost:18789/health
+    ```
+  </TabItem>
+</Tabs>
+
+## Port Summary
+
+A quick-reference table of every port in use across the instance.
+
+| Port | Service | Host |
+|------|---------|------|
+| 22 | SSH | VM |
+| 80 | Dench Proxy (reverse proxy) | Mac |
+| 1234 | LM Studio | Mac |
+| 3001 | Command Center | Mac |
+| 4000 | LiteLLM Proxy | Mac |
+| 4001 | LiteLLM Admin | Mac |
+| 8020 | XTTS TTS Server | Mac |
+| 8090 | Voice Agent | Mac |
+| 8123 | Home Assistant | Mac (Docker) |
+| 8888 | Kiwix | Mac |
+| 8899 | Council-27B MLX | Mac |
+| 18080 | Orbi Bridge (HTTP) | Mac |
+| 18085 | Orbi Bridge (API) | Mac |
+| 18092 | HA SSH Tunnel | Mac -> VM |
+| 18094 | Firewalla Bridge | Mac |
+| 18095 | Health SSH Tunnel | Mac -> VM |
+| 18789 | DenchClaw Gateway | Mac |
+| 18789 | OpenClaw Gateway | VM |
+| 19001 | Holocron Chat | Mac |
+| 21063 | HomeKit Bridge | Mac (Docker) |

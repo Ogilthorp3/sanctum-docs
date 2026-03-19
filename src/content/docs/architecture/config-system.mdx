@@ -1,0 +1,275 @@
+---
+title: Config System
+description: How Sanctum uses a single instance.yaml file, shell and TypeScript libraries, and plist templates to configure every service.
+---
+
+import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+Sanctum follows a single-source-of-truth principle: one YAML file defines the entire instance. Every service, script, dashboard, and LaunchAgent reads its configuration from this file -- either directly or through generated artifacts. Secrets are stored separately in macOS Keychain and never appear in configuration files.
+
+## Configuration Hierarchy
+
+```
+~/.sanctum/instance.yaml          <-- Source of truth (hand-edited)
+    |
+    +-- .instance.json             <-- Auto-generated JSON cache
+    |
+    +-- lib/config.sh              <-- Shell library (sanctum_* functions)
+    +-- lib/config.ts              <-- TypeScript library (get, isEnabled, expand)
+    |
+    +-- templates/launchagents/    <-- 11+ plist templates with {{PLACEHOLDER}} syntax
+    |       |
+    |       +-- generate-plists.sh <-- Renders templates, pulls Keychain tokens
+    |
+    +-- macOS Keychain             <-- Secrets (tokens, API keys)
+    +-- SOPS + age                 <-- VM-side encrypted secrets
+```
+
+## instance.yaml
+
+The central configuration file lives at `~/.sanctum/instance.yaml`. It contains every instance-specific value: network addresses, service ports, node definitions, feature flags, and integration settings.
+
+```yaml
+# ~/.sanctum/instance.yaml
+instance:
+  name: "Manoir Nepveu"
+  slug: haus
+  domain: nepveu.name
+
+network:
+  lan_subnet: 192.168.1.0/24
+  vm_subnet: 10.10.10.0/24
+  gateway_ip: 192.168.1.1
+  mac_bridge_ip: 10.10.10.1
+  vm_ip: 10.10.10.10
+
+services:
+  gateway:
+    enabled: true
+    port: 18789
+  home_assistant:
+    enabled: true
+    port: 8123
+    homekit_port: 21063
+  dashboard:
+    enabled: true
+    port: 3001
+  lm_studio:
+    enabled: true
+    port: 1234
+  council_mlx:
+    enabled: true
+    port: 8899
+  voice_agent:
+    enabled: true
+    port: 8090
+  # ... additional services
+
+nodes:
+  manoir:
+    type: hub
+    host: 192.168.1.10
+    tailscale_ip: 100.0.0.25
+    ssh_user: bert
+    services: [gateway, home_assistant, dashboard, voice_agent]
+  chalet:
+    type: satellite
+    host: null  # set during on-site install
+    tailscale_ip: 100.0.0.32
+    ssh_user: bert
+    services: [gateway, home_assistant]
+```
+
+<Aside type="tip">
+  An annotated example file is available at `~/.sanctum/instance.yaml.example`. Copy it as your starting point when creating a new instance.
+</Aside>
+
+## JSON Cache
+
+The JSON cache at `~/.sanctum/.instance.json` is an auto-generated derivative of the YAML file. It exists so that shell scripts and lightweight tools can parse configuration without a YAML library.
+
+```bash
+# Regenerate the cache manually (normally automatic)
+python3 ~/.sanctum/lib/yaml2json.py
+```
+
+The cache is regenerated automatically whenever configuration libraries detect the YAML file is newer than the JSON. Never edit `.instance.json` by hand -- changes will be overwritten.
+
+## Shell Library
+
+Source `config.sh` in any Bash script to get access to configuration values:
+
+```bash
+source ~/.sanctum/lib/config.sh
+```
+
+### Available Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `sanctum_get <path>` | Read a value by dotted path | `sanctum_get services.gateway.port` |
+| `sanctum_slug` | Return the instance slug | `haus` |
+| `sanctum_home` | Return the Sanctum home directory | `~/.sanctum` |
+| `sanctum_vm_ssh` | Return the VM SSH target | `ubuntu@10.10.10.10` |
+| `sanctum_enabled <service>` | Check if a service is enabled | `sanctum_enabled voice_agent` |
+| `sanctum_expand <template>` | Expand `{{PLACEHOLDER}}` strings | See below |
+| `sanctum_whoami` | Return this node's identity | `manoir` |
+| `sanctum_node_get <node> <path>` | Read a value from a specific node | `sanctum_node_get chalet tailscale_ip` |
+
+### Usage Example
+
+```bash
+#!/bin/bash
+source ~/.sanctum/lib/config.sh
+
+if sanctum_enabled voice_agent; then
+  PORT=$(sanctum_get services.voice_agent.port)
+  echo "Voice agent running on port $PORT"
+fi
+
+VM=$(sanctum_vm_ssh)
+ssh "$VM" 'systemctl --user status openclaw-gateway'
+```
+
+## TypeScript Library
+
+The TypeScript library provides the same capabilities for Node.js services like the command center dashboard and gateway plugins.
+
+```typescript
+import { get, isEnabled, expand, vmSsh, whoami, nodeGet, getNodesByType } from './lib/config';
+```
+
+### Available Functions
+
+| Function | Description | Return Type |
+|----------|-------------|-------------|
+| `get(path)` | Read a value by dotted path | `string \| number \| boolean \| object` |
+| `isEnabled(service)` | Check if a service is enabled | `boolean` |
+| `expand(template)` | Replace `{{PLACEHOLDER}}` tokens | `string` |
+| `vmSsh()` | Return the VM SSH connection string | `string` |
+| `whoami()` | Return this node's identity | `string` |
+| `nodeGet(node, path)` | Read a value from a specific node | `string \| number \| boolean` |
+| `getNodesByType(type)` | List nodes of a given type | `string[]` |
+
+### Usage Example
+
+```typescript
+import { get, isEnabled } from './lib/config';
+
+const port = get('services.dashboard.port') as number;  // 3001
+
+if (isEnabled('home_assistant')) {
+  const haPort = get('services.home_assistant.port');
+  console.log(`HA available at http://localhost:${haPort}`);
+}
+```
+
+<Aside>
+  The dashboard serves the instance configuration (with secrets excluded) at the `/api/config` endpoint for client-side components.
+</Aside>
+
+## Plist Templates
+
+LaunchAgent plist files are generated from templates rather than hand-maintained. This ensures every plist stays in sync with `instance.yaml` and that secrets are injected at generation time from macOS Keychain.
+
+Templates live in `~/.sanctum/templates/launchagents/` and use a `{{PLACEHOLDER}}` syntax:
+
+```xml
+<!-- Template: com.sanctum.gateway.plist -->
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sanctum.gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>{{NODE_PATH}}</string>
+        <string>{{GATEWAY_BIN}}</string>
+        <string>gateway</string>
+        <string>start</string>
+        <string>--port</string>
+        <string>{{GATEWAY_PORT}}</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>GATEWAY_TOKEN</key>
+        <string>{{GATEWAY_TOKEN}}</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
+### Generating Plists
+
+The `generate-plists.sh` script renders all templates:
+
+<Steps>
+1. Reads `instance.yaml` for service ports, paths, and feature flags.
+2. Pulls tokens from macOS Keychain (e.g., `GATEWAY_TOKEN`).
+3. Skips templates for disabled services (`enabled: false`).
+4. Writes rendered plists to `~/Library/LaunchAgents/`.
+</Steps>
+
+```bash
+# Preview what would be generated
+~/.sanctum/generate-plists.sh --dry-run
+
+# Generate and install all plists
+~/.sanctum/generate-plists.sh
+```
+
+<Aside type="caution">
+  After regenerating plists, you must `launchctl unload` and `launchctl load` any changed agents for the new configuration to take effect. The watchdog will detect stopped services and restart them if needed.
+</Aside>
+
+## Secrets Management
+
+Secrets never appear in `instance.yaml` or any configuration file. They are stored in two locations depending on the platform:
+
+<Tabs>
+  <TabItem label="macOS (Keychain)">
+    Tokens and API keys are stored in the macOS login Keychain. The plist generator and shell scripts retrieve them using the `security` command:
+
+    ```bash
+    security find-generic-password -a "sanctum" -s "gateway-token" -w
+    ```
+
+    Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM.
+  </TabItem>
+  <TabItem label="VM (SOPS + age)">
+    On the VM, secrets are encrypted at rest using SOPS with age encryption:
+
+    ```bash
+    # Encrypted file
+    ~/.sanctum/secrets.enc.yaml
+
+    # Decrypted at gateway startup by the wrapper script
+    ~/.sanctum/sops-start.sh
+    ```
+
+    The `sops-start.sh` wrapper decrypts secrets into environment variables, starts the gateway, and never writes plaintext to disk.
+  </TabItem>
+</Tabs>
+
+<Aside type="danger">
+  Never commit secrets to Git, never add them to `instance.yaml`, and never pass them as command-line arguments (they appear in `ps` output). Use Keychain on macOS and SOPS on the VM.
+</Aside>
+
+## Adding a New Service
+
+To add a new service to the configuration layer:
+
+<Steps>
+1. Add a `services.<name>` block to `instance.yaml` with at least `enabled` and `port`.
+2. If the service needs a LaunchAgent, create a template in `templates/launchagents/`.
+3. If the service needs secrets, store them in Keychain and reference them as `{{PLACEHOLDER}}` in the template.
+4. Run `generate-plists.sh` to render the new plist.
+5. Add the service to the appropriate node's `services` list in `instance.yaml`.
+6. Update the watchdog configuration if the service should be health-checked.
+</Steps>
