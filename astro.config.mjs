@@ -3,6 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
+	site: 'https://www.sanctum.run',
 	vite: {
 		server: {
 			allowedHosts: ['sanctum.local'],
