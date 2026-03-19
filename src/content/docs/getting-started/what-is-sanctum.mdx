@@ -1,0 +1,98 @@
+---
+title: What Is Sanctum?
+description: An overview of Sanctum, the intelligent home platform for technical families running on Apple Silicon.
+---
+
+import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Sanctum is an intelligent home platform that unifies home automation, AI agents, network management, voice control, and family tools under a single, config-driven system. It is built for technical families who want deep control over their home infrastructure without stitching together dozens of disconnected services.
+
+## The Problem
+
+Modern smart homes are a patchwork. Home Assistant handles automation. A separate NAS manages storage. Network monitoring lives in yet another app. AI assistants are cloud-dependent black boxes. Each tool has its own config, its own auth model, and its own failure modes. When something breaks at 2 AM, you are debugging five different systems.
+
+## The Platform
+
+Sanctum brings these layers together into a single managed platform running on hardware you own.
+
+<CardGrid>
+  <Card title="Home Automation" icon="laptop">
+    Home Assistant runs as a Docker container on your Mac, with full LAN access to Sonos, HomeKit, and smart devices.
+  </Card>
+  <Card title="AI Agents" icon="star">
+    Specialized agents handle security monitoring, energy efficiency, family health tracking, and financial oversight, each with dedicated models and skills.
+  </Card>
+  <Card title="Network Management" icon="setting">
+    Firewalla integration provides firewall rules, DNS policy, and network topology from within the platform.
+  </Card>
+  <Card title="Voice Control" icon="microphone">
+    Yoda, the voice agent, uses XTTS-v2 for local text-to-speech on Apple Silicon MPS GPU. No cloud dependency for voice.
+  </Card>
+</CardGrid>
+
+## How It Works
+
+At the core of Sanctum is a single YAML configuration file (`instance.yaml`) that describes your entire deployment: which services are enabled, what ports they bind to, which nodes exist, and how secrets are managed. Every script, LaunchAgent, and dashboard panel reads from this one source of truth.
+
+<Tabs>
+  <TabItem label="Hub Node (Mac Mini)">
+    The hub is the primary node. It runs on an Apple Silicon Mac Mini and hosts:
+    - The Sanctum gateway and dashboard
+    - Home Assistant (Docker)
+    - AI agent gateway and specialized agents
+    - Local LLMs via MLX and LM Studio
+    - XTTS voice synthesis server
+    - Cloudflare tunnel for secure remote access
+  </TabItem>
+  <TabItem label="VM Workloads (Ubuntu)">
+    A UTM-managed Ubuntu VM handles workloads that benefit from a Linux environment:
+    - Agent orchestration (multi-agent routing, skill execution)
+    - Knowledge graph (Neo4j + Graphiti)
+    - SOPS-encrypted secrets for service credentials
+    - Network-isolated processing (host-only networking, no direct internet)
+  </TabItem>
+  <TabItem label="Satellite Nodes">
+    Additional locations (vacation home, office) run lightweight satellite nodes that connect back to the hub over Tailscale. Satellites get their own `node_id` and run a subset of services defined in `instance.yaml`.
+  </TabItem>
+</Tabs>
+
+## Key Differentiators
+
+### Single Configuration File
+
+Every service, port, path, and integration is declared in `~/.sanctum/instance.yaml`. There are no scattered `.env` files, no hardcoded usernames in scripts, no magic constants. When you change a port number, you change it in one place.
+
+### Multi-Node Architecture
+
+Sanctum supports hub, satellite, mobile, and sensor node types. Your primary home is the hub. A vacation house runs a satellite. Your laptop is a mobile node. Each node knows its role and adjusts its services accordingly.
+
+### Self-Healing Watchdog
+
+A watchdog process monitors over 20 services every 10 minutes. When it detects a failure, it attempts automatic remediation using the service-doctor skill before alerting you. Most issues resolve without human intervention.
+
+### Encrypted Secret Rotation
+
+API tokens and credentials are stored in macOS Keychain (on the Mac) and SOPS-encrypted files (on the VM). A monthly rotation job generates new tokens, updates Keychain entries, re-encrypts SOPS files, and restarts affected services.
+
+### Local-First AI
+
+Large language models run locally via MLX (Apple Silicon optimized) and LM Studio. Cloud APIs are available as fallbacks with automatic failover, but the system is designed to operate entirely on-premises when needed.
+
+<Aside type="note">
+  Sanctum is the productized name for this platform. Under the hood, it builds on the OpenClaw agent framework and leverages standard open-source components (Home Assistant, Docker, Tailscale, Firewalla). You are not locked into a proprietary ecosystem.
+</Aside>
+
+## Who Is Sanctum For?
+
+Sanctum is designed for technically inclined households that want:
+
+- **Full ownership** of their home intelligence stack, running on their own hardware.
+- **Deep customization** through config files, shell scripts, and agent skills rather than drag-and-drop UIs.
+- **Privacy by default**, with local LLMs, on-device voice, and no mandatory cloud services.
+- **Multi-site support** for families with more than one home.
+
+If you are comfortable with a terminal, YAML files, and the occasional `launchctl` command, Sanctum will feel natural.
+
+## Next Steps
+
+Ready to get started? Check the [Requirements](/getting-started/requirements/) to make sure your hardware and software are in order, then move on to [Installation](/getting-started/installation/).

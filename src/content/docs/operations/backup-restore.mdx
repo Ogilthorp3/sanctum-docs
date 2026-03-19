@@ -1,0 +1,75 @@
+---
+title: Backup & Restore
+description: Automated daily backups and disaster recovery procedures.
+---
+
+## Daily Backup
+
+Runs automatically at 4:15am via cron.
+
+```bash
+# Manual run
+bash ~/Backups/sanctum-backup.sh
+```
+
+### What Gets Backed Up
+
+- OpenClaw config (`~/.openclaw/`)
+- Sanctum config (`~/.sanctum/`)
+- All LaunchAgent plists
+- SSH keys and config
+- 6 project directories
+- TTS models and voice files
+- Crontab, Homebrew package lists
+- Docker container state and tool versions
+
+### Backup Location
+
+```
+iCloud/Backups/daily/YYYY-MM-DD/mac/
+```
+
+7-day retention (older backups auto-pruned).
+
+### Encryption
+
+Sensitive files (SSH keys, secrets) are encrypted with AES-256-CBC using a key stored in macOS Keychain (`sanctum-backup`).
+
+## VM Snapshot
+
+Weekly automated snapshot (Sundays 3am):
+
+```bash
+bash ~/Backups/vm-snapshot.sh
+```
+
+Creates compressed copies of the VM disk image and EFI vars:
+- `iCloud/Backups/VM/qcow2.zst`
+- `iCloud/Backups/VM/efi_vars.fd.zst`
+
+Uses live copy (no VM suspend) with SSH `sync` before snapshot.
+
+## Restore
+
+7-phase process:
+
+1. **Homebrew** — Restore package list, `brew install`
+2. **Dotfiles & SSH** — Restore keys, shell config
+3. **App configs** — OpenClaw, Sanctum, HA
+4. **Projects** — Restore git repos
+5. **Ollama** — Re-pull models (not backed up due to size)
+6. **Docker** — Restore container configs
+7. **LaunchAgents** — Restore plists, bootstrap services
+
+```bash
+bash ~/Backups/sanctum-restore.sh
+```
+
+## Backup Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `sanctum-backup.sh` | Full daily Mac backup |
+| `sanctum-restore.sh` | Multi-phase restore |
+| `vm-snapshot.sh` | Weekly VM disk snapshot |
+| `rotate-secrets.sh` | Monthly secret rotation |

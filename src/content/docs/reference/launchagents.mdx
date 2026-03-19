@@ -1,0 +1,326 @@
+---
+title: LaunchAgents & LaunchDaemons
+description: Reference for all Sanctum-managed macOS LaunchAgents and LaunchDaemons.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Sanctum manages a set of macOS LaunchAgents (user-level) and LaunchDaemons (root-level) that form the boot chain for the home intelligence platform. Each plist is rendered from templates at `~/.sanctum/templates/launchagents/` by the `generate-plists.sh` script, which pulls values from `instance.yaml` and tokens from the macOS Keychain.
+
+<Aside type="tip">
+Services with `KeepAlive: true` are automatically restarted by launchd if they exit. Services without KeepAlive run once at load and are not restarted.
+</Aside>
+
+## Boot Chain Overview
+
+LaunchAgents are loaded at user login. The ordering below reflects the logical dependency chain — launchd does not guarantee ordering, but `RunAtLoad: true` ensures all agents start promptly after login.
+
+## LaunchAgents
+
+### com.user.utm-autostart
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.user.utm-autostart` |
+| **Purpose** | Launch UTM, start the VM, and set the bridge100 IP to the configured `mac_bridge_ip` |
+| **Required Service** | `vm` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+
+Runs a startup script that launches UTM.app, waits for the VM to boot, and configures the bridge interface IP via `sudo ifconfig`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
+
+---
+
+### ai.openclaw.gateway
+
+| Property | Value |
+|----------|-------|
+| **Label** | `ai.openclaw.gateway` |
+| **Purpose** | OpenClaw/DenchClaw agent gateway on the Mac side |
+| **Required Service** | `gateway` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+| **Port** | `18789` |
+
+The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) to avoid breakage on Node.js upgrades.
+
+<Aside type="caution">
+Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup.
+</Aside>
+
+---
+
+### com.openclaw.firewalla-bridge
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.openclaw.firewalla-bridge` |
+| **Purpose** | Bridge between the Sanctum stack and the Firewalla Purple router via the P2P API |
+| **Required Service** | `firewalla` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `18094` |
+| **Bind** | `0.0.0.0` (accessible from VM) |
+
+Runs `firewalla-bridge.js` which authenticates to Firewalla's cloud endpoint and then communicates locally over port 8833. The bridge binds to all interfaces so the VM can reach it at `10.10.10.1:18094`.
+
+---
+
+### com.yoda.xtts-server
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.yoda.xtts-server` |
+| **Purpose** | XTTS-v2 text-to-speech server using Mac GPU (MPS) |
+| **Required Service** | `xtts` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+
+Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal Performance Shaders for faster inference compared to the legacy CPU-based VM server.
+
+---
+
+### com.yoda.voice-agent
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.yoda.voice-agent` |
+| **Purpose** | Yoda voice interaction agent |
+| **Required Service** | `voice_agent` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+
+Manages voice capture, wake-word detection, and Yoda personality interactions.
+
+---
+
+### com.user.ha-ssh-tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.user.ha-ssh-tunnel` |
+| **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 18092 |
+| **Required Service** | `home_assistant` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+
+Allows the Home Assistant container (running in Docker bridge networking) to reach the VM's Network Control API via `host.docker.internal`.
+
+---
+
+### com.sanctum.council-mlx
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.council-mlx` |
+| **Purpose** | Council-27B MLX model server for local agent inference |
+| **Required Service** | `mlx_server` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `8899` |
+
+Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent personalities. KeepAlive ensures the model stays loaded in memory.
+
+---
+
+### com.cloudflare.tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.cloudflare.tunnel` |
+| **Purpose** | Cloudflare Zero Trust tunnel for external access |
+| **Required Service** | `cloudflare` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `manoir-nepveu`). Routes external traffic to internal services like Home Assistant and the health ingester.
+
+---
+
+### com.user.health-ssh-tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.user.health-ssh-tunnel` |
+| **Purpose** | SSH tunnel for the health ingester to reach the VM on port 18095 |
+| **Required Service** | `health_center` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+---
+
+### com.manoir.icloud-filer
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.manoir.icloud-filer` |
+| **Purpose** | Automatic filing daemon for iCloud Drive documents |
+| **Required Service** | `icloud_filer` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+Watches iCloud Drive directories and automatically files documents into organized folder structures.
+
+---
+
+### com.sanctum.litellm-proxy
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.litellm-proxy` |
+| **Purpose** | LiteLLM fallback proxy for LLM API routing |
+| **Required Service** | `litellm` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Ports** | `4000` (proxy), `4001` (admin) |
+
+Provides automatic fallback routing from primary LLM providers to OpenRouter alternatives when billing errors or rate limits occur.
+
+---
+
+### com.sanctum.orbi-bridge
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.orbi-bridge` |
+| **Purpose** | socat bridge allowing the VM to reach the Orbi router |
+| **Required Service** | `vm` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Ports** | `18080` (HTTP), `18085` (API) |
+
+Forwards VM traffic from `10.10.10.1:18080` to the Orbi router at `192.168.1.2:80` and `10.10.10.1:18085` to `192.168.1.2:5000`. Required because the VM has no direct LAN access.
+
+---
+
+### com.sanctum.signal-bridge
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.signal-bridge` |
+| **Purpose** | Signal messaging bridge for agent communication |
+| **Required Service** | `signal_bridge` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+---
+
+### com.sanctum.watchdog
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.watchdog` |
+| **Purpose** | Health monitoring watchdog that runs every 600 seconds |
+| **Required Service** | `watchdog` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+| **StartInterval** | `600` |
+
+Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution.
+
+---
+
+### com.sanctum.rotate-secrets
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.rotate-secrets` |
+| **Purpose** | Monthly secret rotation (gateway tokens, API keys) |
+| **Required Service** | — |
+| **KeepAlive** | No |
+| **RunAtLoad** | No |
+| **StartCalendarInterval** | 1st of each month at 03:30 |
+
+Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password and the macOS Keychain.
+
+---
+
+### com.manoir.command-center
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.manoir.command-center` |
+| **Purpose** | Command center dashboard web server |
+| **Required Service** | `dashboard` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+| **Port** | `3001` |
+
+---
+
+### com.manoir.kiwix-serve
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.manoir.kiwix-serve` |
+| **Purpose** | Kiwix offline library server (Wikipedia, etc.) |
+| **Required Service** | `kiwix` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `8888` |
+| **ThrottleInterval** | `30` |
+
+Requires an external T9 drive to be mounted. KeepAlive with ThrottleInterval prevents rapid restart loops if the drive is disconnected.
+
+---
+
+## LaunchDaemons
+
+LaunchDaemons run as root and load at system boot (before user login).
+
+### com.manoir.dench-proxy
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.manoir.dench-proxy` |
+| **Purpose** | Reverse proxy from port 80 to port 19001 for the Holocron chat interface |
+| **Required Service** | `gateway` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Runs as** | `root` |
+
+This is a **LaunchDaemon** (not a LaunchAgent) because binding to port 80 requires root privileges. It enables `http://holocron/` access from the LAN without specifying a port.
+
+Plist location: `/Library/LaunchDaemons/com.manoir.dench-proxy.plist`
+
+---
+
+## Plist Generation
+
+All plists are rendered from Mustache-style templates using values from `instance.yaml` and tokens from the macOS Keychain:
+
+```bash
+# Preview what would be generated (dry run)
+~/.sanctum/generate-plists.sh --dry-run
+
+# Generate and install all plists for enabled services
+~/.sanctum/generate-plists.sh
+```
+
+The generator:
+1. Reads each template from `~/.sanctum/templates/launchagents/`
+2. Checks if the corresponding service is enabled in `instance.yaml`
+3. Expands `{{PLACEHOLDER}}` tokens with config values
+4. Pulls secrets from the macOS Keychain using the configured `keychain_account`
+5. Writes the rendered plist to `~/Library/LaunchAgents/` (or `/Library/LaunchDaemons/` for daemons)
+
+---
+
+## Managing Agents
+
+Load or unload agents using `launchctl`:
+
+```bash
+# Load an agent
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+
+# Unload an agent
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+
+# Check if an agent is running
+launchctl print gui/$(id -u)/com.sanctum.watchdog
+```
+
+<Aside type="caution">
+The gateway (`ai.openclaw.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks.
+</Aside>

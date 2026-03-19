@@ -1,0 +1,84 @@
+---
+title: Troubleshooting
+description: Common issues and how to resolve them.
+---
+
+## VM Unreachable
+
+**Symptom:** SSH to VM times out, dashboard shows VM as down.
+
+**Check:**
+1. Is UTM running? `pgrep -f UTM`
+2. Is bridge100 configured? `ifconfig bridge100`
+3. Can you ping the VM? `ping 10.10.10.10`
+
+**Fix:**
+```bash
+# Restart UTM autostart (reconfigures bridge100)
+launchctl bootout gui/$(id -u)/com.user.utm-autostart
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.utm-autostart.plist
+```
+
+## Service Down
+
+**Symptom:** Health check shows a service as failed.
+
+**Quick fix:**
+```bash
+bash ~/Projects/openclaw-skills/service-doctor/scripts/service-doctor.sh --fix
+```
+
+## LaunchAgent Not Loading
+
+**Symptom:** `launchctl list <label>` returns "Could not find service."
+
+**Fix:**
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
+```
+
+**Check plist validity:**
+```bash
+plutil -lint ~/Library/LaunchAgents/<label>.plist
+```
+
+## Expired Token (401 Unauthorized)
+
+**Symptom:** Gateway logs show `401 Unauthorized`.
+
+**Fix:** Rotate the affected token:
+```bash
+bash ~/Backups/rotate-secrets.sh
+```
+
+Or for just the gateway token:
+```bash
+openclaw setup-token
+```
+
+## Config Changes Not Taking Effect
+
+The JSON cache may be stale. Force regeneration:
+
+```bash
+touch ~/.sanctum/instance.yaml
+# Next config read will regenerate the cache
+```
+
+## Dashboard Not Loading
+
+1. Check if the backend is running: `curl http://localhost:3002/api/health/status`
+2. Check the LaunchAgent: `launchctl list com.manoir.command-center`
+3. Check port 3001: `lsof -i :3001`
+
+## Watchdog False Alarms
+
+If the watchdog keeps alerting for a known-down service:
+
+```bash
+# Check dedup state
+cat ~/.sanctum/.watchdog-state
+
+# Clear state to reset dedup
+rm ~/.sanctum/.watchdog-state
+```

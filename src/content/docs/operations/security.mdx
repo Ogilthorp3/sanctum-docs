@@ -1,0 +1,66 @@
+---
+title: Security
+description: Sanctum's security model and hardening practices.
+---
+
+## Defense in Depth
+
+Sanctum uses multiple layers of security:
+
+1. **Network isolation** — VM has no internet access (host-only networking)
+2. **Firewall** — pf rules on LAN interface block unauthorized port access
+3. **SSH hardening** — Key-only auth, no root login, AllowUsers restriction
+4. **Encrypted secrets** — SOPS+age on VM, macOS Keychain on Mac
+5. **Automatic rotation** — 8 secrets rotated monthly
+6. **Service binding** — Services bound to specific interfaces (not 0.0.0.0)
+
+## pf Firewall
+
+Rules in `/etc/pf.anchors/sanctum` block external access to internal ports on the LAN interface (en1):
+
+Blocked ports include: gateway (18789), dashboard dev (3000, 3004), XTTS (8020), MLX (8899), Firewalla bridge (18094), and others.
+
+## Secret Rotation
+
+Monthly via `com.sanctum.rotate-secrets` LaunchAgent (1st of month, 3:30am).
+
+Rotates 8 secrets:
+1. Home Assistant main + Windu tokens
+2. Firewalla bridge token
+3. Gateway token
+4. Network control token
+5. Backup encryption key
+6. OpenRouter API key
+7. Deepgram API key
+
+Plus verifies the Cloudflare tunnel token.
+
+```bash
+# Manual rotation
+bash ~/Backups/rotate-secrets.sh
+
+# Dry run
+bash ~/Backups/rotate-secrets.sh --dry-run
+```
+
+## SSH Hardening
+
+Both Mac and VM have hardened SSH configs:
+- Key-only authentication (no passwords)
+- No root login
+- AllowUsers restriction
+- Post-quantum key exchange (on VM)
+
+## VM Isolation
+
+The Ubuntu VM runs on host-only networking (bridge100, 10.10.10.0/24). It can only reach the Mac at 10.10.10.1 — no direct internet access. All external communication goes through the Mac.
+
+## Secrets Storage
+
+| Location | Purpose |
+|----------|---------|
+| macOS Keychain | Runtime token access |
+| 1Password | Backup copies of all secrets |
+| VM SOPS (age) | Encrypted secrets for VM services |
+
+Secrets are **never** stored in config files, git repos, or environment variables on disk.
