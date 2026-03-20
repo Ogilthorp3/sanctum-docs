@@ -50,30 +50,32 @@ Local inference and voice services that take advantage of Apple Silicon hardware
 | Council-27B MLX | 8899 | `com.sanctum.council-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
 | XTTS TTS Server | 8020 | `com.yoda.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
 | Voice Agent | 8090 | `com.yoda.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
-| LiteLLM Proxy | 4000 / 4001 | `com.sanctum.litellm-proxy` | LLM routing proxy with automatic fallback chain. Falls back from Anthropic to OpenRouter models on billing errors. KeepAlive enabled. |
+| LiteLLM Proxy | 4000 / 4001 | `com.sanctum.litellm-proxy` | Two-layer LLM proxy: guardrail injector (port 4000) + LiteLLM router (port 4001). Handles tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
-### Model Hierarchy
+### Model Routing
 
-The AI services form a fallback chain for inference:
+Agents use a **tiered model strategy** — each agent tier has its own primary model and fallback chain:
 
-```
-Request
-  |
-  +-- Primary: anthropic/claude-opus-4-6
-  |     (via direct API)
-  |
-  +-- Fallback 1: LM Studio (local, port 1234)
-  |     Qwen 3.5 35B
-  |
-  +-- Fallback 2: Council-27B MLX (local, port 8899)
-  |     Qwen 3.5 27B 4-bit + LoRA
-  |
-  +-- Fallback 3: OpenRouter
-        Qwen 3.5 Plus -> DeepSeek V3.2 -> MiniMax M2.5
-```
+| Tier | Primary | Fallback Chain | Used By |
+|------|---------|----------------|---------|
+| `claude-opus-4-6` | Claude Opus 4.6 (Anthropic) | qwen35-plus → gemini-25-pro | Claude Code direct |
+| `council-brain` | Qwen 3.5 Plus (OpenRouter) | claude-opus-4-6 → qwen35-plus → LM Studio → council-27b | Yoda, Jocasta |
+| `council-secure` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → LM Studio | Windu |
+| `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
+| `council-heartbeat` | Council 27B (local) | council-27b | All (heartbeat checks) |
+
+The **guardrail injector** (port 4000) intercepts all requests before they reach LiteLLM and applies a 7-step pipeline:
+
+0. Smart content-based routing (Gemini-first for non-code tasks)
+1. Anthropic prompt caching injection
+2. Thinking block sanitization
+3. Empty content block fixes
+4. Context window truncation
+5. Assistant message prefill stripping
+6. PII anonymization for OpenRouter
 
 <Aside>
-  LiteLLM handles the fallback routing automatically. The proxy also applies Presidio PII scrubbing before sending requests to external providers via OpenRouter.
+  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4000) handles request sanitization and content-based routing. All external traffic enters through port 4000.
 </Aside>
 
 ### Config Example
