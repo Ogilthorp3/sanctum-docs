@@ -109,7 +109,11 @@ The trusted proxies cover Docker's internal bridge subnets, allowing HA to corre
 
 ## Remote Access
 
-External access to HA is provided through a Cloudflare tunnel running as a LaunchAgent on the Mac.
+There are two remote access paths into HA, each serving a different purpose:
+
+### Browser Access (Cloudflare Tunnel)
+
+For accessing the HA web UI from a browser, a Cloudflare tunnel provides HTTPS with Zero Trust access controls.
 
 | Component            | Details                               |
 |----------------------|---------------------------------------|
@@ -117,9 +121,37 @@ External access to HA is provided through a Cloudflare tunnel running as a Launc
 | LaunchAgent          | `com.cloudflare.tunnel`               |
 | External URL         | `https://ha.nepveu.name`              |
 | Route                | `ha.nepveu.name` to `localhost:8123`  |
-| DNS                  | Cloudflare managed (nepveu.name)      |
+| Auth                 | Cloudflare Access OTP                 |
 
-The tunnel provides HTTPS termination and Cloudflare Zero Trust access controls without exposing any ports to the public internet.
+### iPhone Companion App (Tailscale)
+
+The HA Companion app cannot handle Cloudflare Access's login page, so it connects via Tailscale instead. Tailscale provides end-to-end WireGuard encryption, so HTTPS is not needed.
+
+<Aside type="important">
+  HA must be bound to `0.0.0.0:8123` (not `127.0.0.1`) in `compose.yaml` for Tailscale access to work. This is safe because HA has its own authentication, and LAN access is needed anyway for HomeKit and Sonos.
+</Aside>
+
+#### Companion App Setup
+
+<Steps>
+1. Install [Tailscale](https://apps.apple.com/app/tailscale/id1470499037) on iPhone and connect (do NOT enable exit node)
+2. Install [HA Companion](https://apps.apple.com/app/home-assistant/id1099568401)
+3. Open HA Companion → Settings → Companion App → Server & Connection
+4. Configure connection URLs:
+
+   | Field | Value |
+   |-------|-------|
+   | **Internal URL** | `http://<mac-lan-ip>:8123` |
+   | **External URL** | `http://<tailscale-ip>:8123` |
+
+5. Under **Internal Connection**: add your home Wi-Fi SSID so the app uses the LAN when home
+6. Enable **Local Push** for instant notifications on home Wi-Fi
+7. Test: turn off Wi-Fi briefly — the app should reconnect via Tailscale
+</Steps>
+
+<Aside type="tip">
+  Use `http://` for both URLs, not `https://`. The internal connection is on your LAN, and the external connection is encrypted by Tailscale's WireGuard tunnel. Adding HTTPS would require managing TLS certificates for no security gain.
+</Aside>
 
 ## HomeKit Bridge
 
