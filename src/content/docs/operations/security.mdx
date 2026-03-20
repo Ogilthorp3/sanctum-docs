@@ -13,6 +13,7 @@ Sanctum uses multiple layers of security:
 4. **Encrypted secrets** — SOPS+age on VM, macOS Keychain on Mac
 5. **Automatic rotation** — 8 secrets rotated monthly
 6. **Service binding** — Services bound to specific interfaces (not 0.0.0.0)
+7. **PII anonymization** — Personal data scrubbed from all external LLM requests
 
 ## pf Firewall
 
@@ -64,3 +65,60 @@ The Ubuntu VM runs on host-only networking (bridge100, 10.10.10.0/24). It can on
 | VM SOPS (age) | Encrypted secrets for VM services |
 
 Secrets are **never** stored in config files, git repos, or environment variables on disk.
+
+## PII Anonymization
+
+All requests routed to external LLM providers (OpenRouter) pass through a Presidio-based anonymization layer before leaving the network. This ensures personal data never reaches third-party inference APIs.
+
+### How It Works
+
+The guardrail injector proxy (port 4000) sits in front of LiteLLM (port 4001). When a request targets an OpenRouter model — either directly or via fallback routing — the proxy:
+
+1. Extracts text from user and assistant messages (system prompts are left untouched)
+2. Sends the text to a local Presidio analyzer container to detect PII entities
+3. Sends detected entities to a local Presidio anonymizer container to replace them with placeholders
+4. Forwards the scrubbed request to the external provider
+5. De-anonymizes the response before returning it to the caller
+
+### What Gets Scrubbed
+
+| Entity | Example | Replacement |
+|--------|---------|-------------|
+| Person names | `John Smith` | `<PERSON>` |
+| Email addresses | `john@example.com` | `<EMAIL_ADDRESS>` |
+| Phone numbers | `514-555-1234` | `<PHONE_NUMBER>` |
+| Credit cards | `4111-1111-1111-1111` | `<CREDIT_CARD>` |
+| SSN / bank numbers | `123-45-6789` | `<US_SSN>` |
+
+Only entities above 0.7 confidence score are anonymized. IP addresses, locations, and code identifiers are intentionally excluded to avoid breaking technical context.
+
+### What Is Not Affected
+
+- **Anthropic (Claude)** — direct API, no PII scrubbing (trusted provider, privacy policy reviewed)
+- **Local models** (LM Studio, Council-27B MLX) — never leave the network
+- **Gemini** — routed via Google AI Studio API (separate trust decision)
+- **System prompts** — contain instructions, not personal data
+
+### Architecture
+
+```
+Client → Guardrail Injector (port 4000) → LiteLLM (port 4001) → Provider
+              |                                                      |
+              +-- Presidio Analyzer (Docker, port 5002)              |
+              +-- Presidio Anonymizer (Docker, port 5001)            |
+              |                                                      |
+              +-- PII scrubbed before exit ◄─────────────────────────+
+              +-- PII restored on response
+```
+
+### Presidio Containers
+
+The analyzer and anonymizer run as local Docker containers, bound to localhost only:
+
+```bash
+# Check status
+docker ps --filter name=presidio
+
+# Restart if needed
+docker restart presidio-analyzer presidio-anonymizer
+```
