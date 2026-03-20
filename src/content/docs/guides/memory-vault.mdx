@@ -1,0 +1,132 @@
+---
+title: Memory Vault
+description: Shared Obsidian-compatible knowledge base accessible to all AI tools in Sanctum.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Memory Vault is a shared knowledge base that all AI tools in Sanctum can read and write to. Notes are stored as Obsidian-compatible Markdown files with YAML frontmatter and `[[wikilinks]]`, backed by a SQLite FTS5 index for fast search.
+
+<Aside type="note">
+  This documentation is automatically kept in sync with the Memory Vault codebase. When the vault is updated, these docs are updated in the same commit cycle.
+</Aside>
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────┐
+│ ~/.sanctum/memory/ (Obsidian vault)             │
+│  ├── home/       (infrastructure, config)       │
+│  ├── agents/     (agent-specific context)       │
+│  ├── family/     (household, preferences)       │
+│  └── projects/   (active work, goals)           │
+├─────────────────────────────────────────────────┤
+│ Memory Vault MCP Server (port 18097)            │
+│  ├── stdio transport → Claude Code, Gemini CLI  │
+│  └── SSE transport → VM agents via HTTP         │
+├─────────────────────────────────────────────────┤
+│ Consumers:                                      │
+│  ├── Claude Code (MCP stdio)                    │
+│  ├── Gemini CLI (MCP stdio)                     │
+│  ├── OpenClaw agents (SSH-based skill)          │
+│  └── Obsidian app (direct file access)          │
+└─────────────────────────────────────────────────┘
+```
+
+Every AI tool in the stack can store and recall knowledge through the vault, creating a shared memory that persists across conversations and agents.
+
+## Note Format
+
+Notes are Markdown files with YAML frontmatter:
+
+```markdown
+---
+type: system
+tags: [network, infrastructure]
+created: 2026-03-20T17:00:00Z
+updated: 2026-03-20T17:00:00Z
+---
+
+# Network Topology
+
+Content here with [[wikilinks]] to related notes...
+```
+
+### Note Types
+
+| Type | Folder | Purpose |
+|------|--------|---------|
+| `system` | `home/` | Infrastructure, config, services |
+| `agent` | `agents/` | Agent-specific context and memory |
+| `family` | `family/` | Family members, preferences, routines |
+| `project` | `projects/` | Active projects and goals |
+| `reference` | varies | External resources and documentation |
+
+### Wikilinks
+
+Notes can reference each other using `[[wikilinks]]`. The vault tracks these links in a graph, allowing agents to traverse related knowledge.
+
+## MCP Server
+
+The vault runs as an MCP server with two transport modes:
+
+| Transport | Port | Used by | How |
+|-----------|------|---------|-----|
+| stdio | — | Claude Code, Gemini CLI | Spawned per-session |
+| SSE | 18097 | VM agents, HTTP clients | LaunchAgent (persistent) |
+
+### Tools Available
+
+| Tool | Description |
+|------|-------------|
+| `memory_search` | Full-text search across all notes |
+| `memory_read` | Read a note by path |
+| `memory_write` | Create or update a note |
+| `memory_delete` | Remove a note |
+| `memory_list` | List notes by folder, tag, or type |
+| `memory_links` | Traverse the wikilink graph |
+
+### LaunchAgent
+
+The SSE server runs as a LaunchAgent for persistent access:
+
+```
+com.sanctum.memory-vault
+  Port: 18097 (bound to 0.0.0.0)
+  Auto-start: yes
+  Keep-alive: yes
+```
+
+## Tool Integration
+
+### Claude Code
+
+Configured in `~/.claude/settings.json` as an MCP server using stdio transport. Available as `memory_search`, `memory_read`, `memory_write`, etc. in every Claude Code session.
+
+### Gemini CLI
+
+Configured in `~/.gemini/settings.json` as an MCP server using stdio transport. Same tools available.
+
+### OpenClaw Agents (VM)
+
+Agents use the `memory-vault` skill which provides a bash wrapper (`vault.sh`) that accesses the vault via SSH to the Mac:
+
+```bash
+# From any agent
+vault.sh search "network topology"
+vault.sh read "home/services.md"
+vault.sh write "agents/my-context.md" "---\ntype: agent\n---\n# My Context\n..."
+vault.sh list --folder agents
+```
+
+### Obsidian
+
+Open `~/.sanctum/memory/` as an Obsidian vault for a visual graph view of all knowledge. Changes made in Obsidian are auto-committed via git.
+
+## Management
+
+The vault is included in standard Sanctum operational tools:
+
+- **`sanctum-status.sh`** checks if the vault server is running and reports note count
+- **`test-connections.sh`** tests SSE endpoint from Mac and VM, verifies note count
+- Changes are auto-committed to the vault's git repo
