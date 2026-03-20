@@ -1,0 +1,160 @@
+---
+title: Operations Tooling
+description: Built-in scripts for monitoring, syncing, diagnosing, and maintaining your Sanctum instance.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Sanctum ships with a set of operational scripts in `~/.sanctum/scripts/` that automate the most common maintenance tasks. These are designed to be run from the Mac Mini hub.
+
+<Aside type="note">
+  This documentation is automatically kept in sync with the scripts in the `sanctum-config` repository. When new tools are added or existing ones are updated, these docs are updated in the same commit cycle.
+</Aside>
+
+## sanctum-status.sh
+
+Full health check dashboard. Shows the state of every service, repo, tunnel, keychain entry, and external endpoint in one view.
+
+```bash
+~/.sanctum/scripts/sanctum-status.sh
+```
+
+**What it checks:**
+- Mac services: Cloudflare Tunnel, Home Assistant, LM Studio, Docker
+- VM services: health ingester, Graphiti, Neo4j, OpenClaw gateway
+- External access: ha.nepveu.name, health.nepveu.name, sanctum.haus (with CF Access token test)
+- Tailscale: connection status, peer count
+- Keychain: all critical keys present (account: `sanctum`)
+- Git repos: 8 Mac repos + VM repo (dirty files, unpushed commits)
+- Disk usage: Mac and VM
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--quiet` | Only show problems. Exit code = number of issues. |
+
+Use `--quiet` in cron jobs or post-boot checks to get a pass/fail result.
+
+## sanctum-sync.sh
+
+One command to check, commit, and push every Sanctum git repository — including the VM repo which requires a bundle proxy since it has no internet access.
+
+```bash
+~/.sanctum/scripts/sanctum-sync.sh
+```
+
+**Repos synced:**
+- `sanctum-config` (~/.sanctum)
+- `command-center`, `health-center`, `openclaw-skills`, `sanctum-docs`
+- `yoda-voice-agent`, `genome-mcp`, `icloud-organizer`
+- `manoir-nepveu` (VM, via bundle proxy)
+
+Dirty files are auto-committed with a generated message describing the changes. The VM repo is pushed through the Mac using `vm-push.sh` under the hood.
+
+**Flags:**
+
+| Flag | Effect |
+|------|--------|
+| `--dry-run` | Show what would be done without making changes |
+| `--force` | Commit and push without prompting |
+
+## sanctum-doctor.sh
+
+Diagnose common issues and optionally auto-fix them. Checks file permissions, port conflicts, stale processes, config cache, Docker health, keychain integrity, firewall state, and VM connectivity.
+
+```bash
+# Diagnose only
+~/.sanctum/scripts/sanctum-doctor.sh
+
+# Diagnose and auto-fix
+~/.sanctum/scripts/sanctum-doctor.sh --fix
+```
+
+**What it checks and fixes:**
+
+| Check | Auto-fix |
+|-------|----------|
+| Config cache stale | Regenerates `.instance.json` |
+| File permissions drifted | Restores `700`/`600` as needed |
+| Scripts not executable | `chmod 700` |
+| Duplicate cloudflared processes | Kills extras, keeps oldest |
+| Zombie Docker containers | `docker container prune` |
+| Stale `familyos` keychain entries | Reports (manual migration) |
+| Missing critical keychain keys | Reports |
+| pf firewall anchor not loaded | Reloads anchor |
+| Stopped Docker containers | `docker start` |
+| LaunchAgents not loaded | `launchctl bootstrap` |
+| VM SOPS vault integrity | Reports |
+
+## vm-push.sh
+
+Push the VM git repository to GitHub via the Mac. The VM runs on a host-only network with no internet access, so this script creates a git bundle on the VM, transfers it to the Mac, merges it with the GitHub remote, and pushes.
+
+```bash
+# Push current VM state
+~/.sanctum/scripts/vm-push.sh
+
+# Commit all dirty files on VM first, then push
+~/.sanctum/scripts/vm-push.sh --commit "Updated health ingester config"
+```
+
+Merge conflicts are resolved automatically by favoring the VM version (since the VM is the source of truth for its own repo).
+
+## rotate-cf-service-token.sh
+
+Rotate the Cloudflare Access service token used by Health Auto Export to authenticate with the health ingester. This should be run before the current token expires (check `sanctum-status.sh` for expiry warnings).
+
+```bash
+~/.sanctum/scripts/rotate-cf-service-token.sh
+```
+
+**What it does:**
+
+<Steps>
+1. Creates a new service token via CF API (1-year expiry)
+2. Updates the CF Access policy for `health.nepveu.name`
+3. Deletes the old service token
+4. Updates the Mac Keychain with new credentials
+5. Regenerates the Health Auto Export import file
+6. Verifies the new token works end-to-end
+</Steps>
+
+After running, you need to update Health Auto Export on the iPhone with the new `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers (or re-import the regenerated config from iCloud).
+
+## generate-hae-config.sh
+
+Generate a Health Auto Export importable `.json` file for this Sanctum instance. Reads tokens from Keychain and VM SOPS, and produces a file ready to AirDrop to an iPhone.
+
+```bash
+# Generate on Desktop (default)
+~/.sanctum/scripts/generate-hae-config.sh
+
+# Generate to specific path
+~/.sanctum/scripts/generate-hae-config.sh ~/Desktop/my-health-config.json
+```
+
+The generated config includes the correct endpoint URL, all three authentication headers (base64-encoded), and the 16 health metrics that the ingester processes. After AirDropping to the iPhone, open the file in Health Auto Export and tap Import.
+
+<Aside type="caution">
+  Health Auto Export may not import headers from the JSON file. If the test returns 401 or 403 after importing, add the three headers manually from the values in the Keychain (`cf-access-health-client-id`, `cf-access-health-client-secret`, and the bearer token from VM SOPS).
+</Aside>
+
+## generate-instance.sh
+
+Interactive wizard that creates a new `instance.yaml` for a fresh Sanctum installation. Asks about your household, network, optional services, and notifications, then generates a complete config file.
+
+```bash
+~/.sanctum/scripts/generate-instance.sh
+```
+
+The wizard:
+- Auto-detects your macOS username, home directory, and LAN IP
+- Picks up Tailscale hostname and IP if installed
+- Generates a URL slug from your household name
+- Asks which optional services to enable (Firewalla, voice agent, Cloudflare, health, Tailscale)
+- Configures Cloudflare domain and tunnel name if enabled
+- Sets up notification preferences (Signal)
+- Produces a properly formatted `instance.yaml` with `600` permissions
+
+After generating, review the file, fill in any hardware-specific values (UTM VM UUID, Firewalla MAC address, HA entity IDs), then run `generate-plists.sh` to create the LaunchAgents.
