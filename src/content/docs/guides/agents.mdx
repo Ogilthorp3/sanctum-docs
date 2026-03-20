@@ -35,39 +35,40 @@ Jocasta runs through the DenchClaw gateway on the Mac (port 18789) with its own 
 
 Agents use a tiered model strategy with automatic fallback to maintain availability during outages or rate limits.
 
-### Primary Model
+### Tiered Model Strategy
 
-All agents default to **Claude** as the primary model via the Anthropic API. This provides the highest quality reasoning for complex tasks.
+Each agent is assigned a **tier** that determines its primary model and fallback chain. All routing goes through the LiteLLM proxy (guardrail injector on port 4000 → LiteLLM on port 4001).
 
-### Fallback Chain
+| Tier | Primary Model | Fallback Chain | Agents |
+|------|--------------|----------------|--------|
+| `council-brain` | Qwen 3.5 Plus (OpenRouter) | claude-opus-4-6 → qwen35-plus → LM Studio → council-27b | Yoda, Jocasta |
+| `council-secure` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → LM Studio | Windu |
+| `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
+| `council-heartbeat` | Council 27B (local) | council-27b | All (heartbeat/status) |
 
-When the primary model is unavailable, agents fall through a chain of alternatives via OpenRouter and local LLMs:
-
-<Steps>
-1. **Claude** (Anthropic API) — primary
-2. **Qwen 3.5 Plus** (OpenRouter) — first fallback
-3. **DeepSeek V3.2** (OpenRouter) — second fallback
-4. **MiniMax M2.5** (OpenRouter) — third fallback, with Presidio PII scrubbing
-5. **Local LLM** (LM Studio, port 1234) — final fallback, fully offline
-</Steps>
+Claude Code connects directly as `claude-opus-4-6` (not through a tier), with its own fallback chain to qwen35-plus → gemini-25-pro.
 
 <Aside type="note">
-  OpenRouter fallbacks that route through non-US providers use Presidio PII scrubbing to strip personally identifiable information before the prompt leaves the local network.
+  Requests to OpenRouter are automatically scrubbed of personally identifiable information via Presidio PII anonymization in the guardrail injector. De-anonymization is applied to responses.
 </Aside>
 
 ### Local Models
 
-LM Studio runs on the Mac Mini (port 1234) serving local models for offline operation and low-latency tasks:
+| Model | Port | Use Case |
+|-------|------|----------|
+| Qwen 3.5 35B (A3B) | 1234 (LM Studio) | General reasoning fallback |
+| Qwen 3.5 27B 4-bit + LoRA | 8899 (MLX) | Agent-personalized local inference |
 
-| Model                  | Use Case                    |
-|------------------------|-----------------------------|
-| Qwen 3.5 35B (A3B)    | General reasoning fallback  |
-
-The Council-27B MLX server (port 8899) provides a Qwen 3.5 27B model with LoRA adapters fine-tuned for each of the six agents, enabling personalized responses at the local tier.
+The Council-27B MLX server provides LoRA adapters fine-tuned for each of the six agents, enabling personalized responses at the local tier.
 
 ### LiteLLM Proxy
 
-A LiteLLM proxy (port 4001) provides an additional fallback path. When Anthropic returns billing errors, requests are automatically rerouted to OpenRouter through the proxy.
+The LiteLLM proxy is the **primary routing layer** for all agent model requests. It consists of two components:
+
+- **Guardrail injector** (port 4000) — request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping
+- **LiteLLM** (port 4001) — model resolution, fallback routing, analytics
+
+See the [Services](/architecture/services/) page for the full 7-step request pipeline.
 
 ## Gateway Architecture
 
