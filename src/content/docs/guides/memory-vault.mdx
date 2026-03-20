@@ -1,132 +1,154 @@
 ---
 title: Memory Vault
-description: Shared Obsidian-compatible knowledge base accessible to all AI tools in Sanctum.
+description: Biomimicry-inspired shared memory system for all AI tools in Sanctum.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The Memory Vault is a shared knowledge base that all AI tools in Sanctum can read and write to. Notes are stored as Obsidian-compatible Markdown files with YAML frontmatter and `[[wikilinks]]`, backed by a SQLite FTS5 index for fast search.
+The Memory Vault is Sanctum's shared knowledge base, inspired by how human memory works. It uses a three-layer architecture — working memory, short-term, and long-term — with a daily consolidation process that acts like sleep: distilling raw observations into lasting knowledge.
 
 <Aside type="note">
-  This documentation is automatically kept in sync with the Memory Vault codebase. When the vault is updated, these docs are updated in the same commit cycle.
+  This documentation is automatically kept in sync with the Memory Vault codebase.
 </Aside>
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────┐
-│ ~/.sanctum/memory/ (Obsidian vault)             │
-│  ├── home/       (infrastructure, config)       │
-│  ├── agents/     (agent-specific context)       │
-│  ├── family/     (household, preferences)       │
-│  └── projects/   (active work, goals)           │
-├─────────────────────────────────────────────────┤
-│ Memory Vault MCP Server (port 18097)            │
-│  ├── stdio transport → Claude Code, Gemini CLI  │
-│  └── SSE transport → VM agents via HTTP         │
-├─────────────────────────────────────────────────┤
-│ Consumers:                                      │
-│  ├── Claude Code (MCP stdio)                    │
-│  ├── Gemini CLI (MCP stdio)                     │
-│  ├── OpenClaw agents (SSH-based skill)          │
-│  └── Obsidian app (direct file access)          │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  LAYER 1: WORKING MEMORY (per-session, ephemeral)   │
+│  Agent's context window. Dies when session ends.     │
+├─────────────────────────────────────────────────────┤
+│  LAYER 2: SHORT-TERM MEMORY (inbox/, days-weeks)    │
+│  inbox/{agent}/ — raw observations, session notes    │
+│  TTL: 7-30 days. Consolidated or discarded daily.    │
+├─────────────────────────────────────────────────────┤
+│  LAYER 3: LONG-TERM MEMORY (consolidated, permanent)│
+│  knowledge/{topic}/ — semantic facts (timeless)      │
+│  events/YYYY/MM/    — significant episodes           │
+│  procedures/        — how-to, runbooks               │
+│  Neo4j/Graphiti     — entity relationship graph      │
+└─────────────────────────────────────────────────────┘
 ```
 
-Every AI tool in the stack can store and recall knowledge through the vault, creating a shared memory that persists across conversations and agents.
+## Directory Structure
+
+```
+~/.sanctum/memory/
+├── inbox/                  # Short-term, per-agent
+│   ├── claude-code/
+│   ├── gemini-cli/
+│   ├── openclaw/
+│   └── home-assistant/
+├── knowledge/              # Long-term semantic
+│   ├── devices/
+│   ├── network/
+│   ├── systems/
+│   ├── people/
+│   └── preferences/
+├── events/                 # Long-term episodic
+│   └── 2026/03/
+├── procedures/             # Long-term procedural
+│   ├── troubleshooting/
+│   ├── maintenance/
+│   └── automation/
+├── archive/                # Expired, retained 90 days
+└── meta/                   # Schema, consolidation logs
+```
 
 ## Note Format
 
-Notes are Markdown files with YAML frontmatter:
+Every note has standardized YAML frontmatter:
 
-```markdown
+```yaml
 ---
-type: system
-tags: [network, infrastructure]
+type: semantic | episodic | procedural | observation | session_summary
+source_agent: claude-code | gemini-cli | openclaw | user | system
 created: 2026-03-20T17:00:00Z
 updated: 2026-03-20T17:00:00Z
+last_accessed: 2026-03-20T17:00:00Z
+access_count: 3
+importance: 0.85
+consolidation_status: raw | reviewed | consolidated | archived
+ttl_days: null  # null = permanent, or integer days
+superseded_by: null  # path to newer version
+tags: [network, infrastructure]
+related_entities: [mac-mini, ubuntu-vm]
 ---
 
-# Network Topology
+# Note Title
 
-Content here with [[wikilinks]] to related notes...
+Content with [[wikilinks]] to related notes...
 ```
 
-### Note Types
+## Importance Scoring
 
-| Type | Folder | Purpose |
-|------|--------|---------|
-| `system` | `home/` | Infrastructure, config, services |
-| `agent` | `agents/` | Agent-specific context and memory |
-| `family` | `family/` | Family members, preferences, routines |
-| `project` | `projects/` | Active projects and goals |
-| `reference` | varies | External resources and documentation |
+Every note has a computed importance score (0.0 to 1.0) that determines its TTL:
 
-### Wikilinks
+| Importance | TTL | Notes |
+|-----------|-----|-------|
+| > 0.8 | Permanent | Core knowledge, user-stated facts |
+| 0.5 - 0.8 | 90 days | Agent-observed patterns |
+| 0.3 - 0.5 | 30 days | Single observations |
+| < 0.3 | 7 days | Ephemeral session data |
 
-Notes can reference each other using `[[wikilinks]]`. The vault tracks these links in a graph, allowing agents to traverse related knowledge.
+**Score formula:** `source_weight x recency x access_frequency x link_density`
 
-## MCP Server
+Notes accessed 5+ times are protected from expiry regardless of score.
 
-The vault runs as an MCP server with two transport modes:
+## Consolidation
 
-| Transport | Port | Used by | How |
-|-----------|------|---------|-----|
-| stdio | — | Claude Code, Gemini CLI | Spawned per-session |
-| SSE | 18097 | VM agents, HTTP clients | LaunchAgent (persistent) |
+The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory-consolidate`). Like sleep for the brain:
 
-### Tools Available
+<Steps>
+1. **Scan inbox** for notes older than 24 hours
+2. **Deduplicate** against existing long-term knowledge
+3. **Classify** and move to the appropriate long-term directory
+4. **Recompute** importance scores for all active notes
+5. **Expire** notes that have exceeded their TTL
+6. **Clean archive** — delete archived notes older than 90 days
+7. **Generate report** in `meta/consolidation-log.md`
+</Steps>
+
+Any agent can trigger consolidation manually via the `memory_consolidate` MCP tool.
+
+## Hard Caps
+
+To prevent bloat, each layer has a maximum note count:
+
+| Layer | Max Notes | Action at Cap |
+|-------|-----------|---------------|
+| Inbox | 300 | Emergency consolidation |
+| Knowledge | 1000 | Merge related notes |
+| Events | 500 | Summarize old episodes |
+| Procedures | 200 | Merge similar runbooks |
+
+## MCP Tools (8 total)
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Full-text search across all notes |
-| `memory_read` | Read a note by path |
-| `memory_write` | Create or update a note |
+| `memory_search` | Full-text search with tag and folder filters |
+| `memory_read` | Read a note (auto-tracks access) |
+| `memory_write` | Create/update with schema enforcement |
 | `memory_delete` | Remove a note |
 | `memory_list` | List notes by folder, tag, or type |
 | `memory_links` | Traverse the wikilink graph |
-
-### LaunchAgent
-
-The SSE server runs as a LaunchAgent for persistent access:
-
-```
-com.sanctum.memory-vault
-  Port: 18097 (bound to 0.0.0.0)
-  Auto-start: yes
-  Keep-alive: yes
-```
+| `memory_consolidate` | Trigger consolidation (dry-run by default) |
+| `memory_health` | Vault health metrics dashboard |
 
 ## Tool Integration
 
-### Claude Code
+| Tool | Transport | Access Method |
+|------|-----------|--------------|
+| Claude Code | MCP stdio | Direct (settings.json) |
+| Gemini CLI | MCP stdio | Direct (settings.json) |
+| OpenClaw agents | SSH skill | `vault.sh` on VM |
+| Obsidian | File system | Open `~/.sanctum/memory/` as vault |
 
-Configured in `~/.claude/settings.json` as an MCP server using stdio transport. Available as `memory_search`, `memory_read`, `memory_write`, etc. in every Claude Code session.
+## Anti-Bloat Rules
 
-### Gemini CLI
-
-Configured in `~/.gemini/settings.json` as an MCP server using stdio transport. Same tools available.
-
-### OpenClaw Agents (VM)
-
-Agents use the `memory-vault` skill which provides a bash wrapper (`vault.sh`) that accesses the vault via SSH to the Mac:
-
-```bash
-# From any agent
-vault.sh search "network topology"
-vault.sh read "home/services.md"
-vault.sh write "agents/my-context.md" "---\ntype: agent\n---\n# My Context\n..."
-vault.sh list --folder agents
-```
-
-### Obsidian
-
-Open `~/.sanctum/memory/` as an Obsidian vault for a visual graph view of all knowledge. Changes made in Obsidian are auto-committed via git.
-
-## Management
-
-The vault is included in standard Sanctum operational tools:
-
-- **`sanctum-status.sh`** checks if the vault server is running and reports note count
-- **`test-connections.sh`** tests SSE endpoint from Mac and VM, verifies note count
-- Changes are auto-committed to the vault's git repo
+- If derivable from code, logs, or sensors — don't store it
+- If the same fact is stated multiple ways — dedup into one
+- If never accessed in 30 days and importance < 0.5 — archive
+- Raw data goes to time-series DBs, not memory
+- Every episodic memory needs context (who, what, when, why)
+- Every semantic memory should be self-contained
