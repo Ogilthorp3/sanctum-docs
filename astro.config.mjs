@@ -46,6 +46,7 @@ export default defineConfig({
 						{ label: 'Requirements', slug: 'getting-started/requirements' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run', slug: 'getting-started/first-run' },
+						{ label: 'Pricing', slug: 'getting-started/pricing' },
 					],
 				},
 				{
