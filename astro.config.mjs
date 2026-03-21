@@ -27,14 +27,22 @@ export default defineConfig({
 					tag: 'link',
 					attrs: {
 						rel: 'preconnect',
-						href: 'https://rsms.me/',
+						href: 'https://fonts.googleapis.com',
+					},
+				},
+				{
+					tag: 'link',
+					attrs: {
+						rel: 'preconnect',
+						href: 'https://fonts.gstatic.com',
+						crossorigin: '',
 					},
 				},
 				{
 					tag: 'link',
 					attrs: {
 						rel: 'stylesheet',
-						href: 'https://rsms.me/inter/inter.css',
+						href: 'https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;0,6..72,500;0,6..72,600;1,6..72,300;1,6..72,400&family=JetBrains+Mono:wght@300;400;500&display=swap',
 					},
 				},
 			],
@@ -67,12 +75,14 @@ export default defineConfig({
 						{ label: 'AI Agents', slug: 'guides/agents' },
 						{ label: 'Skills', slug: 'guides/skills' },
 						{ label: 'Satellite Setup', slug: 'guides/satellite-setup' },
+						{ label: 'Memory Vault', slug: 'guides/memory-vault' },
+						{ label: 'Health Monitoring', slug: 'guides/health-monitoring' },
 					],
 				},
 				{
 					label: 'Agents',
 					items: [
-						{ label: 'Tommy — Guardian Spirit', slug: 'agents/tommy' },
+						{ label: 'Tommy \u2014 Guardian Spirit', slug: 'agents/tommy' },
 					],
 				},
 				{
@@ -91,6 +101,7 @@ export default defineConfig({
 						{ label: 'Backup & Restore', slug: 'operations/backup-restore' },
 						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
+						{ label: 'Tooling', slug: 'operations/tooling' },
 					],
 				},
 			],
