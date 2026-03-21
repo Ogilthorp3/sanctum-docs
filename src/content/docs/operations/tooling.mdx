@@ -1,11 +1,13 @@
 ---
 title: Operations Tooling
-description: Built-in scripts for monitoring, syncing, diagnosing, and maintaining your Sanctum instance.
+description: Built-in scripts for monitoring, syncing, diagnosing, and maintaining your Sanctum instance. Your house has a CI/CD pipeline. Let that sink in.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Sanctum ships with a set of operational scripts in `~/.sanctum/scripts/` that automate the most common maintenance tasks. These are designed to be run from the Mac Mini hub.
+
+Your house has a health check suite, a sync pipeline, an auto-healing watchdog, and a diagnostic tool. There are Fortune 500 companies with worse observability. We're not going to dwell on what that says about the state of enterprise software or the mental state of people who build home intelligence platforms. We're just going to document the tools.
 
 <Aside type="note">
   This documentation is automatically kept in sync with the scripts in the `sanctum-config` repository. When new tools are added or existing ones are updated, these docs are updated in the same commit cycle.
@@ -13,7 +15,7 @@ Sanctum ships with a set of operational scripts in `~/.sanctum/scripts/` that au
 
 ## sanctum-status.sh
 
-Full health check dashboard. Shows the state of every service, repo, tunnel, keychain entry, and external endpoint in one view.
+The big picture. One command, every service, everything you need to know about whether your house is alive and well or quietly falling apart.
 
 ```bash
 ~/.sanctum/scripts/sanctum-status.sh
@@ -34,11 +36,11 @@ Full health check dashboard. Shows the state of every service, repo, tunnel, key
 |------|--------|
 | `--quiet` | Only show problems. Exit code = number of issues. |
 
-Use `--quiet` in cron jobs or post-boot checks to get a pass/fail result.
+Use `--quiet` in cron jobs or post-boot checks to get a pass/fail result. No news is good news. Literally — silence means everything is fine.
 
 ## sanctum-sync.sh
 
-One command to check, commit, and push every Sanctum git repository — including the VM repo which requires a bundle proxy since it has no internet access.
+One command to check, commit, and push every Sanctum git repository. Including the VM repo, which requires a bundle proxy because — and this never stops being fun to explain — the VM has no internet access.
 
 ```bash
 ~/.sanctum/scripts/sanctum-sync.sh
@@ -50,7 +52,7 @@ One command to check, commit, and push every Sanctum git repository — includin
 - `yoda-voice-agent`, `genome-mcp`, `icloud-organizer`
 - `manoir-nepveu` (VM, via bundle proxy)
 
-Dirty files are auto-committed with a generated message describing the changes. The VM repo is pushed through the Mac using `vm-push.sh` under the hood.
+Dirty files are auto-committed with a generated message describing the changes. The VM repo is pushed through the Mac using `vm-push.sh` under the hood, which creates a git bundle, sneaks it across the bridge network like contraband, and pushes it to GitHub on the VM's behalf.
 
 **Flags:**
 
@@ -59,9 +61,13 @@ Dirty files are auto-committed with a generated message describing the changes. 
 | `--dry-run` | Show what would be done without making changes |
 | `--force` | Commit and push without prompting |
 
+<Aside type="tip">
+`--force` is for when you trust yourself. `--dry-run` is for when you've learned not to.
+</Aside>
+
 ## sanctum-doctor.sh
 
-Diagnose common issues and optionally auto-fix them. Checks file permissions, port conflicts, stale processes, config cache, Docker health, keychain integrity, firewall state, and VM connectivity.
+The thing you run when something feels wrong but you don't know what. It checks file permissions, port conflicts, stale processes, config cache, Docker health, keychain integrity, firewall state, and VM connectivity. Then it tells you what's broken. And if you ask nicely — with `--fix` — it'll try to repair things too.
 
 ```bash
 # Diagnose only
@@ -87,9 +93,15 @@ Diagnose common issues and optionally auto-fix them. Checks file permissions, po
 | LaunchAgents not loaded | `launchctl bootstrap` |
 | VM SOPS vault integrity | Reports |
 
+<Aside type="caution">
+The doctor reports but does not auto-fix keychain issues. Keychain surgery requires human hands. This is by design — automated keychain modification at 3 AM is how you end up locked out of your own house. The one with the AI agents. Think about that.
+</Aside>
+
 ## vm-push.sh
 
 Push the VM git repository to GitHub via the Mac. The VM runs on a host-only network with no internet access, so this script creates a git bundle on the VM, transfers it to the Mac, merges it with the GitHub remote, and pushes.
+
+It's a Rube Goldberg machine for `git push`, and it works flawlessly.
 
 ```bash
 # Push current VM state
@@ -122,6 +134,8 @@ Rotate the Cloudflare Access service token used by Health Auto Export to authent
 
 After running, you need to update Health Auto Export on the iPhone with the new `CF-Access-Client-Id` and `CF-Access-Client-Secret` headers (or re-import the regenerated config from iCloud).
 
+Yes, the last step is manual. On your phone. With your thumbs. Welcome to the limits of automation.
+
 ## generate-hae-config.sh
 
 Generate a Health Auto Export importable `.json` file for this Sanctum instance. Reads tokens from Keychain and VM SOPS, and produces a file ready to AirDrop to an iPhone.
@@ -137,7 +151,7 @@ Generate a Health Auto Export importable `.json` file for this Sanctum instance.
 The generated config includes the correct endpoint URL, all three authentication headers (base64-encoded), and the 16 health metrics that the ingester processes. After AirDropping to the iPhone, open the file in Health Auto Export and tap Import.
 
 <Aside type="caution">
-  Health Auto Export may not import headers from the JSON file. If the test returns 401 or 403 after importing, add the three headers manually from the values in the Keychain (`cf-access-health-client-id`, `cf-access-health-client-secret`, and the bearer token from VM SOPS).
+  Health Auto Export may not import headers from the JSON file. If the test returns 401 or 403 after importing, add the three headers manually from the values in the Keychain (`cf-access-health-client-id`, `cf-access-health-client-secret`, and the bearer token from VM SOPS). This is one of those delightful iOS behaviors that works perfectly in testing and then doesn't in production. Sound familiar?
 </Aside>
 
 ## generate-instance.sh
@@ -158,3 +172,7 @@ The wizard:
 - Produces a properly formatted `instance.yaml` with `600` permissions
 
 After generating, review the file, fill in any hardware-specific values (UTM VM UUID, Firewalla MAC address, HA entity IDs), then run `generate-plists.sh` to create the LaunchAgents.
+
+<Aside type="note">
+The wizard gets you 80% of the way there. The last 20% is the part that requires you to actually know things about your own hardware. No script can help you find your Firewalla's MAC address. That's between you and your router's admin page.
+</Aside>

@@ -7,6 +7,8 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Every Sanctum service has an `enabled` flag in `instance.yaml`. Disabled services are skipped by the plist generator, excluded from the dashboard, and ignored by the watchdog. This page is the authoritative catalog of all services in the platform.
 
+There are a lot of them. What started as "I'll just automate the speakers" has become something that requires its own port allocation strategy and a documentation site. This is either a home automation system or a small government. The line blurred around service number twelve and never came back.
+
 ## Core Services
 
 The foundation of a Sanctum instance. These services are expected to run on every hub node.
@@ -21,7 +23,7 @@ The foundation of a Sanctum instance. These services are expected to run on ever
 | Dench Proxy | 80 | `com.manoir.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 19001. |
 
 <Aside type="tip">
-  The Dench Proxy is a **LaunchDaemon**, not a LaunchAgent. It runs as root to bind to port 80 and lives in `/Library/LaunchDaemons/`.
+  The Dench Proxy is a **LaunchDaemon**, not a LaunchAgent. It runs as root to bind to port 80 and lives in `/Library/LaunchDaemons/`. Yes, one of the services runs as root so the family can type `http://holocron/` instead of `http://holocron:19001/`. Vanity port. Worth it.
 </Aside>
 
 ### Config Example
@@ -42,7 +44,7 @@ services:
 
 ## AI Services
 
-Local inference and voice services that take advantage of Apple Silicon hardware on the Mac Mini.
+Local inference and voice services that take advantage of Apple Silicon hardware on the Mac Mini. This section is where the power bill starts to make sense. Or stops making sense. Depends on your perspective.
 
 | Service | Port | LaunchAgent | Description |
 |---------|------|-------------|-------------|
@@ -54,7 +56,7 @@ Local inference and voice services that take advantage of Apple Silicon hardware
 
 ### Model Routing
 
-Agents use a **tiered model strategy** — each agent tier has its own primary model and fallback chain:
+Agents use a **tiered model strategy** -- each agent tier has its own primary model and fallback chain. When the primary model is unavailable (billing error, rate limit, solar flare), traffic cascades down through increasingly local alternatives until it hits a quantized model running on the same machine. The AI equivalent of "the generator kicked in."
 
 | Tier | Primary | Fallback Chain | Used By |
 |------|---------|----------------|---------|
@@ -75,7 +77,7 @@ The **guardrail injector** (port 4000) intercepts all requests before they reach
 6. PII anonymization for OpenRouter
 
 <Aside>
-  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4000) handles request sanitization and content-based routing. All external traffic enters through port 4000.
+  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4000) handles request sanitization and content-based routing. All external traffic enters through port 4000. Two ports, seven pipeline stages, and a hope that the content blocks aren't empty again.
 </Aside>
 
 ### Config Example
@@ -102,7 +104,7 @@ services:
 
 ## Network Services
 
-Bridges and tunnels that connect Sanctum to network devices and the outside world.
+Bridges and tunnels that connect Sanctum to network devices and the outside world. If the core services are the organs, these are the nervous system -- delicate, invisible when they work, and the first thing you suspect when something goes wrong.
 
 | Service | Port | LaunchAgent | Description |
 |---------|------|-------------|-------------|
@@ -122,7 +124,7 @@ Bridges and tunnels that connect Sanctum to network devices and the outside worl
 | `ha.nepveu.name` | `localhost:8123` | Home Assistant remote access |
 
 <Aside type="caution">
-  The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. Keys are stored at `~/.sanctum/firewalla/keys/`.
+  The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. Keys are stored at `~/.sanctum/firewalla/keys/`. So yes -- to talk to the router sitting three feet away, we first authenticate through a cloud service. Home networking in 2026.
 </Aside>
 
 ### Config Example
@@ -143,7 +145,7 @@ services:
 
 ## System Services
 
-Background agents that maintain the health, security, and data integrity of the instance.
+Background agents that maintain the health, security, and data integrity of the instance. These are the services nobody thinks about until they stop running, at which point everybody thinks about them very quickly.
 
 | Service | Port | LaunchAgent | Description |
 |---------|------|-------------|-------------|
@@ -154,6 +156,10 @@ Background agents that maintain the health, security, and data integrity of the 
 | UTM Autostart | -- | `com.user.utm-autostart` | Launches UTM on login, starts the Ubuntu VM, and sets the bridge100 interface IP to 10.10.10.1. |
 | Music Cleanup | -- | `com.manoir.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
 | Kiwix | 8888 | `com.manoir.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
+
+<Aside type="note">
+  Kiwix requires an external T9 drive to be connected. If the drive is absent, the service will start, fail, wait 30 seconds, and try again. Forever. KeepAlive is patient. KeepAlive believes in you plugging that drive back in.
+</Aside>
 
 ### Config Example
 
@@ -176,7 +182,7 @@ services:
 
 ## VM Services
 
-These services run on the Ubuntu VM (`10.10.10.10`) and are managed by systemd, not macOS LaunchAgents.
+These services run on the Ubuntu VM (`10.10.10.10`) and are managed by systemd, not macOS LaunchAgents. A whole different init system, a whole different set of complaints.
 
 | Service | Port | Systemd Unit | Description |
 |---------|------|-------------|-------------|
@@ -197,7 +203,7 @@ These services run on the Ubuntu VM (`10.10.10.10`) and are managed by systemd, 
 The gateway uses SOPS+age encryption for secrets. The `sops-start.sh` wrapper decrypts environment variables at startup and never writes plaintext to disk.
 
 <Aside>
-  The VM has no direct internet access. All external API calls route through Mac-side proxies or SSH tunnels. Skills sync from the Mac via rsync every 30 minutes.
+  The VM has no direct internet access. All external API calls route through Mac-side proxies or SSH tunnels. Skills sync from the Mac via rsync every 30 minutes. The VM is, in the most literal sense, a brain in a jar. An air-gapped brain in a jar with five personalities.
 </Aside>
 
 ### VM Gateway Management
@@ -245,7 +251,7 @@ Every service follows the same lifecycle through the configuration system:
 
 ## Port Summary
 
-A quick-reference table of every port in use across the instance.
+A quick-reference table of every port in use across the instance. Print this out. Tape it to the wall. You will need it at 2 AM when something is listening on a port and you can't remember what.
 
 | Port | Service | Host |
 |------|---------|------|
@@ -269,3 +275,7 @@ A quick-reference table of every port in use across the instance.
 | 18789 | OpenClaw Gateway | VM |
 | 19001 | Holocron Chat | Mac |
 | 21063 | HomeKit Bridge | Mac (Docker) |
+
+<Aside type="danger">
+  Port 18789 is used by both the DenchClaw Gateway (Mac) and OpenClaw Gateway (VM). They don't conflict because they live on different hosts (10.10.10.1 and 10.10.10.10). But if you ever bridge them onto the same network, you'll have two gateways fighting for the same port, and nobody wins that war.
+</Aside>

@@ -7,6 +7,8 @@ import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
 
 Sanctum follows a single-source-of-truth principle: one YAML file defines the entire instance. Every service, script, dashboard, and LaunchAgent reads its configuration from this file -- either directly or through generated artifacts. Secrets are stored separately in macOS Keychain and never appear in configuration files.
 
+This is either an act of elegant simplicity or a magnificent dare. One file. One indentation error away from a very quiet house.
+
 ## Configuration Hierarchy
 
 ```
@@ -24,6 +26,8 @@ Sanctum follows a single-source-of-truth principle: one YAML file defines the en
     +-- macOS Keychain             <-- Secrets (tokens, API keys)
     +-- SOPS + age                 <-- VM-side encrypted secrets
 ```
+
+Everything flows down from that YAML file at the top. If you're looking for the single point of failure, you found it. If you're looking for the single source of truth, you also found it. Schrodinger's architecture decision: genius and catastrophe in the same file, and you won't know which until you open it.
 
 ## instance.yaml
 
@@ -81,7 +85,7 @@ nodes:
 ```
 
 <Aside type="tip">
-  An annotated example file is available at `~/.sanctum/instance.yaml.example`. Copy it as your starting point when creating a new instance.
+  An annotated example file is available at `~/.sanctum/instance.yaml.example`. Copy it as your starting point when creating a new instance. Read it slowly. The comments are trying to save you from the mistakes we already made.
 </Aside>
 
 ## JSON Cache
@@ -93,7 +97,7 @@ The JSON cache at `~/.sanctum/.instance.json` is an auto-generated derivative of
 python3 ~/.sanctum/lib/yaml2json.py
 ```
 
-The cache is regenerated automatically whenever configuration libraries detect the YAML file is newer than the JSON. Never edit `.instance.json` by hand -- changes will be overwritten.
+The cache is regenerated automatically whenever configuration libraries detect the YAML file is newer than the JSON. Never edit `.instance.json` by hand -- changes will be overwritten. This is not a suggestion. The file is named with a dot prefix for a reason. It is trying to hide from you.
 
 ## Shell Library
 
@@ -172,6 +176,8 @@ if (isEnabled('home_assistant')) {
 
 LaunchAgent plist files are generated from templates rather than hand-maintained. This ensures every plist stays in sync with `instance.yaml` and that secrets are injected at generation time from macOS Keychain.
 
+If you've ever manually edited 11 plist files, changed a port number, missed one, and then spent 45 minutes watching logs from the wrong service -- this system exists because of you. Well. Because of us.
+
 Templates live in `~/.sanctum/templates/launchagents/` and use a `{{PLACEHOLDER}}` syntax:
 
 ```xml
@@ -225,7 +231,7 @@ The `generate-plists.sh` script renders all templates:
 ```
 
 <Aside type="caution">
-  After regenerating plists, you must `launchctl unload` and `launchctl load` any changed agents for the new configuration to take effect. The watchdog will detect stopped services and restart them if needed.
+  After regenerating plists, you must `launchctl unload` and `launchctl load` any changed agents for the new configuration to take effect. The watchdog will detect stopped services and restart them if needed. launchctl does not care about your feelings or your intention to restart things "in a minute."
 </Aside>
 
 ## Secrets Management
@@ -240,7 +246,7 @@ Secrets never appear in `instance.yaml` or any configuration file. They are stor
     security find-generic-password -a "sanctum" -s "gateway-token" -w
     ```
 
-    Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM.
+    Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM. Nothing like waking up to fresh tokens you didn't have to think about.
   </TabItem>
   <TabItem label="VM (SOPS + age)">
     On the VM, secrets are encrypted at rest using SOPS with age encryption:
@@ -253,12 +259,12 @@ Secrets never appear in `instance.yaml` or any configuration file. They are stor
     ~/.sanctum/sops-start.sh
     ```
 
-    The `sops-start.sh` wrapper decrypts secrets into environment variables, starts the gateway, and never writes plaintext to disk.
+    The `sops-start.sh` wrapper decrypts secrets into environment variables, starts the gateway, and never writes plaintext to disk. The secrets exist in memory only, like a thought you can't quite remember but that still controls your house.
   </TabItem>
 </Tabs>
 
 <Aside type="danger">
-  Never commit secrets to Git, never add them to `instance.yaml`, and never pass them as command-line arguments (they appear in `ps` output). Use Keychain on macOS and SOPS on the VM.
+  Never commit secrets to Git, never add them to `instance.yaml`, and never pass them as command-line arguments (they appear in `ps` output). Use Keychain on macOS and SOPS on the VM. If you're reading this because you already did one of those things -- rotate immediately. We'll wait.
 </Aside>
 
 ## Adding a New Service
@@ -273,3 +279,7 @@ To add a new service to the configuration layer:
 5. Add the service to the appropriate node's `services` list in `instance.yaml`.
 6. Update the watchdog configuration if the service should be health-checked.
 </Steps>
+
+<Aside type="note">
+  Six steps. That's not bad for a system that will now automatically start, monitor, restart, and health-check your new service across reboots and power failures. You've traded six steps for never thinking about it again. That's the deal.
+</Aside>

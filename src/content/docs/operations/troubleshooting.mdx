@@ -1,11 +1,21 @@
 ---
 title: Troubleshooting
-description: Common issues and how to resolve them.
+description: Common issues and how to resolve them. We're not going to pretend everything is fine.
 ---
+
+import { Aside } from '@astrojs/starlight/components';
+
+If you're here, something has gone wrong. We're not going to sugarcoat that. But most things that go wrong have gone wrong before, and the solutions are written down on this page, which means you're already in better shape than the first time each of these problems was encountered at 2 AM with nothing but `man launchctl` and a growing sense of dread.
+
+<Aside type="tip">
+Before diving into specific symptoms, try the universal first step: `~/.sanctum/scripts/sanctum-doctor.sh --fix`. It catches and auto-heals about 60% of common issues. If the doctor can't fix it, at least you'll have a diagnosis.
+</Aside>
 
 ## VM Unreachable
 
 **Symptom:** SSH to VM times out, dashboard shows VM as down.
+
+The VM lives in a sealed room with one door. If you can't reach it, either the room is gone or the door is locked.
 
 **Check:**
 1. Is UTM running? `pgrep -f UTM`
@@ -19,6 +29,10 @@ launchctl bootout gui/$(id -u)/com.user.utm-autostart
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.utm-autostart.plist
 ```
 
+<Aside type="note">
+If bridge100 doesn't exist at all, UTM either hasn't started the VM or macOS decided the bridge interface wasn't important enough to keep around. The `utm-autostart` script recreates it via `sudo ifconfig`. The sudoers entry at `/etc/sudoers.d/vmnet-bridge` makes this passwordless.
+</Aside>
+
 ## Service Down
 
 **Symptom:** Health check shows a service as failed.
@@ -28,9 +42,13 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.user.utm-autostart.p
 bash ~/Projects/openclaw-skills/service-doctor/scripts/service-doctor.sh --fix
 ```
 
+The service doctor knows how to restart most things. If it can't fix the problem, it will at least tell you what's wrong in language more helpful than a cryptic exit code.
+
 ## LaunchAgent Not Loading
 
 **Symptom:** `launchctl list <label>` returns "Could not find service."
+
+A plist that isn't loaded is just an XML file sitting in a directory, dreaming of being useful.
 
 **Fix:**
 ```bash
@@ -42,9 +60,15 @@ launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/<label>.plist
 plutil -lint ~/Library/LaunchAgents/<label>.plist
 ```
 
+<Aside type="caution">
+If `plutil` reports errors, the plist has a syntax problem. Run `generate-plists.sh` to regenerate it from the template. Hand-editing plists is how XML gets its reputation.
+</Aside>
+
 ## Expired Token (401 Unauthorized)
 
 **Symptom:** Gateway logs show `401 Unauthorized`.
+
+A token has died of old age. This happens monthly if rotation didn't run, or immediately if you rotated manually and forgot to propagate the new token somewhere.
 
 **Fix:** Rotate the affected token:
 ```bash
@@ -58,12 +82,18 @@ openclaw setup-token
 
 ## Config Changes Not Taking Effect
 
-The JSON cache may be stale. Force regeneration:
+The JSON cache may be stale. The shell and TypeScript libraries read from `.instance.json`, not directly from `instance.yaml`. If you edited the YAML, the cache needs to catch up.
+
+Force regeneration:
 
 ```bash
 touch ~/.sanctum/instance.yaml
 # Next config read will regenerate the cache
 ```
+
+<Aside type="note">
+This is the config equivalent of turning it off and on again. The `touch` updates the file's modification time, which triggers cache invalidation on the next read. Elegant? Debatable. Effective? Always.
+</Aside>
 
 ## Dashboard Not Loading
 
@@ -71,9 +101,11 @@ touch ~/.sanctum/instance.yaml
 2. Check the LaunchAgent: `launchctl list com.manoir.command-center`
 3. Check port 3001: `lsof -i :3001`
 
+If port 3001 is occupied by something that isn't the dashboard, you've found your problem. Kill the interloper, reload the LaunchAgent, and carry on.
+
 ## Watchdog False Alarms
 
-If the watchdog keeps alerting for a known-down service:
+If the watchdog keeps alerting for a known-down service — one you've intentionally stopped, or one that's in maintenance — the deduplication state may need clearing.
 
 ```bash
 # Check dedup state
@@ -82,3 +114,9 @@ cat ~/.sanctum/.watchdog-state
 # Clear state to reset dedup
 rm ~/.sanctum/.watchdog-state
 ```
+
+The watchdog will rebuild its state file on the next run. This is harmless. The worst that happens is you get one extra notification cycle before dedup kicks back in.
+
+<Aside type="danger">
+If you're getting false alarms for a service that *should* be running, don't clear the watchdog state — fix the service. Silencing the smoke detector is not the same as putting out the fire.
+</Aside>

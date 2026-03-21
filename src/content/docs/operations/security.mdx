@@ -1,11 +1,15 @@
 ---
 title: Security
-description: Sanctum's security model and hardening practices.
+description: Sanctum's security model and hardening practices. Paranoia as a service.
 ---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Somewhere a security auditor is reading this page and trying to decide whether to be impressed or alarmed that this level of defense-in-depth has been applied to a house. The answer is both. It should be both.
 
 ## Defense in Depth
 
-Sanctum uses multiple layers of security:
+Sanctum uses seven layers of security, because if action movies have taught us anything, it's that every single layer will eventually be breached by someone with enough determination. The game isn't making the wall perfect — it's making the attacker tired.
 
 1. **Network isolation** — VM has no internet access (host-only networking)
 2. **Firewall** — pf rules on LAN interface block unauthorized port access
@@ -15,11 +19,17 @@ Sanctum uses multiple layers of security:
 6. **Service binding** — Services bound to specific interfaces (not 0.0.0.0)
 7. **PII anonymization** — Personal data scrubbed from all external LLM requests
 
+<Aside type="tip">
+The VM literally cannot reach the internet. It sits in a digital room with no doors to the outside, talking to the Mac through a slot in the wall. This is not a metaphor. This is the actual network topology.
+</Aside>
+
 ## pf Firewall
 
 Rules in `/etc/pf.anchors/sanctum` block external access to internal ports on the LAN interface (en1):
 
 Blocked ports include: gateway (18789), dashboard dev (3000, 3004), XTTS (8020), MLX (8899), Firewalla bridge (18094), and others.
+
+The philosophy: if a service doesn't need to talk to the LAN, it doesn't get to. Every open port is a decision, not a default.
 
 ## Secret Rotation
 
@@ -44,6 +54,10 @@ bash ~/Backups/rotate-secrets.sh
 bash ~/Backups/rotate-secrets.sh --dry-run
 ```
 
+<Aside type="note">
+The secrets rotate while you sleep. By the time you wake up, every token from last month is dead. This is the kind of thing that sounds paranoid until you read about the breach that happened because someone's API key was six months old and had been quietly exfiltrated in February.
+</Aside>
+
 ## SSH Hardening
 
 Both Mac and VM have hardened SSH configs:
@@ -52,9 +66,13 @@ Both Mac and VM have hardened SSH configs:
 - AllowUsers restriction
 - Post-quantum key exchange (on VM)
 
+Yes, post-quantum key exchange. For a VM that can't access the internet. Because when the quantum computers arrive, they'll find this particular door already bolted from the inside.
+
 ## VM Isolation
 
 The Ubuntu VM runs on host-only networking (bridge100, 10.10.10.0/24). It can only reach the Mac at 10.10.10.1 — no direct internet access. All external communication goes through the Mac.
+
+This means a compromised VM can't phone home, can't exfiltrate data, can't join a botnet. The worst it can do is send a strongly worded message to the Mac, which is already watching.
 
 ## Secrets Storage
 
@@ -66,9 +84,15 @@ The Ubuntu VM runs on host-only networking (bridge100, 10.10.10.0/24). It can on
 
 Secrets are **never** stored in config files, git repos, or environment variables on disk.
 
+<Aside type="danger">
+If you find a secret in a git repo, something has gone wrong. Rotate it immediately, then figure out how it got there, then have a quiet word with whoever committed it. Possibly yourself. Especially yourself.
+</Aside>
+
 ## PII Anonymization
 
 All requests routed to external LLM providers (OpenRouter) pass through a Presidio-based anonymization layer before leaving the network. This ensures personal data never reaches third-party inference APIs.
+
+Your AI agents know your name. The cloud doesn't need to.
 
 ### How It Works
 
@@ -122,3 +146,7 @@ docker ps --filter name=presidio
 # Restart if needed
 docker restart presidio-analyzer presidio-anonymizer
 ```
+
+<Aside type="caution">
+If the Presidio containers are down, PII scrubbing silently stops working and requests go through unscrubbed. The watchdog checks for this, but it's worth knowing: the absence of a safety net looks exactly like the presence of one until you fall.
+</Aside>
