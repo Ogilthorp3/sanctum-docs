@@ -1,19 +1,23 @@
 ---
 title: LaunchAgents & LaunchDaemons
-description: Reference for all Sanctum-managed macOS LaunchAgents and LaunchDaemons.
+description: Reference for all Sanctum-managed macOS LaunchAgents and LaunchDaemons. XML plists, because Apple said so.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 Sanctum manages a set of macOS LaunchAgents (user-level) and LaunchDaemons (root-level) that form the boot chain for the home intelligence platform. Each plist is rendered from templates at `~/.sanctum/templates/launchagents/` by the `generate-plists.sh` script, which pulls values from `instance.yaml` and tokens from the macOS Keychain.
 
+You might wonder why these aren't written in a friendlier format. The answer is that Apple chose XML for process management configuration in 2005 and has been politely pretending that was fine ever since. The template system exists so you never have to touch raw plist XML. You're welcome.
+
 <Aside type="tip">
-Services with `KeepAlive: true` are automatically restarted by launchd if they exit. Services without KeepAlive run once at load and are not restarted.
+Services with `KeepAlive: true` are automatically restarted by launchd if they exit. Services without KeepAlive run once at load and are not restarted. KeepAlive is the difference between "runs at boot" and "runs forever, whether it likes it or not."
 </Aside>
 
 ## Boot Chain Overview
 
 LaunchAgents are loaded at user login. The ordering below reflects the logical dependency chain — launchd does not guarantee ordering, but `RunAtLoad: true` ensures all agents start promptly after login.
+
+In practice, everything starts within seconds of each other and sorts itself out. It's less of a chain and more of a stampede in roughly the right direction.
 
 ## LaunchAgents
 
@@ -28,6 +32,8 @@ LaunchAgents are loaded at user login. The ordering below reflects the logical d
 | **RunAtLoad** | Yes |
 
 Runs a startup script that launches UTM.app, waits for the VM to boot, and configures the bridge interface IP via `sudo ifconfig`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
+
+The first domino. Everything else assumes the VM is running and the bridge exists.
 
 ---
 
@@ -45,7 +51,7 @@ Runs a startup script that launches UTM.app, waits for the VM to boot, and confi
 The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) to avoid breakage on Node.js upgrades.
 
 <Aside type="caution">
-Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup.
+Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup. Ignoring this advice results in orphaned port locks and a gateway that thinks it's running when it isn't, which is worse than a gateway that's honestly down.
 </Aside>
 
 ---
@@ -63,6 +69,8 @@ Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never u
 | **Bind** | `0.0.0.0` (accessible from VM) |
 
 Runs `firewalla-bridge.js` which authenticates to Firewalla's cloud endpoint and then communicates locally over port 8833. The bridge binds to all interfaces so the VM can reach it at `10.10.10.1:18094`.
+
+A bridge to a bridge. Networking is turtles all the way down.
 
 ---
 
@@ -90,7 +98,7 @@ Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal P
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Manages voice capture, wake-word detection, and Yoda personality interactions.
+Manages voice capture, wake-word detection, and Yoda personality interactions. The part of the system that listens for someone to say the magic words, then responds in the cadence of a small green Jedi. A completely normal thing for a house to do.
 
 ---
 
@@ -119,7 +127,7 @@ Allows the Home Assistant container (running in Docker bridge networking) to rea
 | **RunAtLoad** | Yes |
 | **Port** | `8899` |
 
-Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent personalities. KeepAlive ensures the model stays loaded in memory.
+Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent personalities. KeepAlive ensures the model stays loaded in memory. Twenty-seven billion parameters, sitting in RAM, waiting to be useful. The idle power draw of a small space heater, but for thinking.
 
 ---
 
@@ -159,7 +167,7 @@ Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `haus
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
-Watches iCloud Drive directories and automatically files documents into organized folder structures.
+Watches iCloud Drive directories and automatically files documents into organized folder structures. Digital Marie Kondo, but for PDFs.
 
 ---
 
@@ -191,6 +199,8 @@ Runs two processes: the guardrail injector (Starlette/uvicorn on port 4000) whic
 
 Forwards VM traffic from `10.10.10.1:18080` to the Orbi router at `192.168.1.2:80` and `10.10.10.1:18085` to `192.168.1.2:5000`. Required because the VM has no direct LAN access.
 
+The VM wants to talk to the router. The VM can't reach the router. So we built a socat tunnel through the Mac. Networking: where every problem is solved by adding another layer of indirection.
+
 ---
 
 ### com.sanctum.signal-bridge
@@ -216,7 +226,7 @@ Forwards VM traffic from `10.10.10.1:18080` to the Orbi router at `192.168.1.2:8
 | **RunAtLoad** | Yes |
 | **StartInterval** | `600` |
 
-Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution.
+Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep.
 
 ---
 
@@ -231,7 +241,7 @@ Periodically checks the health of all enabled services and auto-heals failures v
 | **RunAtLoad** | No |
 | **StartCalendarInterval** | 1st of each month at 03:30 |
 
-Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password and the macOS Keychain.
+Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password and the macOS Keychain. The only agent that doesn't start at login — it waits for its appointed hour like a well-mannered assassin.
 
 ---
 
@@ -262,11 +272,15 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 
 Requires an external T9 drive to be mounted. KeepAlive with ThrottleInterval prevents rapid restart loops if the drive is disconnected.
 
+<Aside type="note">
+Without the T9 drive, Kiwix starts, fails, waits 30 seconds, starts, fails, waits 30 seconds — forever. This is launchd's version of patience. The ThrottleInterval keeps it from consuming your Mac's entire CPU in a panicked loop of optimism.
+</Aside>
+
 ---
 
 ## LaunchDaemons
 
-LaunchDaemons run as root and load at system boot (before user login).
+LaunchDaemons run as root and load at system boot (before user login). There is exactly one, and it exists because of the number 80.
 
 ### com.manoir.dench-proxy
 
@@ -282,6 +296,8 @@ LaunchDaemons run as root and load at system boot (before user login).
 This is a **LaunchDaemon** (not a LaunchAgent) because binding to port 80 requires root privileges. It enables `http://holocron/` access from the LAN without specifying a port.
 
 Plist location: `/Library/LaunchDaemons/com.manoir.dench-proxy.plist`
+
+The entire reason this runs as root is so family members can type `holocron` into a browser instead of `holocron:19001`. Usability has a cost. That cost is `sudo`.
 
 ---
 
@@ -322,5 +338,5 @@ launchctl print gui/$(id -u)/com.sanctum.watchdog
 ```
 
 <Aside type="caution">
-The gateway (`ai.openclaw.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks.
+The gateway (`ai.openclaw.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks. This is the third time these docs have told you this. There will not be a fourth.
 </Aside>

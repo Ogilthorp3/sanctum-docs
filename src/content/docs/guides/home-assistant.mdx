@@ -5,7 +5,7 @@ description: Running Home Assistant in Docker on the Mac Mini with HomeKit, Sono
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Home Assistant is Sanctum's home automation hub. It runs as a Docker container on the Mac Mini with bridge networking, integrating Sonos speakers, HomeKit devices, and providing remote access through a Cloudflare tunnel.
+Home Assistant is Sanctum's home automation hub. It runs as a Docker container on the Mac Mini with bridge networking, integrating Sonos speakers, HomeKit devices, and providing remote access through a Cloudflare tunnel. It used to run on the VM, but the VM's networking had other ideas.
 
 ## Architecture
 
@@ -28,11 +28,11 @@ Home Assistant is Sanctum's home automation hub. It runs as a Docker container o
 └──────────────────────────────────────────────┘
 ```
 
-HA was migrated from the VM to Mac Docker because SLIRP networking on the VM proved unreliable for the number of integrations and real-time device communication required.
+HA was migrated from the VM to Mac Docker because SLIRP networking on the VM proved unreliable for the number of integrations and real-time device communication required. Translation: the Sonos speakers kept dropping off, and no amount of debugging SLIRP made the problem go away. Some battles you win. Some you migrate around.
 
 ## Docker Configuration
 
-The container uses bridge networking rather than `--network=host` because host networking is not supported on macOS Docker.
+The container uses bridge networking rather than `--network=host` because host networking is not supported on macOS Docker. This is the polite way of saying "Docker on Mac is a compromise and we've all agreed to live with it."
 
 ### Key Settings
 
@@ -70,15 +70,15 @@ sonos:
 ```
 
 <Aside type="caution">
-  If a Sonos speaker changes IP address (e.g., after a router reboot), it will become unreachable until the `configuration.yaml` is updated with the new IP. Use Firewalla DHCP reservations to keep speaker IPs stable.
+  If a Sonos speaker changes IP address (e.g., after a router reboot), it will become unreachable until the `configuration.yaml` is updated with the new IP. Use Firewalla DHCP reservations to keep speaker IPs stable. Ten speakers, ten reservations, zero tolerance for DHCP roulette.
 </Aside>
 
 ### Text-to-Speech on Sonos
 
 The XTTS-v2 TTS server runs on the Mac (port 8020, using MPS GPU acceleration). To play speech on Sonos speakers, use the `media_player.play_media` service with a `media-source://tts/` URI and the `announce: true` flag.
 
-<Aside type="note">
-  The `tts.speak` service does not dispatch audio to Sonos. Always use `media_player.play_media` with a TTS media source URI for Sonos announcements.
+<Aside type="danger">
+  The `tts.speak` service does **not** dispatch audio to Sonos. If you use it, you'll get silence and confusion. Always use `media_player.play_media` with a TTS media source URI for Sonos announcements. This has been learned the hard way so you don't have to.
 </Aside>
 
 ## SSH Agent Forwarding
@@ -109,7 +109,7 @@ The trusted proxies cover Docker's internal bridge subnets, allowing HA to corre
 
 ## Remote Access
 
-There are two remote access paths into HA, each serving a different purpose:
+There are two remote access paths into HA, each serving a different purpose. Because one way in would have been too simple, and simplicity is what other people have.
 
 ### Browser Access (Cloudflare Tunnel)
 
@@ -150,7 +150,7 @@ The HA Companion app cannot handle Cloudflare Access's login page, so it connect
 </Steps>
 
 <Aside type="tip">
-  Use `http://` for both URLs, not `https://`. The internal connection is on your LAN, and the external connection is encrypted by Tailscale's WireGuard tunnel. Adding HTTPS would require managing TLS certificates for no security gain.
+  Use `http://` for both URLs, not `https://`. The internal connection is on your LAN, and the external connection is encrypted by Tailscale's WireGuard tunnel. Adding HTTPS would require managing TLS certificates for no security gain. Save your energy for problems that matter.
 </Aside>
 
 ## HomeKit Bridge
@@ -193,5 +193,5 @@ If the Mac Docker instance has issues, a rollback path exists to the VM:
 </Steps>
 
 <Aside type="note">
-  The VM still has a preserved HA configuration at `~/.openclaw/homeassistant/`. The VM instance is stopped but not removed, making rollback straightforward.
+  The VM still has a preserved HA configuration at `~/.openclaw/homeassistant/`. The VM instance is stopped but not removed, making rollback straightforward. Think of it as a parachute — you hope you never need it, but you'd be a fool to cut it loose.
 </Aside>

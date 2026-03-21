@@ -1,11 +1,13 @@
 ---
 title: Shell API Reference
-description: Complete reference for the sanctum_* shell functions provided by config.sh and notify.sh.
+description: Complete reference for the sanctum_* shell functions provided by config.sh and notify.sh. Bash that reads YAML through Python through JSON. It works.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 The Sanctum shell library provides a set of `sanctum_*` functions for reading instance configuration, querying node topology, and interacting with the Sanctum infrastructure from Bash scripts and LaunchAgent wrappers.
+
+Under the hood, these functions read from a JSON cache that was generated from YAML by a Python script. Bash calls `jq` which reads JSON that was written by Python that parsed YAML that you wrote by hand. The Rube Goldberg machine of config access. But it resolves any key in under 50ms, it never breaks, and it's been running in production for months. Sometimes the unglamorous solution is the correct one.
 
 ## Setup
 
@@ -22,7 +24,7 @@ source ~/.sanctum/lib/notify.sh
 ```
 
 <Aside type="note" title="Backwards Compatibility">
-The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been removed. All callers should use the `sanctum_*` functions directly.
+The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been removed. All callers should use the `sanctum_*` functions directly. If you find a script still using `fos_*`, it's overdue for a rename and probably a few other things too.
 </Aside>
 
 ---
@@ -31,7 +33,7 @@ The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been remo
 
 ### sanctum_get
 
-Read any value from the instance config using dot-notation path.
+Read any value from the instance config using dot-notation path. The Swiss Army knife. The one function you'll use more than all others combined.
 
 ```bash
 sanctum_get <key_path>
@@ -59,7 +61,7 @@ sanctum_get network.vm_ip  # 10.10.10.10
 
 ### sanctum_enabled
 
-Check whether a config path evaluates to `true`.
+Check whether a config path evaluates to `true`. Returns an exit code, so it plays nicely with `if` statements — which is more than can be said for most things in Bash.
 
 ```bash
 sanctum_enabled <key_path>
@@ -93,6 +95,10 @@ sanctum_expand <template_string>
 expanded=$(sanctum_expand "User is {{users.mac}} at {{network.lan_ip}}")
 echo "$expanded"  # User is bert at 192.168.1.10
 ```
+
+<Aside type="tip">
+This is the engine behind plist generation. Every `{{PLACEHOLDER}}` in a template gets resolved through this function. If a placeholder resolves to empty, the template renders with a blank — which is usually a sign that you forgot to fill in `instance.yaml`.
+</Aside>
 
 ---
 
@@ -214,6 +220,8 @@ sanctum_whoami
 sanctum_whoami  # manoir
 ```
 
+The existential question, answered in one function call.
+
 ---
 
 ### sanctum_is_node
@@ -250,7 +258,7 @@ sanctum_my_type  # hub
 
 ## Node Topology Functions
 
-These functions query the `nodes` section of the instance config. They accept a `<node_id>` argument (e.g., `manoir`, `chalet`).
+These functions query the `nodes` section of the instance config. They accept a `<node_id>` argument (e.g., `manoir`, `chalet`). Useful when your home automation hobby has metastasized into a multi-site distributed system.
 
 ### sanctum_node_type
 
@@ -339,6 +347,10 @@ if sanctum_node_online chalet; then
   echo "Chalet is reachable"
 fi
 ```
+
+<Aside type="note">
+This does a real network ping, so it takes a second or two. Don't put it in a tight loop unless you enjoy watching your script crawl.
+</Aside>
 
 ---
 
@@ -437,7 +449,7 @@ echo "$hub"  # manoir
 
 ## Notification Functions
 
-Source `~/.sanctum/lib/notify.sh` for notification support.
+Source `~/.sanctum/lib/notify.sh` for notification support. Because when your house has something to say, it should be able to say it.
 
 ### sanctum_notify
 
@@ -459,6 +471,10 @@ source ~/.sanctum/lib/notify.sh
 sanctum_notify "Backup Complete" "All files backed up successfully"
 sanctum_notify "Disk Warning" "Boot volume is 90% full" high
 ```
+
+<Aside type="caution">
+Use `high` priority sparingly. It's for things that actually need attention right now — disk full, service down, security event. Not for "backup completed successfully." Nobody needs to be woken up because a backup worked. That's what backups are supposed to do.
+</Aside>
 
 ---
 
@@ -487,3 +503,5 @@ else
   sanctum_notify "Chalet Status" "Chalet node is offline" high
 fi
 ```
+
+Twenty lines. Queries the config, checks the network, sends a notification. This is what the shell library is for — turning what would be 200 lines of raw `jq` and `ssh` and `osascript` into something a human can read before coffee.

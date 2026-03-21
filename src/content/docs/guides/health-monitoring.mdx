@@ -5,7 +5,7 @@ description: Ingesting Apple Health data into Sanctum via the Health Auto Export
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Sanctum includes a health data pipeline that ingests Apple Health metrics from your iPhone and feeds them into the Cilghal health agent for analysis. The pipeline uses the **Health Auto Export** iOS app to push data to a FastAPI service running on the VM.
+Your house already monitors itself. It seemed only fair to let it monitor you too. Sanctum includes a health data pipeline that ingests Apple Health metrics from your iPhone and feeds them into the Cilghal health agent for analysis. The pipeline uses the **Health Auto Export** iOS app to push data to a FastAPI service running on the VM — through a Cloudflare tunnel, because your resting heart rate deserves enterprise-grade security.
 
 ## Architecture
 
@@ -24,6 +24,8 @@ Ubuntu VM (health-ingester.py, FastAPI)
   ├── Rolling JSON files (~/.openclaw/health-data/)
   └── Graphiti knowledge graph (for Cilghal agent)
 ```
+
+Five hops between your wrist and the knowledge graph. Each one encrypted. The Cold War had simpler supply chains.
 
 ## Prerequisites
 
@@ -69,7 +71,7 @@ Ubuntu VM (health-ingester.py, FastAPI)
 </Steps>
 
 <Aside type="tip">
-  The health ingester token is stored in SOPS on the VM under `health_ingester_token`. The CF Access service token credentials are in the Mac Keychain under `cf-access-health-client-id` and `cf-access-health-client-secret`.
+  The health ingester token is stored in SOPS on the VM under `health_ingester_token`. The CF Access service token credentials are in the Mac Keychain under `cf-access-health-client-id` and `cf-access-health-client-secret`. If you're wondering where to find the credentials, the answer is always "encrypted, somewhere else."
 </Aside>
 
 ## Health Ingester Service
@@ -91,6 +93,10 @@ The ingester is a FastAPI service on the VM that receives health data, extracts 
 |----------|--------|------|---------|
 | `/health` | GET | None | Health check |
 | `/ingest` | POST | Bearer | Receive health data from iOS |
+
+<Aside type="note">
+  Yes, the health monitoring system has its own health check endpoint. The recursion is noted but not regretted.
+</Aside>
 
 ### Starting the Service
 
@@ -123,10 +129,12 @@ The health endpoint is protected by Cloudflare Access with two authentication me
 - **OTP (email)** for browser access by the owner
 - **Service Token** for automated sync from Health Auto Export
 
-The service token expires annually and credentials are stored in the Mac Keychain.
+The service token expires annually and credentials are stored in the Mac Keychain. Mark your calendar, or don't — the watchdog will let you know when it stops working.
 
 ## Cilghal Agent
 
 The Cilghal agent on the VM reads ingested health data and maintains a knowledge graph of health trends. It provides daily health briefings and can answer questions about historical health metrics.
 
 Data flows: Health Auto Export → ingester → JSON files + Graphiti KG → Cilghal agent queries.
+
+An AI named after a Mon Calamari healer, running inside a virtual machine, inside a Mac Mini, analyzing your sleep patterns through a knowledge graph. If you find this normal, you've been reading these docs too long.

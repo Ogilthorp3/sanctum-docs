@@ -5,7 +5,7 @@ description: Automated health monitoring with self-healing capabilities and conf
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The watchdog is Sanctum's automated health monitoring system. It runs on a fixed schedule, detects failures, attempts self-healing through the service-doctor, and delivers notifications through multiple channels.
+The watchdog is the part of Sanctum that doesn't sleep. Every ten minutes it checks every service, attempts to fix what's broken, and tells you about whatever it couldn't fix. It is, in the most literal sense, a program that watches other programs and judges them. If it ever develops opinions about your uptime, unplug everything.
 
 ## How It Works
 
@@ -45,6 +45,8 @@ The watchdog is Sanctum's automated health monitoring system. It runs on a fixed
                     └──────────────┘
 ```
 
+Most of the time, the happy path is: check, all clear, go back to sleep. On the less happy days, the watchdog detects a failure, summons the doctor, waits, checks again, and either nods in satisfaction or sends you a message on Signal that your evening is about to get worse.
+
 ## Schedule
 
 The watchdog runs every 10 minutes via a LaunchAgent:
@@ -59,7 +61,7 @@ The first execution occurs at LaunchAgent load time (typically at login or boot)
 
 ## Notification Deduplication
 
-To avoid flooding notification channels during extended outages, the watchdog implements deduplication. When a service fails and a notification is sent, subsequent failures of the **same service** are suppressed for the duration of the `dedup_window`.
+To avoid flooding notification channels during extended outages — because nothing helps you fix a problem like your phone buzzing every ten minutes about it — the watchdog implements deduplication. When a service fails and a notification is sent, subsequent failures of the **same service** are suppressed for the duration of the `dedup_window`.
 
 The dedup state is tracked in memory between invocations using a timestamp file. Each service failure is keyed by service name and the dedup window is evaluated against the last notification time for that key.
 
@@ -70,8 +72,8 @@ Same failure 35 min later            → Notify ✓ (window expired)
 Different service fails               → Notify ✓ (independent key)
 ```
 
-<Aside type="caution">
-  If the watchdog process itself fails, there is no meta-monitor. The LaunchAgent will restart it on the next interval, but a gap in monitoring may occur. Check the watchdog's own logs if you suspect missed alerts.
+<Aside type="danger">
+  If the watchdog process itself fails, there is no meta-monitor. Nobody watches the watchmen. The LaunchAgent will restart it on the next interval, but a gap in monitoring may occur. Check the watchdog's own logs if you suspect missed alerts. If you find yourself building a watchdog for the watchdog, it's time to step outside and look at a tree.
 </Aside>
 
 ## Configuration
@@ -96,7 +98,7 @@ services:
 
 ## Notification Channels
 
-The watchdog delivers alerts through three independent channels. All channels fire in parallel when a notification is triggered.
+The watchdog delivers alerts through three independent channels. All channels fire in parallel when a notification is triggered. Redundancy is the point — if one channel is down, the others still reach you.
 
 ### macOS Notifications
 
@@ -108,16 +110,16 @@ Writes alert data to the health API, which the command center dashboard polls. A
 
 ### Signal Messenger
 
-Sends a message to a configured Signal group using the apple-toolkit skill's Signal integration. This provides mobile-reachable alerts for critical failures when away from the LAN.
+Sends a message to a configured Signal group using the apple-toolkit skill's Signal integration. This provides mobile-reachable alerts for critical failures when away from the LAN. Nothing quite like getting a Signal message from your house at midnight telling you the gateway is down.
 
 ## Service Doctor Integration
 
-The `service-doctor` skill is the repair engine invoked by the watchdog. It knows how to restart LaunchAgents, restart systemd services on the VM via SSH, restart Docker containers, and reset network interfaces.
+The `service-doctor` skill is the repair engine invoked by the watchdog. It knows how to restart LaunchAgents, restart systemd services on the VM via SSH, restart Docker containers, and reset network interfaces. It is a blunt instrument with a narrow range of repair strategies, but most failures in this stack respond to "have you tried turning it off and on again."
 
 When `auto_fix` is enabled, the watchdog passes each failing service to service-doctor with the `--fix` flag. The doctor applies the appropriate repair action based on the service type and returns a success or failure status.
 
 <Aside type="tip">
-  You can run `service-doctor --fix` manually at any time to repair a specific service without waiting for the watchdog cycle.
+  You can run `service-doctor --fix` manually at any time to repair a specific service without waiting for the watchdog cycle. Sometimes you don't want to wait ten minutes. Sometimes the house is broken and you know it.
 </Aside>
 
 ## Health Test Suite
@@ -138,4 +140,4 @@ The test suite covers all critical Sanctum subsystems:
 | XTTS server          | Port 8020 responds                                  |
 | Firewalla bridge     | Port 18094 responds                                 |
 
-Tests return structured results with pass/fail status, latency, and diagnostic messages that feed into both the notification system and the dashboard.
+Tests return structured results with pass/fail status, latency, and diagnostic messages that feed into both the notification system and the dashboard. Eleven tests. Every ten minutes. That's 1,584 health checks a day. Your house gets more checkups than you do.

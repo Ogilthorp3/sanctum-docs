@@ -1,17 +1,21 @@
 ---
 title: CLI Reference
-description: Command-line tools and scripts for managing a Sanctum instance.
+description: Command-line tools and scripts for managing a Sanctum instance. Everything you need, nothing you don't.
 ---
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-This page documents the command-line tools used to manage, monitor, and maintain a Sanctum instance.
+This page documents the command-line tools used to manage, monitor, and maintain a Sanctum instance. Every command here has been typed in anger at least once during a production incident. They work.
 
 ---
 
 ## Gateway Management
 
-The OpenClaw gateway is the core agent runtime. Always use the `openclaw` CLI to manage it — never use raw `launchctl` commands for the gateway.
+The OpenClaw gateway is the core agent runtime — the brain stem of the whole operation. Always use the `openclaw` CLI to manage it. Never use raw `launchctl` commands for the gateway.
+
+<Aside type="danger">
+Seriously. Raw `launchctl` skips state cleanup and port lock management. Use `openclaw gateway start/stop`. This is not a suggestion. This is the voice of experience, and experience has scars.
+</Aside>
 
 ### Start the Gateway
 
@@ -77,6 +81,8 @@ openclaw agent --agent main --message "Run the evening briefing"
 openclaw agent --agent windu --message "Generate the weekly security report"
 ```
 
+Yes, you're sending text messages to named AI agents running on a Mac Mini. This is your life now.
+
 ### Cross-Node Agent Messaging
 
 For sending messages between Mac and VM agents, use the council bridge SSH pattern:
@@ -98,14 +104,14 @@ ssh neo@10.10.10.1 \
 </Tabs>
 
 <Aside type="note">
-The VM-to-Mac path requires a PATH prefix because `fnm`-managed Node.js is not in the default SSH `PATH`.
+The VM-to-Mac path requires a PATH prefix because `fnm`-managed Node.js is not in the default SSH `PATH`. This is the kind of thing that takes two hours to debug and two seconds to fix. The PATH prefix is the two-second fix.
 </Aside>
 
 ---
 
 ## launchctl Patterns
 
-macOS uses `launchctl` to manage LaunchAgents and LaunchDaemons. Sanctum uses the modern `bootstrap`/`bootout` subcommands.
+macOS uses `launchctl` to manage LaunchAgents and LaunchDaemons. Sanctum uses the modern `bootstrap`/`bootout` subcommands, because Apple deprecated the old `load`/`unload` commands and then kept them working anyway, which is the most Apple thing imaginable.
 
 ### Load a LaunchAgent
 
@@ -153,7 +159,7 @@ sudo launchctl bootout system /Library/LaunchDaemons/<label>.plist
 
 ## generate-plists.sh
 
-Renders LaunchAgent plist files from templates using values from `instance.yaml` and the macOS Keychain.
+Renders LaunchAgent plist files from templates using values from `instance.yaml` and the macOS Keychain. The bridge between your clean YAML config and the XML format that Apple chose specifically to test human patience.
 
 ```bash
 ~/.sanctum/generate-plists.sh [--dry-run]
@@ -179,6 +185,10 @@ Renders LaunchAgent plist files from templates using values from `instance.yaml`
 # Generate and install
 ~/.sanctum/generate-plists.sh
 ```
+
+<Aside type="tip">
+Always `--dry-run` first. Trust, but verify. Especially when the output is XML that macOS will silently reject if you look at it wrong.
+</Aside>
 
 ---
 
@@ -214,11 +224,13 @@ Output uses color-coded pass/fail indicators. A summary count is printed at the 
 Results: 15/16 passed
 ```
 
+That one Kiwix failure? The external drive isn't plugged in. It's always the external drive.
+
 ---
 
 ## watchdog.sh
 
-The watchdog script runs every 600 seconds via the `com.sanctum.watchdog` LaunchAgent. It monitors all enabled services and attempts auto-healing via `service-doctor`.
+The watchdog runs every 600 seconds via the `com.sanctum.watchdog` LaunchAgent. It monitors all enabled services and attempts auto-healing via `service-doctor`. It's the night shift security guard of your infrastructure — mostly bored, occasionally essential.
 
 ```bash
 ~/.sanctum/watchdog.sh
@@ -284,7 +296,7 @@ Backups are timestamped and stored as compressed archives:
 
 ## sanctum-restore.sh
 
-Restore a Sanctum instance from a backup archive.
+Restore a Sanctum instance from a backup archive. The undo button for your entire home infrastructure.
 
 ```bash
 ~/.sanctum/sanctum-restore.sh <backup_file>
@@ -309,7 +321,7 @@ Restore a Sanctum instance from a backup archive.
 7. Optionally restarts affected services
 
 <Aside type="caution">
-Restore does not automatically reload LaunchAgents. After a restore, you should either reboot or manually reload affected services via `launchctl`.
+Restore does not automatically reload LaunchAgents. After a restore, you should either reboot or manually reload affected services via `launchctl`. The restore script puts everything in place. Getting macOS to acknowledge the new files is a separate negotiation.
 </Aside>
 
 ---

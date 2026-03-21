@@ -7,6 +7,8 @@ import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/compone
 
 Sanctum runs on a two-layer architecture: a **Mac Mini host** that manages hardware, networking, and Apple-native services, and an **Ubuntu VM** that runs the AI agent cluster. The two communicate over a private Host-Only network and are managed through a single configuration file.
 
+If you're wondering why anyone would build a distributed intelligence platform on consumer hardware tucked behind a residential ISP in Quebec -- congratulations, you've found the right documentation. Keep reading. The answers won't comfort you.
+
 ## System Diagram
 
 ```
@@ -33,9 +35,11 @@ Internet
   +-- 20+ LaunchAgents
 ```
 
+Stare at that diagram long enough and two things become clear: first, this is a real system that actually runs a household. Second, no one should have let it get this far. And yet here we are, port 18094 deep, with no intention of stopping.
+
 ## Mac Mini Host
 
-The Mac Mini is the always-on hub. It runs macOS with over 20 LaunchAgents that start on boot, a Docker instance for Home Assistant, and several AI inference servers that take advantage of Apple Silicon.
+The Mac Mini is the always-on hub. It runs macOS with over 20 LaunchAgents that start on boot, a Docker instance for Home Assistant, and several AI inference servers that take advantage of Apple Silicon. It is also, let's be honest, a $1,600 space heater that happens to control the other space heaters.
 
 <CardGrid>
   <Card title="DenchClaw Gateway" icon="rocket">
@@ -54,7 +58,7 @@ The Mac Mini is the always-on hub. It runs macOS with over 20 LaunchAgents that 
 
 ### Boot Sequence
 
-All LaunchAgents use `RunAtLoad: true` and start in this order:
+All LaunchAgents use `RunAtLoad: true` and start in this order. Every boot is a small miracle. Twenty-some services waking up in sequence, each one assuming the last one did its job. It works like a row of dominoes -- except some of the dominoes are SSH tunnels and one of them controls your front door.
 
 | Order | Service | What It Does |
 |-------|---------|-------------|
@@ -76,12 +80,14 @@ All LaunchAgents use `RunAtLoad: true` and start in this order:
 | 16 | Watchdog | Health checks every 600 seconds, auto-heals via service-doctor |
 
 <Aside type="tip">
-  The full LaunchAgent inventory is in the [LaunchAgents reference](/reference/launchagents/). The watchdog monitors all services and can restart most of them automatically.
+  The full LaunchAgent inventory is in the [LaunchAgents reference](/reference/launchagents/). The watchdog monitors all services and can restart most of them automatically -- which it will need to do, because entropy is undefeated.
 </Aside>
 
 ## Ubuntu VM
 
 The VM is a QEMU guest running Ubuntu 24.04 under UTM with Apple Hypervisor acceleration. It has no direct internet access -- all external communication routes through the Mac host at 10.10.10.1.
+
+This is by design. An air-gapped VM running five AI agents that can only see the outside world through a single bridge interface is either excellent security architecture or the plot of a containment thriller. Possibly both.
 
 ### VM Specifications
 
@@ -97,7 +103,7 @@ The VM is a QEMU guest running Ubuntu 24.04 under UTM with Apple Hypervisor acce
 
 ### Agent Cluster
 
-The VM runs OpenClaw with five specialized agents, each with a distinct role:
+The VM runs OpenClaw with five specialized agents, each with a distinct role. Yes, someone named their home automation agents after Star Wars characters. No, there was never a serious alternative under consideration.
 
 | Agent | Role | Description |
 |-------|------|-------------|
@@ -122,7 +128,7 @@ Mac Mini (10.10.10.1)  <----  bridge100  ---->  VM (10.10.10.10)
 - **VM to Internet**: Not possible. The VM relies on the Mac for any external data (synced via rsync, git pull, or API proxies).
 
 <Aside type="caution">
-  The bridge100 IP (10.10.10.1) is set by the UTM autostart script using `sudo ifconfig`. A sudoers entry at `/etc/sudoers.d/vmnet-bridge` allows this without a password prompt.
+  The bridge100 IP (10.10.10.1) is set by the UTM autostart script using `sudo ifconfig`. A sudoers entry at `/etc/sudoers.d/vmnet-bridge` allows this without a password prompt. If that sudoers file ever disappears, the VM wakes up into a world with no bridge to anywhere. It will handle this about as well as you'd expect.
 </Aside>
 
 ## External Access
@@ -140,7 +146,7 @@ The `haus` tunnel exposes select services under the `nepveu.name` domain with Cl
 
 ### Tailscale
 
-All Sanctum nodes join a shared Tailscale tailnet. This provides encrypted mesh networking for SSH, API access, and inter-node communication without opening any ports on the home router.
+All Sanctum nodes join a shared Tailscale tailnet. This provides encrypted mesh networking for SSH, API access, and inter-node communication without opening any ports on the home router. It's the one piece of infrastructure here that someone else maintains, and that fact brings genuine peace.
 
 ## Skills and Plugins
 

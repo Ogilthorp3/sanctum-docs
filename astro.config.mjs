@@ -70,6 +70,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Agents',
+					items: [
+						{ label: 'Tommy — Guardian Spirit', slug: 'agents/tommy' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'instance.yaml', slug: 'reference/instance-yaml' },

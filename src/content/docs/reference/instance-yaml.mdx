@@ -1,15 +1,23 @@
 ---
 title: instance.yaml Reference
-description: Complete configuration reference for the Sanctum instance configuration file.
+description: Complete configuration reference for the Sanctum instance configuration file. One file to rule them all.
 ---
 
-import { Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 The central configuration file for a Sanctum instance lives at `~/.sanctum/instance.yaml`. Every instance-specific value is defined here — services, networking, paths, family members, node topology, and secrets references.
 
+One file. Everything your house knows about itself is in this file. The name, the network layout, which services run, who lives there. If this file is wrong, everything downstream is wrong. If this file is right, everything downstream has a fighting chance.
+
 A JSON cache is auto-regenerated at `~/.sanctum/.instance.json` whenever the YAML changes, via `lib/yaml2json.py`.
 
+<Aside type="note">
+Yes, the YAML is converted to JSON through a Python script so that Bash can read it. YAML to Python to JSON to Bash. The Rube Goldberg machine of config access — but it works on every read in under 50ms, and that's more than most microservices can claim.
+</Aside>
+
 ## Minimal Example
+
+The absolute minimum to get Sanctum to acknowledge your existence:
 
 ```yaml
 instance:
@@ -33,7 +41,7 @@ network:
 
 ## instance
 
-Top-level identity for this Sanctum deployment.
+Top-level identity for this Sanctum deployment. Who you are. Where you are. When you are.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
@@ -48,11 +56,15 @@ instance:
   timezone: America/Montreal
 ```
 
+<Aside type="tip">
+The slug shows up everywhere — DNS records, file paths, tunnel names, dashboard URLs. Choose it once, choose it well. Renaming later is possible but tedious in the way that only infrastructure renames can be.
+</Aside>
+
 ---
 
 ## users
 
-OS-level usernames on the Mac host and the VM.
+OS-level usernames on the Mac host and the VM. Unglamorous but load-bearing.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
@@ -69,7 +81,7 @@ users:
 
 ## network
 
-Networking topology between the Mac host, the VM, and the LAN.
+Networking topology between the Mac host, the VM, and the LAN. This section is the plumbing. Nobody admires plumbing until it breaks.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
@@ -111,11 +123,17 @@ paths:
   backups: /Users/neo/.sanctum/backups
 ```
 
+<Aside type="caution">
+Use absolute paths. Tilde expansion works in the shell library but not in all contexts. The safest path is the one that doesn't require interpretation.
+</Aside>
+
 ---
 
 ## services
 
 Each service has at minimum an `enabled` boolean flag. Services that listen on a port include a `port` key (or multiple port keys). The `enabled` flag controls whether `generate-plists.sh` renders and loads the corresponding LaunchAgent.
+
+Flip the boolean, regenerate plists, and the service appears or vanishes. Configuration as incantation.
 
 ### Service Table
 
@@ -138,6 +156,8 @@ Each service has at minimum an `enabled` boolean flag. Services that listen on a
 | Kiwix | `kiwix` | `8888` | Offline library server |
 | Signal Bridge | `signal_bridge` | — | Signal messaging bridge |
 | LiteLLM Proxy | `litellm` | `4000`, `4001` | LLM fallback proxy |
+
+Seventeen services. On a Mac Mini. Under a desk. In Quebec. Running a household.
 
 ### Full Example
 
@@ -230,7 +250,7 @@ if (isEnabled('services.gateway')) {
 
 ## secrets
 
-References to external secret stores. Sanctum never stores secrets in `instance.yaml` directly.
+References to external secret stores. Sanctum never stores secrets in `instance.yaml` directly. The config file tells you *where* secrets live, not *what* they are. Think of it as a treasure map that says "the chest is buried under the oak tree" without ever containing the treasure.
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -280,6 +300,10 @@ home_assistant:
       type: ecobee
 ```
 
+<Aside type="note">
+The Sonos speakers need hardcoded IPs because Docker bridge networking can't do mDNS discovery. Ten speakers, ten IPs, manually maintained. This is the glamorous side of home automation they don't put in the brochure.
+</Aside>
+
 ---
 
 ## family
@@ -305,7 +329,7 @@ family:
 
 ## nodes
 
-Multi-site node topology. Each node represents a physical location running Sanctum infrastructure.
+Multi-site node topology. Each node represents a physical location running Sanctum infrastructure. Because one house wasn't enough — you needed a distributed system.
 
 | Key | Type | Description |
 |-----|------|-------------|
@@ -372,3 +396,7 @@ The YAML config is automatically converted to a flat JSON cache at `~/.sanctum/.
 ```bash
 python3 ~/.sanctum/lib/yaml2json.py
 ```
+
+<Aside type="tip">
+You usually don't need to run this manually. The config libraries detect stale caches by comparing modification timestamps. But if things are acting strange and you've just edited the YAML, this is a good reflex — like washing your hands before surgery.
+</Aside>
