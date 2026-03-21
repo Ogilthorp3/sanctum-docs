@@ -12,7 +12,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Sanctum',
-			tagline: 'Your home, intelligently managed.',
+			tagline: 'Your haus, intelligently managed.',
 			logo: {
 				light: './src/assets/sanctum-logo-light.svg',
 				dark: './src/assets/sanctum-logo-dark.svg',
