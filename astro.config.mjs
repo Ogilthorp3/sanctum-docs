@@ -11,7 +11,7 @@ export default defineConfig({
 	},
 	integrations: [
 		starlight({
-			title: 'Sanctum',
+			title: 'Le Sanctum',
 			tagline: 'Your haus, wittily managed.',
 			logo: {
 				light: './src/assets/sanctum-logo-light.svg',
@@ -19,6 +19,7 @@ export default defineConfig({
 				replacesTitle: false,
 			},
 			social: [
+				{ icon: 'x.com', label: 'Follow @LeSanctum', href: 'https://x.com/LeSanctum' },
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/Ogilthorp3' },
 			],
 			customCss: ['./src/styles/custom.css'],
