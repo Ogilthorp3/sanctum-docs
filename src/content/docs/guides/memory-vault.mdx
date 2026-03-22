@@ -13,6 +13,23 @@ At some point during development, we realized we'd built a system that remembers
   This documentation is automatically kept in sync with the Memory Vault codebase.
 </Aside>
 
+## Memory Stack
+
+Sanctum runs a four-layer memory stack. Each layer does one thing well. Together they give the house a memory system more sophisticated than most startups' data architecture.
+
+| Layer | Role | Backend | Cost |
+|-------|------|---------|------|
+| **Mem0** | Primary cross-agent semantic memory | [mem0.ai](https://mem0.ai) via Rube/Composio | **Free** |
+| **Memory Vault** | Git-native versioned source of truth | [sanctum-memory](https://github.com/Ogilthorp3/sanctum-memory) repo | Free |
+| **Neo4j / Graphiti** | Entity relationships & graph queries | Local, port 18093 | Free (self-hosted) |
+| **Supermemory** | Legacy cross-LLM bridge (secondary) | supermemory.ai MCP | Connected but secondary |
+
+<Aside type="tip">
+  **Mem0 is the primary memory layer.** It's free, supports structured filtering (by user, agent, project, metadata), and is wired into Rube where all automations live. Project: `sanctum-memory`, user: `Ogilthorp3`. Every recipe that needs context about the house queries Mem0 first.
+</Aside>
+
+When Mem0 and the vault disagree, the vault wins — because Git has receipts. When the vault and the graph disagree, someone has a long night ahead of them. This has happened twice.
+
 ## Architecture
 
 ```
@@ -20,11 +37,15 @@ At some point during development, we realized we'd built a system that remembers
 │  LAYER 1: WORKING MEMORY (per-session, ephemeral)   │
 │  Agent's context window. Dies when session ends.     │
 ├─────────────────────────────────────────────────────┤
-│  LAYER 2: SHORT-TERM MEMORY (inbox/, days-weeks)    │
+│  LAYER 2: MEM0 (cross-agent, persistent, free)      │
+│  Semantic search + structured queries via Rube.      │
+│  project: sanctum-memory / user: Ogilthorp3          │
+├─────────────────────────────────────────────────────┤
+│  LAYER 3: SHORT-TERM MEMORY (inbox/, days-weeks)    │
 │  inbox/{agent}/ — raw observations, session notes    │
 │  TTL: 7-30 days. Consolidated or discarded daily.    │
 ├─────────────────────────────────────────────────────┤
-│  LAYER 3: LONG-TERM MEMORY (consolidated, permanent)│
+│  LAYER 4: LONG-TERM MEMORY (consolidated, permanent)│
 │  knowledge/{topic}/ — semantic facts (timeless)      │
 │  events/YYYY/MM/    — significant episodes           │
 │  procedures/        — how-to, runbooks               │
@@ -107,8 +128,9 @@ The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory
 3. **Classify** and move to the appropriate long-term directory
 4. **Recompute** importance scores for all active notes
 5. **Expire** notes that have exceeded their TTL
-6. **Clean archive** — delete archived notes older than 90 days
-7. **Generate report** in `meta/consolidation-log.md`
+6. **Push to Mem0** — consolidated knowledge synced to Mem0 for cross-agent access
+7. **Clean archive** — delete archived notes older than 90 days
+8. **Generate report** in `meta/consolidation-log.md`
 </Steps>
 
 Any agent can trigger consolidation manually via the `memory_consolidate` MCP tool.
@@ -137,14 +159,41 @@ To prevent bloat, each layer has a maximum note count. Without limits, a system 
 | `memory_consolidate` | Trigger consolidation (dry-run by default) |
 | `memory_health` | Vault health metrics dashboard |
 
+## Mem0 Integration
+
+Mem0 is the **primary cross-agent memory layer**, accessed via Rube/Composio. It's free, and every recipe and automation that needs Sanctum context queries it first.
+
+| Setting | Value |
+|---------|-------|
+| Provider | [mem0.ai](https://mem0.ai) |
+| Access | Rube/Composio (`MEM0_*` tools) |
+| Project | `sanctum-memory` |
+| User ID | `Ogilthorp3` |
+| Cost | Free |
+
+### Mem0 Tools (via Rube)
+
+| Tool | Description |
+|------|-------------|
+| `MEM0_ADD_NEW_MEMORY_RECORDS` | Store new memories with user/project scope |
+| `MEM0_PERFORM_SEMANTIC_SEARCH_ON_MEMORIES` | Natural language search across all memories |
+| `MEM0_RETRIEVE_MEMORY_LIST` | List memories with pagination and filters |
+| `MEM0_SEARCH_MEMORIES_WITH_QUERY_FILTERS` | Structured search with metadata filters |
+| `MEM0_UPDATE_MEMORY_DETAILS_BY_ID` | Update existing memory content |
+
+<Aside type="note">
+  The consolidation engine (step 6) pushes summarized knowledge to Mem0 after each nightly run. This keeps Mem0 current without requiring every agent to write to both systems. The vault is the source of truth. Mem0 is the fast lookup.
+</Aside>
+
 ## Tool Integration
 
-| Tool | Transport | Access Method |
-|------|-----------|--------------|
-| Claude Code | MCP stdio | Direct (settings.json) |
-| Gemini CLI | MCP stdio | Direct (settings.json) |
-| OpenClaw agents | SSH skill | `vault.sh` on VM |
-| Obsidian | File system | Open `~/.sanctum/memory/` as vault |
+| Tool | Vault Access | Mem0 Access |
+|------|-------------|-------------|
+| Claude Code | MCP stdio (port 18097) | Via Rube/Composio |
+| Gemini CLI | MCP stdio | Via Rube/Composio |
+| OpenClaw agents | SSH skill (`vault.sh`) | Via API |
+| Rube recipes | GitHub tools | Native (Composio `MEM0_*`) |
+| Obsidian | File system (`~/.sanctum/memory/`) | N/A |
 
 <Aside type="tip">
   Opening the memory directory in Obsidian gives you a graph view of your house's knowledge. The wikilinks render as connections. It's beautiful, informative, and a little like reading someone's diary — except the someone is your haus infrastructure.
