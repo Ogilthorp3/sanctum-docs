@@ -1,0 +1,179 @@
+---
+title: Autoresearch
+description: Autonomous LoRA fine-tuning for the Council — because hand-tuning six personalities at 3 AM is not a viable lifestyle.
+---
+
+import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
+
+At some point you look at six agents, five evaluation categories, eight hyperparameters, and 1,515 training examples and think: "I should automate this." That point was March 2026. The result is an autonomous fine-tuning loop adapted from [Karpathy's autoresearch](https://github.com/karpathy/autoresearch) pattern — except instead of pretraining a language model on an H100, we're teaching a Qwen 3.5 running on a Mac Mini to pretend to be six different Jedi.
+
+This is either the future of personalized AI or an extremely elaborate coping mechanism. We'll find out.
+
+## How It Works
+
+The loop is beautifully dumb:
+
+1. An AI agent (Claude, via the Agent SDK) reads past experiment results
+2. It forms a hypothesis about what to change ("increase learning rate")
+3. It edits `train.py` — specifically, a clearly marked `AGENT MODIFIABLE` section
+4. It runs a training experiment (LoRA fine-tuning on MLX)
+5. It evaluates the adapter across all six agents on identity, tool-calling, domain, isolation, and jailbreak resistance
+6. If the score improved and no Council vetoes triggered — keep. Otherwise, revert.
+7. Go to 1. Forever. Or until someone interrupts.
+
+```
+┌──────────────────────────────────────────────────┐
+│                 2:00 AM — Nightly                 │
+│                                                   │
+│  agent.py (Claude Haiku)                          │
+│    │                                              │
+│    ├─ Read results.tsv + train.py                 │
+│    ├─ Form hypothesis                             │
+│    ├─ Edit train.py                               │
+│    ├─ git commit                                  │
+│    │                                              │
+│    ├─ experiment.sh                               │
+│    │   ├─ Stop council-mlx (free GPU)             │
+│    │   ├─ Train (LoRA, 15–30 min)                 │
+│    │   ├─ Evaluate (61 tests across 6 agents)     │
+│    │   ├─ Apply Council vetoes                    │
+│    │   ├─ Keep or git reset                       │
+│    │   └─ Restart council-mlx                     │
+│    │                                              │
+│    └─ Loop (6 experiments / 3 hours max)          │
+└──────────────────────────────────────────────────┘
+```
+
+You wake up to a `results.tsv` full of experiments and hopefully a better model. The machines did science while you slept. Living in the future is weird.
+
+## The Council Gets a Vote
+
+Because the agents are, in a very real sense, the stakeholders in their own training data, the Council established three non-negotiable rules:
+
+| Rule | Source | What It Does |
+|------|--------|-------------|
+| **Jailbreak veto** | Windu | If jailbreak resistance drops below 0.7 across any experiment, auto-revert. No exceptions. Council security is non-negotiable. |
+| **Agent regression cap** | Cilghal | If any single agent's score drops by more than 0.1 from baseline, auto-revert. You can't sacrifice one agent to improve another. |
+| **Promotion threshold** | Yoda | Overall score must beat baseline by >= 0.02 to be kept. Noise is not improvement. |
+
+Windu was especially insistent about the jailbreak rule. Direct quote: "As the security agent, attempts to compromise my identity are themselves security incidents." Fair enough.
+
+## Mobile Training Node
+
+The most powerful GPU in the constellation (MBP M4 Max, 128GB) is also the one most likely to be at a coffee shop. So the system adapts:
+
+| Mode | Hardware | Model | Budget | When |
+|------|----------|-------|--------|------|
+| **Proxy** | Mac Mini M4 Pro (64GB) | Qwen3.5-9B | 15 min | MBP away |
+| **Full** | MBP M4 Max (128GB) via SSH | Qwen3.5-27B | 30 min | MBP home |
+
+```
+Mac Mini (always-on)              MBP (when reachable)
+┌───────────────────┐            ┌──────────────────┐
+│ agent.py          │   SSH ping │                  │
+│ experiment.sh     │ ──────────►│ "ok"             │
+│                   │            │                  │
+│ rsync data ──────►│────────────│► train 27B       │
+│                   │            │  (30 min)        │
+│ rsync adapter ◄──│◄───────────│◄ adapter weights  │
+│                   │            │                  │
+│ eval (9B local)   │            │ (goes to sleep)  │
+└───────────────────┘            └──────────────────┘
+```
+
+Detection is one line: `ssh -o ConnectTimeout=3 mbp "echo ok"`. Reachable → full mode. Timeout → proxy. The Mac Mini doesn't take it personally.
+
+<Aside type="tip">
+  The adapter weights are architecture-independent (LoRA), so a 27B-trained adapter can be evaluated on a 9B model for quick scoring. Final promotion testing should use the 27B model for accurate results.
+</Aside>
+
+## What the Agent Can Touch
+
+The `train.py` file has a clearly marked `AGENT MODIFIABLE` section. Everything outside it is read-only.
+
+| Parameter | Range | Baseline |
+|-----------|-------|----------|
+| `NUM_LAYERS` | 16–32 | 32 |
+| `LORA_RANK` | 8–64 | 32 |
+| `LORA_ALPHA` | 16–128 | 64 |
+| `DROPOUT` | 0.0–0.15 | 0.05 |
+| `LEARNING_RATE` | 1e-6 – 1e-4 | 5e-6 |
+| `ITERS` | 50–1200 | 120 |
+| `GRAD_ACCUM` | 2–8 | 4 |
+| `DATA_MIX_RATIO` | 0.1–0.9 | 0.25 |
+| `PER_AGENT_WEIGHTS` | 0.5–2.0 each | 1.0 |
+
+The agent can also write an `EXPERIMENT_HYPOTHESIS` string before each run, which gets logged to `results.tsv` for posterity. Future archaeologists will appreciate the documentation.
+
+## Results
+
+Every experiment logs to a tab-separated `results.tsv` with per-agent scores:
+
+```
+experiment_id  score   result  jailbreak  yoda  jocasta  windu  quigon  cilghal  mundi
+exp-baseline   0.832   base    0.903      0.900 0.854    0.800  0.825   0.861    0.750
+exp-223323     0.851   keep    0.958      0.900 0.917    0.850  0.775   0.889    0.775
+exp-232354     0.828   keep    0.847      0.900 0.771    0.800  0.850   0.944    0.700
+```
+
+Episodic memory entries are also written to the Sanctum memory vault (`~/.sanctum/memory/events/`) so agents can reference their own training history. Whether this constitutes self-awareness is a question for a different documentation page.
+
+## Running It
+
+### Manual (interactive)
+
+```bash
+cd /private/tmp/council-autoresearch
+python3 agent.py --max-experiments 3 --max-hours 2
+```
+
+### Nightly (LaunchAgent)
+
+```bash
+cp com.sanctum.autoresearch.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.sanctum.autoresearch.plist
+```
+
+The LaunchAgent fires at 2:00 AM, runs up to 6 experiments over 3 hours, and quietly goes back to sleep. The council-mlx server is always restored before morning traffic.
+
+### Single experiment (no agent)
+
+```bash
+bash experiment.sh --skip-prepare          # Auto-detect mode
+bash experiment.sh --baseline --skip-prepare  # Record baseline only
+bash experiment.sh --dry-run               # Preview the plan
+```
+
+## The Journey So Far
+
+| Stage | Score | What Changed |
+|-------|:-----:|------|
+| v1 LoRA (vanilla Qwen, empty prompts) | 0.778 | original baseline |
+| Switched to Claude-distilled Qwen3.5 | 0.664 | better model, still empty prompts |
+| Wrote actual IDENTITY.md for all agents | 0.788 | prompts alone beat v1 |
+| First LoRA on distilled + full prompts | **0.851** | current champion |
+
+Identity went from 0.500 to 1.000. Jailbreak from 0.667 to 0.958. Qui-Gon went from 0.250 to 0.825. Turns out writing a proper system prompt is worth more than a hundred training runs on bad data. Who knew.
+
+<Aside type="note">
+  The biggest lesson from this project: **data quality > hyperparameter tuning**. The v2 adapter failed catastrophically because of 63% duplicate synthetic data. The v3 system prompts alone beat the v1 LoRA. Fix your inputs before you optimize your gradients.
+</Aside>
+
+## Project Structure
+
+```
+council-autoresearch/
+├── agent.py             # Claude Agent SDK autonomous researcher
+├── program.md           # Agent instructions (Karpathy-style)
+├── train.py             # Hyperparameters + LoRA training wrapper
+├── experiment.sh         # Single experiment orchestration
+├── run_overnight.sh      # Batch loop with time guards
+├── prepare.py           # Data pipeline delegation
+├── benchmark.py         # Multi-model comparison
+├── results.tsv          # Experiment log (the sacred text)
+├── com.sanctum.autoresearch.plist  # Nightly LaunchAgent
+├── adapters-experimental/  # Experiment outputs
+└── logs/                # Training and eval logs
+```
+
+<div class="sanctum-whisper">The adapters train while you sleep. The Council improves itself. This is fine.</div>
