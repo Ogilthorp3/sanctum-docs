@@ -1,0 +1,120 @@
+---
+title: Service Graph
+description: Dependency-aware service management — because restarting leaves when the root is dead helps no one.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The old watchdog was honest and dumb. It had one list and one idea: check everything, restart whatever's broken. No context. No depth perception. The emotional intelligence of a `while true; do restart; done` loop.
+
+When bridge100 went down on March 22, the watchdog dutifully restarted six services that depend on bridge100 — a retry storm that accomplished nothing, because the root was dead and nobody told it to look down. It was like calling an ambulance for every room in a house that lost power. The problem was the breaker. The watchdog couldn't see the breaker. The watchdog didn't know breakers existed.
+
+The service graph replaced that flat list with a tree. Twenty-eight services, wired together by who-needs-whom. When something breaks, the graph walks upward until it finds the cause. Then it fixes *that*. Everything downstream recovers on its own — or doesn't, in which case you have a different problem and possibly a different hobby.
+
+![The dependency tree — twenty-eight services, one truth](../../../assets/illustrations/living-force-immune.png)
+
+## Service Manifests
+
+Every monitored service gets a YAML file in `~/.sanctum/services/`. One file per service. Twenty-eight files. Each one declares what the service provides, what it requires, how to check its pulse, and how to restart it when the pulse stops. Think of it as a birth certificate, a résumé, and a DNR order all in one document.
+
+```yaml
+# ~/.sanctum/services/sanctum-proxy.yaml
+name: sanctum-proxy
+provides:
+  - port: 4000
+    protocol: tcp
+requires:
+  - service: bridge100
+health:
+  startup:
+    command: "curl -sf http://localhost:4000/health"
+    timeout: 10
+  liveness:
+    command: "curl -sf http://localhost:4000/health"
+    interval: 60
+remediation:
+  restart_command: "launchctl kickstart -k gui/$(id -u)/com.sanctum.litellm-proxy"
+  max_restarts: 3
+  quarantine_after: 3
+```
+
+The `requires` field is where the graph gets its edges. If `sanctum-proxy` requires `bridge100`, then when bridge100 is dead, the graph knows not to waste time restarting the proxy. It would just die again. Like pushing Sisyphus back up the hill every sixty seconds and calling it remediation.
+
+Services without a `requires` field are roots — they depend on nothing but the machine being on and the laws of physics holding. If either of those fails, we have bigger problems than YAML can solve.
+
+## The Dependency DAG
+
+Here's where it gets beautiful, in the way that only directed acyclic graphs can be beautiful, which is to say: extremely beautiful if you're reading this page, and completely invisible to everyone else in your household.
+
+`service-graph.py` reads every manifest, extracts the `requires` edges, and builds a DAG using topological sort. The result is a tree that knows things your flat list never could:
+
+```
+bridge100
+├── sanctum-proxy
+│   ├── council-brain
+│   └── council-secure
+├── ssh-tunnel-gateway
+│   └── openclaw-gateway
+├── council-mlx
+└── orbi-bridge
+```
+
+Root-cause analysis walks UP. When `council-brain` fails, the graph checks `sanctum-proxy`. If that's also down, it checks `bridge100`. If bridge100 is dead, that's your root cause. One fix, not three. The old watchdog would have filed three separate complaints and restarted three separate corpses.
+
+Topological ordering also gives the graph a restart sequence. You don't restart a service before its dependencies are alive. You don't serve dinner before you turn on the stove. The Force has a direction, and it flows from root to leaf.
+
+## Drift Detection
+
+`service-drift.sh` runs weekly and asks a simple, uncomfortable question: does reality match the manifests?
+
+Spoiler: it usually doesn't. Reality and documentation maintain the kind of relationship where they've technically never broken up but haven't been in the same room for months.
+
+The script compares three sources of truth that should agree but often don't:
+
+| Source | What It Claims |
+|--------|---------------|
+| Manifests | What services *should* exist and what ports they *should* use |
+| LaunchAgents/systemd | What services *are configured* to run |
+| Listening ports | What services *actually* run |
+
+A manifest that declares port 4000 but nothing listens there — that's drift. A LaunchAgent with no corresponding manifest — that's an orphan. A listening port with no manifest — that's a ghost. All three get flagged in the drift report. None are fatal. All of them mean someone changed something and didn't tell the graph. The graph remembers. The graph always remembers.
+
+## Remediation Ladder
+
+When a service fails its liveness check, the graph doesn't panic. Panic is for flat lists. The graph climbs a ladder.
+
+<Steps>
+1. **Self-heal** — Restart the service using its `restart_command`. Most failures are transient. Most transient failures respond to the digital equivalent of percussive maintenance.
+2. **Dependency restart** — If the service fails again, restart what it depends on. Maybe the problem is one floor down. Maybe the foundation is cracked and you've been repainting the ceiling.
+3. **Subtree restart** — Restart the root of the dependency subtree and let everything below it come back up in topological order. The nuclear option, minus the radiation. Order 66, but for processes.
+4. **Agent investigation** — If the subtree restart didn't work, something is genuinely wrong. Alert a human or dispatch the code-forge agent to investigate. Most issues resolve without human intervention. The rest resolve after human intervention and a glass of something strong.
+</Steps>
+
+Each step only triggers if the previous one failed. The graph is patient. It exhausts the cheap options before reaching for the expensive ones — a level of fiscal discipline that most startups and all toddlers lack.
+
+## Crash Loop Quarantine
+
+<Aside type="danger">
+  If a service crashes three times within thirty minutes, the graph stops restarting it. The service is marked **quarantined** and left alone until a human explicitly clears it. Neo4j taught this lesson — it was crash-looping on a corrupted index, and every restart made the corruption worse. The watchdog was restarting it every ten minutes, like a well-meaning friend who keeps setting you up on dates with the same terrible person. The graph would have stopped after three and waited for someone with hands and judgment.
+</Aside>
+
+Quarantined services appear in the dashboard with a red badge and a timestamp. Unquarantine requires a manual command — `service-graph.py unquarantine <name>` — because the whole point is that automation tried, automation failed, and now it's your turn. Bring coffee.
+
+## Metrics
+
+Every system that heals itself also needs to remember what it healed, and when, and whether the patient was getting worse. Otherwise you're not a doctor — you're a bartender handing out aspirin.
+
+`metrics-collect.sh` runs every five minutes and records RSS memory, disk usage, and CPU time for every monitored service into a SQLite database at `~/.sanctum/metrics/metrics.db`. Small footprint. Append-only. Retained for 90 days. The kind of quiet, diligent record-keeping that would make an accountant weep with joy.
+
+`anomaly-detect.py` runs hourly against the metrics database. It computes a rolling 24-hour mean and standard deviation for RSS, then projects forward. If a service's memory usage will exceed its threshold within 48 hours at the current growth rate, that's a leak — flagged before it becomes an outage. Precrime, but for RAM.
+
+| Script | Interval | Storage | Purpose |
+|--------|----------|---------|---------|
+| `metrics-collect.sh` | 5 min | `metrics.db` (SQLite) | RSS, disk, CPU per service |
+| `anomaly-detect.py` | 60 min | same | Rolling stats, leak projection |
+
+The difference between monitoring and surveillance is consent. Your services consented when you wrote their manifests. They didn't read the terms of service either, but that's a problem for robot lawyers.
+
+<Aside type="tip">
+  Query the metrics database directly for ad-hoc investigation: `sqlite3 ~/.sanctum/metrics/metrics.db "SELECT name, rss_mb FROM metrics WHERE ts > datetime('now', '-1 hour') ORDER BY rss_mb DESC LIMIT 10;"` — useful when something feels slow but nothing has technically failed yet. The gut feeling before the pager goes off. Trust it.
+</Aside>
