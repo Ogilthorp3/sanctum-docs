@@ -62,6 +62,8 @@ export default defineConfig({
 					label: 'Architecture',
 					items: [
 						{ label: 'Overview', slug: 'architecture/overview' },
+						{ label: 'The Living Force', slug: 'architecture/living-force' },
+						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
@@ -72,6 +74,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Dashboard', slug: 'guides/dashboard' },
 						{ label: 'Watchdog', slug: 'guides/watchdog' },
+						{ label: 'Service Graph', slug: 'guides/service-graph' },
 						{ label: 'Home Assistant', slug: 'guides/home-assistant' },
 						{ label: 'AI Agents', slug: 'guides/agents' },
 						{ label: 'Autoresearch', slug: 'guides/autoresearch' },

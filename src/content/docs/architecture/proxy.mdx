@@ -1,0 +1,174 @@
+---
+title: Sanctum Proxy
+description: The intelligent LLM routing engine — 4.6MB of Rust that replaced a Python stack and learned to think.
+---
+
+import { Card, CardGrid, Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The Sanctum Proxy is a 4.6MB Rust binary that routes every LLM request in the platform. It replaced a Python LiteLLM stack that was doing the same job with more RAM, more latency, and considerably more opinions about garbage collection pauses during your most expensive API calls.
+
+It listens on port 4000. It knows about 17 models across 4 providers. It maintains 12 fallback chains. And it has a budget system that will cut off an agent mid-sentence if the math says so. The proxy does not negotiate. The proxy does not feel bad about it.
+
+## What It Does
+
+Every agent, every Claude Code session, every voice query -- all of it flows through this binary. One process. No microservice archipelago. Just a single Rust daemon standing between your agents and the cloud providers who bill by the breath.
+
+The proxy receives an OpenAI-compatible request, decides which provider should handle it, transforms the request to match that provider's format, streams the response back, and tracks every token spent. Think of it as a bouncer, a translator, and an accountant fused into one very small, very fast organism.
+
+Config-driven. One `config.yaml` file declares the models, the fallback chains, the quality tiers, and the budget limits. Change the file, restart the binary, new reality. No database. No state directory. Just a YAML file and convictions.
+
+## The 6-Layer Routing Engine
+
+When a request arrives, it falls through six layers of increasingly opinionated decision-making. The first layer that has a strong opinion wins. The others shut up.
+
+![The routing engine — six layers of increasingly opinionated decision-making](../../../assets/illustrations/living-force-router.png)
+
+```
+                    ┌─────────────────────┐
+  Incoming Request  │                     │
+  ─────────────────>│  1. QUALITY TIER    │  Tier 0? NEVER reroute.
+                    │     claude-opus-4-6  │  Go directly to Anthropic.
+                    │     council-secure   │  Do not pass Go.
+                    └────────┬────────────┘
+                             │ not tier 0
+                    ┌────────▼────────────┐
+                    │  2. TASK TYPE        │  Vision → Gemini.
+                    │     vision, code,    │  Code/security → strongest
+                    │     security         │  available model.
+                    └────────┬────────────┘
+                             │ no strong match
+                    ┌────────▼────────────┐
+                    │  3. COST             │  Claude free tokens left?
+                    │     free → cheap     │  Use them. Then OpenRouter.
+                    │     → paid → local   │  Then Gemini. Then local.
+                    └────────┬────────────┘
+                             │ routed
+                    ┌────────▼────────────┐
+                    │  4. LATENCY          │  (Future) Prefer local
+                    │     placeholder      │  for health checks and
+                    │                      │  heartbeats.
+                    └────────┬────────────┘
+                             │
+                    ┌────────▼────────────┐
+                    │  5. PROVIDER HEALTH  │  >30% error rate?
+                    │     error tracking   │  Skip that provider.
+                    │     exp. decay       │  Try the next one.
+                    └────────┬────────────┘
+                             │
+                    ┌────────▼────────────┐
+                    │  6. BUDGET BREAKER   │  Agent over daily limit?
+                    │     hard cutoff      │  All traffic → local.
+                    │     no exceptions    │  The conversation is over.
+                    └─────────────────────┘
+```
+
+Layer 1 is the velvet rope. `claude-opus-4-6` and `council-secure` are tier 0 -- they go where they're told, always. The proxy does not second-guess these requests. It does not optimize them. It delivers them with the quiet deference of a butler who knows better than to suggest a cheaper wine.
+
+Layer 6 is the bouncer. When an agent exhausts its daily token budget, every subsequent request gets rerouted to a local model running on Apple Silicon three feet away. The agent can still think. It just thinks smaller. Like being demoted from a corner office to a broom closet -- you can still have ideas, but the ambiance has changed.
+
+## Budget System
+
+Five AI agents sharing one wallet. What could go wrong.
+
+Each agent gets a token bucket backed by a lock-free `AtomicI64`. No mutexes. No contention. Five agents can burn tokens simultaneously and the counters stay correct because atomic operations don't have feelings about fairness -- they just increment. This is, incidentally, the ideal personality for anything handling money.
+
+The system tracks Claude Max free-token allocation separately, because free tokens are the most dangerous kind. They feel infinite until they aren't. Free tokens get spent first. When they're gone, paid tokens start. When those hit the daily ceiling, the circuit breaker fires and all traffic diverts to local models. The party's over. Everyone goes home to Apple Silicon.
+
+Every token transaction writes to a JSONL log via an async `mpsc` channel. Non-blocking. Batch-flushed. The budget system never slows down a request to write a receipt. It's the financial equivalent of speed-running your accounting -- technically correct, delivered at wire speed, with the audit trail written in the margins.
+
+<Aside type="tip">
+  Budget defaults to 500K tokens per agent per day. Claude Max contributes ~500K free daily tokens across all agents. The numbers are configurable. The math is not optional.
+</Aside>
+
+## The Claude Code Incident
+
+The proxy was built for agents. Then Claude Code showed up -- a different species of client entirely, with different assumptions about authentication, model naming, and the basic social contract of an API request. The proxy failed in two ways that 52 passing tests didn't catch. The tests were green. The system was on fire. This is, apparently, what progress looks like.
+
+Here's how it went down.
+
+Claude Code sends model IDs like `claude-haiku-4-5-20251001`. The proxy knew about 17 models. It had strong opinions about all of them. This was not one of them. Unknown model. Door's closed. Go away.
+
+Meanwhile -- and this is the part where the proxy became the kind of helpful that gets people killed in horror movies -- Claude Code authenticates with an OAuth token via the `authorization` header. The proxy, in an act of breathtaking helpfulness, *replaced it with its own API key*. It saw a perfectly valid credential, thought "I know a better one," and swapped it out like a valet who decides your car keys would work better if they were his car keys.
+
+The request arrived at Anthropic carrying credentials from a different billing context. Anthropic, with the warmth of a bank teller who has just been handed someone else's driver's license, declined the transaction.
+
+Two bugs. Both invisible to the test suite. Both obvious in retrospect -- which is, of course, the only time anything is obvious.
+
+<Aside type="danger" title="The lesson that launched 7 tests">
+  When you expand the scope of a system -- new client, new auth method, new model format -- the existing test suite covers the old scope. It tells you nothing about the new one. Write tests for the new use case *before* deploying. The 52 tests that passed were correct. They were also irrelevant.
+</Aside>
+
+The fix: auto-passthrough for any `claude-*` model not in the config (no routing, no transformation, just forward it and keep your hands to yourself). Auth priority: client OAuth token wins over proxy API key, always, no exceptions, no helpful overrides. Seven new integration tests that send requests the way Claude Code actually sends them, not the way the proxy wished they would.
+
+## Streaming Token Tracking
+
+This is the bug that earned its own council session. Five AI agents convened in the digital equivalent of a smoke-filled room, argued about streaming protocol semantics with the intensity of constitutional scholars debating a comma, and voted unanimously to deploy a fix immediately rather than shadow-test it. When the robots skip their own safety protocol because the situation is that urgent, you should probably pay attention.
+
+The problem was quiet and catastrophic. Streaming SSE responses -- the kind Claude Code sends for every single interaction -- were returning zero tokens. The proxy faithfully logged `input_tokens: 0, output_tokens: 0` for the most expensive traffic in the entire system. The budget circuit breaker, whose sole reason for existence is to notice when money is being spent, watched Claude Code burn through token allocations and reported: all clear. Everything's fine. Nothing to see here. The meter is definitely running. It just reads zero.
+
+The council's verdict was succinct and damning: "This is not a tracking bug. It is a budget circuit breaker that does not fire."
+
+A budget system that can't see your most expensive traffic isn't a budget system. It's a decorative gauge on the dashboard of a car with no brakes.
+
+The fix: `StreamUsageExtractor`, a state machine that captures token counts from the final events in an SSE stream. Two-phase for Anthropic (input tokens arrive in `message_start`, output tokens in `message_delta`). Single-phase for OpenAI-format providers, with `stream_options: {"include_usage": true}` injected into the request. If the connection drops before the final event, it estimates from content bytes and marks the entry `source: "estimated"` -- because an honest guess beats a confident zero.
+
+Hard cap: 50 concurrent tracked streams. After that, new streams get estimated rather than buffered. The proxy protects itself from its own diligence. Even accounting has limits.
+
+## Configuration
+
+The proxy reads a single `config.yaml` at startup. No hot-reload. No live patching. No "let me just tweak this one value in production." Change the file, restart the binary, twelve seconds of downtime. The agents will survive. They've been through worse -- see literally every other page in this documentation.
+
+```yaml
+# ~/.sanctum/sanctum-proxy/config.yaml (abbreviated)
+listen: "0.0.0.0:4000"
+
+providers:
+  anthropic:
+    base_url: "https://api.anthropic.com"
+  openrouter:
+    base_url: "https://openrouter.ai/api/v1"
+  gemini:
+    base_url: "https://generativelanguage.googleapis.com"
+  local:
+    base_url: "http://localhost:1234"
+
+models:
+  claude-opus-4-6:
+    provider: anthropic
+    quality_tier: 0          # never reroute
+    smart_route: false
+  council-brain:
+    provider: openrouter
+    quality_tier: 1
+    smart_route: true
+    fallback: [qwen35-plus, gemini-25-pro, lm-studio, council-27b]
+  council-routine:
+    provider: openrouter
+    quality_tier: 2
+    smart_route: true
+    fallback: [qwen35-plus, council-27b]
+
+budget:
+  daily_limit_per_agent: 500000
+  claude_max_free_daily: 500000
+  circuit_breaker: true
+```
+
+Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
+
+## Test Coverage
+
+58 tests. 52 for the original agent routing. 7 for the Claude Code integration that broke on first contact -- because nothing teaches you to write tests like watching a system fail in a way your test suite swore was impossible. The streaming token tests simulate dropped connections, concurrent streams at the hard cap, and the Anthropic two-phase capture sequence.
+
+The tests live in the service-doctor skill because the proxy is a service and the doctor makes house calls. It's also the only medical professional in the system that doesn't charge by the token.
+
+```bash
+# Run the full suite
+bash /Users/neo/Projects/openclaw-skills/service-doctor/tests/test-proxy.sh
+
+# Expected: 58 passed, 0 failed
+```
+
+<Aside>
+  For model routing tiers and fallback chains, see [Services](/architecture/services/#model-routing). For the incident that inspired the Living Force principles, see [The Living Force](/architecture/living-force/). For the council session that approved the streaming fix, the minutes are exactly as dramatic as you'd expect from five AI agents voting on their own budget enforcement.
+</Aside>
