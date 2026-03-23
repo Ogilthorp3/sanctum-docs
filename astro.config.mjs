@@ -74,6 +74,7 @@ export default defineConfig({
 						{ label: 'Watchdog', slug: 'guides/watchdog' },
 						{ label: 'Home Assistant', slug: 'guides/home-assistant' },
 						{ label: 'AI Agents', slug: 'guides/agents' },
+						{ label: 'Autoresearch', slug: 'guides/autoresearch' },
 						{ label: 'Skills', slug: 'guides/skills' },
 						{ label: 'Satellite Setup', slug: 'guides/satellite-setup' },
 						{ label: 'Memory Vault', slug: 'guides/memory-vault' },
