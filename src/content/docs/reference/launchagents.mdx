@@ -21,7 +21,11 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 ## LaunchAgents
 
-### com.user.utm-autostart
+### Core Infrastructure
+
+These agents stand up the VM, the gateway, and the firewall bridge. Without them, the rest of the stack is a collection of orphaned processes with nowhere to send their feelings.
+
+#### com.user.utm-autostart
 
 | Property | Value |
 |----------|-------|
@@ -33,11 +37,11 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 Runs a startup script that launches UTM.app, waits for the VM to boot, and configures the bridge interface IP via `sudo ifconfig`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
 
-The first domino. Everything else assumes the VM is running and the bridge exists.
+The first domino. Everything else assumes the VM is running and the bridge exists. If this one fails, enjoy your very expensive space heater.
 
 ---
 
-### ai.openclaw.gateway
+#### ai.openclaw.gateway
 
 | Property | Value |
 |----------|-------|
@@ -48,7 +52,7 @@ The first domino. Everything else assumes the VM is running and the bridge exist
 | **RunAtLoad** | Yes |
 | **Port** | `18789` |
 
-The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) to avoid breakage on Node.js upgrades.
+The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) because pointing a LaunchAgent at a Cellar path is a time bomb with a `brew upgrade` fuse.
 
 <Aside type="caution">
 Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup. Ignoring this advice results in orphaned port locks and a gateway that thinks it's running when it isn't, which is worse than a gateway that's honestly down.
@@ -56,7 +60,7 @@ Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never u
 
 ---
 
-### com.openclaw.firewalla-bridge
+#### com.openclaw.firewalla-bridge
 
 | Property | Value |
 |----------|-------|
@@ -74,7 +78,11 @@ A bridge to a bridge. Networking is turtles all the way down.
 
 ---
 
-### com.yoda.xtts-server
+### AI & Voice
+
+The agents that give the house its opinions. One serves a 27-billion-parameter model. One synthesizes speech. One listens for a wake word and responds as a fictional Jedi. Totally standard residential infrastructure.
+
+#### com.yoda.xtts-server
 
 | Property | Value |
 |----------|-------|
@@ -84,11 +92,11 @@ A bridge to a bridge. Networking is turtles all the way down.
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal Performance Shaders for faster inference compared to the legacy CPU-based VM server.
+Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal Performance Shaders — because asking a CPU to synthesize speech in real time is like asking a poet to take dictation. It can do it. It won't enjoy it.
 
 ---
 
-### com.yoda.voice-agent
+#### com.yoda.voice-agent
 
 | Property | Value |
 |----------|-------|
@@ -98,25 +106,11 @@ Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal P
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Manages voice capture, wake-word detection, and Yoda personality interactions. The part of the system that listens for someone to say the magic words, then responds in the cadence of a small green Jedi. A completely normal thing for a house to do.
+Manages voice capture, wake-word detection, and Yoda personality interactions. A daemon that sits in silence, waiting for someone to speak, then answers in the cadence of a small green Jedi master. Your house does this now. You chose this life.
 
 ---
 
-### com.user.ha-ssh-tunnel
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.user.ha-ssh-tunnel` |
-| **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 18092 |
-| **Required Service** | `home_assistant` |
-| **KeepAlive** | No |
-| **RunAtLoad** | Yes |
-
-Allows the Home Assistant container (running in Docker bridge networking) to reach the VM's Network Control API via `host.docker.internal`.
-
----
-
-### com.sanctum.council-mlx
+#### com.sanctum.council-mlx
 
 | Property | Value |
 |----------|-------|
@@ -131,47 +125,7 @@ Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent persona
 
 ---
 
-### com.cloudflare.tunnel
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.cloudflare.tunnel` |
-| **Purpose** | Cloudflare Zero Trust tunnel for external access |
-| **Required Service** | `cloudflare` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-
-Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `manoir-nepveu`). Routes external traffic to internal services like Home Assistant and the health ingester.
-
----
-
-### com.user.health-ssh-tunnel
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.user.health-ssh-tunnel` |
-| **Purpose** | SSH tunnel for the health ingester to reach the VM on port 18095 |
-| **Required Service** | `health_center` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-
----
-
-### com.manoir.icloud-filer
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.manoir.icloud-filer` |
-| **Purpose** | Automatic filing daemon for iCloud Drive documents |
-| **Required Service** | `icloud_filer` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-
-Watches iCloud Drive directories and automatically files documents into organized folder structures. Digital Marie Kondo, but for PDFs.
-
----
-
-### com.sanctum.litellm-proxy
+#### com.sanctum.litellm-proxy
 
 | Property | Value |
 |----------|-------|
@@ -182,11 +136,57 @@ Watches iCloud Drive directories and automatically files documents into organize
 | **RunAtLoad** | Yes |
 | **Ports** | `4000` (guardrail injector, all interfaces), `4001` (LiteLLM, localhost only) |
 
-Runs two processes: the guardrail injector (Starlette/uvicorn on port 4000) which handles request sanitization, content-based routing, prompt caching, PII scrubbing, and assistant prefill stripping; and LiteLLM (port 4001) which handles model resolution, tiered fallback chains, and analytics. All external traffic enters through port 4000.
+Runs two processes: the guardrail injector (Starlette/uvicorn on port 4000) which handles request sanitization, content-based routing, prompt caching, PII scrubbing, and assistant prefill stripping; and LiteLLM (port 4001) which handles model resolution, tiered fallback chains, and analytics. All external traffic enters through port 4000. The bouncer and the bartender, working the same door.
 
 ---
 
-### com.sanctum.orbi-bridge
+### Network & Tunnels
+
+Every system with a VM that can't see the LAN eventually grows a small collection of tunnels. This is that collection. Each one exists because some process needed to reach some other process, and a direct route was too much to ask.
+
+#### com.user.ha-ssh-tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.user.ha-ssh-tunnel` |
+| **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 18092 |
+| **Required Service** | `home_assistant` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+
+Allows the Home Assistant container (running in Docker bridge networking) to reach the VM's Network Control API via `host.docker.internal`. A Docker container, talking through an SSH tunnel, to a VM it can't see, about devices on a network it's not on. Distributed systems are just loneliness at scale.
+
+---
+
+#### com.user.health-ssh-tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.user.health-ssh-tunnel` |
+| **Purpose** | SSH tunnel for the health ingester to reach the VM on port 18095 |
+| **Required Service** | `health_center` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+The health ingester's lifeline to the VM. Keeps itself alive because health data waits for no one — your resting heart rate doesn't care that the tunnel crashed at 3 AM.
+
+---
+
+#### com.cloudflare.tunnel
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.cloudflare.tunnel` |
+| **Purpose** | Cloudflare Zero Trust tunnel for external access |
+| **Required Service** | `cloudflare` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `manoir-nepveu`). Routes external traffic to internal services like Home Assistant and the health ingester. The one tunnel in this list that actually reaches the outside world, which makes it either the most important or the most dangerous, depending on your threat model.
+
+---
+
+#### com.sanctum.orbi-bridge
 
 | Property | Value |
 |----------|-------|
@@ -203,7 +203,7 @@ The VM wants to talk to the router. The VM can't reach the router. So we built a
 
 ---
 
-### com.sanctum.signal-bridge
+#### com.sanctum.signal-bridge
 
 | Property | Value |
 |----------|-------|
@@ -213,9 +213,29 @@ The VM wants to talk to the router. The VM can't reach the router. So we built a
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
+Lets agents send and receive Signal messages. End-to-end encrypted AI communication — because if your house is going to text you, it should at least have the decency to do it privately.
+
 ---
 
-### com.sanctum.watchdog
+### System & Maintenance
+
+The quiet ones. They file your documents, rotate your secrets, watch for fires, and serve your offline Wikipedia. They don't get thanked enough.
+
+#### com.manoir.icloud-filer
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.manoir.icloud-filer` |
+| **Purpose** | Automatic filing daemon for iCloud Drive documents |
+| **Required Service** | `icloud_filer` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+
+Watches iCloud Drive directories and automatically files documents into organized folder structures. Digital Marie Kondo, but for PDFs. Does it spark joy? Doesn't matter. It sparks organization.
+
+---
+
+#### com.sanctum.watchdog
 
 | Property | Value |
 |----------|-------|
@@ -226,11 +246,11 @@ The VM wants to talk to the router. The VM can't reach the router. So we built a
 | **RunAtLoad** | Yes |
 | **StartInterval** | `600` |
 
-Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep.
+Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep. The most relatable agent in the fleet.
 
 ---
 
-### com.sanctum.rotate-secrets
+#### com.sanctum.rotate-secrets
 
 | Property | Value |
 |----------|-------|
@@ -245,7 +265,7 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 
 ---
 
-### com.manoir.command-center
+#### com.manoir.command-center
 
 | Property | Value |
 |----------|-------|
@@ -256,9 +276,11 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 | **RunAtLoad** | Yes |
 | **Port** | `3001` |
 
+The dashboard. Where you go to see, at a glance, whether the twenty-odd processes described on this page are all still speaking to each other. Think of it as mission control, except the mission is "keep the house sentient."
+
 ---
 
-### com.manoir.kiwix-serve
+#### com.manoir.kiwix-serve
 
 | Property | Value |
 |----------|-------|
@@ -270,7 +292,7 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 | **Port** | `8888` |
 | **ThrottleInterval** | `30` |
 
-Requires an external T9 drive to be mounted. KeepAlive with ThrottleInterval prevents rapid restart loops if the drive is disconnected.
+Requires an external T9 drive to be mounted. KeepAlive with ThrottleInterval prevents rapid restart loops if the drive is disconnected. All of human knowledge, served from an external hard drive — the library of Alexandria, if Alexandria ran on USB-C.
 
 <Aside type="note">
 Without the T9 drive, Kiwix starts, fails, waits 30 seconds, starts, fails, waits 30 seconds — forever. This is launchd's version of patience. The ThrottleInterval keeps it from consuming your Mac's entire CPU in a panicked loop of optimism.
@@ -280,7 +302,7 @@ Without the T9 drive, Kiwix starts, fails, waits 30 seconds, starts, fails, wait
 
 ## LaunchDaemons
 
-LaunchDaemons run as root and load at system boot (before user login). There is exactly one, and it exists because of the number 80.
+Everything above runs as your user. Everything below runs as root. There is exactly one daemon in this section, and it exists because of a number: 80. The lowest-numbered privilege escalation in the history of home automation.
 
 ### com.manoir.dench-proxy
 
