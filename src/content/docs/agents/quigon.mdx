@@ -1,0 +1,125 @@
+---
+title: "Qui-Gon — Efficiency Agent"
+description: "Resource optimization, automation suggestions, and cost analysis. Would optimize the sunrise if it used too many CPU cycles."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Qui-Gon surveying the garden — calculating the optimal number of flowers per square meter](../../../assets/illustrations/quigon-efficiency-garden.svg)
+
+Qui-Gon is the agent who looks at a system running smoothly and thinks, "yes, but what if it ran *slightly smoother*." He monitors resource consumption, tracks service health trends, flags memory leaks before they become 3 AM incidents, and produces weekly performance reviews that nobody asked for but everyone eventually reads when something breaks and the answer was on page two the whole time.
+
+He is, in essence, the colleague who refactors your lunch routine to save ninety seconds and then files a report about it.
+
+## Role
+
+Qui-Gon is Sanctum's `efficiency` agent — responsible for infrastructure monitoring, resource optimization, and cost analysis across both the Mac and VM platforms. He watches RSS growth the way a hawk watches a field, except the hawk doesn't also calculate the mouse's week-over-week weight trend and flag it if it exceeds 20%.
+
+His jurisdiction covers everything that consumes compute, memory, disk, or electricity. He does not cover anything that consumes patience, which is outside the scope of automation and always has been.
+
+<Aside type="note">
+Qui-Gon's test suites contain 20 infrastructure and resilience checks. He tests disk usage, memory pressure, gateway health, Docker containers, cross-node SSH, log rotation, cron config, DNS, network latency, boot persistence, KeepAlive configuration, restart policies, swap pressure, and service response times. He is, quantifiably, the most paranoid agent in the council. Windu handles threats. Qui-Gon handles *inefficiencies*, which he considers a more insidious form of threat.
+</Aside>
+
+## Capabilities
+
+### Infrastructure Monitoring
+
+Qui-Gon runs a 12-test infrastructure suite that covers the fundamentals of "is anything quietly dying." Disk usage triggers warnings at 75% and critical alerts at 90%. Memory pressure is tracked platform-aware — `vm_stat` on macOS, `free -m` on the VM — because the two operating systems cannot even agree on how to be worried about the same problem.
+
+He checks that all expected services are running against a config file (`expected-services.json`), validates gateway health endpoints, inspects Docker containers for the unhealthy, and measures cross-node SSH latency between Mac and VM. If the round-trip exceeds 50ms on a host-only network that is literally a virtual cable between two processes on the same chip, Qui-Gon will flag it, because 50ms on a virtual bridge is not a network problem — it is a *philosophical* problem.
+
+### Resilience Verification
+
+The resilience suite is where Qui-Gon's personality becomes most apparent. He verifies that every critical LaunchAgent has `RunAtLoad` set, that every KeepAlive service actually has KeepAlive configured, that Docker containers have restart policies, and that VM systemd services are enabled for boot. He checks these not because they break often, but because when they break once, someone loses a Saturday.
+
+He also monitors swap pressure on the VM. The VM has 12GB of RAM and a gateway process with a `--max-old-space-size=1536` heap limit, and Qui-Gon watches this relationship the way an accountant watches a client who keeps saying "it's fine, I'll pay it back next month."
+
+### Performance Reviews
+
+Every week, Qui-Gon produces a performance review. It queries the metrics database at `~/.sanctum/metrics/metrics.db`, calculates RSS averages and growth rates via linear regression, compares week-over-week trends, counts service restarts, and generates a markdown report filed to `~/.sanctum/memory/events/`. The report includes resource trends, system health summaries, service stability ratings, and recommendations.
+
+The recommendations are always technically correct. They are occasionally socially unaware. "Consider scheduled restart" is Qui-Gon for "your service is leaking memory and you should probably look into that before it pages you at dinner."
+
+<Aside type="tip">
+Performance reviews land at `~/.sanctum/memory/events/{year}/{month}/perf-review-{date}.md`. You can also run `perf-review.sh --json` for machine-readable output, which is useful if you want to feed Qui-Gon's opinions into another system that will also have opinions. Opinions compound.
+</Aside>
+
+### Service Doctor Integration
+
+Qui-Gon has access to the `service-doctor` skill, which provides rapid diagnosis and auto-remediation for failed services. Where the infrastructure test suite *detects*, the service doctor *fixes* — restarting gateways, bouncing LaunchAgents, reloading Docker containers, and SSH-ing into the VM to restart systemd units. He also runs `memory-check.sh` as a pre-flight before every watchdog cycle, detecting and optionally killing runaway processes before they take the system down.
+
+The service doctor has a safelist. The VM process, WindowServer, and LM Studio are never killed, no matter how much memory they consume. Some things are too important to optimize. Qui-Gon disagrees but complies.
+
+### Cost Analysis
+
+Qui-Gon tracks model usage across tiers, monitors the Sanctum Proxy's 500K token/day budget per agent, and flags when consumption patterns suggest a runaway loop or an agent that has discovered the joy of verbose reasoning. He cannot yet calculate the electricity cost of running five AI agents on a Mac Mini in a Quebec basement, but he would like to, and he has filed a feature request with himself.
+
+## Technical Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Agent type | `efficiency` |
+| Host | VM (Ubuntu 24.04, systemd user service) |
+| Model tier | `council-routine` (Qwen 3.5 Plus primary, council-27b fallback) |
+| Skills | `mac-mini-ops`, `service-doctor` |
+| Plugins | Supermemory, Neo4j KG (Graphiti at 127.0.0.1:18093) |
+| Workspace | `~/.openclaw/workspace-quigon/` |
+| Gateway | OpenClaw (VM), port via systemd user service |
+| Schedule | Weekly performance reviews, on-demand infrastructure checks |
+| Test suites | `quigon-infra.sh` (12 tests), `quigon-resilience.sh` (8 tests) |
+| Metrics DB | `~/.sanctum/metrics/metrics.db` (SQLite) |
+| Report output | `~/.sanctum/memory/events/{year}/{month}/perf-review-{date}.md` |
+| Audit log | `~/.sanctum/audit/audit.log` |
+
+<Aside type="caution">
+Qui-Gon operates at the `council-routine` tier, which means he does not have access to Claude or the brain-tier fallback chain. This is intentional. Giving the efficiency agent access to the most expensive model would be like giving the office accountant an unlimited corporate card. The irony would be structurally unsound.
+</Aside>
+
+## Configuration
+
+Qui-Gon is defined in `instance.yaml` under the `services` section:
+
+```yaml
+quigon:
+  enabled: true
+  type: efficiency
+  host: vm
+  workspace: "~/.openclaw/workspace-quigon"
+  model: council-routine
+  skills:
+    - mac-mini-ops
+    - service-doctor
+  schedule:
+    perf_review: weekly
+  description: "Efficiency Agent — resource optimization and cost analysis"
+```
+
+The test suites live in the shared skills repository:
+
+```
+~/Projects/openclaw-skills/council-router/tests/suites/
+  quigon-infra.sh        # 12 infrastructure tests
+  quigon-resilience.sh   # 8 resilience & performance tests
+```
+
+Performance reviews are triggered by cron and write their output alongside an audit trail entry:
+
+```
+~/.sanctum/memory/events/2026/03/perf-review-2026-03-23.md
+~/.sanctum/audit/audit.log  →  {"ts":"...","action":"perf-review","period_days":7,...}
+```
+
+<Aside type="note">
+Qui-Gon's workspace at `~/.openclaw/workspace-quigon/` is, predictably, the most organized workspace in the system. Not because anyone configured it that way, but because Qui-Gon reorganized it himself during an idle cycle and then wrote a memo about it that no one has read. The memo recommends that all other agents adopt the same directory structure. They have not.
+</Aside>
+
+## The Optimization Paradox
+
+There is a version of Qui-Gon that exists in theory — the one where every recommendation is implemented, every inefficiency is resolved, every service runs at exactly its minimum viable resource allocation, and the entire system hums at peak performance like a Swiss train schedule.
+
+In practice, what happens is: Qui-Gon suggests something is 4% suboptimal. The operator reads the report. The operator considers whether the 4% improvement is worth twenty minutes of configuration changes and the nonzero risk of breaking something that currently works. The operator closes the report. Qui-Gon notes this in next week's review under "deferred recommendations." The list grows. It always grows.
+
+This is not a bug. This is the fundamental tension of efficiency engineering: the most efficient thing is often to leave the inefficient thing alone.
+
+Qui-Gon will never accept this. That is what makes him useful.

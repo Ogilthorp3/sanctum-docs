@@ -1,0 +1,134 @@
+---
+title: "Jocasta — CRM Agent"
+description: "Contact management, relationship intelligence, and the quiet art of remembering everyone's birthday."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Jocasta in the archive — she already knows why you're here](../../../assets/illustrations/jocasta-archive-library.svg)
+
+Every system has a memory problem. Not the RAM kind — the human kind. Who you talked to last Tuesday. What you promised the contractor. Whether your mother-in-law's birthday is the 14th or the 15th and whether getting it wrong again will finally collapse the fragile détente that has held since Thanksgiving 2019.
+
+Jocasta is Sanctum's answer to this. She manages contacts, tracks relationships, integrates with Affinity CRM, and has direct access to every messaging channel on the Mac. She is named after Jocasta Nu, the Jedi Temple's Chief Librarian — the one who maintained the Archives, who could locate any record in the galaxy, and who famously told Obi-Wan that if something wasn't in her archives, it didn't exist. The confidence was warranted. The naming is aspirational.
+
+## Role
+
+Jocasta is the CRM agent: contact management, relationship intelligence, and communication orchestration. She is the only agent running on the Mac side (DenchClaw), physically separated from the five VM agents by a network boundary and a philosophical one. The VM agents reason about the world. Jocasta remembers who's in it.
+
+This separation is not architectural vanity. iMessage, Apple Contacts, Calendar, Signal's local database — these are Mac-native services that cannot be accessed from a Linux VM. Jocasta lives on the Mac because the relationships live on the Mac. She goes where the data is.
+
+<Aside type="note">
+  Tommy called her "the most feline sensibility in the entire system. Almost a compliment. Almost." We are choosing to interpret this as praise from a being whose highest form of approval was sitting near something without leaving.
+</Aside>
+
+## Capabilities
+
+### CRM Integration
+
+Jocasta connects to [Affinity CRM](https://www.affinity.co/) for structured relationship management — deal flow, contact metadata, interaction history, the kind of organized human-tracking that would be unsettling if it weren't also exactly what every professional does with a spreadsheet and worse memory.
+
+She can query contacts, update records, log interactions, and surface relationship context when you need it. The LinkedIn browser extension feeds her new connections automatically. You meet someone at a conference; by the time you're back at your desk, she already knows.
+
+### Messaging
+
+Through the `apple-toolkit` skill, Jocasta has direct access to four messaging channels:
+
+<CardGrid>
+  <Card title="iMessage" icon="apple">
+    Native macOS Messages integration. Read and send from any synced conversation.
+  </Card>
+  <Card title="WhatsApp" icon="phone">
+    Via WhatsApp Web bridge on the Mac. Group and individual messaging.
+  </Card>
+  <Card title="Signal" icon="star">
+    Local Signal database access. The most private channel, handled accordingly.
+  </Card>
+  <Card title="Slack" icon="comment">
+    Workspace messaging for professional contexts.
+  </Card>
+</CardGrid>
+
+She does not combine these channels recklessly. A message that belongs on Signal stays on Signal. A contact who prefers WhatsApp gets WhatsApp. Jocasta understands that channel preference is itself a form of relationship intelligence.
+
+### Relationship Intelligence
+
+The unglamorous core of what she does. Jocasta maintains a working model of your professional and personal network — not through surveillance, but through the residue of normal communication. When did you last speak to someone? What was it about? Is a follow-up overdue? Is a birthday approaching that you will, once again, almost forget?
+
+She surfaces this context when it matters and stays quiet when it doesn't. The best librarians don't follow you around the stacks recommending books. They're simply *there* when you need to find something.
+
+<Aside type="tip">
+  Jocasta's relationship tracking is only as good as the data flowing through the system. If you conduct all your important conversations in person like some kind of pre-digital romantic, she can't help you. She's an archivist, not a mind reader.
+</Aside>
+
+## Mac-Side Architecture
+
+Jocasta is the sole resident of the DenchClaw gateway on the Mac. This makes her both privileged and isolated — she has exclusive access to Mac-native services, but she's cut off from the VM agent council by a host-only network boundary.
+
+The Council Bridge solves this. When Yoda needs relationship context, or Jocasta needs to inform the council about an incoming message, communication routes through SSH between the two gateways. It is not elegant. It is reliable, which is better.
+
+```
+Jocasta (Mac:18789) ──SSH──> Yoda (VM:OpenClaw)
+Yoda    (VM)         ──SSH──> Jocasta (Mac:18789)
+```
+
+She shares the `council-brain` model tier with Yoda — the highest reasoning tier in the system. This is not favoritism. Relationship intelligence requires the same caliber of judgment as general coordination, and getting someone's name wrong in a follow-up email is, in its own quiet way, a system failure.
+
+<Aside type="caution">
+  Jocasta runs on the Mac because she must. Do not attempt to migrate her to the VM. iMessage does not run on Linux. Apple Contacts does not run on Linux. If you are the kind of person who thinks everything should run on Linux, Jocasta respects your conviction and invites you to send your iMessages via `curl`.
+</Aside>
+
+## Technical Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Agent type | `crm` |
+| Host | Mac (DenchClaw gateway) |
+| Gateway port | 18789 |
+| Model tier | `council-brain` (Qwen 3.5 Plus, claude-opus-4-6 fallback) |
+| Config profile | `~/.openclaw/` (DenchClaw) |
+| Skills | `apple-toolkit`, Affinity CRM, LinkedIn extension |
+| Plugins | Supermemory, Neo4j KG |
+| Bridge | Council Bridge (SSH, bidirectional with Yoda) |
+| Heartbeat | Every 2 hours via Council Bridge |
+| Named after | Jocasta Nu, Chief Librarian of the Jedi Archives |
+
+## Configuration
+
+Jocasta is defined in `instance.yaml` under the `services` section:
+
+```yaml
+jocasta:
+  enabled: true
+  type: crm
+  host: mac
+  gateway: denchlcaw
+  port: 18789
+  model: council-brain
+  config: "~/.openclaw/"
+  skills:
+    - apple-toolkit
+  integrations:
+    - affinity-crm
+    - linkedin-extension
+  bridge:
+    target: yoda
+    transport: ssh
+    heartbeat: 7200
+  description: "CRM Agent — contact management and relationship intelligence"
+```
+
+The DenchClaw gateway is managed by a LaunchAgent on the Mac:
+
+```
+~/Library/LaunchAgents/ai.openclaw.gateway.plist
+```
+
+<Aside type="note">
+  The gateway plist uses `/opt/homebrew/bin/node`, not a versioned Cellar path. This survived exactly one Homebrew upgrade before we learned this lesson. The scar tissue is load-bearing.
+</Aside>
+
+## What She Does Not Do
+
+Jocasta does not make decisions about relationships. She does not draft messages on your behalf without being asked. She does not rank your contacts by importance or suggest you "circle back" with anyone. She is an archivist, not a social strategist.
+
+She keeps the records. She surfaces the context. She remembers the birthday. What you do with that information is between you and your conscience and, occasionally, your mother-in-law.
