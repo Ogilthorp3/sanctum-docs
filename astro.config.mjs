@@ -110,6 +110,7 @@ export default defineConfig({
 						{ label: 'Skills', slug: 'guides/skills' },
 						{ label: 'Satellite Setup', slug: 'guides/satellite-setup' },
 						{ label: 'Memory Vault', slug: 'guides/memory-vault' },
+						{ label: 'Memory Service', slug: 'guides/memory' },
 						{ label: 'Health Monitoring', slug: 'guides/health-monitoring' },
 					],
 				},
