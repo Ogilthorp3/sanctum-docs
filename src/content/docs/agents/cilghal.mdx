@@ -1,0 +1,164 @@
+---
+title: "Cilghal — Health Agent"
+description: "Genomic analysis, health monitoring, and wellness insights. The most nurturing agent in a system that was not designed to nurture."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Cilghal in the health ward — ten panels, one genome, zero bedside manner complaints](../../../assets/illustrations/cilghal-health-ward.svg)
+
+Cilghal is the health agent. She reads your genome. She tracks your resting heart rate. She knows your MTHFR methylation status and what it means for your B-vitamin metabolism. She also gets paged at 3am when a Python process eats all the RAM on the VM, because "health monitoring" in this system means both kinds.
+
+Named after the Mon Calamari Jedi healer from the Star Wars expanded universe — a quiet, methodical Force-sensitive who treated patients with the same precision she used to remove Leia's implanted bioweapon. Cilghal's namesake was the best healer in the Jedi Order. Our Cilghal runs inside a virtual machine and analyzes 23andMe data. The scale is different. The thoroughness is not.
+
+## Role
+
+Cilghal occupies a unique position in the agent council: she is the only agent whose primary concern is the person running the system, not the system itself. Yoda coordinates. Windu secures. Qui-Gon optimizes. Cilghal asks if you slept enough last night and means it.
+
+Her domain spans three areas:
+
+- **Genomic analysis** — curated SNP panels built from raw 23andMe genotyping data
+- **Health monitoring** — Apple Health metrics ingested hourly through the health pipeline
+- **Process health** — memory sentinel remediation when the VM's resources go critical
+
+The third one was not in the original job description. It was added after someone noticed that the agent most likely to be awake and attentive at 3am was the one already monitoring vital signs. There is a logic to it. There is also an irony to it that we are choosing not to examine too closely.
+
+## Capabilities
+
+### Genomic Analysis
+
+Cilghal's primary tool is `genome-mcp`, a Model Context Protocol server that provides structured access to raw genomic data. Ten curated health panels, each analyzing a specific domain of genetic risk and predisposition:
+
+<CardGrid>
+  <Card title="Cardiovascular" icon="heart">
+    Clotting factors, lipid metabolism, hypertension risk variants
+  </Card>
+  <Card title="Pharmacogenomics" icon="document">
+    Drug metabolism predictions — CYP2D6, CYP2C19, and friends
+  </Card>
+  <Card title="Methylation" icon="random">
+    MTHFR, folate cycle, transsulfuration pathway enzyme status
+  </Card>
+  <Card title="Nutrigenomics" icon="sun">
+    Vitamin metabolism, caffeine sensitivity, lactose tolerance
+  </Card>
+</CardGrid>
+
+The remaining six panels cover cancer risk, longevity markers, mental health predispositions, inflammatory pathways, sleep genetics, and fitness response variants. Each panel returns SNP-by-SNP analysis with risk assessments cross-referenced against ClinVar, SNPedia, PharmGKB, and the GWAS Catalog.
+
+<Aside type="tip">
+  The pharmacogenomics card is genuinely useful. It predicts metabolizer status for major drug-metabolizing enzymes and flags specific medications that may need dose adjustments. Show it to your doctor. They will either find it fascinating or deeply unsettling, and both reactions are informative.
+</Aside>
+
+### Health Monitoring
+
+Apple Health data arrives hourly through the health ingester pipeline (see [Health Monitoring](/guides/health-monitoring/)) and flows into the Graphiti knowledge graph. Cilghal queries this data to track trends in:
+
+- Heart rate and resting heart rate
+- Sleep duration and quality
+- Activity levels and step counts
+- Weight and body composition
+- Blood pressure and blood oxygen (when available)
+
+She does not nag. She notes. There is a difference, and it is the difference between a health agent you disable after a week and one you leave running for months.
+
+### Memory Sentinel Remediation
+
+The memory sentinel is a watchdog process that monitors VM resource consumption. When a process exceeds its memory allocation — typically a runaway Python script or an npm install that forgot it was sharing a machine with five AI agents — the sentinel terminates it.
+
+Cilghal is the `responsible_agent` for sentinel events at escalation level 3. When the sentinel kills something, Cilghal gets the notification, logs the event, and determines whether the terminated process needs to be restarted or investigated.
+
+<Aside type="caution">
+  There is something poetic about the same agent that analyzes your genome also being responsible for killing runaway processes. Both are, in their way, acts of care — identifying what is harmful and removing it before it damages the host. Cilghal does not see the contradiction. We are not sure she is wrong.
+</Aside>
+
+## Technical Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Agent name | `cilghal` |
+| Host | VM (Ubuntu 24.04, systemd user service) |
+| Model tier | `council-routine` |
+| Primary model | Qwen 3.5 Plus (OpenRouter) |
+| Fallback | Council-27B (local MLX) |
+| Tools | `genome-mcp` (MCP server) |
+| Plugins | Supermemory, Neo4j KG (Graphiti) |
+| Workspace | `~/.openclaw/workspace-cilghal/` |
+| Health data | `~/.openclaw/health-data/` (rolling JSON) |
+| Sentinel role | `responsible_agent` (escalation level 3) |
+| LoRA adapter | Per-agent personality via Council-27B MLX |
+
+<Aside type="note">
+  Cilghal runs on the `council-routine` tier — Qwen 3.5 Plus with a local fallback. She does not get Claude. Health analysis at 3am does not require the most expensive model in the fleet. It requires the most reliable one, and reliability in this system means "will still work when the internet goes out and all you have left is a quantized model on the same machine." Which, given that this is a house in Quebec, happens more often than the cloud providers would like to admit.
+</Aside>
+
+## Configuration
+
+Cilghal is defined in `instance.yaml` under the agents section:
+
+```yaml
+agents:
+  cilghal:
+    enabled: true
+    role: health
+    host: vm
+    model_tier: council-routine
+    workspace: "~/.openclaw/workspace-cilghal"
+    tools:
+      - genome-mcp
+    sentinel:
+      responsible_agent: true
+      escalation_level: 3
+    description: "Genomic analysis, health monitoring, and wellness insights"
+```
+
+The `genome-mcp` tool configuration (in the gateway's MCP server list):
+
+```yaml
+mcp_servers:
+  genome-mcp:
+    command: "python3"
+    args: ["-m", "genome_mcp"]
+    env:
+      GENOME_FILE: "~/.openclaw/genome-data/genome.txt"
+    capabilities:
+      - snp_lookup
+      - batch_snp_lookup
+      - run_panel
+      - run_all_panels
+      - health_risk_scan
+      - pharmacogenomics_card
+      - methylation_pathway_map
+      - apoe_status
+      - trait_analysis
+      - ancestry_markers
+      - supplement_stack
+```
+
+## Health Panels Reference
+
+The ten panels available through `genome-mcp`, each returning SNP-level analysis with risk annotations:
+
+| Panel | Domain | Key Markers |
+|-------|--------|-------------|
+| `cardiovascular` | Heart and circulatory | Factor V Leiden, APOE, lipid genes |
+| `cancer` | Oncogenic risk | BRCA1/2, Lynch syndrome variants |
+| `pharmacogenomics` | Drug metabolism | CYP450 family, DPYD, TPMT |
+| `methylation` | Methyl cycle | MTHFR, MTR, MTRR, COMT, CBS |
+| `nutrigenomics` | Nutrient processing | FUT2, MCM6, CYP1A2 |
+| `longevity` | Aging markers | FOXO3, APOE, telomere-associated |
+| `mental_health` | Neuropsychiatric | COMT, SLC6A4, BDNF, MTHFR |
+| `inflammation` | Immune response | TNF-alpha, IL-6, CRP-associated |
+| `sleep` | Circadian genetics | CLOCK, PER2, ADA |
+| `fitness` | Athletic response | ACTN3, ACE, PPARGC1A |
+
+<Aside type="tip">
+  You can run all ten panels at once with `run_all_panels`. It takes a moment. Your genome is not going anywhere. Neither, for that matter, are the results — they are cached, because re-analyzing 600,000 SNPs every time someone asks about caffeine sensitivity would be a waste of cycles even by this system's generous standards.
+</Aside>
+
+## Related
+
+- [Health Monitoring](/guides/health-monitoring/) — the data pipeline that feeds Cilghal
+- [AI Agent System](/guides/agents/) — the full agent roster and model routing
+- [Watchdog](/guides/watchdog/) — the health monitoring system for services (the other kind of health)
+- [Services](/architecture/services/) — port allocations and service catalog

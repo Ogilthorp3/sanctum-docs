@@ -117,6 +117,13 @@ export default defineConfig({
 					label: 'Agents',
 					items: [
 						{ label: 'Tommy \u2014 Guardian Spirit', slug: 'agents/tommy' },
+						{ label: 'Yoda \u2014 Main Agent', slug: 'agents/yoda' },
+						{ label: 'Windu \u2014 Security', slug: 'agents/windu' },
+						{ label: 'Qui-Gon \u2014 Efficiency', slug: 'agents/quigon' },
+						{ label: 'Cilghal \u2014 Health', slug: 'agents/cilghal' },
+						{ label: 'Mundi \u2014 Finance', slug: 'agents/mundi' },
+						{ label: 'Jocasta \u2014 CRM', slug: 'agents/jocasta' },
+						{ label: 'Ahsoka \u2014 Satellite', slug: 'agents/ahsoka' },
 					],
 				},
 				{
