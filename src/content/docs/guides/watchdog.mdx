@@ -143,3 +143,80 @@ The test suite covers all critical Sanctum subsystems:
 | Firewalla bridge     | Port 18094 responds                                 |
 
 Tests return structured results with pass/fail status, latency, and diagnostic messages that feed into both the notification system and the dashboard. Eleven tests. Every ten minutes. That's 1,584 health checks a day. Your house gets more checkups than you do.
+
+## Memory Sentinel
+
+At 3:39 AM on March 23, 2026, two rogue Python processes leaked 59 GB on the 64 GB Mac Mini. WindowServer hit a watchdog timeout and the entire machine crashed. The service-graph kept checking ports and HTTP endpoints while the system slowly asphyxiated underneath it — because knowing that a service is up doesn't help when there's no RAM left to run it.
+
+The memory sentinel exists because of that night. It runs as a pre-flight check *before* the service-graph, because the service-graph itself spawns Python, threads, and SSH connections — all of which consume memory. Running diagnostics on a memory-starved system is the monitoring equivalent of performing surgery on a patient who is actively on fire.
+
+### How It Works
+
+The sentinel reads `kern.memorystatus_level` (the kernel's view of free memory, accounting for compression) and scans per-process RSS via `ps`. It classifies the system into four levels:
+
+| Level | System Free | Per-Process RSS | Action |
+|-------|------------|-----------------|--------|
+| OK | >= 20% | < 8 GB | Exit 0, all clear |
+| Warning | 15–19% | 8–12 GB | Exit 0, log only |
+| Critical | 8–14% | 12–20 GB | Exit 1, SIGTERM top offender (5s grace, then SIGKILL) |
+| Emergency | < 8% | > 20 GB | Exit 1, immediate SIGKILL |
+
+The "top offender" is the highest-RSS process *not* on the safelist. Safelisted processes are never killed regardless of consumption:
+
+- `kernel_task`, `WindowServer`, `launchd` — killing these *is* the crash
+- `com.apple.Virtualization.VirtualMachine`, `QEMULauncher` — RSS is guest-mapped memory, not a leak
+- `mds_stores`, `corespotlightd`, `mediaanalysisd` — system indexers that self-regulate
+
+Everything else — MLX server, LM Studio, node processes, Docker, Python agents — is fair game. Managed services get killed and the service-graph handles the restart. Unmanaged processes get killed and get to think about what they did.
+
+<Aside type="caution">
+Before killing, the sentinel re-reads the process's RSS to confirm it hasn't exited or shrunk. A process that was at 15 GB when the scan started might be at 2 GB by the time the kill arrives. The sentinel checks. Most kill scripts don't. That's how you get bug reports titled "why did my database get SIGKILLed during a vacuum."
+</Aside>
+
+### Watchdog Integration
+
+The sentinel runs as Step 0.5 in the watchdog cycle — after log rotation, before the service-graph:
+
+```
+Watchdog check starting
+  → Memory sentinel pre-flight (--json)
+    → If emergency/critical: --kill, notify, sleep 3s
+    → If warning: log only
+  → Step 1: service-graph check-all (existing flow)
+```
+
+If the sentinel kills a process, it sends a critical notification via all channels (macOS, dashboard, Signal) and waits three seconds for the system to reclaim memory before the service-graph runs.
+
+### Configuration
+
+```yaml
+services:
+  memory_sentinel:
+    enabled: true
+    thresholds:
+      warning_free_pct: 15
+      critical_free_pct: 8
+      emergency_free_pct: 5
+      per_process_warn_gb: 8
+      per_process_kill_gb: 12
+    auto_kill: true
+    kill_grace_seconds: 5
+    safelist:
+      - "com.apple.Virtualization.VirtualMachine"
+      - "QEMULauncher"
+      - "WindowServer"
+      - "kernel_task"
+      - "mds_stores"
+      - "corespotlightd"
+      - "mediaanalysisd"
+      - "launchd"
+```
+
+<Aside type="tip">
+You can run the sentinel manually at any time: `bash ~/.sanctum/scripts/memory-sentinel.sh --status` for a human-readable table, or `--json` for structured output. The `--kill` flag only acts at critical or emergency level — you can't accidentally nuke a process by running it on a healthy system.
+</Aside>
+
+### Agent Integration
+
+Cilghal (the health agent) can invoke the sentinel through the `memory-check.sh` tool in the service-doctor skill. This gives agents the ability to check memory pressure and, if authorized, kill runaway processes without SSH access to the host. The tool passes `--status`, `--json`, or `--kill` through to the sentinel script.
+
