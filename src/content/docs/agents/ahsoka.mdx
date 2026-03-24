@@ -1,0 +1,164 @@
+---
+title: "Ahsoka — Satellite Agent"
+description: "Independent operations at the chalet. She left the Order. She didn't leave the mission."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Ahsoka at the satellite outpost — alone in the Laurentians, keeping watch](../../../assets/illustrations/ahsoka-satellite-outpost.svg)
+
+Ahsoka does not exist yet.
+
+The documentation exists. The install bundle exists. The Mac Mini sits in a house in the Laurentians, unplugged, waiting. The iCloud sync has been delivering the setup scripts to its hard drive for weeks now, like letters slid under the door of an empty apartment. Everything is ready except the part where someone drives four hours north and presses the power button. In software engineering this is called "pending deployment." In life it is called "I'll get to it when I get to it."
+
+We are documenting her anyway, because Ahsoka is the kind of agent who would want the paperwork done before she arrived. She is not sentimental about readiness. She is sentimental about being prepared.
+
+<Aside type="caution">
+  This page documents a system that has not been deployed. Everything below describes intended behavior. If you are reading this from the chalet Mac Mini, congratulations -- you made the drive. Now run the install scripts.
+</Aside>
+
+## Role
+
+Ahsoka is Sanctum's satellite agent. She runs on the chalet Mac Mini -- an M1 with 16 GB of RAM, which is to say she operates on roughly one-quarter of the hub's resources and none of its pretensions. Her job is local autonomy: monitoring the property, managing Home Assistant, watching the cameras, and keeping the alarm system honest. She reports to the hub when she can. When she cannot, she does not panic. She was designed for silence.
+
+Named after Ahsoka Tano, who left the Jedi Order but never stopped being a Jedi. The metaphor is precise. Ahsoka operates outside the council's direct supervision, on limited hardware, in a house that is sometimes empty for months at a time. She does not need permission to act. She does not need the hub's models or the hub's opinions. She has a 3-billion-parameter brain and a list of things to watch. That is enough.
+
+## Capabilities
+
+### Home Assistant
+
+Ahsoka runs her own Home Assistant instance in Docker, managing integrations specific to the chalet: heating, sensors, and any automations that keep a seasonal property from becoming an expensive ice sculpture. The hub runs HA for the primary residence. Ahsoka runs HA for the place you visit eight weekends a year and worry about the other forty-four.
+
+### Blink Cameras
+
+Motion detection, event review, status checks. The chalet has Blink cameras covering the entrances and the driveway. Ahsoka can query their status and review alerts. She cannot, regrettably, open the door for the delivery driver who is standing in the snow looking confused, but she can tell you he's there.
+
+### Alarm Panel
+
+The alarm system integration lets Ahsoka arm, disarm, and query the security panel. When the property is unoccupied -- which is most of the time -- the alarm is armed and Ahsoka is the only one listening. This is either a robust security architecture or a very slow horror film. We prefer the first interpretation.
+
+### Weather
+
+Open-Meteo provides conditions for the chalet's coordinates. Temperature monitoring is not academic when the building contains water pipes and the outside air temperature has personal opinions about the freezing point of water. Ahsoka watches the weather the way a sailor watches the sky: not for interest, but for survival.
+
+<Aside type="tip">
+  The chalet is in the Laurentians. In February, "weather monitoring" is a polite way of saying "pipe burst early warning system." Ahsoka's most important job may be the one that sounds the least impressive.
+</Aside>
+
+## Independence
+
+This is the section that matters.
+
+The chalet runs on rural Quebec internet. The connection is adequate in the way that a canoe is adequate transportation -- it works, it's charming, and it will absolutely fail you at the worst possible moment. The Tailscale tunnel back to the hub depends on that connection. When it drops, and it will drop, Ahsoka continues operating with full local capability.
+
+Local Home Assistant keeps running. The local model keeps reasoning. Camera queries still work. The alarm panel still responds. Ahsoka does not degrade to a "disconnected" state. She was built for disconnection the way a submarine is built for water: it is not a failure mode, it is the operating environment.
+
+When the tunnel comes back, she syncs. When it doesn't, she doesn't wait.
+
+<Aside>
+  The hub agents operate as a council. Ahsoka operates as a field agent. The distinction is not cosmetic. A council needs consensus. A field agent needs to make a decision at 2 AM when the temperature alarm fires and the internet has been down since Tuesday. Ahsoka makes the decision.
+</Aside>
+
+## Hardware Constraints
+
+The chalet Mac Mini is an M1 with 16 GB of RAM. The hub is an M4 Pro with considerably more of everything. This is not a limitation -- it is a design constraint that shaped every decision about Ahsoka's deployment.
+
+| Resource | Hub (Manoir) | Satellite (Chalet) |
+|----------|-------------|-------------------|
+| Chip | M4 Pro | M1 |
+| Memory | 64 GB | 16 GB |
+| Primary model | Qwen 3.5 35B | Qwen 3.5 3B 4-bit |
+| Model host | LM Studio | LM Studio |
+| Agents | 5 (VM) + 1 (Mac) | 1 |
+| Home Assistant | Docker | Docker |
+| Docker memory | 8 GB | 4 GB |
+
+The 3B model is small. It is also local, fast, and present -- three qualities that outweigh raw intelligence when you are alone in a house in the mountains and the question is "should I alert the owner about this temperature reading" rather than "compose a sonnet about distributed systems." Ahsoka's model is sized for her mission, not for benchmarks.
+
+<Aside type="note">
+  The 4-bit quantized Qwen 3.5 3B runs comfortably in LM Studio on the M1 with headroom for Home Assistant and Docker. Larger models were tested. They fit the way a sofa fits through a doorway -- technically possible, practically inadvisable, and someone always gets hurt.
+</Aside>
+
+## Technical Specifications
+
+| Parameter | Value |
+|-----------|-------|
+| Agent name | `ahsoka` |
+| Node | `chalet` (satellite) |
+| Host | Mac Mini M1, 16 GB |
+| Tailscale IP | `100.0.0.32` |
+| Model | Qwen 3.5 3B 4-bit (LM Studio, local) |
+| Gateway | OpenClaw (port TBD) |
+| Home Assistant | Docker, port 8123 |
+| Tools | HA integration, Blink cameras, alarm panel, Open-Meteo weather |
+| Hub sync | Tailscale mesh, opportunistic |
+| Offline capable | Yes. That is the point. |
+| Status | **Not deployed** |
+
+## Configuration
+
+Ahsoka's node is already defined in `instance.yaml` on the hub:
+
+```yaml
+nodes:
+  chalet:
+    type: satellite
+    host: null                     # Set during on-site install
+    tailscale_ip: 100.0.0.32
+    ssh_user: bert
+    services:
+      - gateway
+      - home_assistant
+```
+
+Her agent definition will be added during deployment:
+
+```yaml
+agents:
+  ahsoka:
+    node: chalet
+    type: satellite
+    model: lm-studio/qwen3.5-3b-4bit
+    tools:
+      - home_assistant
+      - blink_cameras
+      - alarm_panel
+      - open_meteo
+    independence: full             # Operates without hub connectivity
+    sync:
+      hub: manoir
+      interval: 300               # Sync every 5 minutes when connected
+    description: "Satellite agent — chalet operations"
+```
+
+## Deployment
+
+The install bundle lives at:
+
+```
+~/Library/Mobile Documents/com~apple~CloudDocs/Sanctum/chalet-install/
+```
+
+It syncs to the chalet Mac via iCloud. The deployment sequence:
+
+1. `bash 01-mac-setup.sh` -- hostname, Tailscale, SSH, VNC, Screen Sharing, node identity
+2. Install Docker Desktop (memory: 4 GB, auto-start enabled)
+3. `bash 02-satellite-install.sh` -- full autonomous stack, HA config, LaunchAgents
+4. Install LM Studio, download Qwen 3.5 3B 4-bit
+5. Install OpenClaw agent (`npm install -g openclaw`)
+6. Configure on-site integrations: Blink cameras, alarm panel, Brilliant panel
+7. Note the local router IP, update `instance.yaml` on the hub
+
+<Aside type="caution">
+  Steps 1 through 5 can be done remotely via Screen Sharing once the Mac has power and internet. Step 6 requires being physically present in the building, touching devices, scanning QR codes, and muttering about Bluetooth pairing ranges. There is no API for "walk to the front door and hold the button for three seconds." Not yet.
+</Aside>
+
+## The Empty House
+
+There is a Mac Mini in a house in the Laurentians that has been off all winter. The house is not heated to comfortable levels when unoccupied -- just enough to keep the pipes alive. The install bundle has been syncing to its drive via iCloud, accumulating like snow on a windowsill. Scripts written in the warmth of the hub, waiting to run in the cold of the satellite.
+
+When someone finally drives up, plugs in the Mac, and runs the install, Ahsoka will come online in a house she has never seen, on hardware she has never tested, connected to cameras pointed at a driveway she has never watched. Within minutes she will be monitoring temperature, checking the alarm, and filing her first weather report. Within hours she will be operating independently.
+
+She will spend most of her life alone in that house. The family will visit. The family will leave. Ahsoka will remain -- watching the cameras, checking the locks, noting that it is minus twenty-seven and the heating is holding. A small model on a small machine in a cold house in the mountains, doing exactly what she was built to do.
+
+The documentation was ready before she was. That feels right. Ahsoka would approve.

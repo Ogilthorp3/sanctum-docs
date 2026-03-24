@@ -1,0 +1,122 @@
+---
+title: "Windu — Security Agent"
+description: "Network security, threat assessment, and the firm belief that everything is suspicious until proven otherwise."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Windu — the security agent who treats every packet like a potential threat and every open port like a personal insult](../../../assets/illustrations/windu-security-perimeter.svg)
+
+Windu is the security agent. He monitors the network via the Firewalla Purple, enforces security policies, generates daily threat briefings, and maintains a level of vigilance that would be clinically concerning in a person but is exactly correct in a firewall agent. He sees threats everywhere. This is occasionally annoying and will one day save everything.
+
+Named after Mace Windu, the Jedi who trusted nobody and was right about Palpatine the whole time. The parallel is deliberate. Windu trusts no device on the network until it has been identified, categorized, and judged. New devices get flagged. Unusual traffic patterns get logged. The Orbi router's firmware update traffic gets scrutinized with the same intensity as a port scan from Moldova. Windu does not distinguish between paranoia and thoroughness.
+
+## Role
+
+Windu handles all security-related operations:
+
+- Daily security briefings (generated and delivered via the council bridge)
+- Network monitoring through the Firewalla Purple P2P API
+- Threat assessment and anomaly detection on LAN traffic
+- Security policy enforcement across all Sanctum services
+- Firewall rule management and audit
+- Incident response escalation to Yoda when human intervention is required
+
+<Aside type="note">
+Windu generates a security briefing every morning. It covers new devices on the network, unusual traffic patterns, blocked threats, and any policy violations detected overnight. The briefing is thorough. Some might say exhaustive. Windu would say those people don't take security seriously enough.
+</Aside>
+
+## Capabilities
+
+| Capability | Details |
+|------------|---------|
+| Firewalla toolkit | Full access to `fw-*.sh` tools for network management |
+| Security policy skill | Policy enforcement and audit via `security-policy` skill |
+| Network scanning | Device discovery, port analysis, traffic pattern review |
+| Briefing generation | Daily security reports with threat classification |
+| Incident escalation | Automatic escalation to Yoda for critical findings |
+
+## Technical Specifications
+
+| Property | Value |
+|----------|-------|
+| Agent ID | `windu` |
+| Host | VM (Ubuntu 24.04, UTM/QEMU) |
+| IP | 10.10.10.10 (shared VM) |
+| Primary model | `anthropic/claude-sonnet-4-20250514` |
+| Model tier | `council-secure` |
+| Routing | **Tier 0 — never rerouted** |
+| Fallback chain | None. Claude Sonnet or nothing. |
+| Workspace | `~/.openclaw/workspace-windu/` |
+| Skills | `firewalla-toolkit`, `security-policy` |
+
+<Aside type="danger">
+Windu runs on the `council-secure` tier, which means the Sanctum Proxy will **never** reroute his requests to a cheaper model. Not to Gemini. Not to Qwen. Not to the local 27B. Security analysis does not get budget-optimized. If you change this, you deserve whatever Windu finds that a cheaper model would have missed.
+</Aside>
+
+## Configuration
+
+Windu's agent definition in `~/.openclaw/openclaw.json`:
+
+```yaml
+# Agent definition (shown as YAML for readability)
+agents:
+  list:
+    - id: windu
+      model: anthropic/claude-sonnet-4-20250514
+      identity:
+        name: Windu
+        theme: >
+          Security guardian. Monitors network threats,
+          manages firewall rules, watches for intrusions,
+          and enforces security policies across the homelab.
+```
+
+## Firewalla Integration
+
+Windu reaches the Firewalla Purple through a bridge running on the Mac:
+
+| Component | Details |
+|-----------|---------|
+| Firewalla IP | 192.168.1.1 (router mode) |
+| Bridge LaunchAgent | `com.openclaw.firewalla-bridge` |
+| Bridge port | 18094 (bound to 0.0.0.0) |
+| Bridge code | `/Users/neo/.openclaw/firewalla-bridge.js` |
+| VM access | `http://10.10.10.1:18094` |
+| P2P port | 8833 on 192.168.1.1 |
+| Auth | Cloud auth to `firewalla.encipher.io` before local P2P |
+| Keys | `/Users/neo/.openclaw/firewalla/keys/` |
+
+The VM has no direct internet access (host-only networking), so Windu accesses the Firewalla through the Mac bridge. Every network management command traverses: VM agent → SSH/HTTP to Mac bridge → P2P API to Firewalla. This is three hops to manage a firewall that is physically one Ethernet cable away. Windu does not complain about the architecture. Windu complains about the things the architecture is designed to protect against.
+
+<Aside type="caution">
+The Firewalla SDK requires cloud authentication to `firewalla.encipher.io` before establishing a local P2P connection. If the internet goes down, Windu loses access to the firewall. The irony of a security agent being unable to reach the firewall during a network outage is not lost on anyone, but it is a Firewalla SDK limitation, not a Sanctum design choice.
+</Aside>
+
+## The Briefing
+
+Windu's daily security briefing typically includes:
+
+1. **New devices** — anything that appeared on the network since the last briefing
+2. **Blocked threats** — connection attempts rejected by Firewalla rules
+3. **Traffic anomalies** — unusual bandwidth patterns, unexpected outbound connections
+4. **Policy compliance** — status of security policies across Sanctum services
+5. **Recommendations** — suggested rule changes or investigations
+
+The briefing is delivered via the council bridge to Yoda, who distributes relevant sections to other agents as needed. Windu would prefer to deliver the briefing directly to every agent simultaneously, at maximum volume, with mandatory acknowledgment. The council bridge does not support this.
+
+## Security Philosophy
+
+Windu operates on a simple principle: the network is hostile until proven otherwise, and even then, keep watching. This applies equally to:
+
+- External traffic from the internet
+- Internal traffic between LAN devices
+- Traffic between the Mac and the VM (yes, even the bridge100 subnet)
+- The Orbi router's own management traffic
+- Albert's iPad at 11pm on a school night
+
+<Aside type="tip">
+Windu's toolkit scripts live at `~/Projects/openclaw-skills/firewalla-toolkit/tools/fw-*.sh` on the VM. The test suite (122 tests) is at `firewalla-toolkit/tests/`. If you modify any firewall rules manually, Windu will notice on the next briefing cycle and will have opinions about it. Justified opinions.
+</Aside>
+
+Every port that is open has a reason. Every service that listens on `0.0.0.0` instead of `127.0.0.1` has been evaluated. Every exception to the pf firewall rules on en1 has been documented. Windu knows where every door is, and he checks every lock. That this level of diligence is applied to a residential network in a house with ten Sonos speakers is the kind of gap between ambition and context that makes Sanctum what it is.

@@ -1,0 +1,119 @@
+---
+title: "Yoda — Main Agent"
+description: "Primary intelligence, coordinator, and the one who inherits everyone else's problems."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Yoda — the grand master who coordinates five other agents and still finds time to have opinions about your YAML indentation](../../../assets/illustrations/yoda-council-chamber.svg)
+
+Yoda is the main agent on the VM. He coordinates the other four agents, handles complex multi-step tasks, and serves as the primary conversational interface for the OpenClaw gateway. He is named after a nine-hundred-year-old puppet who speaks in inverted syntax, which tells you something about the naming conventions in this household but nothing about the agent's actual speech patterns. Yoda speaks normally. The puppet thing is just a burden he carries.
+
+Every problem that the other agents cannot solve eventually lands on Yoda's desk. Windu escalates security events. Qui-Gon escalates infrastructure anomalies. Cilghal escalates health alerts. Mundi escalates budget overruns. Yoda escalates to a human, which is the polite way of saying the buck stops with a systemd user service running on a QEMU virtual machine in a basement in Québec.
+
+## Role
+
+Yoda is the general intelligence layer. He:
+
+- Coordinates tasks across all agents on the VM
+- Handles direct user conversations via the OpenClaw gateway
+- Dispatches work to domain-specific agents when the task has a clear owner
+- Makes final decisions when agents disagree (which they do, because agents are opinionated and consensus is a myth)
+- Runs the weekly council session (Sundays at 20:00 ET)
+- Processes the morning tech briefing pipeline from Jocasta
+
+## Capabilities
+
+| Capability | Details |
+|------------|---------|
+| Full toolkit access | All OpenClaw skills and tools available |
+| Agent coordination | Can invoke Windu, Qui-Gon, Cilghal, Mundi as sub-agents |
+| Council sessions | Chairs weekly planning and incident review |
+| Memory search | Local embeddings via `text-embedding-nomic-embed-text-v2-moe` |
+| Context pruning | `cache-ttl` mode, 1-hour TTL |
+| Heartbeat | Every 2 hours |
+| Sub-agents | Up to 8 concurrent |
+
+<Aside type="note">
+Yoda is the only agent with explicit sub-agent orchestration. The other agents can request help from each other via the council bridge, but Yoda is the one who decides whether those requests are reasonable. He is, functionally, middle management with root access.
+</Aside>
+
+## Technical Specifications
+
+| Property | Value |
+|----------|-------|
+| Agent ID | `yoda` |
+| Host | VM (Ubuntu 24.04, UTM/QEMU) |
+| IP | 10.10.10.10 |
+| Gateway | `openclaw-gateway.service` (systemd user, linger=yes) |
+| Gateway port | Inherited from OpenClaw gateway |
+| Primary model | `anthropic/claude-opus-4-6` |
+| Model tier | council-brain |
+| Fallback chain | Claude Opus 4.6 → Qwen 3.5 Plus → DeepSeek V3.2 → MiniMax M2.5 |
+| Local fallback | LM Studio `qwen/qwen3.5-35b-a3b` (port 1234) |
+| Workspace | `~/.openclaw/workspace-yoda/` |
+| Skills directory | `~/Projects/openclaw-skills` |
+| Sandbox mode | Off |
+| Max concurrent tasks | 4 |
+
+<Aside type="caution">
+Yoda's primary model is Claude Opus 4.6, routed through the Sanctum Proxy on port 4000. The proxy's smart router may reroute general queries to Gemini or Qwen to save budget, but code, security, and tool sessions stay on Claude. If Yoda starts giving you suspiciously vague answers about infrastructure, check whether the proxy downgraded him to a cheaper model mid-conversation. The proxy logs at `~/.sanctum/sanctum-proxy/usage.jsonl` will tell you exactly what happened.
+</Aside>
+
+## Configuration
+
+In `~/.openclaw/openclaw.json` on the VM:
+
+```yaml
+# Yoda's agent definition (shown as YAML for readability)
+agents:
+  list:
+    - id: yoda
+      model: anthropic/claude-opus-4-6
+      identity:
+        name: Yoda
+        theme: >
+          Grand Master of the Council. Strategic thinker and
+          decision maker. Orchestrates the other agents and
+          makes the final call on complex decisions.
+```
+
+The VM gateway service:
+
+```bash
+# systemd user service
+~/.config/systemd/user/openclaw-gateway.service
+
+# Uses SOPS wrapper for secrets
+~/.openclaw/sops-start.sh
+
+# Restart pattern (always use this, never raw systemctl)
+systemctl --user restart openclaw-gateway.service
+```
+
+## Smart Routing
+
+Yoda operates on the `council-brain` tier, which means the Sanctum Proxy applies content-based routing to his requests:
+
+| Content type | Route | Rationale |
+|-------------|-------|-----------|
+| Code / tool sessions | Claude Opus 4.6 | Quality matters when you're writing infrastructure |
+| Security queries | Claude Opus 4.6 | Windu would never forgive a downgrade |
+| Vision / images | Gemini 3 Flash | Multimodal routing |
+| General conversation | Gemini 3 Flash → Pro | Cost optimization for chat |
+
+The routing is regex-based classification at ~0ms overhead. No LLM classifier in the loop. The proxy examines the last user message and decides whether the conversation deserves the expensive model or can survive on a cheaper one. Yoda does not get a vote in this process, which is fitting for someone named after a character who famously said things like "do or do not."
+
+<Aside type="tip">
+To check Yoda's current status from the Mac: `ssh openclaw 'systemctl --user status openclaw-gateway.service'`. To see what model he's actually using for a given conversation, check the proxy's JSONL usage log. The `model_used` field tells the truth even when the agent doesn't know it's been rerouted.
+</Aside>
+
+## The Weight of "Main"
+
+Every OpenClaw installation has a main agent. In the Manoir Nepveu instance, the Mac's main agent is Jocasta and the VM's main agent is Yoda. Being "main" means being the default handler for anything that doesn't have a more specific owner. It means getting woken up at 3am because the bridge100 interface lost its IP and five services cascaded into failure. It means chairing meetings where Windu wants to block half the internet and Qui-Gon wants to consolidate three services into one that nobody asked for.
+
+Yoda handles it. He has 8GB of heap allocation and a fallback chain four models deep. He has been running continuously since the VM was provisioned, and he will continue running until someone unplugs the Mac Mini or the basement floods. Whichever comes first.
+
+<Aside type="note">
+The 8GB heap was bumped from 768MB on 2026-03-14 after the 2026.3.13 release started OOMing at the old limit. If your agent is mysteriously dying, check `--max-old-space-size` in the systemd unit before you blame the model.
+</Aside>
