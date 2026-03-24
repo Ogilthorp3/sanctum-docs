@@ -1,0 +1,142 @@
+---
+title: "Memory Service"
+description: "How sanctum-memory gives agents the ability to remember. And occasionally, to forget."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+The Memory Service is a Rust binary (port 18097) that gives every Sanctum agent persistent memory without requiring any of them to manage it. It replaces the Python memory-vault MCP server with something faster, smaller, and wired directly into the proxy so that remembering happens as a side effect of thinking — which, if you squint, is how it works for the rest of us too.
+
+Dual storage: SQLite with FTS5 for search, markdown files for humans and Obsidian. The database is fast. The files are legible. The agents don't care which one you read. You will care, at 2 AM, when you need to understand why Yoda thinks the internet goes down every Thursday.
+
+## How It Works with the Proxy
+
+The proxy (port 4000) already sees every conversation in the house. Making it the memory capture point was less a design decision than an observation: the data was already flowing through the wire. We just started writing it down.
+
+The integration is three hooks, all non-blocking:
+
+1. **Pre-request** — The proxy queries sanctum-memory for cached context relevant to the incoming conversation and injects it into the system message. The agent receives memories it didn't ask for and doesn't know it received. This is, technically, inception.
+2. **Post-response** — After streaming the response, the proxy fires an async ingest call with the conversation data. No waiting. No acknowledgment. Fire and forget.
+3. **Failure isolation** — Memory failures never block or slow requests. If the memory service is down, the proxy sends the request without context and logs a warning. Agents can think without remembering. They just think less well.
+
+<Aside type="tip">
+  Why the proxy and not the agents themselves? Because five agents writing their own memories is five different formats, five different dedup strategies, and five different opinions about what's worth remembering. The proxy has one opinion. It applies uniformly. This is the only form of centralized government the house tolerates.
+</Aside>
+
+## Memory Types
+
+Every memory has a type. The type determines where it lives, how long it survives, and how it's retrieved.
+
+| Type | Purpose | Example |
+|------|---------|---------|
+| `semantic` | Facts, preferences, knowledge | "User prefers terse responses" |
+| `episodic` | Events with timestamps | "Internet outage March 23 at 3:39 AM" |
+| `procedural` | How-to knowledge, runbooks | "To restart LM Studio, kill the process then..." |
+| `observation` | Agent-noted patterns | "Disk usage trending up 2% per week" |
+| `session_summary` | Compressed conversation logs | End-of-session distillation |
+
+The distinction between semantic and episodic matters for retrieval. When an agent asks "what does the user prefer," you search semantic. When it asks "what happened last Thursday," you search episodic. Conflating them is how you get a memory system that answers "what happened last Thursday" with "the user prefers dark mode."
+
+## Storage Architecture
+
+Dual storage, matching the existing vault layout:
+
+| Backend | Role | Format |
+|---------|------|--------|
+| SQLite (`.vault.db`) | Search, metadata, indexes | FTS5 full-text, JSON1 metadata |
+| Markdown files | Human-readable, git-tracked | YAML frontmatter + body |
+
+The markdown directories — `inbox/`, `knowledge/`, `events/`, `procedures/` — are unchanged from the vault. Obsidian still works. Git history still works. The database is the index; the files are the truth.
+
+<Aside type="note">
+  Why FTS5 and not a vector database? Because a 200KB SQLite extension that ships with the binary beats deploying a separate vector service that needs its own memory, its own port, and its own existential crisis about embedding dimensions. FTS5 handles the queries we actually run. If the house ever needs semantic similarity search across ten million documents, we'll revisit. The house does not have ten million documents. The house has a few hundred notes and strong opinions about its SSH keys.
+</Aside>
+
+## Importance Scoring
+
+Every memory gets a score between 0.0 and 1.0. The score determines how long it lives.
+
+**Formula:** `base × source_weight × recency × access_boost × link_boost`
+
+| Factor | Calculation | Rationale |
+|--------|-------------|-----------|
+| Source weight | user=0.9, system=0.85, claude-code=0.7, openclaw=0.7, HA=0.5 | User-stated facts outrank machine observations |
+| Recency | `hours^(-0.3)` (power-law decay) | Recent memories matter more, but the decay is gentle |
+| Access boost | `1 + ln(access_count + 1)` | Frequently accessed memories earn protection |
+| Link boost | Proportional to inbound wikilinks | Well-connected knowledge survives longer |
+
+## TTL Rules
+
+Importance determines lifespan. The system forgets on purpose — and considers this a feature.
+
+| Importance | TTL | Notes |
+|------------|-----|-------|
+| > 0.8 | Permanent | Core knowledge, user-stated preferences |
+| 0.5 – 0.8 | 90 days | Agent-observed patterns, recurring events |
+| 0.3 – 0.5 | 30 days | Single observations, transient context |
+| < 0.3 | 7 days | Ephemeral session data |
+
+**Protection rules:** Memories with importance above 0.8 or an access count of 5 or more are exempt from expiry. If the system keeps reaching for a memory, the memory stays. Even if the math says otherwise.
+
+## Consolidation
+
+Runs every 6 hours. The process is hybrid: regex extraction happens immediately, LLM enrichment is deferred to council-27b on a best-effort basis. If the local model is busy or down, consolidation finishes without enrichment and tries again next cycle.
+
+1. **Scan inbox** — Find raw notes older than 24 hours
+2. **Recompute scores** — Update importance for all active memories
+3. **LLM enrichment** — Extract entities, tags, and relationships via council-27b (best-effort)
+4. **Promote** — Move consolidated notes to `knowledge/`, `events/`, or `procedures/`
+5. **Expire** — Apply TTL rules, archive expired notes (retained 90 days)
+6. **Enforce caps** — Inbox: 300, Knowledge: 1000, Events: 500, Procedures: 200
+
+<Aside>
+  The old vault consolidated once daily at 4:17 AM. The memory service runs every 6 hours because agents don't stop generating observations at midnight. The 4:17 AM schedule was inherited from a cron job that someone set up while half asleep. The time was not meaningful. It was just the time on the clock when the config file was saved.
+</Aside>
+
+## API Reference
+
+All endpoints accept and return JSON. The service binds to `127.0.0.1:18097` by default.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/recall` | Context-aware retrieval — returns memories ranked by relevance to a query |
+| POST | `/search` | Full-text search with filters (type, tags, date range, source) |
+| POST | `/ingest` | Async ingestion of conversation data (called by proxy) |
+| POST | `/write` | Create or update a memory with schema enforcement |
+| GET | `/read/{id}` | Read a memory by ID (auto-tracks access count) |
+| DELETE | `/delete/{id}` | Remove a memory |
+| GET | `/health` | Service health and vault metrics |
+| POST | `/consolidate` | Trigger manual consolidation (dry-run by default) |
+
+## Configuration
+
+All settings live in `instance.yaml` under `services.memory_vault`:
+
+```yaml
+services:
+  memory_vault:
+    enabled: true
+    port: 18097
+    db_path: "~/.sanctum/memory/.vault.db"
+    markdown_dir: "~/.sanctum/memory"
+    consolidation_interval: 21600  # 6 hours in seconds
+    model: "council-27b"           # LLM for enrichment
+    max_context_tokens: 2048       # injected context budget
+    ttl_check_interval: 3600       # hourly TTL sweep
+```
+
+## Technical Specifications
+
+| Property | Value |
+|----------|-------|
+| Host | `127.0.0.1` |
+| Port | 18097 |
+| Binary | ~3.8MB (Rust, statically linked) |
+| Storage | SQLite 3 + FTS5, markdown files |
+| Model tier | council-27b (enrichment only, best-effort) |
+| Dependencies | None at runtime (SQLite compiled in) |
+| LaunchAgent | `com.sanctum.memory-vault` |
+
+<Aside type="caution">
+  The memory service stores everything locally. No cloud sync, no external API calls except to council-27b on localhost. Your house's memories stay in your house. This is a privacy decision, a latency decision, and — given what the agents remember about your network outages — probably a dignity decision.
+</Aside>
