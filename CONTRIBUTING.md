@@ -91,6 +91,10 @@ The QC version is not a translation. It is a rewrite. Same structure, same Aside
 - Memorial or emotional images where the page earns them
 - No stock photos. No clip art. This is a house, not a startup.
 
+## Typography
+
+Body text is justified (`text-align: justify`). This gives clean left and right edges across all documentation pages. Do not override this with centered or left-aligned prose blocks — the justified layout is a deliberate choice for readability.
+
 ## What Not To Do
 
 - **No marketing language.** "Seamlessly orchestrates" is a firing offense.
