@@ -19,7 +19,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 
 | Service | Port | LaunchAgent / Unit | Description |
 |---------|------|--------------------|-------------|
-| DenchClaw Gateway | 18789 | `ai.openclaw.gateway` | Mac-side agent gateway. Runs Jocasta (household management agent) and exposes the agent API. |
+| DenchClaw Gateway | 19001 | `ai.openclaw.gateway` | Mac-side agent gateway. Runs Jocasta (household management agent) and exposes the agent API. |
 | Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
 | Command Center | 3001 | `com.manoir.command-center` | Web dashboard for service status, agent activity, and system health. |
 | Health Center | -- | `com.manoir.health-center` | Health monitoring dashboard for family wellness data. |
@@ -36,7 +36,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 services:
   gateway:
     enabled: true
-    port: 18789
+    port: 19001
   home_assistant:
     enabled: true
     port: 8123
@@ -168,6 +168,7 @@ Seven background agents, zero ports for most of them, and one that requires you 
 | UTM Autostart | -- | `com.user.utm-autostart` | Launches UTM on login, starts the Ubuntu VM, and sets the bridge100 interface IP to 10.10.10.1. |
 | Music Cleanup | -- | `com.manoir.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
 | Kiwix | 8888 | `com.manoir.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
+| Outline | 3100 | Docker container | Self-hosted wiki and documentation service. Provides a collaborative knowledge base for household documentation. |
 
 <Aside type="note">
   Kiwix requires an external T9 drive to be connected. If the drive is absent, the service will start, fail, wait 30 seconds, and try again. Forever. KeepAlive is patient. KeepAlive believes in you plugging that drive back in.
@@ -260,14 +261,14 @@ Every service follows the same lifecycle through the configuration system. Three
 
     ```bash
     # Manual health check
-    sanctum_enabled gateway && curl -sf http://localhost:18789/health
+    sanctum_enabled gateway && curl -sf http://localhost:19001/health
     ```
   </TabItem>
 </Tabs>
 
 ## Port Summary
 
-Twenty ports. Two hosts. One network that exists entirely inside a closet. Print this table out. Tape it to the wall next to the Mac Mini. You will need it at 2 AM when something is listening on a port you don't recognize and you're debugging five different systems in your underwear.
+Twenty-one ports. Two hosts. One network that exists entirely inside a closet. Print this table out. Tape it to the wall next to the Mac Mini. You will need it at 2 AM when something is listening on a port you don't recognize and you're debugging five different systems in your underwear.
 
 | Port | Service | Host |
 |------|---------|------|
@@ -275,6 +276,7 @@ Twenty ports. Two hosts. One network that exists entirely inside a closet. Print
 | 80 | Dench Proxy (reverse proxy) | Mac |
 | 1234 | LM Studio | Mac |
 | 3001 | Command Center | Mac |
+| 3100 | Outline | Mac (Docker) |
 | 4000 | LiteLLM Proxy | Mac |
 | 4001 | LiteLLM Admin | Mac |
 | 8020 | XTTS TTS Server | Mac |
@@ -287,11 +289,11 @@ Twenty ports. Two hosts. One network that exists entirely inside a closet. Print
 | 18092 | HA SSH Tunnel | Mac -> VM |
 | 18094 | Firewalla Bridge | Mac |
 | 18095 | Health SSH Tunnel | Mac -> VM |
-| 18789 | DenchClaw Gateway | Mac |
 | 18789 | OpenClaw Gateway | VM |
+| 19001 | DenchClaw Gateway | Mac |
 | 19001 | Holocron Chat | Mac |
 | 21063 | HomeKit Bridge | Mac (Docker) |
 
-<Aside type="danger">
-  Port 18789 is used by both the DenchClaw Gateway (Mac) and OpenClaw Gateway (VM). They don't conflict because they live on different hosts (10.10.10.1 and 10.10.10.10). But if you ever bridge them onto the same network, you'll have two gateways fighting for the same port, and nobody wins that war.
+<Aside type="note">
+  The DenchClaw Gateway (Mac, port 19001) and OpenClaw Gateway (VM, port 18789) use different ports on different hosts. Earlier documentation incorrectly listed both at 18789. They never conflicted in practice because they live on separate hosts (10.10.10.1 and 10.10.10.10), but the port numbers are in fact distinct.
 </Aside>
