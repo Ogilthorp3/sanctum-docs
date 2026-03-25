@@ -52,13 +52,13 @@ Five AI models sharing a single Mac Mini is either an act of architectural geniu
 
 This is where Apple Silicon earns its keep. The M4 Pro runs local inference, text-to-speech, and a voice agent simultaneously -- the kind of multitasking that would make an Intel chip file a workers' comp claim.
 
-| Service | Port | LaunchAgent | Description |
-|---------|------|-------------|-------------|
-| LM Studio | 1234 | `com.manoir.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
-| Council-27B MLX | 8899 | `com.sanctum.council-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
-| XTTS TTS Server | 8020 | `com.yoda.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
-| Voice Agent | 8090 | `com.yoda.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
-| LiteLLM Proxy | 4000 / 4001 | `com.sanctum.litellm-proxy` | Two-layer LLM proxy: guardrail injector (port 4000) + LiteLLM router (port 4001). Handles tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
+| Service | Port | Codename | LaunchAgent | Description |
+|---------|------|----------|-------------|-------------|
+| LM Studio | 1234 | — | `com.manoir.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
+| Council-27B MLX | `1337` | leet — the coding brain | `com.sanctum.council-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
+| XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.yoda.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
+| Voice Agent | 8090 | — | `com.yoda.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
+| Sanctum Proxy | `4040` / 4001 | .40 caliber — the gateway | `com.sanctum.litellm-proxy` | Two-layer LLM proxy: guardrail injector (port 4040) + LiteLLM router (port 4001). Handles tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
 ### Model Routing
 
@@ -72,7 +72,7 @@ Agents use a **tiered model strategy** -- each agent tier has its own primary mo
 | `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
 | `council-heartbeat` | Council 27B (local) | council-27b | All (heartbeat checks) |
 
-The **guardrail injector** (port 4000) intercepts all requests before they reach LiteLLM and applies a 7-step pipeline. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
+The **guardrail injector** (port 4040) intercepts all requests before they reach LiteLLM and applies a 7-step pipeline. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
 
 0. Smart content-based routing (Gemini-first for non-code tasks)
 1. Anthropic prompt caching injection
@@ -83,7 +83,7 @@ The **guardrail injector** (port 4000) intercepts all requests before they reach
 6. PII anonymization for OpenRouter
 
 <Aside>
-  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4000) handles request sanitization and content-based routing. All external traffic enters through port 4000. Two ports, seven pipeline stages, and a hope that the content blocks aren't empty again.
+  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4040) handles request sanitization and content-based routing. All external traffic enters through port 4040. Two ports, seven pipeline stages, and a hope that the content blocks aren't empty again.
 </Aside>
 
 ### Config Example
@@ -95,16 +95,16 @@ services:
     port: 1234
   council_mlx:
     enabled: true
-    port: 8899
+    port: 1337
   voice_agent:
     enabled: true
     port: 8090
   tts:
     enabled: true
-    port: 8020
+    port: 8008
   litellm:
     enabled: true
-    port: 4000
+    port: 4040
     admin_port: 4001
 ```
 
@@ -114,13 +114,13 @@ Bridges and tunnels. The unglamorous plumbing that connects a closet-mounted Mac
 
 There are seven of them. Two are SSH tunnels. Two are mDNS broadcasters. One talks to the router by first authenticating through a cloud server three thousand miles away. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
 
-| Service | Port | LaunchAgent | Description |
-|---------|------|-------------|-------------|
-| Firewalla Bridge | 18094 | `com.openclaw.firewalla-bridge` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
-| Orbi Bridge | 18080 / 18085 | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
-| Cloudflare Tunnel | -- | `com.cloudflare.tunnel` | Named tunnel `manoir-nepveu`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
-| HA SSH Tunnel | 18092 | `com.user.ha-ssh-tunnel` | SSH tunnel forwarding port 18092 to the VM for Home Assistant integrations. |
-| Health SSH Tunnel | 18095 | `com.user.health-ssh-tunnel` | SSH tunnel forwarding port 18095 to the VM for the health data ingester. KeepAlive enabled. |
+| Service | Port | Codename | LaunchAgent | Description |
+|---------|------|----------|-------------|-------------|
+| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.openclaw.firewalla-bridge` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
+| Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
+| Cloudflare Tunnel | -- | — | `com.cloudflare.tunnel` | Named tunnel `manoir-nepveu`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
+| Network Control | `4007` | 007 — licensed to ping | `com.user.ha-ssh-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
+| Health Ingester | `10101` | binary heartbeat | `com.user.health-ssh-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
 | mDNS Alias (manoir) | -- | `com.manoir.mdns-alias` | Broadcasts `manoir-nepveu.local` via mDNS for LAN discovery. KeepAlive enabled. |
 | mDNS Alias (holocron) | -- | `com.manoir.mdns-dench` | Broadcasts `holocron.local` via mDNS for the chat interface. KeepAlive enabled. |
 
@@ -130,7 +130,7 @@ Two subdomains. Two Cloudflare Zero Trust routes. The entire external attack sur
 
 | Subdomain | Local Target | Purpose |
 |-----------|-------------|---------|
-| `health.nepveu.name` | `localhost:18095` | Health data ingestion endpoint |
+| `health.nepveu.name` | `localhost:10101` | Health data ingestion endpoint |
 | `ha.nepveu.name` | `localhost:8123` | Home Assistant remote access |
 
 <Aside type="caution">
@@ -143,7 +143,7 @@ Two subdomains. Two Cloudflare Zero Trust routes. The entire external attack sur
 services:
   firewalla_bridge:
     enabled: true
-    port: 18094
+    port: 1984
   orbi_bridge:
     enabled: true
     port: 18080
@@ -199,9 +199,9 @@ On the other side of bridge100, in a QEMU-emulated box with no internet access, 
 
 The VM is, in the most literal sense, a brain in a jar. An air-gapped brain in a jar that runs your household security agent. We thought about this. We thought about this a lot. The architecture diagram made it look intentional.
 
-| Service | Port | Systemd Unit | Description |
-|---------|------|-------------|-------------|
-| OpenClaw Gateway | 18789 | `openclaw-gateway.service` (user) | VM agent gateway with 1.5 GB heap. Runs 5 agents: Yoda (main), Windu (security), Qui-Gon (efficiency), Cilghal (health), Mundi (finance). |
+| Service | Port | Codename | Systemd Unit | Description |
+|---------|------|----------|-------------|-------------|
+| OpenClaw Gateway | `1977` | Star Wars — the year hope was born | `openclaw-gateway.service` (user) | VM agent gateway with 1.5 GB heap. Runs 5 agents: Yoda (main), Windu (security), Qui-Gon (efficiency), Cilghal (health), Mundi (finance). |
 | Docker | -- | `docker.service` | Container runtime for any VM-side containers. |
 | SSH | 22 | `ssh.socket` | Remote access. Key-only auth with PQ key exchange enabled. |
 
@@ -280,7 +280,7 @@ Every service follows the same lifecycle through the configuration system. Three
 
 ## Port Summary
 
-Twenty-one ports. Two hosts. One network that exists entirely inside a closet. Print this table out. Tape it to the wall next to the Mac Mini. You will need it at 2 AM when something is listening on a port you don't recognize and you're debugging five different systems in your underwear.
+Twenty-one ports. Two hosts. One network that exists entirely inside a closet. Every Deadpool port has a codename because if you're going to memorize port numbers at 2 AM in your underwear, they should at least be funny.
 
 | Port | Service | Host |
 |------|---------|------|
@@ -289,23 +289,23 @@ Twenty-one ports. Two hosts. One network that exists entirely inside a closet. P
 | 1234 | LM Studio | Mac |
 | 3001 | Command Center | Mac |
 | 3100 | Outline | Mac (Docker) |
-| 4000 | LiteLLM Proxy | Mac |
+| 4040 | Sanctum Proxy | Mac |
 | 4001 | LiteLLM Admin | Mac |
-| 8020 | XTTS TTS Server | Mac |
+| 8008 | XTTS Voice | Mac |
 | 8090 | Voice Agent | Mac |
 | 8123 | Home Assistant | Mac (Docker) |
 | 8888 | Kiwix | Mac |
-| 8899 | Council-27B MLX | Mac |
+| 1337 | Council-27B MLX | Mac |
 | 18080 | Orbi Bridge (HTTP) | Mac |
 | 18085 | Orbi Bridge (API) | Mac |
-| 18092 | HA SSH Tunnel | Mac -> VM |
-| 18094 | Firewalla Bridge | Mac |
-| 18095 | Health SSH Tunnel | Mac -> VM |
-| 18789 | OpenClaw Gateway | VM |
+| 4007 | Network Control | Mac -> VM |
+| 1984 | Firewalla Bridge | Mac |
+| 10101 | Health Ingester | Mac -> VM |
+| 1977 | OpenClaw Gateway | VM |
 | 19001 | DenchClaw Gateway | Mac |
 | 19001 | Holocron Chat | Mac |
 | 21063 | HomeKit Bridge | Mac (Docker) |
 
 <Aside type="note">
-  The DenchClaw Gateway (Mac, port 19001) and OpenClaw Gateway (VM, port 18789) use different ports on different hosts. Earlier documentation incorrectly listed both at 18789. They never conflicted in practice because they live on separate hosts (10.10.10.1 and 10.10.10.10), but the port numbers are in fact distinct.
+  The DenchClaw Gateway (Mac, port 19001) and OpenClaw Gateway (VM, port 1977) use different ports on different hosts. Earlier documentation incorrectly listed both at 1977. They never conflicted in practice because they live on separate hosts (10.10.10.1 and 10.10.10.10), but the port numbers are in fact distinct.
 </Aside>
