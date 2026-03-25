@@ -7,10 +7,38 @@ import { Aside } from '@astrojs/starlight/components';
 
 Sanctum manages a set of macOS LaunchAgents (user-level) and LaunchDaemons (root-level) that form the boot chain for the haus intelligence platform. Each plist is rendered from templates at `~/.sanctum/templates/launchagents/` by the `generate-plists.sh` script, which pulls values from `instance.yaml` and tokens from the macOS Keychain.
 
+Every LaunchAgent uses the `com.sanctum.*` reverse-DNS namespace. Every process shows a descriptive name in Activity Monitor. If you open Activity Monitor and see seventeen copies of `python` and `bash` with no indication which is which, you're running an older version. Upgrade. Your sanity is worth it.
+
 You might wonder why these aren't written in a friendlier format. The answer is that Apple chose XML for process management configuration in 2005 and has been politely pretending that was fine ever since. The template system exists so you never have to touch raw plist XML. You're welcome.
 
 <Aside type="tip">
 Services with `KeepAlive: true` are automatically restarted by launchd if they exit. Services without KeepAlive run once at load and are not restarted. KeepAlive is the difference between "runs at boot" and "runs forever, whether it likes it or not."
+</Aside>
+
+## Process Naming
+
+macOS Activity Monitor shows the process name from `argv[0]` — the first entry in `ProgramArguments`. When that entry is `/opt/homebrew/bin/node` or `/usr/bin/ssh`, you get a sea of identical process names and zero useful information about what's actually running.
+
+Sanctum solves this with symlinks in `~/.sanctum/bin/`. Each service gets a named symlink that points to its real binary:
+
+```bash
+~/.sanctum/bin/sanctum-gateway     → /opt/homebrew/bin/node
+~/.sanctum/bin/sanctum-ha-tunnel   → /usr/bin/ssh
+~/.sanctum/bin/sanctum-memory-vault → ~/.sanctum/memory-vault/.venv/bin/python
+```
+
+Because the plist's `ProgramArguments[0]` is the symlink, launchd launches the real binary but Activity Monitor displays the symlink's filename. Open Activity Monitor, and you see `sanctum-gateway`, `sanctum-ha-tunnel`, `sanctum-memory-vault` — not `node`, `ssh`, `python`.
+
+```bash
+# Create or update all symlinks
+~/.sanctum/scripts/create-bin-symlinks.sh
+
+# Verify
+ls -la ~/.sanctum/bin/
+```
+
+<Aside type="caution">
+The Rust binaries (`sanctum-proxy`, `sanctum-watchdog`, `sanctum-idle`) are already compiled with descriptive names. They don't need symlinks. Only interpreted-language services (Node, Python, Bash, SSH) get the symlink treatment.
 </Aside>
 
 ## Boot Chain Overview
@@ -25,11 +53,12 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 These agents stand up the VM, the gateway, and the firewall bridge. Without them, the rest of the stack is a collection of orphaned processes with nowhere to send their feelings.
 
-#### com.user.utm-autostart
+#### com.sanctum.utm-autostart
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.utm-autostart` |
+| **Label** | `com.sanctum.utm-autostart` |
+| **Activity Monitor** | `sanctum-utm-autostart` |
 | **Purpose** | Launch UTM, start the VM, and set the bridge100 IP to the configured `mac_bridge_ip` |
 | **Required Service** | `vm` |
 | **KeepAlive** | No |
@@ -41,18 +70,19 @@ The first domino. Everything else assumes the VM is running and the bridge exist
 
 ---
 
-#### ai.openclaw.gateway
+#### com.sanctum.gateway
 
 | Property | Value |
 |----------|-------|
-| **Label** | `ai.openclaw.gateway` |
+| **Label** | `com.sanctum.gateway` |
+| **Activity Monitor** | `sanctum-gateway` |
 | **Purpose** | OpenClaw/DenchClaw agent gateway on the Mac side |
 | **Required Service** | `gateway` |
-| **KeepAlive** | No |
+| **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `19001` |
+| **Port** | Configured via `services.gateway.port` |
 
-The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) because pointing a LaunchAgent at a Cellar path is a time bomb with a `brew upgrade` fuse.
+The Mac-side agent gateway. The symlink `sanctum-gateway` points to `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) because pointing a LaunchAgent at a Cellar path is a time bomb with a `brew upgrade` fuse.
 
 <Aside type="caution">
 Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup. Ignoring this advice results in orphaned port locks and a gateway that thinks it's running when it isn't, which is worse than a gateway that's honestly down.
@@ -60,11 +90,12 @@ Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never u
 
 ---
 
-#### com.openclaw.firewalla-bridge
+#### com.sanctum.firewalla
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.openclaw.firewalla-bridge` |
+| **Label** | `com.sanctum.firewalla` |
+| **Activity Monitor** | `sanctum-firewalla` |
 | **Purpose** | Bridge between the Sanctum stack and the Firewalla Purple router via the P2P API |
 | **Required Service** | `firewalla` |
 | **KeepAlive** | Yes |
@@ -72,7 +103,7 @@ Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never u
 | **Port** | `18094` |
 | **Bind** | `0.0.0.0` (accessible from VM) |
 
-Runs `firewalla-bridge.js` which authenticates to Firewalla's cloud endpoint and then communicates locally over port 8833. The bridge binds to all interfaces so the VM can reach it at `10.10.10.1:18094`.
+Runs `firewalla-bridge.sh` which authenticates to Firewalla's cloud endpoint and then communicates locally over port 8833. The bridge binds to all interfaces so the VM can reach it at `10.10.10.1:18094`.
 
 A bridge to a bridge. Networking is turtles all the way down.
 
@@ -82,11 +113,12 @@ A bridge to a bridge. Networking is turtles all the way down.
 
 The agents that give the house its opinions. One serves a 27-billion-parameter model. One synthesizes speech. One listens for a wake word and responds as a fictional Jedi. Totally standard residential infrastructure.
 
-#### com.yoda.xtts-server
+#### com.sanctum.xtts-server
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.yoda.xtts-server` |
+| **Label** | `com.sanctum.xtts-server` |
+| **Activity Monitor** | `sanctum-xtts-server` |
 | **Purpose** | XTTS-v2 text-to-speech server using Mac GPU (MPS) |
 | **Required Service** | `xtts` |
 | **KeepAlive** | No |
@@ -96,11 +128,12 @@ Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal P
 
 ---
 
-#### com.yoda.voice-agent
+#### com.sanctum.voice-agent
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.yoda.voice-agent` |
+| **Label** | `com.sanctum.voice-agent` |
+| **Activity Monitor** | `sanctum-voice-agent` |
 | **Purpose** | Yoda voice interaction agent |
 | **Required Service** | `voice_agent` |
 | **KeepAlive** | No |
@@ -115,6 +148,7 @@ Manages voice capture, wake-word detection, and Yoda personality interactions. A
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.council-mlx` |
+| **Activity Monitor** | `sanctum-council-mlx` |
 | **Purpose** | Council-27B MLX model server for local agent inference |
 | **Required Service** | `mlx_server` |
 | **KeepAlive** | Yes |
@@ -125,18 +159,57 @@ Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent persona
 
 ---
 
-#### com.sanctum.litellm-proxy
+#### com.sanctum.proxy
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.litellm-proxy` |
-| **Purpose** | Two-layer LLM proxy: guardrail injector + LiteLLM router |
-| **Required Service** | `litellm` |
+| **Label** | `com.sanctum.proxy` |
+| **Activity Monitor** | `sanctum-proxy` |
+| **Purpose** | Rust LLM proxy with model routing, budget tracking, and fallback chains |
+| **Required Service** | — (always enabled) |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Ports** | `4000` (guardrail injector, all interfaces), `4001` (LiteLLM, localhost only) |
+| **Port** | `4000` |
 
-Runs two processes: the guardrail injector (Starlette/uvicorn on port 4000) which handles request sanitization, content-based routing, prompt caching, PII scrubbing, and assistant prefill stripping; and LiteLLM (port 4001) which handles model resolution, tiered fallback chains, and analytics. All external traffic enters through port 4000. The bouncer and the bartender, working the same door.
+The Rust replacement for the old Python LiteLLM stack. Handles model resolution, tiered fallback chains (Anthropic → OpenAI → Gemini → local MLX), per-model budget enforcement, and request analytics. All LLM traffic enters through port 4000. A single 1.1MB binary that replaced a Python virtualenv, two processes, and a grudge.
+
+<Aside type="note">
+The proxy binary is already named `sanctum-proxy` at compile time. No symlink needed — Rust doesn't have the "everything shows up as `python`" problem.
+</Aside>
+
+---
+
+### Memory
+
+The biomimicry-inspired persistent memory system. Consolidation runs at 4:17 AM because that's when the house is least likely to need the CPU for anything else, and because 4:17 is a suitably eccentric time for a memory consolidation daemon.
+
+#### com.sanctum.memory-vault
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.memory-vault` |
+| **Activity Monitor** | `sanctum-memory-vault` |
+| **Purpose** | Memory vault MCP server for agent memory access |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `18097` |
+
+Serves the memory vault as an SSE-based MCP server. Agents connect to query and store memories. The keeper of everything the house has ever learned, running on a port number that means nothing to anyone.
+
+---
+
+#### com.sanctum.memory-consolidate
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.memory-consolidate` |
+| **Activity Monitor** | `sanctum-memory-consolidate` |
+| **Purpose** | Nightly memory consolidation (compression, deduplication, graph updates) |
+| **KeepAlive** | No |
+| **RunAtLoad** | No |
+| **StartCalendarInterval** | Daily at 04:17 |
+
+Not KeepAlive, not RunAtLoad. Wakes once a day, compresses the day's memories into long-term storage, deduplicates, updates the knowledge graph, and goes back to sleep. The house's equivalent of REM sleep.
 
 ---
 
@@ -144,27 +217,29 @@ Runs two processes: the guardrail injector (Starlette/uvicorn on port 4000) whic
 
 Every system with a VM that can't see the LAN eventually grows a small collection of tunnels. This is that collection. Each one exists because some process needed to reach some other process, and a direct route was too much to ask.
 
-#### com.user.ha-ssh-tunnel
+#### com.sanctum.ha-tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.ha-ssh-tunnel` |
+| **Label** | `com.sanctum.ha-tunnel` |
+| **Activity Monitor** | `sanctum-ha-tunnel` |
 | **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 18092 |
-| **Required Service** | `home_assistant` |
-| **KeepAlive** | No |
+| **Required Service** | `vm` |
+| **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
 Allows the Home Assistant container (running in Docker bridge networking) to reach the VM's Network Control API via `host.docker.internal`. A Docker container, talking through an SSH tunnel, to a VM it can't see, about devices on a network it's not on. Distributed systems are just loneliness at scale.
 
 ---
 
-#### com.user.health-ssh-tunnel
+#### com.sanctum.health-tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.health-ssh-tunnel` |
+| **Label** | `com.sanctum.health-tunnel` |
+| **Activity Monitor** | `sanctum-health-tunnel` |
 | **Purpose** | SSH tunnel for the health ingester to reach the VM on port 18095 |
-| **Required Service** | `health_center` |
+| **Required Service** | `vm` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
@@ -172,60 +247,31 @@ The health ingester's lifeline to the VM. Keeps itself alive because health data
 
 ---
 
-#### com.cloudflare.tunnel
+#### com.sanctum.tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.cloudflare.tunnel` |
+| **Label** | `com.sanctum.tunnel` |
+| **Activity Monitor** | `sanctum-tunnel` |
 | **Purpose** | Cloudflare Zero Trust tunnel for external access |
 | **Required Service** | `cloudflare` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
-Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `haus`). Routes external traffic to internal services like Home Assistant and the health ingester. The one tunnel in this list that actually reaches the outside world, which makes it either the most important or the most dangerous, depending on your threat model.
-
----
-
-#### com.sanctum.orbi-bridge
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.sanctum.orbi-bridge` |
-| **Purpose** | socat bridge allowing the VM to reach the Orbi router |
-| **Required Service** | `vm` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-| **Ports** | `18080` (HTTP), `18085` (API) |
-
-Forwards VM traffic from `10.10.10.1:18080` to the Orbi router at `192.168.1.2:80` and `10.10.10.1:18085` to `192.168.1.2:5000`. Required because the VM has no direct LAN access.
-
-The VM wants to talk to the router. The VM can't reach the router. So we built a socat tunnel through the Mac. Networking: where every problem is solved by adding another layer of indirection.
-
----
-
-#### com.sanctum.signal-bridge
-
-| Property | Value |
-|----------|-------|
-| **Label** | `com.sanctum.signal-bridge` |
-| **Purpose** | Signal messaging bridge for agent communication |
-| **Required Service** | `signal_bridge` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-
-Lets agents send and receive Signal messages. End-to-end encrypted AI communication — because if your house is going to text you, it should at least have the decency to do it privately.
+Runs the `cloudflared` tunnel daemon for the configured tunnel name. Routes external traffic to internal services like Home Assistant and the health ingester. The one tunnel in this list that actually reaches the outside world, which makes it either the most important or the most dangerous, depending on your threat model.
 
 ---
 
 ### System & Maintenance
 
-The quiet ones. They file your documents, rotate your secrets, watch for fires, and serve your offline Wikipedia. They don't get thanked enough.
+The quiet ones. They file your documents, rotate your secrets, watch for fires, and scout for new models. They don't get thanked enough.
 
-#### com.manoir.icloud-filer
+#### com.sanctum.icloud-filer
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.icloud-filer` |
+| **Label** | `com.sanctum.icloud-filer` |
+| **Activity Monitor** | `sanctum-icloud-filer` |
 | **Purpose** | Automatic filing daemon for iCloud Drive documents |
 | **Required Service** | `icloud_filer` |
 | **KeepAlive** | Yes |
@@ -235,18 +281,18 @@ Watches iCloud Drive directories and automatically files documents into organize
 
 ---
 
-#### com.sanctum.watchdog
+#### com.sanctum.proxy-watchdog
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.watchdog` |
+| **Label** | `com.sanctum.proxy-watchdog` |
+| **Activity Monitor** | `sanctum-proxy-watchdog` |
 | **Purpose** | Health monitoring watchdog that runs every 600 seconds |
-| **Required Service** | `watchdog` |
 | **KeepAlive** | No |
-| **RunAtLoad** | Yes |
+| **RunAtLoad** | No |
 | **StartInterval** | `600` |
 
-Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep. The most relatable agent in the fleet.
+Periodically checks the health of the proxy and auto-heals failures. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep. The most relatable agent in the fleet.
 
 ---
 
@@ -255,8 +301,8 @@ Periodically checks the health of all enabled services and auto-heals failures v
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.rotate-secrets` |
+| **Activity Monitor** | `sanctum-rotate-secrets` |
 | **Purpose** | Monthly secret rotation (gateway tokens, API keys) |
-| **Required Service** | — |
 | **KeepAlive** | No |
 | **RunAtLoad** | No |
 | **StartCalendarInterval** | 1st of each month at 03:30 |
@@ -265,38 +311,48 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 
 ---
 
-#### com.manoir.command-center
+#### com.sanctum.secrets-audit
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.command-center` |
-| **Purpose** | Command center dashboard web server |
-| **Required Service** | `dashboard` |
+| **Label** | `com.sanctum.secrets-audit` |
+| **Activity Monitor** | `sanctum-secrets-audit` |
+| **Purpose** | Daily secrets drift audit |
 | **KeepAlive** | No |
-| **RunAtLoad** | Yes |
-| **Port** | `3001` |
+| **RunAtLoad** | No |
+| **StartCalendarInterval** | Daily at 04:00 |
 
-The dashboard. Where you go to see, at a glance, whether the twenty-odd processes described on this page are all still speaking to each other. Think of it as mission control, except the mission is "keep the house sentient."
+Checks that secrets in the Keychain, 1Password, and SOPS are all in agreement about reality. Runs at 4 AM, seventeen minutes before memory consolidation, because there's a brief window each night where the house does its housekeeping and pretends to be a responsible adult.
 
 ---
 
-#### com.manoir.kiwix-serve
+#### com.sanctum.model-scout
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.kiwix-serve` |
-| **Purpose** | Kiwix offline library server (Wikipedia, etc.) |
-| **Required Service** | `kiwix` |
-| **KeepAlive** | Yes |
+| **Label** | `com.sanctum.model-scout` |
+| **Activity Monitor** | `sanctum-model-scout` |
+| **Purpose** | Weekly model availability and pricing check |
+| **KeepAlive** | No |
+| **RunAtLoad** | No |
+| **StartCalendarInterval** | Monday at 06:23 |
+
+Checks API provider status, model availability, and pricing changes once a week. Runs Monday morning so you start the week knowing whether Google deprecated something over the weekend. They usually did.
+
+---
+
+#### com.sanctum.post-boot
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.post-boot` |
+| **Activity Monitor** | `sanctum-post-boot` |
+| **Purpose** | Post-boot self-test and auto-remediation |
+| **Required Service** | `post_boot` |
+| **KeepAlive** | No |
 | **RunAtLoad** | Yes |
-| **Port** | `8888` |
-| **ThrottleInterval** | `30` |
 
-Requires an external T9 drive to be mounted. KeepAlive with ThrottleInterval prevents rapid restart loops if the drive is disconnected. All of human knowledge, served from an external hard drive — the library of Alexandria, if Alexandria ran on USB-C.
-
-<Aside type="note">
-Without the T9 drive, Kiwix starts, fails, waits 30 seconds, starts, fails, waits 30 seconds — forever. This is launchd's version of patience. The ThrottleInterval keeps it from consuming your Mac's entire CPU in a panicked loop of optimism.
-</Aside>
+Runs once at login, checks every service, fixes what it can, and reports what it can't. The house's morning routine — wake up, check vitals, fix anything broken, send a status report, and get on with the day.
 
 ---
 
@@ -335,12 +391,7 @@ All plists are rendered from Mustache-style templates using values from `instanc
 ~/.sanctum/generate-plists.sh
 ```
 
-The generator:
-1. Reads each template from `~/.sanctum/templates/launchagents/`
-2. Checks if the corresponding service is enabled in `instance.yaml`
-3. Expands `{{PLACEHOLDER}}` tokens with config values
-4. Pulls secrets from the macOS Keychain using the configured `keychain_account`
-5. Writes the rendered plist to `~/Library/LaunchAgents/` (or `/Library/LaunchDaemons/` for daemons)
+The generator reads each `com.sanctum.*.plist` template from `~/.sanctum/templates/launchagents/`, checks if the corresponding service is enabled in `instance.yaml`, expands `{{PLACEHOLDER}}` tokens with config values, pulls secrets from the macOS Keychain, and writes the rendered plist to `~/Library/LaunchAgents/`.
 
 ---
 
@@ -350,15 +401,32 @@ Load or unload agents using `launchctl`:
 
 ```bash
 # Load an agent
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.proxy-watchdog.plist
 
 # Unload an agent
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+launchctl bootout gui/$(id -u)/com.sanctum.proxy-watchdog
 
 # Check if an agent is running
-launchctl print gui/$(id -u)/com.sanctum.watchdog
+launchctl print gui/$(id -u)/com.sanctum.proxy-watchdog
+
+# List all Sanctum agents
+launchctl list | grep com.sanctum
 ```
 
 <Aside type="caution">
-The gateway (`ai.openclaw.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks. This is the third time these docs have told you this. There will not be a fourth.
+The gateway (`com.sanctum.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks. This is the third time these docs have told you this. There will not be a fourth.
+</Aside>
+
+## Migration from Legacy Labels
+
+If you're upgrading from before the `com.sanctum.*` unification, run the one-shot migration script:
+
+```bash
+~/.sanctum/scripts/migrate-process-names.sh
+```
+
+This script unloads old agents (`ai.openclaw.*`, `com.manoir.*`, `com.user.*`, `com.yoda.*`), removes their plist files from `~/Library/LaunchAgents/`, creates the `~/.sanctum/bin/` symlinks, regenerates all plists from the new templates, and loads the new agents. Use `--dry-run` to preview changes first.
+
+<Aside type="note">
+The migration script is idempotent. Running it twice won't break anything — it'll just skip everything that's already done and report `[ok]` for each step. If only all migrations were this polite.
 </Aside>
