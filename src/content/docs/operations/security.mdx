@@ -29,7 +29,7 @@ The VM literally cannot reach the internet. It sits in a digital room with no do
 
 Rules in `/etc/pf.anchors/sanctum` block external access to internal ports on the LAN interface (en1):
 
-Blocked ports include: gateway (19001), dashboard dev (3000, 3004), XTTS (8008), MLX (1337), Firewalla bridge (1984), and others.
+Blocked ports include: gateway (1977), dashboard (1111), XTTS (8008), MLX (1337), Firewalla bridge (1984), and others.
 
 The philosophy: if a service doesn't need to talk to the LAN, it doesn't get to. Every open port is a decision, not a default.
 
@@ -98,7 +98,7 @@ Your AI agents know your name. The cloud doesn't need to.
 
 ### How It Works
 
-The guardrail injector proxy (port 4040) sits in front of LiteLLM (port 4001). When a request targets an OpenRouter model — either directly or via fallback routing — the proxy:
+The Sanctum Proxy (port 4040) handles all LLM request routing. When a request targets an OpenRouter model — either directly or via fallback routing — the proxy:
 
 1. Extracts text from user and assistant messages (system prompts are left untouched)
 2. Sends the text to a local Presidio analyzer container to detect PII entities
@@ -128,12 +128,12 @@ Only entities above 0.7 confidence score are anonymized. IP addresses, locations
 ### Architecture
 
 ```
-Client → Guardrail Injector (port 4040) → LiteLLM (port 4001) → Provider
-              |                                                      |
-              +-- Presidio Analyzer (Docker, port 5002)              |
-              +-- Presidio Anonymizer (Docker, port 5001)            |
-              |                                                      |
-              +-- PII scrubbed before exit ◄─────────────────────────+
+Client → Sanctum Proxy (port 4040) → Provider
+              |                           |
+              +-- Presidio Analyzer (Docker, port 5002)
+              +-- Presidio Anonymizer (Docker, port 5001)
+              |                           |
+              +-- PII scrubbed before exit ◄──────────+
               +-- PII restored on response
 ```
 

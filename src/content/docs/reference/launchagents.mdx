@@ -5,6 +5,8 @@ description: Reference for all Sanctum-managed macOS LaunchAgents and LaunchDaem
 
 import { Aside } from '@astrojs/starlight/components';
 
+![The template forge — where XML plists are stamped into existence with the precision of a bureaucracy that runs on cron](../../../assets/illustrations/launchagents-assembly.svg)
+
 Sanctum manages a set of macOS LaunchAgents (user-level) and LaunchDaemons (root-level) that form the boot chain for the haus intelligence platform. Each plist is rendered from templates at `~/.sanctum/templates/launchagents/` by the `generate-plists.sh` script, which pulls values from `instance.yaml` and tokens from the macOS Keychain.
 
 You might wonder why these aren't written in a friendlier format. The answer is that Apple chose XML for process management configuration in 2005 and has been politely pretending that was fine ever since. The template system exists so you never have to touch raw plist XML. You're welcome.
@@ -25,11 +27,11 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 These agents stand up the VM, the gateway, and the firewall bridge. Without them, the rest of the stack is a collection of orphaned processes with nowhere to send their feelings.
 
-#### com.user.utm-autostart
+#### com.sanctum.utm-autostart
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.utm-autostart` |
+| **Label** | `com.sanctum.utm-autostart` |
 | **Purpose** | Launch UTM, start the VM, and set the bridge100 IP to the configured `mac_bridge_ip` |
 | **Required Service** | `vm` |
 | **KeepAlive** | No |
@@ -41,16 +43,16 @@ The first domino. Everything else assumes the VM is running and the bridge exist
 
 ---
 
-#### ai.openclaw.gateway
+#### com.sanctum.gateway
 
 | Property | Value |
 |----------|-------|
-| **Label** | `ai.openclaw.gateway` |
+| **Label** | `com.sanctum.gateway` |
 | **Purpose** | OpenClaw/DenchClaw agent gateway on the Mac side |
 | **Required Service** | `gateway` |
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
-| **Port** | `19001` |
+| **Port** | `1977` |
 
 The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) because pointing a LaunchAgent at a Cellar path is a time bomb with a `brew upgrade` fuse.
 
@@ -60,11 +62,11 @@ Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never u
 
 ---
 
-#### com.openclaw.firewalla-bridge
+#### com.sanctum.firewalla
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.openclaw.firewalla-bridge` |
+| **Label** | `com.sanctum.firewalla` |
 | **Purpose** | Bridge between the Sanctum stack and the Firewalla Purple router via the P2P API |
 | **Required Service** | `firewalla` |
 | **KeepAlive** | Yes |
@@ -82,11 +84,11 @@ A bridge to a bridge. Networking is turtles all the way down.
 
 The agents that give the house its opinions. One serves a 27-billion-parameter model. One synthesizes speech. One listens for a wake word and responds as a fictional Jedi. Totally standard residential infrastructure.
 
-#### com.yoda.xtts-server
+#### com.sanctum.xtts-server
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.yoda.xtts-server` |
+| **Label** | `com.sanctum.xtts-server` |
 | **Purpose** | XTTS-v2 text-to-speech server using Mac GPU (MPS) |
 | **Required Service** | `xtts` |
 | **KeepAlive** | No |
@@ -96,11 +98,11 @@ Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal P
 
 ---
 
-#### com.yoda.voice-agent
+#### com.sanctum.voice-agent
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.yoda.voice-agent` |
+| **Label** | `com.sanctum.voice-agent` |
 | **Purpose** | Yoda voice interaction agent |
 | **Required Service** | `voice_agent` |
 | **KeepAlive** | No |
@@ -110,11 +112,11 @@ Manages voice capture, wake-word detection, and Yoda personality interactions. A
 
 ---
 
-#### com.sanctum.council-mlx
+#### com.sanctum.idle-mlx
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.council-mlx` |
+| **Label** | `com.sanctum.idle-mlx` |
 | **Purpose** | Council-27B MLX model server for local agent inference |
 | **Required Service** | `mlx_server` |
 | **KeepAlive** | Yes |
@@ -125,18 +127,18 @@ Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent persona
 
 ---
 
-#### com.sanctum.litellm-proxy
+#### com.sanctum.proxy
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.litellm-proxy` |
-| **Purpose** | Two-layer LLM proxy: guardrail injector + LiteLLM router |
-| **Required Service** | `litellm` |
+| **Label** | `com.sanctum.proxy` |
+| **Purpose** | Sanctum Proxy — single-binary LLM routing layer |
+| **Required Service** | `proxy` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Ports** | `4040` (guardrail injector, all interfaces), `4001` (LiteLLM, localhost only) |
+| **Port** | `4040` (all interfaces) |
 
-Runs two processes: the guardrail injector (Starlette/uvicorn on port 4040) which handles request sanitization, content-based routing, prompt caching, PII scrubbing, and assistant prefill stripping; and LiteLLM (port 4001) which handles model resolution, tiered fallback chains, and analytics. All external traffic enters through port 4040. The bouncer and the bartender, working the same door.
+A single Rust binary that handles the full LLM request pipeline: request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping, model resolution, tiered fallback chains, and analytics. All agent traffic enters through port 4040. The bouncer and the bartender in one efficient package.
 
 ---
 
@@ -144,11 +146,11 @@ Runs two processes: the guardrail injector (Starlette/uvicorn on port 4040) whic
 
 Every system with a VM that can't see the LAN eventually grows a small collection of tunnels. This is that collection. Each one exists because some process needed to reach some other process, and a direct route was too much to ask.
 
-#### com.user.ha-ssh-tunnel
+#### com.sanctum.ha-tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.ha-ssh-tunnel` |
+| **Label** | `com.sanctum.ha-tunnel` |
 | **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 4007 |
 | **Required Service** | `home_assistant` |
 | **KeepAlive** | No |
@@ -158,11 +160,11 @@ Allows the Home Assistant container (running in Docker bridge networking) to rea
 
 ---
 
-#### com.user.health-ssh-tunnel
+#### com.sanctum.health-tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.user.health-ssh-tunnel` |
+| **Label** | `com.sanctum.health-tunnel` |
 | **Purpose** | SSH tunnel for the health ingester to reach the VM on port 10101 |
 | **Required Service** | `health_center` |
 | **KeepAlive** | Yes |
@@ -172,11 +174,11 @@ The health ingester's lifeline to the VM. Keeps itself alive because health data
 
 ---
 
-#### com.cloudflare.tunnel
+#### com.sanctum.tunnel
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.cloudflare.tunnel` |
+| **Label** | `com.sanctum.tunnel` |
 | **Purpose** | Cloudflare Zero Trust tunnel for external access |
 | **Required Service** | `cloudflare` |
 | **KeepAlive** | Yes |
@@ -221,11 +223,11 @@ Lets agents send and receive Signal messages. End-to-end encrypted AI communicat
 
 The quiet ones. They file your documents, rotate your secrets, watch for fires, and serve your offline Wikipedia. They don't get thanked enough.
 
-#### com.manoir.icloud-filer
+#### com.sanctum.icloud-filer
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.icloud-filer` |
+| **Label** | `com.sanctum.icloud-filer` |
 | **Purpose** | Automatic filing daemon for iCloud Drive documents |
 | **Required Service** | `icloud_filer` |
 | **KeepAlive** | Yes |
@@ -265,26 +267,26 @@ Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password an
 
 ---
 
-#### com.manoir.command-center
+#### com.sanctum.dashboard
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.command-center` |
+| **Label** | `com.sanctum.dashboard` |
 | **Purpose** | Command center dashboard web server |
 | **Required Service** | `dashboard` |
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
-| **Port** | `3001` |
+| **Port** | `1111` |
 
 The dashboard. Where you go to see, at a glance, whether the twenty-odd processes described on this page are all still speaking to each other. Think of it as mission control, except the mission is "keep the house sentient."
 
 ---
 
-#### com.manoir.kiwix-serve
+#### com.sanctum.kiwix-serve
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.kiwix-serve` |
+| **Label** | `com.sanctum.kiwix-serve` |
 | **Purpose** | Kiwix offline library server (Wikipedia, etc.) |
 | **Required Service** | `kiwix` |
 | **KeepAlive** | Yes |
@@ -304,12 +306,12 @@ Without the T9 drive, Kiwix starts, fails, waits 30 seconds, starts, fails, wait
 
 Everything above runs as your user. Everything below runs as root. There is exactly one daemon in this section, and it exists because of a number: 80. The lowest-numbered privilege escalation in the history of home automation.
 
-### com.manoir.dench-proxy
+### com.sanctum.dench-proxy
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.manoir.dench-proxy` |
-| **Purpose** | Reverse proxy from port 80 to port 19001 for the Holocron chat interface |
+| **Label** | `com.sanctum.dench-proxy` |
+| **Purpose** | Reverse proxy from port 80 to port 1977 for the Holocron chat interface |
 | **Required Service** | `gateway` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
@@ -317,9 +319,9 @@ Everything above runs as your user. Everything below runs as root. There is exac
 
 This is a **LaunchDaemon** (not a LaunchAgent) because binding to port 80 requires root privileges. It enables `http://holocron/` access from the LAN without specifying a port.
 
-Plist location: `/Library/LaunchDaemons/com.manoir.dench-proxy.plist`
+Plist location: `/Library/LaunchDaemons/com.sanctum.dench-proxy.plist`
 
-The entire reason this runs as root is so family members can type `holocron` into a browser instead of `holocron:19001`. Usability has a cost. That cost is `sudo`.
+The entire reason this runs as root is so family members can type `holocron` into a browser instead of `holocron:1977`. Usability has a cost. That cost is `sudo`.
 
 ---
 
@@ -360,5 +362,5 @@ launchctl print gui/$(id -u)/com.sanctum.watchdog
 ```
 
 <Aside type="caution">
-The gateway (`ai.openclaw.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks. This is the third time these docs have told you this. There will not be a fourth.
+The gateway (`com.sanctum.gateway`) should always be managed via `openclaw gateway start/stop`, not via raw `launchctl` commands. The CLI handles cleanup of state files and port locks. This is the third time these docs have told you this. There will not be a fourth.
 </Aside>
