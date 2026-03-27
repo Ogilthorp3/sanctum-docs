@@ -21,15 +21,23 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 
 | Service | Port | LaunchAgent / Unit | Description |
 |---------|------|--------------------|-------------|
-| DenchClaw Gateway | 19001 | `ai.openclaw.gateway` | Mac-side agent gateway. Runs Jocasta (household management agent) and exposes the agent API. |
+| DenchClaw Gateway | 1977 | `com.sanctum.gateway` | Mac-side agent gateway. Runs Jocasta (household management agent) and exposes the agent API. |
 | Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
-| Command Center | 3001 | `com.manoir.command-center` | Web dashboard for service status, agent activity, and system health. |
-| Health Center | -- | `com.manoir.health-center` | Health monitoring dashboard for family wellness data. |
-| Holocron (Dench) | 19001 | `ai.openclaw.dench` | Family chat interface. Bound to LAN, token-authenticated. Accessible at `http://holocron/`. |
-| Dench Proxy | 80 | `com.manoir.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 19001. |
+| Command Center | 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. |
+| Health Center | -- | `com.sanctum.health-center` | Health monitoring dashboard for family wellness data. |
+| Holocron (Dench) | 1977 | `com.sanctum.dench` | Family chat interface. Bound to LAN, token-authenticated. Accessible at `http://holocron/`. |
+| Dench Proxy | 80 | `com.sanctum.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 1977. |
 
 <Aside type="tip">
-  The Dench Proxy is a **LaunchDaemon**, not a LaunchAgent. It runs as root to bind to port 80 and lives in `/Library/LaunchDaemons/`. Yes, one of the services runs as root so the family can type `http://holocron/` instead of `http://holocron:19001/`. Vanity port. Worth it.
+  The Dench Proxy is a **LaunchDaemon**, not a LaunchAgent. It runs as root to bind to port 80 and lives in `/Library/LaunchDaemons/`. Yes, one of the services runs as root so the family can type `http://holocron/` instead of `http://holocron:1977/`. Vanity port. Worth it.
+</Aside>
+
+<Aside type="note">
+  Dench Proxy is currently disabled. Port 80 routing requires a LaunchDaemon and root privileges -- most access now goes through Cloudflare Tunnel or Tailscale, which need neither.
+</Aside>
+
+<Aside type="note">
+  Holocron is currently disabled. The chat interface remains defined in configuration for future re-enablement but is not running on any hub node at present.
 </Aside>
 
 ### Config Example
@@ -38,14 +46,14 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 services:
   gateway:
     enabled: true
-    port: 19001
+    port: 1977
   home_assistant:
     enabled: true
     port: 8123
     homekit_port: 21063
   dashboard:
     enabled: true
-    port: 3001
+    port: 1111
 ```
 
 ## AI Services
@@ -56,11 +64,11 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| LM Studio | 1234 | — | `com.manoir.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
-| Council-27B MLX | `1337` | leet — the coding brain | `com.sanctum.council-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
-| XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.yoda.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
-| Voice Agent | 8090 | — | `com.yoda.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
-| Sanctum Proxy | `4040` / 4001 | .40 caliber — the gateway | `com.sanctum.litellm-proxy` | Two-layer LLM proxy: guardrail injector (port 4040) + LiteLLM router (port 4001). Handles tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
+| LM Studio | 1234 | — | `com.sanctum.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
+| Council-27B MLX | `1337` | leet — the coding brain | `com.sanctum.idle-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
+| XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.sanctum.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
+| Voice Agent | 8090 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
+| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
 ### Model Routing
 
@@ -74,7 +82,7 @@ Agents use a **tiered model strategy** -- each agent tier has its own primary mo
 | `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
 | `council-heartbeat` | Council 27B (local) | council-27b | All (heartbeat checks) |
 
-The **guardrail injector** (port 4040) intercepts all requests before they reach LiteLLM and applies a 7-step pipeline. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
+The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step pipeline before routing them to the appropriate model. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
 
 0. Smart content-based routing (Gemini-first for non-code tasks)
 1. Anthropic prompt caching injection
@@ -85,7 +93,7 @@ The **guardrail injector** (port 4040) intercepts all requests before they reach
 6. PII anonymization for OpenRouter
 
 <Aside>
-  LiteLLM (port 4001) handles model resolution and fallback routing. The guardrail injector (port 4040) handles request sanitization and content-based routing. All external traffic enters through port 4040. Two ports, seven pipeline stages, and a hope that the content blocks aren't empty again.
+  The Sanctum Proxy is a single Rust binary on port 4040. It handles model resolution, fallback routing, request sanitization, and content-based routing in one process. All external traffic enters through port 4040. One port, seven pipeline stages, and a hope that the content blocks aren't empty again.
 </Aside>
 
 ### Config Example
@@ -104,10 +112,9 @@ services:
   tts:
     enabled: true
     port: 8008
-  litellm:
+  proxy:
     enabled: true
     port: 4040
-    admin_port: 4001
 ```
 
 ## Network Services
@@ -118,13 +125,13 @@ There are seven of them. Two are SSH tunnels. Two are mDNS broadcasters. One tal
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.openclaw.firewalla-bridge` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
+| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
 | Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
-| Cloudflare Tunnel | -- | — | `com.cloudflare.tunnel` | Named tunnel `haus`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
-| Network Control | `4007` | 007 — licensed to ping | `com.user.ha-ssh-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
-| Health Ingester | `10101` | binary heartbeat | `com.user.health-ssh-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
-| mDNS Alias (manoir) | -- | `com.manoir.mdns-alias` | Broadcasts `haus.local` via mDNS for LAN discovery. KeepAlive enabled. |
-| mDNS Alias (holocron) | -- | `com.manoir.mdns-dench` | Broadcasts `holocron.local` via mDNS for the chat interface. KeepAlive enabled. |
+| Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `haus`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
+| Network Control | `4007` | 007 — licensed to ping | `com.sanctum.ha-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
+| Health Ingester | `10101` | binary heartbeat | `com.sanctum.health-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
+| mDNS Alias (manoir) | -- | `com.sanctum.mdns-alias` | Broadcasts `haus.local` via mDNS for LAN discovery. KeepAlive enabled. |
+| mDNS Alias (holocron) | -- | `com.sanctum.mdns-dench` | Broadcasts `holocron.local` via mDNS for the chat interface. KeepAlive enabled. |
 
 ### Tunnel Routes
 
@@ -165,11 +172,11 @@ Seven background agents, zero ports for most of them, and one that requires you 
 |---------|------|-------------|-------------|
 | Watchdog | -- | `com.sanctum.watchdog` | Runs every 600 seconds. Checks all enabled services and auto-heals failures via `service-doctor`. |
 | Secret Rotation | -- | `com.sanctum.rotate-secrets` | Runs on the 1st of each month at 3:30 AM. Rotates gateway tokens and updates Keychain entries. |
-| iCloud Filer | -- | `com.manoir.icloud-filer` | Auto-filing daemon. Organizes documents from iCloud Drive into structured folders. KeepAlive enabled. |
-| iCloud Backup | -- | `com.openclaw.icloud-backup` | Periodic backup of Sanctum configuration and data to iCloud Drive. |
-| UTM Autostart | -- | `com.user.utm-autostart` | Launches UTM on login, starts the Ubuntu VM, and sets the bridge100 interface IP to 10.10.10.1. |
-| Music Cleanup | -- | `com.manoir.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
-| Kiwix | 8888 | `com.manoir.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
+| iCloud Filer | -- | `com.sanctum.icloud-filer` | Auto-filing daemon. Organizes documents from iCloud Drive into structured folders. KeepAlive enabled. |
+| iCloud Backup | -- | `com.sanctum.icloud-backup` | Periodic backup of Sanctum configuration and data to iCloud Drive. |
+| UTM Autostart | -- | `com.sanctum.utm-autostart` | Launches UTM on login, starts the Ubuntu VM, and sets the bridge100 interface IP to 10.10.10.1. |
+| Music Cleanup | -- | `com.sanctum.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
+| Kiwix | 8888 | `com.sanctum.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
 | Outline | 3100 | Docker container | Self-hosted wiki and documentation service. Provides a collaborative knowledge base for household documentation. |
 
 <Aside type="note">
@@ -275,39 +282,37 @@ Every service follows the same lifecycle through the configuration system. Three
 
     ```bash
     # Manual health check
-    sanctum_enabled gateway && curl -sf http://localhost:19001/health
+    sanctum_enabled gateway && curl -sf http://localhost:1977/health
     ```
   </TabItem>
 </Tabs>
 
 ## Port Summary
 
-Twenty-one ports. Two hosts. One network that exists entirely inside a closet. Every Deadpool port has a codename because if you're going to memorize port numbers at 2 AM in your underwear, they should at least be funny.
+Nineteen ports. Two hosts. One network that exists entirely inside a closet. Every Deadpool port has a codename because if you're going to memorize port numbers at 2 AM in your underwear, they should at least be funny.
 
 | Port | Service | Host |
 |------|---------|------|
 | 22 | SSH | VM |
-| 80 | Dench Proxy (reverse proxy) | Mac |
+| 80 | Dench Proxy (disabled) | Mac |
+| 1111 | Command Center | Mac |
 | 1234 | LM Studio | Mac |
-| 3001 | Command Center | Mac |
+| 1337 | Council-27B MLX | Mac |
+| 1977 | Gateway | Mac + VM |
+| 1984 | Firewalla Bridge | Mac |
 | 3100 | Outline | Mac (Docker) |
 | 4040 | Sanctum Proxy | Mac |
-| 4001 | LiteLLM Admin | Mac |
 | 8008 | XTTS Voice | Mac |
 | 8090 | Voice Agent | Mac |
 | 8123 | Home Assistant | Mac (Docker) |
 | 8888 | Kiwix | Mac |
-| 1337 | Council-27B MLX | Mac |
-| 18080 | Orbi Bridge (HTTP) | Mac |
-| 18085 | Orbi Bridge (API) | Mac |
-| 4007 | Network Control | Mac -> VM |
-| 1984 | Firewalla Bridge | Mac |
 | 10101 | Health Ingester | Mac -> VM |
-| 1977 | OpenClaw Gateway | VM |
-| 19001 | DenchClaw Gateway | Mac |
-| 19001 | Holocron Chat | Mac |
+| 18080 | Orbi Bridge (HTTP) | Mac |
+| 18081 | Signal Bridge | Mac |
+| 18085 | Orbi Bridge (API) | Mac |
 | 21063 | HomeKit Bridge | Mac (Docker) |
+| 42069 | Memory Vault | Mac |
 
 <Aside type="note">
-  The DenchClaw Gateway (Mac, port 19001) and OpenClaw Gateway (VM, port 1977) use different ports on different hosts. Earlier documentation incorrectly listed both at 1977. They never conflicted in practice because they live on separate hosts (10.10.10.1 and 10.10.10.10), but the port numbers are in fact distinct.
+  Port 1977 appears twice because the DenchClaw Gateway (Mac) and OpenClaw Gateway (VM) run on separate hosts (10.10.10.1 and 10.10.10.10). Same port number, different machines, zero conflict. The networking equivalent of two people named Steve in different departments.
 </Aside>
