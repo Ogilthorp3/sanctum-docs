@@ -55,6 +55,26 @@ The service doctor has a safelist. The VM process, WindowServer, and LM Studio a
 
 Qui-Gon tracks model usage across tiers, monitors the Sanctum Proxy's 500K token/day budget per agent, and flags when consumption patterns suggest a runaway loop or an agent that has discovered the joy of verbose reasoning. He cannot yet calculate the electricity cost of running five AI agents on a Mac Mini in a Quebec basement, but he would like to, and he has filed a feature request with himself.
 
+### Home Assistant Self-Healing
+
+The `ha-self-healer` skill at `~/Projects/openclaw-skills/ha-self-healer/` is Qui-Gon's most interventionist capability — and the one that most clearly demonstrates the gap between "monitoring" and "actually doing something about it."
+
+Every 30 minutes, the healer diagnoses the full Home Assistant stack: 55 Tuya smart lights, 4 Ecobee sensors, 4 Ring cameras, 10 Sonos speakers, Alarmo, and 24 automations. It assigns severity levels from 0 (everything is fine) to 4 (the house is confused about whether its own lights exist), then works through a three-tier remediation pipeline:
+
+1. **API-level fixes** — reload integrations, restart the HA container, re-enable tripped automations. The equivalent of turning it off and on again, except with surgical precision about *which* thing gets turned off and on.
+2. **UI-level fixes via Playwright** — headless browser automation for problems that can only be solved by clicking through the HA interface. Tuya's OAuth re-authentication is the primary customer here. The browser launches, clicks through the flow, and closes. No human required. The cooldown is 2 hours, because launching a headless browser every 30 minutes to re-authenticate your light bulbs is a line even Qui-Gon won't cross.
+3. **Escalation to Yoda** — when neither API nor UI fixes resolve the issue, Qui-Gon admits defeat and hands the problem to an agent with brain-tier model access. This happens rarely. Qui-Gon keeps statistics on how rarely. He is proud of those statistics.
+
+<Aside type="note">
+The healer scripts form a pipeline: `ha-diagnose.sh` maps the problem, `ha-heal-api.sh` tries the gentle fix, `ha-heal-ui.js` (Playwright) tries the less gentle fix, `ha-heal.sh` orchestrates the sequence, and `ha-verify.sh` confirms the fix actually took. Cooldowns — 60 minutes for Tuya reloads, 2 hours for Playwright — prevent the healer from becoming the problem it's trying to solve.
+</Aside>
+
+Two real incidents from the field:
+
+An Ecobee went offline. The healer traced it to a stale HomeKit Controller config entry — a ghost device blocking rediscovery. The API heal stage deleted the stale entry, HA rediscovered the sensors, and four temperature readings reappeared without anyone noticing they'd been gone. Which is the point.
+
+48 Tuya lights went dark simultaneously. The healer diagnosed the failure, saw that every entity failed at the same timestamp, recognized it as a cloud connection drop, and did nothing. No reload. No Playwright. It logged the incident, set severity to 3, and waited. The cloud recovered. The lights recovered. The healer verified and closed the case. Knowing when not to act is the hardest part of automation, and the part most systems get catastrophically wrong.
+
 ## Technical Specifications
 
 | Parameter | Value |
@@ -62,11 +82,11 @@ Qui-Gon tracks model usage across tiers, monitors the Sanctum Proxy's 500K token
 | Agent type | `efficiency` |
 | Host | VM (Ubuntu 24.04, systemd user service) |
 | Model tier | `council-routine` (Qwen 3.5 Plus primary, council-27b fallback) |
-| Skills | `mac-mini-ops`, `service-doctor` |
+| Skills | `mac-mini-ops`, `service-doctor`, `ha-self-healer` |
 | Plugins | Supermemory, Neo4j KG (Graphiti at 127.0.0.1:31416) |
 | Workspace | `~/.openclaw/workspace-quigon/` |
 | Gateway | OpenClaw (VM), port via systemd user service |
-| Schedule | Weekly performance reviews, on-demand infrastructure checks |
+| Schedule | Weekly performance reviews, on-demand infrastructure checks, HA self-healer every 30 min |
 | Test suites | `quigon-infra.sh` (12 tests), `quigon-resilience.sh` (8 tests) |
 | Metrics DB | `~/.sanctum/metrics/metrics.db` (SQLite) |
 | Report output | `~/.sanctum/memory/events/{year}/{month}/perf-review-{date}.md` |
@@ -90,8 +110,10 @@ quigon:
   skills:
     - mac-mini-ops
     - service-doctor
+    - ha-self-healer
   schedule:
     perf_review: weekly
+    ha_self_healer: "*/30 * * * *"
   description: "Efficiency Agent — resource optimization and cost analysis"
 ```
 
