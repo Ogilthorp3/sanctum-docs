@@ -51,6 +51,60 @@ The old watchdog was a security guard asleep at the desk with the monitors turne
   </Card>
 </CardGrid>
 
+## Phase 2 in Practice: The HA Self-Healer
+
+The Immune System phase sounds elegant in the abstract — anomaly detection, remediation ladders, quarantine protocols. In practice, it means Qui-Gon stares at Home Assistant every thirty minutes and asks: "Are the lights still talking to us? How about the cameras? The thermostat? The thing that knows whether the doors are locked?"
+
+The answer, with alarming regularity, is no.
+
+Home Assistant manages 55 Tuya smart lights (cloud API), 4 Ecobee sensors (HomeKit Controller), 4 Ring cameras, 10 Sonos speakers, Alarmo (alarm panel), and 24 automations that do everything from turning on the porch light at sunset to arming the house when everyone leaves. Each integration has its own failure mode, its own opinion about reconnection, and its own way of dying silently while the dashboard stays green.
+
+The `ha-self-healer` skill at `~/Projects/openclaw-skills/ha-self-healer/` is Phase 2's concrete implementation. It runs a five-stage pipeline:
+
+1. **Diagnose** (`ha-diagnose.sh`) — queries the HA API for every integration, entity, and automation. Assigns a severity: 0 (OK), 1 (warning), 2 (attention), 3 (degraded), 4 (critical).
+2. **API Heal** (`ha-heal-api.sh`) — reloads integrations, restarts the container, re-enables automations that tripped. The kind of fixes you'd do from the settings page, except at 3 AM without waking anyone.
+3. **UI Heal** (`ha-heal-ui.js`) — headless Playwright. For the problems that can only be fixed by clicking through a browser — Tuya OAuth re-authentication being the prime offender.
+4. **Verify** (`ha-verify.sh`) — runs the diagnostic again. If severity dropped, declare victory. If not, escalate.
+5. **Escalate** — pings Yoda. Something is structurally wrong and an agent with higher-tier model access needs to look at it.
+
+<Aside type="note">
+The healer respects cooldowns: 60 minutes between Tuya integration reloads, 2 hours between Playwright sessions. Without these, a flapping integration would trigger an infinite loop of reloads and browser launches. The system learned patience the hard way — which is to say, the operator learned patience the hard way, and then taught the system.
+</Aside>
+
+Two incidents illustrate the difference between "monitoring" and "understanding":
+
+**The Ecobee Incident.** Four temperature sensors went offline. The healer's diagnosis traced the failure to a stale HomeKit Controller config entry — the kind of ghost that survives a reboot and blocks rediscovery. The API heal stage deleted the stale entry. HA auto-rediscovered the sensors within minutes. No human involved. No 4 AM underwear.
+
+**The Great Tuya Blackout.** 48 lights went offline simultaneously. The healer ran its diagnosis, saw that every Tuya entity had failed at the same timestamp, and correctly identified this as a cloud connection drop — not a software failure. It did not attempt to reload the integration 48 times. It did not launch Playwright. It logged the event, set severity to 3, and waited. The cloud came back twenty minutes later. The lights came back with it. The healer verified and closed the incident.
+
+<Aside type="tip">
+The distinction matters. A dumb retry loop would have hammered the Tuya API, hit rate limits, and made the recovery slower. The healer's diagnostic step — checking *whether* the failure pattern suggests a systemic cause before attempting fixes — is what separates Phase 2 from Phase 0.
+</Aside>
+
+## The Great Container Escape
+
+Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes your containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network, which is a different thing entirely — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
+
+This matters when your home automation system needs to discover Ecobee thermostats via HomeKit Controller, which uses Bonjour/mDNS, which broadcasts to the local subnet, which Docker Desktop's VM is not on.
+
+On March 28, 2026, Docker Desktop was replaced with Colima — a lightweight alternative that is, at its core, just a Lima VM running a Docker daemon. No GUI. No update nags. No Kubernetes toggle that nobody asked for. It starts in 12 seconds via launchd and exposes a Unix socket at:
+
+```
+DOCKER_HOST=unix:///Users/bert/.colima/default/docker.sock
+```
+
+The startup chain is intentionally sequential:
+
+1. `com.manoir.colima` LaunchAgent starts Colima at boot
+2. `launch-after-docker.sh` waits for the Docker socket to appear
+3. Once the socket is live, it starts the Home Assistant and signal-cli containers
+
+<Aside type="caution">
+If you're running Docker Desktop and wondering why your HomeKit integrations can't discover devices: it's not your config. It's not your firewall. It's the VM boundary. mDNS packets don't cross it. They never will. Switch to Colima or run HA on bare metal and the devices appear like they were there all along — because they were.
+</Aside>
+
+The migration itself was uneventful, which is the highest compliment infrastructure work can receive. Stop Desktop, start Colima, point `DOCKER_HOST` at the new socket, bring up the containers. The Ecobee sensors appeared in HA's discovery panel within seconds. They had been broadcasting the entire time. Docker Desktop just couldn't hear them.
+
 ## The Principles
 
 Ten rules that emerged from the wreckage. None of them were obvious before March 22. All of them are obvious now, which is how you know they were expensive lessons.
