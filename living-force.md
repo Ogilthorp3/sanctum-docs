@@ -805,3 +805,20 @@ A single Python service on port 4077 that every notification source in the house
 >
 > The purpose of a notification is to change behavior. If the recipient cannot or should not act on it, it is not a notification — it is noise. Noise trains humans to ignore alerts. Ignored alerts are worse than no alerts, because they create the illusion of monitoring while providing none. Force Flow exists to ensure that when the house speaks, it has something worth saying.
 
+
+### Phase 9.1: The Bootstrap Daemon (March 30, 2026)
+
+The first reboot after disabling FileVault revealed a new problem: macOS will not start LaunchAgents until someone logs into the GUI. Auto-login would fix this, but requires removing Touch ID and stored credit cards — an unacceptable trade for a security-conscious system.
+
+The solution: two LaunchDaemons that run at boot, before any user session exists.
+
+**`com.sanctum.vmnet`** (root) creates the 10.10.10.x vmnet-host network using `socket_vmnet`. This is the same tool that Lima/Colima uses — it provides vmnet.framework networking to unprivileged processes via a Unix socket.
+
+**`com.sanctum.bootstrap`** (bert) starts every service in four phases: Docker, headless services, the VM (via `socket_vmnet_client` + bare QEMU), and SSH keys + proxies. The VM no longer needs UTM or a GUI — QEMU connects to the vmnet socket as fd=3, bypassing the Apple Developer ID signing requirement entirely.
+
+The result: power goes out, power comes back, every service in the house recovers. No login screen. No human intervention. No Touch ID compromise.
+
+> **Principle 14: The System Must Survive Its Owner's Absence**
+>
+> A home automation system that requires a human to type a password after a power outage is not automated — it is a complicated manual process with extra steps. If the system cannot recover from the most common failure mode (power loss) without human intervention, it has failed at its primary job. The bootstrap daemon exists so that when Bert is in Tokyo and Hydro-Québec has a moment, the house heals itself.
+
