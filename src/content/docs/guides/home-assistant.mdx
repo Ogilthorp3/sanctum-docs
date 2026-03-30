@@ -1,11 +1,11 @@
 ---
 title: Home Assistant Integration
-description: Running Home Assistant in Docker on the Mac Mini with HomeKit, Sonos, and remote access via Cloudflare tunnel.
+description: Running Home Assistant in Docker on the Mac Mini with HomeKit, Sonos Bridge, and remote access via Cloudflare tunnel.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Home Assistant is Sanctum's haus automation hub. It runs as a Docker container on the Mac Mini with bridge networking, integrating Sonos speakers, HomeKit devices, and providing remote access through a Cloudflare tunnel. It used to run on the VM, but the VM's networking had other ideas.
+Home Assistant is Sanctum's haus automation hub. It runs as a Docker container on the Mac Mini with bridge networking, integrating HomeKit devices and providing remote access through a Cloudflare tunnel. Sonos speakers are managed by a separate native bridge running directly on the Mac, because Docker bridge networking and Sonos callbacks have a relationship best described as "irreconcilable differences."
 
 ![The robot butler — your haus automation concierge](../../../assets/illustrations/pool-robot-butler.png)
 
@@ -16,6 +16,12 @@ Home Assistant is Sanctum's haus automation hub. It runs as a Docker container o
 │ Mac Mini                                      │
 │                                               │
 │  ┌─────────────────────────────────────────┐  │
+│  │ Sonos Bridge (native, port 18421)       │  │
+│  │  SoCo → mDNS → 10 Sonos speakers       │  │
+│  │  XTTS → port 8008 → Yoda voice         │  │
+│  └──────────┬──────────────────────────────┘  │
+│             │ REST (host.docker.internal)      │
+│  ┌──────────▼──────────────────────────────┐  │
 │  │ Docker (bridge network)                 │  │
 │  │                                         │  │
 │  │  ┌─────────────────────────────────┐    │  │
@@ -30,7 +36,7 @@ Home Assistant is Sanctum's haus automation hub. It runs as a Docker container o
 └──────────────────────────────────────────────┘
 ```
 
-HA was migrated from the VM to Mac Docker because SLIRP networking on the VM proved unreliable for the number of integrations and real-time device communication required. Translation: the Sonos speakers kept dropping off, and no amount of debugging SLIRP made the problem go away. Some battles you win. Some you migrate around.
+HA was migrated from the VM to Mac Docker because SLIRP networking on the VM proved unreliable for the number of integrations and real-time device communication required. Sonos was later extracted from HA entirely because Docker bridge networking on macOS couldn't reliably maintain the bidirectional callback connection that Sonos requires. Two migrations, two networking problems, one closet.
 
 ## Docker Configuration
 
@@ -60,27 +66,82 @@ Docker Desktop is configured with auto-start enabled, ensuring HA comes up after
 
 ## Sonos Integration
 
-Sanctum manages 10 Sonos speakers. Because the HA container runs in bridge networking mode, mDNS/SSDP discovery does not work. All speakers must be configured as known hosts in `configuration.yaml`.
+Sanctum manages 10 Sonos speakers across the house. The speakers are **not** controlled through HA's built-in Sonos integration. That integration is disabled. Instead, a native Python service called the Sonos Bridge runs directly on the Mac Mini, bypassing Docker entirely.
+
+The bridge runs on port 18421 and exposes a REST API for speaker control, TTS announcements, and media playback. HA communicates with it via `rest_command` entries in `configuration.yaml`.
+
+```
+┌─────────────────────────────────────────────┐
+│ Mac Mini (native)                           │
+│                                             │
+│  ┌───────────────────────────────────────┐  │
+│  │ Sonos Bridge (port 18421)             │  │
+│  │  SoCo → mDNS → 10 speakers on LAN    │  │
+│  │  XTTS → Yoda TTS voice generation     │  │
+│  └──────────┬────────────────────────────┘  │
+│             │ REST API                       │
+│  ┌──────────▼────────────────────────────┐  │
+│  │ Docker: Home Assistant                │  │
+│  │  rest_command.sonos_tts → :18421/tts  │  │
+│  │  rest_command.sonos_announce → :18421  │  │
+│  └───────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+```
+
+### Why Not the HA Integration?
+
+Docker bridge networking on macOS cannot relay mDNS or SSDP discovery packets. The HA integration requires `advertise_addr` and static host IPs to compensate, but Sonos speakers still need to reach back into the container for event callbacks. This callback path breaks unpredictably after container restarts, Colima VZ networking warmups, and the occasional firmware update. We tried socat tunnels, socket_vmnet, and timed reload automations. None of it was reliable.
+
+The native bridge uses SoCo directly on the Mac's LAN interface. mDNS discovery works instantly. Speaker callbacks land on the Mac's real IP. No tunnels, no NAT, no prayers.
+
+### HA REST Commands
+
+HA scripts and automations call the bridge through two REST commands:
 
 ```yaml
-sonos:
-  media_player:
-    hosts:
-      - 192.168.1.101
-      - 192.168.1.102
-      # ... all 10 speaker IPs
+rest_command:
+  sonos_tts:
+    url: "http://host.docker.internal:18421/tts"
+    method: POST
+    content_type: "application/json"
+    payload: '{"rooms": {{ rooms }}, "text": "{{ message }}", "severity": "{{ severity }}"}'
+  sonos_announce:
+    url: "http://host.docker.internal:18421/announce"
+    method: POST
+    content_type: "application/json"
+    payload: '{"rooms": {{ rooms }}, "text": "{{ message }}", "severity": "{{ severity }}"}'
+```
+
+Severity maps to volume: `low` (30%), `medium` (50%), `high` (80%), `critical` (100%). The bridge handles XTTS generation, audio file serving, and Sonos playback in a single call.
+
+### Text-to-Speech
+
+The bridge generates speech using the XTTS-v2 server on port 8008, saves the WAV file locally, and tells Sonos to fetch it from `http://192.168.1.10:18421/<id>.wav`. The voice is Yoda. There was a discussion about this. Yoda won.
+
+### Bridge Management
+
+```bash
+# Check bridge health
+curl -s http://localhost:18421/health | python3 -m json.tool
+
+# List all speakers
+curl -s http://localhost:18421/speakers | python3 -m json.tool
+
+# Manual TTS test
+curl -X POST http://localhost:18421/tts \
+  -H 'Content-Type: application/json' \
+  -d '{"rooms": ["chalet"], "text": "Testing", "severity": "low"}'
+
+# Restart bridge
+launchctl kickstart -k gui/$(id -u)/com.openclaw.sonos-bridge
 ```
 
 <Aside type="caution">
-  If a Sonos speaker changes IP address (e.g., after a router reboot), it will become unreachable until the `configuration.yaml` is updated with the new IP. Use Firewalla DHCP reservations to keep speaker IPs stable. Ten speakers, ten reservations, zero tolerance for DHCP roulette.
+  If a Sonos speaker changes IP address (e.g., after a router reboot), the bridge will rediscover it via mDNS within 5 minutes. But the `config.yaml` room-to-IP mapping will be stale. Use Firewalla DHCP reservations to keep speaker IPs stable. The bridge also accepts discovery results, so a transient IP change won't break things -- it just makes the logs ugly.
 </Aside>
 
-### Text-to-Speech on Sonos
-
-The XTTS-v2 TTS server runs on the Mac (port 8008, using MPS GPU acceleration). To play speech on Sonos speakers, use the `media_player.play_media` service with a `media-source://tts/` URI and the `announce: true` flag.
-
-<Aside type="danger">
-  The `tts.speak` service does **not** dispatch audio to Sonos. If you use it, you'll get silence and confusion. Always use `media_player.play_media` with a TTS media source URI for Sonos announcements. This has been learned the hard way so you don't have to.
+<Aside type="note">
+  The HA Sonos integration config entry (`01KHHZ98C0MYWPAGKBZM9K1ZB2`) still exists in HA's storage but is set to `disabled_by: user`. It can be re-enabled from HA's Settings > Devices & Services if needed for rollback, though we'd recommend therapy first.
 </Aside>
 
 ## SSH Agent Forwarding
