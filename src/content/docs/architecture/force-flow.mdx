@@ -1,0 +1,163 @@
+---
+title: Force Flow
+description: The unified notification hub. One service, one brain, every alert in the house flows through it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every notification in the house used to go through three different systems. Home Assistant had its own push notifications. The Living Force had `sanctum_notify`. The Council Router had its escalation chain. Three notification stacks, four channels, zero coordination — which is how you end up with Yoda's cloned voice shouting about Ring motion through the bathroom speaker at 7 AM while your phone buzzes twice about the same squirrel.
+
+Force Flow is the fix. One service. One brain. Everything flows through it.
+
+## Architecture
+
+```
+              ALL NOTIFICATION SOURCES
+                       │
+        ┌──────────┬───┴───┬──────────┐
+        HA     Living Force Council   Agents
+        │          │       Router      │
+        └──────────┴───┬───┴──────────┘
+                       │
+                ┌──────▼──────┐
+                │  Force Flow  │
+                │  port 4077  │
+                └──────┬──────┘
+                       │
+          ┌────────────┼────────────┐
+          │            │            │
+    ┌─────▼─────┐ ┌───▼───┐ ┌─────▼─────┐
+    │  iPhone    │ │ Sonos │ │ Dashboard  │
+    │  (push)    │ │ (TTS) │ │ (banner)   │
+    └───────────┘ └───────┘ └───────────┘
+```
+
+Every notification hits the `/notify` endpoint with a source, severity, title, and message. Force Flow decides where it goes based on two things: how bad is it, and what time is it.
+
+## Routing Table
+
+| Severity | 08:00–22:00 | 22:00–08:00 (Quiet) |
+|----------|-------------|---------------------|
+| **info** | Dashboard only | Log only |
+| **warn** | iPhone (silent) + Dashboard | Log only |
+| **error** | iPhone (sound) + Dashboard | iPhone (silent) + Dashboard |
+| **critical** | iPhone + Sonos + Signal + Dashboard | iPhone + Sonos (reduced) + Signal + Dashboard |
+
+<Aside type="tip">
+Critical always gets through. Always. If the house is on fire, quiet hours do not apply. But "Ring saw a raccoon" at 3 AM is an info, and info during quiet hours goes to the log and nowhere else. The raccoon can wait.
+</Aside>
+
+## Deduplication
+
+Ring doorbells love to fire four motion events in thirty seconds. Without dedup, that is four push notifications, four Sonos announcements, and one family member who is now very awake and very angry.
+
+Force Flow hashes each notification by source + title + message. If the same hash appears within a 120-second window, duplicates are suppressed. The first one goes through. The rest get logged with `deduplicated: true` and go nowhere.
+
+## Rate Limiting
+
+Non-critical notifications are capped at 10 per hour. When a service is flapping — restarting every 60 seconds, firing an alert each time — you get the first 10 and then silence until the hour rolls over.
+
+Critical bypasses the rate limit. If something genuinely urgent fires 15 times, you hear about it 15 times. That is a feature, not a bug.
+
+## API
+
+```bash
+# Send a notification
+curl -X POST http://127.0.0.1:4077/notify \
+  -H "Content-Type: application/json" \
+  -d '{"source": "windu", "severity": "error", "title": "Motion Alert", "message": "Ring detected motion at front door"}'
+
+# Response
+{"status": "sent", "channels": ["iphone", "dashboard"], "deduplicated": false, "rate_limited": false, "quiet_hours": false}
+
+# Health check
+curl http://127.0.0.1:4077/health
+{"status": "ok", "quiet_hours": false, "hourly_count": 3, "max_per_hour": 10}
+
+# Query history
+curl "http://127.0.0.1:4077/history?limit=10&severity=error"
+```
+
+### Notify Payload
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `source` | string | yes | Who is sending: `ha`, `windu`, `sanctum`, `living-force`, `council` |
+| `severity` | string | yes | `info`, `warn`, `error`, `critical` |
+| `title` | string | yes | Short title for the notification |
+| `message` | string | yes | Full message body |
+| `force_channels` | list | no | Override automatic routing (e.g. `["iphone", "sonos"]`) |
+
+## Integration Points
+
+### Home Assistant
+
+HA automations call Force Flow via `rest_command.force_flow` instead of `notify.notify` or `notify.mobile_app`. This means HA never decides where a notification goes — it describes what happened and how bad it is, and Force Flow handles the rest.
+
+```yaml
+# In an automation action:
+- service: rest_command.force_flow
+  data:
+    source: windu
+    severity: error
+    title: "Ring Motion While Away"
+    message: "Motion detected at Front Door while armed away."
+```
+
+### Sanctum (Living Force, Watchdog)
+
+The `sanctum_notify` bash function in `lib/notify.sh` routes through Force Flow with a fallback to macOS Notification Center if Force Flow is down.
+
+```bash
+sanctum_notify "Service Down" "Gateway is unreachable" "error"
+# → POST http://127.0.0.1:4077/notify
+# → Falls back to osascript if Force Flow is down
+```
+
+### Council Router
+
+Council agents sending alerts to Bert route through Force Flow instead of direct Signal messages. The escalation config in `escalation.json` defines severity thresholds; Force Flow handles the actual delivery.
+
+## History
+
+Every notification — sent, deduplicated, or rate-limited — is logged to SQLite at `~/.sanctum/force-flow/notifications.db`. This means you can answer "what woke me up last Tuesday" with a query instead of a guess.
+
+```bash
+# Last 5 critical alerts
+curl "http://127.0.0.1:4077/history?limit=5&severity=critical"
+
+# Direct SQLite query
+sqlite3 ~/.sanctum/force-flow/notifications.db \
+  "SELECT timestamp, source, title FROM notifications WHERE severity='critical' ORDER BY id DESC LIMIT 10"
+```
+
+<Aside type="note">
+The database keeps everything. There is no automatic purge. If this becomes a problem in three years, the problem will be that the house has sent too many notifications, which is itself a notification worth investigating.
+</Aside>
+
+## Service Details
+
+| Property | Value |
+|----------|-------|
+| Port | 4077 |
+| LaunchAgent | `com.sanctum.force-flow` |
+| Binary | `~/.sanctum/force-flow/.venv/bin/python3.12` |
+| Script | `~/.sanctum/force-flow/force_flow.py` |
+| Log | `~/.openclaw/logs/force-flow.log` |
+| Database | `~/.sanctum/force-flow/notifications.db` |
+| Tests | `~/.sanctum/force-flow/test_force_flow.py` (42 tests) |
+| KeepAlive | Yes (restarts on crash) |
+
+## What It Replaced
+
+Before Force Flow, the notification stack looked like this:
+
+| Component | What it did | Problem |
+|-----------|-------------|---------|
+| `notify.notify` (HA) | Push to all devices | No dedup, no quiet hours, double-notified |
+| `notify.mobile_app` (HA) | Push to iPhone | Separate from `notify.notify`, often both fired |
+| `script.security_announcement` (HA) | Sonos TTS via bridge | Had its own quiet hours logic, no coordination |
+| `sanctum_notify` (bash) | macOS + dashboard + Signal | Completely separate stack, no dedup |
+| `escalation.json` (Council) | Severity → channel mapping | Config only, no enforcement |
+
+Five systems, zero awareness of each other. Force Flow is one system that knows everything.

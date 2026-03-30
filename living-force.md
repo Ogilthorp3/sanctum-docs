@@ -764,3 +764,44 @@ In a single focused session, the following systemic repairs were executed to ach
 
 ---
 
+
+## PHASE 9: The Force Flow (March 29, 2026)
+
+The night of March 29, a Ring doorbell detected motion at both the front and side doors at 07:27. The alarm was in `armed_away` mode. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The Sonos bridge dutifully played XTTS-generated Yoda voice through three speakers at 80% volume — chalet, master bathroom, Albert's bedroom — repeated twice per door. Four loud announcements about a raccoon. The house woke up.
+
+The root cause was not the Ring sensor. It was not the alarm state. It was the notification architecture itself: three independent systems — Home Assistant, Sanctum's `notify.sh`, and the Council Router's escalation chain — each making their own decisions about where alerts go, with no awareness of each other, no deduplication, and quiet hours enforced in different files with different syntax.
+
+### The Problem
+
+| System | Notification Stack | Quiet Hours | Dedup | Rate Limit |
+|--------|-------------------|-------------|-------|------------|
+| Home Assistant | `notify.notify`, `notify.mobile_app`, `script.security_announcement` | YAML template in scripts.yaml | None | None |
+| Sanctum | `sanctum_notify()` → macOS + dashboard + Signal | None | None | None |
+| Council Router | `send.sh` → agent messaging | escalation.json (different timezone) | None | None |
+
+Three stacks. Zero coordination. A single Ring motion event could produce: two iPhone pushes (one from `notify.notify`, one from `notify.mobile_app`), two Sonos TTS announcements (HIGH severity = repeat 2x), a macOS notification, a Signal message, and a dashboard banner. Seven notifications for one squirrel.
+
+### The Solution: Force Flow
+
+A single Python service on port 4077 that every notification source in the house calls instead of notifying directly.
+
+**Core capabilities:**
+- **Unified routing** — severity + time of day determines channel (iPhone, Sonos, Signal, dashboard, log)
+- **Quiet hours** (22:00–08:00) — enforced in one place, not scattered across three YAML files
+- **Deduplication** — same message within 120 seconds = suppressed
+- **Rate limiting** — max 10 non-critical notifications per hour
+- **Critical bypass** — critical alerts always get through, always get Sonos + Signal + iPhone
+- **History** — every notification logged to SQLite, queryable via `/history`
+- **Fallback** — if Force Flow is down, `sanctum_notify` falls back to direct macOS notification
+
+**Integration:**
+- HA automations call `rest_command.force_flow` instead of `notify.notify`
+- `sanctum_notify()` in `lib/notify.sh` POSTs to Force Flow
+- Council Router escalations route through Force Flow for Bert-facing alerts
+
+**Test coverage:** 42 unit tests covering routing logic, dedup, rate limiting, quiet hours, API endpoints, and database persistence.
+
+> **Principle 13: A Notification Should Be Important or It Should Not Exist**
+>
+> The purpose of a notification is to change behavior. If the recipient cannot or should not act on it, it is not a notification — it is noise. Noise trains humans to ignore alerts. Ignored alerts are worse than no alerts, because they create the illusion of monitoring while providing none. Force Flow exists to ensure that when the house speaks, it has something worth saying.
+

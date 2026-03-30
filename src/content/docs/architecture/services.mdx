@@ -69,7 +69,7 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 | LM Studio | 1234 | — | `com.sanctum.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
 | Council-27B MLX | `1337` | leet — the coding brain | `com.sanctum.idle-mlx` | Quantized Qwen 3.5 27B 4-bit with per-agent LoRA adapters. Runs natively on Apple Silicon via MLX. KeepAlive enabled. |
 | XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.sanctum.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
-| Voice Agent | 8090 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via Home Assistant `media_player.play_media`. |
+| Voice Agent | 8090 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
 | Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
 ### Model Routing
@@ -123,11 +123,12 @@ services:
 
 Bridges and tunnels. The unglamorous plumbing that connects a closet-mounted Mac Mini to a router, a mesh access point, a VM with no internet, and the wider world beyond the front door. If the core services are the organs, these are the nervous system -- delicate, invisible when they work, and the first thing you suspect when something goes wrong.
 
-There are seven of them. Two are SSH tunnels. Two are mDNS broadcasters. One talks to the router by first authenticating through a cloud server three thousand miles away. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
+There are eight of them. Two are SSH tunnels. Two are mDNS broadcasters. One talks to the router by first authenticating through a cloud server three thousand miles away. One talks to Sonos speakers because Docker couldn't. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
 | Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
+| Sonos Bridge | `1969` | — | `com.openclaw.sonos-bridge` | Native Mac SoCo REST API for 10 Sonos speakers. Replaces HA's built-in Sonos integration. Handles TTS via XTTS, volume control, grouping, and announcements. KeepAlive enabled. |
 | Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
 | Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `manoir-nepveu`. Exposes `health.nepveu.name` and `ha.nepveu.name` via Cloudflare Zero Trust. KeepAlive enabled. |
 | Network Control | `4007` | 007 — licensed to ping | `com.sanctum.ha-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
@@ -155,6 +156,9 @@ services:
   firewalla_bridge:
     enabled: true
     port: 1984
+  sonos_bridge:
+    enabled: true
+    port: 1969
   orbi_bridge:
     enabled: true
     port: 18080
@@ -291,30 +295,37 @@ Every service follows the same lifecycle through the configuration system. Three
 
 ## Port Summary
 
-Nineteen ports. Two hosts. One network that exists entirely inside a closet. Every Deadpool port has a codename because if you're going to memorize port numbers at 2 AM in your underwear, they should at least be funny.
+Every port in Sanctum has a number, and most of those numbers mean something — a movie year, a calculator joke, a cry for help. We didn't set out to build a Deadpool-style naming convention into our network topology. It just happened, the way it always does: one engineer picks 1337 for the LLM server, another picks 42069 for the memory store, and suddenly you're maintaining a spreadsheet of cultural references alongside your firewall rules. We leaned in. If the infrastructure is going to be absurd, it should at least be _consistently_ absurd.
 
-| Port | Service | Host |
-|------|---------|------|
-| 22 | SSH | VM |
-| 80 | Dench Proxy (disabled) | Mac |
-| 1111 | Command Center | Mac |
-| 1234 | LM Studio | Mac |
-| 1337 | Council-27B MLX | Mac |
-| 1977 | Gateway | Mac + VM |
-| 1984 | Firewalla Bridge | Mac |
-| 3100 | Outline | Mac (Docker) |
-| 4040 | Sanctum Proxy | Mac |
-| 8008 | XTTS Voice | Mac |
-| 8090 | Voice Agent | Mac |
-| 8123 | Home Assistant | Mac (Docker) |
-| 8888 | Kiwix | Mac |
-| 10101 | Health Ingester | Mac -> VM |
-| 18080 | Orbi Bridge (HTTP) | Mac |
-| 18081 | Signal Bridge | Mac |
-| 18085 | Orbi Bridge (API) | Mac |
-| 21063 | HomeKit Bridge | Mac (Docker) |
-| 42069 | Memory Vault | Mac |
+| Port | Service | Host | Codename | Commentary |
+|------|---------|------|----------|------------|
+| 22 | SSH | VM | — | The one port that doesn't need a personality. |
+| 80 | Dench Proxy (disabled) | Mac | Vanity Mirror | Exists solely so someone can type  and feel important. Currently unplugged, like a decorative fireplace. |
+| 1111 | Command Center | Mac | Make-A-Wish | 11:11 — you're supposed to close your eyes, not open a socket. |
+| 1234 | LM Studio | Mac | Password1 | The port equivalent of leaving your key under the mat, except the mat is a 27-billion-parameter model. |
+| 1337 | Council-27B MLX | Mac | LEET | Because nothing says elite hacker like a Metal-accelerated language model running inference in a home office in Quebec. |
+| 1977 | Gateway | Mac + VM | A New Hope | Star Wars release year. The gateway between Mac and VM, which is approximately as fraught as the trench run. |
+| 1984 | Firewalla Bridge | Mac | Big Brother | George Orwell wrote a warning. We turned it into a port number for our firewall bridge. He would have had notes. |
+| 3100 | Outline | Mac (Docker) | Page Turner | 3100 — the kind of number that exists because 3000 was taken and someone started incrementing with quiet desperation. |
+| 4040 | Sanctum Proxy | Mac | Forty Cal | Sits at the intersection of every request that enters the house. Named after the .40-caliber round — the proxy that guards the gate carries accordingly. |
+| 4077 | Force Flow | Mac | Hawkeye | M\*A\*S\*H 4077th — the field hospital that triaged casualties with gallows humor and a still. Force Flow triages notifications with approximately the same energy. |
+| 5150 | Signal Proxy | VM | Van Halen | Eddie's hottest album and California's code for an involuntary psychiatric hold. Running a messaging proxy on it feels appropriate either way. |
+| 8008 | XTTS Voice | Mac | Calculator | Flip it upside down. You know what you did. Now it synthesizes speech, which is somehow less juvenile. |
+| 8090 | Voice Agent | Mac | Understudy | Living in 8008's shadow at a respectable 82-port distance. Handles voice routing without the calculator jokes. |
+| 8123 | Home Assistant | Mac (Docker) | Default | HA's factory port. Sometimes the most radical act is not changing the default. |
+| 8888 | Kiwix | Mac | Lucky Eights | Four eights. Auspicious in Chinese numerology, overkill everywhere else. Houses the offline encyclopedia for when civilization gets patchy. |
+| 10101 | Health Ingester | Mac -> VM | Binary 21 | 10101 in binary is 21 — blackjack. The health ingester always hits, never stands. |
+| 18080 | Orbi Bridge (HTTP) | Mac | Orbital-H | 18080: HTTP's older, more paranoid sibling who moved to a five-digit neighborhood to avoid the crowds. |
+| 18081 | Signal Bridge | Mac | Orbital-S | One door down from the Orbi Bridge, handling messages instead of mesh nodes. They share a hallway but do not speak. |
+| 18085 | Orbi Bridge (API) | Mac | Orbital-A | The API counterpart to 18080. Same Orbi, different verb. REST in peace. |
+| 1969 | Sonos Bridge | Mac | Woodstock | The summer of love, Hendrix, and music in every field. The Sonos bridge puts music in every room — same energy, fewer mud-covered hippies. |
+| 21063 | HomeKit Bridge | Mac (Docker) | Siri's Doorbell | Five digits of Apple-adjacent infrastructure. HomeKit wanted a port; it got the one nobody else was using. |
+| 42069 | Memory Vault | Mac | Nice. | The internet's favorite number. We put long-term memory on it because some decisions are permanent. |
 
-<Aside type="note">
-  Port 1977 appears twice because the DenchClaw Gateway (Mac) and OpenClaw Gateway (VM) run on separate hosts (10.10.10.1 and 10.10.10.10). Same port number, different machines, zero conflict. The networking equivalent of two people named Steve in different departments.
+<Aside type="tip" title="Why 1977 appears on two hosts">
+The Gateway runs on both the Mac ( origin) and the VM ( reverse-proxied). Same port, same service, two machines — because the Rebel Alliance also operated out of multiple bases and it worked out fine until Hoth.
+</Aside>
+
+<Aside type="note" title="New arrival: 4077 — Force Flow">
+The newest addition to the port registry. Force Flow handles notification triage — deciding what deserves your attention and what gets filed under the house is fine, stop asking. We gave it 4077 because, like the 4077th M\*A\*S\*H, it operates in a permanent state of controlled chaos, sorting the critical from the cosmetic while maintaining a dark sense of humor about the whole situation. Hawkeye Pierce would approve of a system that intercepts alerts about your thermostat with the same gravity as a push notification about your front door.
 </Aside>
