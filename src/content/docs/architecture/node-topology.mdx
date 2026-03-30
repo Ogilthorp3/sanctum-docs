@@ -130,6 +130,36 @@ These services only run on the hub and are not deployed to satellites:
 | Sonos Bridge | Native SoCo control of LAN Sonos speakers |
 | Voice Agent | Tied to local Sonos Bridge and XTTS |
 
+## Hub Network — The Bridge
+
+The Mac Mini hub runs two virtual machines: the Ubuntu VM (UTM/QEMU) and the Docker VM (Colima). Both need network access, but only one needs a bridge to the 10.10.10.0/24 subnet.
+
+### The Single Bridge Rule
+
+UTM creates a macOS vmnet bridge (`bridge100`) for the Ubuntu VM. This bridge carries all agent traffic, SSH tunnels, and inter-node communication on the 10.10.10.0/24 subnet. The Mac host is 10.10.10.1, the VM is 10.10.10.10.
+
+Colima (Docker) uses user-mode networking with port forwarding. It does **not** need vmnet. Its `network.address` setting is `false` in `~/.colima/default/colima.yaml`. This is deliberate: if Colima creates a vmnet bridge, it races UTM for `bridge100` and the VM ends up on `bridge102` — a different bridge with a different host IP (10.10.10.2), which breaks every socat proxy, SSH tunnel, and service health check that expects 10.10.10.1.
+
+This was learned the hard way on March 29, 2026, when a dual-bridge conflict caused half the test suite to fail. The fix: one vmnet user (UTM), one bridge (bridge100), one subnet.
+
+<Aside type="caution">
+If Colima ever needs vmnet re-enabled (e.g., for direct container-to-VM communication), change `network.address: true` in the Colima config. But ensure UTM's LaunchAgent starts **before** Colima's, or UTM will get `bridge102` and nothing will work. The current naming (`com.sanctum.openclaw.colima` sorts after `com.sanctum.utm-autostart`) was not sufficient — Colima still won the race. Disabling vmnet entirely was the only reliable fix.
+</Aside>
+
+### Boot Sequence
+
+1. macOS boots → auto-login (FileVault disabled, `autoLoginUser: bert`)
+2. `com.sanctum.utm-autostart` → launches UTM, starts VM, creates bridge100, sets 10.10.10.1
+3. `com.sanctum.openclaw.colima` → starts Colima (user-mode networking, no bridge)
+4. `apple-post-boot.sh` → loads SSH keys from Keychain, runs health checks
+5. Remaining LaunchAgents start services in dependency order
+
+### SSH Key Persistence
+
+macOS Sequoia+ does not auto-load SSH keys into the agent at boot. The `apple-post-boot.sh` script runs `ssh-add --apple-load-keychain` to load all Keychain-stored SSH passphrases into the agent. Without this, non-interactive LaunchAgents (SSH tunnels, skill sync, VM health checks) cannot authenticate to the VM.
+
+The SSH config for VM hosts uses `IdentityAgent SSH_AUTH_SOCK` to ensure they use the system agent, not the 1Password SSH agent (which is the `Host *` default).
+
 ## Satellite Node
 
 A satellite is a smaller deployment at a secondary location. It runs a gateway with a lightweight local model and its own Home Assistant instance for location-specific devices.
