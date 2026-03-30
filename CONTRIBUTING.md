@@ -91,6 +91,42 @@ The QC version is not a translation. It is a rewrite. Same structure, same Aside
 - Memorial or emotional images where the page earns them
 - No stock photos. No clip art. This is a house, not a startup.
 
+## Port Naming — The Deadpool Convention
+
+Every service needs a port. Most infrastructure assigns them sequentially and moves on. Sanctum doesn't, because if you're going to memorize port numbers at 2 AM in your underwear, they should at least be memorable.
+
+**The rule:** Name the ports you chose. Leave the ports that chose you.
+
+Ports you deliberately picked — 1337, 1977, 1984, 4040, 4077, 8008, 42069 — have cultural references. They get codenames and one-liner commentary in the Port Summary table. These are creative decisions that deserve documentation.
+
+Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085) didn't earn a story. They get dry observations about their own existence. The humor in a default port is acknowledging that it's a default. Don't force a cultural reference onto a number that's just doing its job.
+
+**How to pick a port number for a new service:**
+
+1. **Check if it's free.** `lsof -iTCP:<port> -sTCP:LISTEN` on Mac, `ss -tlnp` on VM. Also check `expected-ports.json` in the council-router config.
+2. **Must be above 1024.** Anything below requires root to bind. LaunchAgents run as the user.
+3. **Cultural reference preferred.** A year, a movie, a song, a math joke — something a human can latch onto. The port number is infrastructure _and_ documentation. When someone sees 4077 in a log, they should think "that's Force Flow" without checking a spreadsheet.
+4. **No explanation required.** If the reference needs a paragraph to land, pick a different one. 1977 (Star Wars) works. 1895 (year Marconi sent the first wireless signal) does not. The test: would someone in the room get it without Googling?
+5. **Update the Port Summary table.** Every new port gets a row with a Codename and Commentary. The commentary is one sentence — technically accurate, culturally aware, and exactly as amused as the situation warrants.
+6. **Update `expected-ports.json`.** The council-router test suite validates that expected ports are listening. A new service that isn't in the list will trigger a Windu security alert.
+
+**Current codenames for reference:**
+
+| Port | Codename | Reference |
+|------|----------|-----------|
+| 1111 | Make-A-Wish | 11:11 |
+| 1234 | Password1 | Worst password ever |
+| 1337 | LEET | Hacker speak |
+| 1969 | Woodstock | Music everywhere |
+| 1977 | A New Hope | Star Wars |
+| 1984 | Big Brother | Orwell |
+| 4040 | Forty Cal | .40 caliber |
+| 4077 | Hawkeye | M\*A\*S\*H |
+| 5150 | Van Halen | Album / psych hold |
+| 8008 | Calculator | Flip it upside down |
+| 42069 | Nice. | The internet |
+
+
 ## Typography
 
 Body text is justified (`text-align: justify`). This gives clean left and right edges across all documentation pages. Do not override this with centered or left-aligned prose blocks — the justified layout is a deliberate choice for readability.
