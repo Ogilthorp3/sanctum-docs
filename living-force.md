@@ -822,3 +822,155 @@ The result: power goes out, power comes back, every service in the house recover
 >
 > A home automation system that requires a human to type a password after a power outage is not automated — it is a complicated manual process with extra steps. If the system cannot recover from the most common failure mode (power loss) without human intervention, it has failed at its primary job. The bootstrap daemon exists so that when Bert is in Tokyo and Hydro-Québec has a moment, the house heals itself.
 
+
+
+## Phase 10: The Raccoon Theorem
+
+*March 29-30, 2026. 7:27 PM to 1:30 AM.*
+
+At 7:27 on the evening of March 29, a raccoon walked across the front porch of a house in Sainte-Adele, Quebec.
+
+The Ring doorbell detected motion. The alarm was armed_away. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The XTTS voice engine synthesized Yoda's voice — the actual Yoda voice, because this is the system we have built for ourselves — and blasted it through three Sonos speakers at 80% volume: chalet, master bathroom, Albert's bedroom. The announcement repeated twice. Then the side door sensor triggered. Two more announcements. Ring's own sirens joined the chorus. Four Yoda announcements. Two siren blasts. Three notification channels. One raccoon.
+
+The house woke up. The children woke up. The raccoon, presumably, did not care.
+
+Root cause analysis revealed something worse than a false alarm. It revealed architecture. Three separate notification systems — Home Assistant automations, `sanctum_notify()` in the shell toolkit, and Council Router's escalation pipeline — operated in total independence, like three fire departments responding to the same address with no dispatcher. A single motion event could produce seven notifications through four channels. There was no deduplication. No rate limiting. No concept of quiet hours. The system's response to a raccoon was indistinguishable from its response to an actual intrusion, except that an actual intruder would have been less startled.
+
+> **Principle 13: A notification should be important or it should not exist.**
+>
+> Seven alerts for one raccoon is not diligence. It is a system that has confused volume with vigilance. The cost of a false alarm is not annoyance — it is the erosion of trust that makes a human ignore the next alert. Every notification trains the recipient to either listen or stop listening. There is no middle ground.
+
+What followed was a six-hour session that touched nearly every layer of the stack. It began with a raccoon and ended with a system that can cold-boot unattended after a power failure. The narrative arc is ridiculous. The engineering is not.
+
+### Force Flow (Port 4077 / Hawkeye)
+
+The notification problem needed a triage unit. We named it after the 4077th M*A*S*H — the field hospital that sorted the dying from the merely wounded with gallows humor and surgical precision.
+
+Force Flow is a single HTTP endpoint. Every notification source in Sanctum — all 11 Home Assistant automations, the Living Force itself, `sanctum_notify()`, the proxy watchdog, weekly chaos drills — POSTs to `/notify` on port 4077. Force Flow makes the routing decision:
+
+- **Severity tiers:** CRITICAL bypasses everything and screams. HIGH respects quiet hours but logs. INFO is a whisper in the audit trail. DEBUG exists only for archaeologists.
+- **Quiet hours:** 22:00 to 08:00. The house sleeps. The system watches silently. Critical events — actual security breaches, service cascades, fire — still sound the alarm. Raccoons do not.
+- **Deduplication:** 120-second sliding window. The same event arriving through three channels produces one notification, not three.
+- **Rate limiting:** 10 notifications per hour per source. Critical bypasses the limit. Everything else queues.
+- **History:** SQLite. Every notification that enters the system is recorded — routed or suppressed, delivered or deduplicated. The system remembers what it chose not to say.
+
+42 unit tests. Zero remaining direct notification paths anywhere in the codebase. The rewiring was total: every automation, every script, every watchdog now speaks through Hawkeye. The dispatcher exists. The three fire departments now share a radio.
+
+### The LiteLLM Exorcism
+
+Every reference to LiteLLM across the entire codebase — variable names, config keys, test fixtures, migration scripts, memory-vault test data, comments, documentation — was found and renamed to Sanctum Proxy. This was not a refactor motivated by technical debt. It was nomenclature hygiene. The proxy is ours. It was written here. It carries a Sanctum port number and a Deadpool name. It should not carry the name of the software it replaced, any more than a renovated house should keep the previous owner's mailbox.
+
+Zero remaining references. The ghost is fully exorcised.
+
+### The Bridge Wars
+
+The network layer had been fighting a quiet civil war, and we had been losing.
+
+**The bare QEMU VM.** An old virtual machine, running outside UTM, was sharing the same MAC address and subnet as UTM's managed VM. Two machines on bridge102, same identity, maximum confusion. The bare QEMU VM was disabled and its disk deleted. It had no running services. It had no purpose except to cause ARP conflicts at 2 AM.
+
+**The Colima bridge.** This was subtler. Colima — the Docker runtime for macOS — had its vmnet networking enabled by default. vmnet was claiming bridge100 before UTM could. Two bridges, one subnet, undefined behavior. The fix was a single line in Colima's configuration: `address: false`. Colima gets no bridge. UTM gets bridge100. One bridge, one subnet, one source of truth. The network stopped arguing with itself.
+
+It is remarkable how much infrastructure pain can hide behind "it works most of the time." The bridge conflict was intermittent. Some boots, UTM won the race. Some boots, Colima won. The system appeared healthy on the boots where UTM won, and appeared inexplicably broken on the boots where it didn't. Intermittent failures are the system's way of telling you that you have two things where you should have one.
+
+### SSH and the Keychain Incident
+
+macOS Sequoia changed how SSH keys are loaded at boot. Specifically, it stopped loading them. The `ssh-agent` no longer reads from the Keychain automatically — a security improvement that rendered every post-boot SSH connection to the VM a manual ceremony of `ssh-add`.
+
+Fix: `ssh-add --apple-load-keychain` added to the post-boot sequence. Keys load from the Keychain. SSH works on first attempt.
+
+But the SSH config had a deeper problem. The Mac Mini's 1Password agent was the default `IdentityAgent`, which meant SSH connections to VM hosts were falling through to 1Password instead of the system's SSH agent. 1Password's agent is excellent for GitHub. It is less excellent for bare-metal VM access over a local bridge. The fix: explicit `IdentityAgent SSH_AUTH_SOCK` for VM host entries in `~/.ssh/config`. The right agent for the right connection.
+
+A third issue surfaced during testing: OpenSSH 10.2's hostbound key verification is incompatible with OpenSSH 9.6 on some keychain-managed keys. The session diagnosed it; the fix is a known compatibility constraint, not a code change. Sometimes the answer is "don't upgrade the VM's OpenSSH until the signature format converges." Patience is also engineering.
+
+### The Council Decision: FileVault
+
+At approximately 22:30, a council session was convened on a single question: should the Mac Mini's disk remain encrypted with FileVault?
+
+FileVault is full-disk encryption. It is good security. It also requires a password at pre-boot, which means the machine cannot start unattended after a power failure. For a laptop, this is a reasonable trade. For a stationary home server in a locked office, it is a guarantee that every power outage requires a human with a keyboard.
+
+The vote was unanimous. Windu — *Windu*, the security agent — voted to disable it. His reasoning: physical access to the machine is controlled by physical security (locked room, no external exposure). The secrets on disk are stored in 1Password, not in plaintext files. The threat model for a stationary home server is not the threat model for a stolen laptop. Availability beats encryption when the machine's purpose is to be available.
+
+Compensating controls: physical access restriction, secret rotation schedule, 1Password vault backup. FileVault was disabled. The machine can now boot to a usable state without a human present.
+
+Auto-login was also evaluated and rejected. Enabling it would remove Touch ID and deregister credit cards from the system. The Mac Mini serves one human. That human's fingerprint and payment methods are not acceptable collateral damage for boot convenience. There are other ways to solve the boot problem, and we found them.
+
+### The Bootstrap Daemon
+
+This is the centerpiece. Everything else in this session was preparation for this.
+
+Two LaunchDaemons:
+
+- **`com.sanctum.bootstrap`** — runs as `bert`. Starts all Sanctum services: the proxy, Force Flow, the Living Force, the Navigator sidecar, Council Router, all of it. Every service that needs to be running after boot is declared here.
+- **`com.sanctum.vmnet`** — runs as `root`. Starts the VM using `socket_vmnet_client` piped to bare QEMU. No UTM. No GUI application. No Apple Developer ID code signing. Just a root-level daemon that creates the network socket and hands a virtual machine to QEMU.
+
+The significance of this cannot be overstated. Previously, the VM required UTM — a GUI application — which required a logged-in user session, which required either auto-login (rejected) or a human typing a password. The entire infrastructure stack, including every VM-hosted service, was gated behind a human being physically present after every reboot.
+
+Now the machine boots, the daemon starts QEMU with vmnet networking, the VM acquires its bridge100 address, and every service comes up. No GUI. No login. No human. The Mac Mini in a locked office in Sainte-Adele can survive a power outage while its owner is in Tokyo.
+
+30 integration tests validate the bootstrap sequence.
+
+### The Deadpool Convention
+
+Port 4077 for Force Flow. Port 1969 for the Sonos Bridge (moved from 18421, which had no cultural resonance — 1969 is Woodstock, and if a music service doesn't get a music port, what are we even doing here). Port 1138 for the Neural Link. Port 2187 for the Living Force. Port 4040 for the Sanctum Proxy.
+
+The pattern was obvious but uncodified. In this session, it was codified in `CONTRIBUTING.md`:
+
+*"Name the ports you chose, leave the ports that chose you."*
+
+Criteria: above 1024, culturally resonant or personally meaningful, no explanation required to anyone who gets it (and no explanation sufficient for anyone who doesn't). Update `expected-ports.json`. That's the whole convention. Sanctum's port table reads like a film school syllabus, and that is by design. Infrastructure should have personality. If you're going to stare at port numbers in logs at 1 AM, they should at least make you smile.
+
+### The Test Suite
+
+The session's test work was extensive enough to constitute its own phase in a less eventful night:
+
+- Tailscale macOS app detection (the app, not just the CLI)
+- `socket_vmnet` added to the safe process list (it runs as root; the test suite was flagging it as suspicious)
+- LM Studio embedding model validation
+- All expected services updated to `com.sanctum.*` naming convention
+- `launchctl print` replacing `launchctl list` (no race condition on boot)
+- Gateway memory threshold validation
+- Docker `DOCKER_HOST` environment variable in the test framework
+- `SSH_AUTH_SOCK` validation
+- Boot persistence plist name verification
+- Sonos bridge health check on the new port
+- Home Assistant 302 response acceptance (HA redirects to onboarding on first contact; this is not an error)
+- Allowed-disabled automation list (some automations are intentionally off; the test suite now knows which ones)
+
+### Cron Restoration
+
+Five cron jobs had been lost to various system changes and were restored:
+
+| Job | Schedule | Purpose |
+|-----|----------|---------|
+| Skill sync | Every 2 hours | Synchronize openclaw-skills across nodes |
+| VM snapshot | Weekly, Sunday 4 AM | Point-in-time VM backup |
+| Sanctum backup | Daily, 2 AM | Full configuration backup |
+| Council Router tests | Daily, 1 AM | Automated routing validation |
+| Phone discovery | Every 2 minutes | Network device presence detection |
+
+These are the system's habits. A system without habits is a system that forgets to take care of itself.
+
+### Documentation
+
+Seven documents were created or updated in this session: `force-flow.mdx` (new), `services.mdx` (Deadpool port table), `security.mdx` (FileVault rationale and bootstrap architecture), `node-topology.mdx` (bridge resolution and boot sequence), `proxy.mdx` (LiteLLM references removed), `CONTRIBUTING.md` (port convention), and this document.
+
+The documentation exists because the system must be legible to the next person — or the next agent — who encounters it at 1 AM with a raccoon problem and no context. If it isn't written down, it didn't happen. If it isn't written *clearly*, it happened but nobody will understand why.
+
+---
+
+### The Shape of the Night
+
+This session began with a raccoon and a family jolted awake by a synthesized Yoda voice announcing a security breach that was, in fact, a medium-sized mammal investigating a recycling bin. It ended six hours later with a system that can boot unattended, route notifications through a triage unit named after a Korean War field hospital, survive a bridge conflict, manage its own SSH keys, and maintain its own cron schedule.
+
+The two principles that emerged are complementary. Principle 13 is about the system's relationship with its humans: do not cry wolf. Do not confuse noise with safety. Every notification is a withdrawal from a finite trust account, and when that account is empty, the humans stop listening, and then the system is truly alone. Principle 14 is about the system's relationship with itself: survive. Boot without help. Start your services. Check your health. Phone home when something is actually wrong. Wait for the human who may not come for hours, or days, and keep the lights on in the meantime.
+
+> **Principle 14: The system must survive its owner's absence.**
+>
+> A home server that requires a human to type a password after a power failure is not a server. It is a very expensive space heater that occasionally runs containers. The system must boot, connect, validate, and serve without a login session, without a GUI, and without the assumption that someone is watching. The owner may be asleep. The owner may be traveling. The owner may simply have better things to do at 4 AM than babysit infrastructure. Design for absence. Test for absence. The power will go out in Tokyo, and the house in Quebec must answer for itself.
+
+Between the raccoon and the bootstrap daemon, seventeen distinct engineering problems were identified, diagnosed, and resolved. Two architectural principles were established. One council session was held. 42 tests were written for Force Flow. 30 tests were written for the bootstrap sequence. Seven documents were updated. Five cron jobs were restored. One dead VM was buried. Two bridges were unified into one. Three notification systems were unified into one. One port was given a better name.
+
+The session cost six hours of a Saturday night. The system will spend the rest of its operational life not waking up children because of raccoons, and not requiring a human to restart it after a storm. That seems like a fair trade.
+
+---
+
