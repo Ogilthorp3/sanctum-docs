@@ -144,6 +144,7 @@ export default defineConfig({
 						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
 						{ label: 'Tooling', slug: 'operations/tooling' },
+						{ label: 'Roadmap', slug: 'operations/roadmap' },
 					],
 				},
 			],
