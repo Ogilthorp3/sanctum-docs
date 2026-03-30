@@ -148,11 +148,33 @@ If Colima ever needs vmnet re-enabled (e.g., for direct container-to-VM communic
 
 ### Boot Sequence
 
-1. macOS boots → auto-login (FileVault disabled, `autoLoginUser: bert`)
-2. `com.sanctum.utm-autostart` → launches UTM, starts VM, creates bridge100, sets 10.10.10.1
-3. `com.sanctum.openclaw.colima` → starts Colima (user-mode networking, no bridge)
-4. `apple-post-boot.sh` → loads SSH keys from Keychain, runs health checks
-5. Remaining LaunchAgents start services in dependency order
+The Mac Mini starts every service — including the VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. Two LaunchDaemons handle everything:
+
+**`com.sanctum.vmnet`** (root) creates the 10.10.10.x network:
+```
+/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet \
+    --vmnet-mode host --vmnet-gateway 10.10.10.1 \
+    /opt/homebrew/var/run/socket_vmnet_sanctum
+```
+
+**`com.sanctum.bootstrap`** (bert) starts all services in four phases:
+
+1. **Phase 1: Docker** — Colima starts (user-mode networking, no vmnet), Docker socket ready, HA container up
+2. **Phase 2: Headless services** — Force Flow, XTTS, Voice Agent, Sonos Bridge, Living Force, Sanctum Proxy, Watchdog, Dashboard, Firewalla Bridge, Cloudflared
+3. **Phase 3: VM** — QEMU starts via `socket_vmnet_client` (passes vmnet as fd=3, no Apple Dev ID signing required, no GUI needed), bridge detected, host IP set to 10.10.10.1, waits for VM SSH
+4. **Phase 4: SSH + proxies** — Loads SSH keys from Keychain, starts socat proxies for VM-to-Mac service access
+
+<Aside type="note">
+The VM runs via bare QEMU with `socket_vmnet_client`, not UTM. UTM requires a GUI session (Aqua domain) which doesn't exist until someone logs in. `socket_vmnet` provides the vmnet.framework networking that QEMU needs, running as a root LaunchDaemon. The QEMU binary only needs the `com.apple.security.hypervisor` entitlement (which Homebrew's build already has). No Apple Developer ID signing required.
+</Aside>
+
+```bash
+# Install or update the bootstrap (one command)
+bash ~/.sanctum/boot/install-bootstrap.sh
+
+# Run bootstrap tests (30 integration tests)
+bash ~/.sanctum/boot/test_bootstrap.sh
+```
 
 ### SSH Key Persistence
 
