@@ -108,10 +108,79 @@ The QC version is not a translation. It is a rewrite. Same structure, same Aside
 
 ## Illustrations
 
-- One hero image per page, wide format, PNG in `src/assets/illustrations/`
-- Alt text should describe *and* have personality
-- Memorial or emotional images where the page earns them
-- No stock photos. No clip art. This is a haus, not a startup.
+Every doc page gets one hero image. No exceptions. No SVGs. No stock photos. No clip art.
+
+### The Style
+
+All illustrations are **black-and-white pencil sketches** generated with **Gemini image generation** (model: `gemini-3-pro-image-preview`). The style is hand-drawn, whimsical but technically grounded, on a white background.
+
+**Tommy the Abyssinian cat appears in every illustration** — lean, elegant, large ears, slightly smug, always observing or supervising the scene. He is the visual thread that ties the docs together.
+
+### Generation Spec
+
+| Property | Value |
+|----------|-------|
+| Model | `gemini-3-pro-image-preview` |
+| Aspect ratio | `16:9` |
+| Resolution | `2K` (outputs 2752x1536) |
+| Format | PNG (convert from JPEG if Gemini returns JPEG — use `sips -s format png`) |
+| Color | Black and white only. No color except black lines and shading. |
+| Location | `src/assets/illustrations/` |
+
+### Prompt Template
+
+Every prompt must begin with this prefix:
+
+```
+Black and white pencil sketch illustration, wide format.
+```
+
+And end with this suffix:
+
+```
+Hand-drawn pencil style on white background. No color except black lines and shading.
+```
+
+Between them, describe the scene with:
+1. **A visual metaphor** for the technical concept (conveyor belt for CI/CD, bouncer for routing, lemonade stand for pricing)
+2. **Tommy** — where he is, what he's doing, his expression
+3. **Labels and text** visible in the scene that ground it technically
+4. **Details** that reward a closer look
+
+### Prompt Pitfalls
+
+- Avoid trademarked character names (Yoda, Jedi, lightsaber) — Gemini content filters will block them. Use neutral descriptions instead.
+- Keep prompts under 500 characters for best results.
+- If a generation fails with `PROHIBITED_CONTENT`, rephrase — don't retry the same prompt.
+
+### Alt Text
+
+Alt text must describe the scene **and** have personality. It's both accessibility and brand voice:
+
+```
+Good: "Tommy at the Force Flow switchboard — routing every alert in the haus through one brain"
+Bad:  "Illustration of a cat near a switchboard"
+```
+
+### Consistency Checklist
+
+Before committing a new illustration, verify:
+
+- [ ] Black and white only (no color)
+- [ ] Tommy is recognizably an Abyssinian cat (lean, large ears, elegant)
+- [ ] Wide format (~16:9 aspect ratio, 2752x1536 or similar)
+- [ ] White/off-white background
+- [ ] Pencil sketch / hand-drawn line quality
+- [ ] Metaphor is immediately readable without explanation
+- [ ] Technical concept is embedded in the visual (not just decorative)
+- [ ] File is real PNG (not JPEG with .png extension — use `file` to check)
+
+### Do Not
+
+- **No SVGs for hero images.** SVGs are for inline technical diagrams only (architecture, topology, flow). Hero images are always PNG pencil sketches.
+- **No color illustrations.** The B&W pencil style is the brand.
+- **No AI-generated images from other tools.** Gemini `gemini-3-pro-image-preview` only, for visual consistency.
+- **No placeholder 1x1 pixel PNGs.** If the image isn't ready, leave the page without a hero until it is.
 
 ## Port Naming — The Deadpool Convention
 
