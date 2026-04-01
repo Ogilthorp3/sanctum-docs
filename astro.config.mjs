@@ -96,6 +96,7 @@ export default defineConfig({
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
+						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
 					],
 				},
 				{
