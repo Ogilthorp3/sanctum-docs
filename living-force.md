@@ -816,7 +816,7 @@ The solution: two LaunchDaemons that run at boot, before any user session exists
 
 **`com.sanctum.bootstrap`** (bert) starts every service in four phases: Docker, headless services, the VM (via `socket_vmnet_client` + bare QEMU), and SSH keys + proxies. The VM no longer needs UTM or a GUI — QEMU connects to the vmnet socket as fd=3, bypassing the Apple Developer ID signing requirement entirely.
 
-The result: power goes out, power comes back, every service in the house recovers. No login screen. No human intervention. No Touch ID compromise.
+The result: power goes out, power comes back, every service in the house recovers. No login screen. No human intervention. No Touch ID compromise.\n\n*(Update: The Qui-Gon memory triage daemons and backup cron jobs have also been migrated into this headless flow to ensure memory safeguards and disaster recovery survive power outages.)*
 
 > **Principle 14: The System Must Survive Its Owner's Absence**
 >
