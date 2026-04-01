@@ -5,6 +5,8 @@ description: What's planned, what's next, and what's parked. The single source o
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
+![Tommy at the drafting table — shipped features in ink, planned features in pencil, parked ideas in the recycling bin](../../../assets/illustrations/roadmap-blueprint-table.png)
+
 This page is the canonical list of what's coming. If it's not here, it's not planned. If it's here and crossed out, it shipped. Ideas graduate from "Parked" to "Next" when they earn it — usually by a raccoon or a power outage making the case more eloquently than any product manager could.
 
 ## Now — In Progress
@@ -23,7 +25,7 @@ Ring doorbells detect motion but cannot tell a raccoon from an intruder. Frigate
 </Card>
 
 <Card title="Force Flow — Screen Time & Parental Controls" icon="seti:clock">
-The flagship feature of Force Flow beyond notifications: regulate screen access across the house to help parents build healthy habits for their children. Force Flow already controls what the house says and when — the natural extension is controlling what the screens show and for how long.
+The flagship feature of Force Flow beyond notifications: regulate screen access across the haus to help parents build healthy habits for their children. Force Flow already controls what the haus says and when — the natural extension is controlling what the screens show and for how long.
 
 **Capabilities:**
 - Per-child screen time budgets (weekday vs weekend, school vs vacation)
@@ -40,6 +42,8 @@ The flagship feature of Force Flow beyond notifications: regulate screen access 
 
 <Card title="Test Suite — Instance-YAML Aware" icon="seti:config">
 Half the pre-existing test failures are tests expecting services that are intentionally disabled. The council-router test suite should read `instance.yaml` and skip tests for disabled services. One architectural change, five fewer false failures, and daily test reports that are actually trustworthy.
+
+This is also a prerequisite for the [Kitchen Loop regression oracle](/architecture/kitchen-loop/) — the oracle needs tests that understand which services are enabled before it can measure whether the system is "at least as good as yesterday."
 
 **Effort:** Medium. Modify test-framework.sh to parse instance.yaml, update each suite.
 </Card>
@@ -64,6 +68,22 @@ Crash-proof Rust replacement for the Python `mlx_lm.server` on port 1337. The Py
 Jump Desktop failed to connect twice during the Raccoon Theorem session. Investigate root cause — may need Tailscale SSH as fallback, or a Cloudflare Tunnel to a VNC endpoint. Remote GUI access must be reliable for the bootstrap fallback (Keychain unlock, UTM debugging).
 
 **Effort:** Investigation + config. Not a code project.
+</Card>
+
+<Card title="Kitchen Loop — Specification Surface" icon="seti:yaml">
+Enumerate every testable claim Sanctum makes — 14 services x 6 integrations x 6 actions x 5 failure modes — in a `sanctum-spec-surface.yaml`. Forces every "we support X" to become a verifiable assertion rather than a vague promise. The spec surface is documentation work with immediate architectural value: it tells the Living Force what *correct* looks like, not just what *alive* looks like.
+
+Based on the Kitchen Loop framework ([arXiv:2603.25697](/architecture/kitchen-loop/)).
+
+**Effort:** Medium. YAML authoring, no code. Every cell in the matrix is a design decision.
+</Card>
+
+<Card title="Kitchen Loop — L4 State Delta Checks" icon="seti:test">
+Extend the Living Force watchdog from L2 verification (is the service alive?) to L4 (did the user-visible action produce the correct end-to-end state change?). Start with the five most-exercised automations: goodnight scene, morning routine, presence detection, temperature regulation, and security arm/disarm. Each test captures before-state, triggers the action, and asserts the exact expected delta across HA entities, Tuya cloud state, and agent memory.
+
+This is where the March 22 bridge100 failure would have been caught before the underwear incident.
+
+**Effort:** Full session. Test harness, shadow HA instance for safe actuation, state snapshot tooling.
 </Card>
 </CardGrid>
 
@@ -92,6 +112,38 @@ Signal CLI containers (ports 18081, 18082) have intermittent connectivity issues
 The `http://haus/` DNS alias returns 502. The Dench Proxy LaunchDaemon (port 80) was disabled. Either re-enable it or set up a Cloudflare Tunnel route for local dashboard access.
 
 **Effort:** Small. Config change.
+</Card>
+
+<Card title="Kitchen Loop — Regression Oracle" icon="seti:shell">
+Build a repeatable nightly test suite that consumes the spec surface and answers "is Sanctum at least as good as yesterday?" Runs during the existing night window. Produces a pass/fail matrix across all valid spec surface combinations. Integrates with the Living Force metrics pipeline so drift is visible on the dashboard. The oracle is the foundation for the full autonomous Kitchen Loop.
+
+**Effort:** Full session. Oracle harness, spec surface consumer, metrics integration, nightly cron.
+</Card>
+
+<Card title="Kitchen Loop — Anti-Signal Canaries" icon="seti:todo">
+Inject known-bad inputs into the agent pipeline to verify quality gates catch them. Four tiers: Tier 1 (obviously bad — Mundi recommends overspending), Tier 2 (stale data — Jocasta flags a patched CVE), Tier 3 (adversarial — plausible but wrong conclusions), Tier 4 (mixed — partially correct outputs). Track catch rates over time. A Tier 1 escape triggers an immediate alert. The paper achieved zero Tier 1 escapes across 163 iterations. That's the bar.
+
+**Effort:** Multi-session. Canary injection framework, per-agent test scenarios, tracking dashboard.
+</Card>
+
+<Card title="Kitchen Loop — Heterogeneous Tribunals" icon="seti:flow">
+Route critical Council decisions through diverse model backends instead of the same proxy chain. Claude Opus for proposing, Gemini for challenging, local Council-27B for grounding. Blind opening rounds to prevent first-speaker anchoring. Explicit kill gates requiring "do not build this" arguments. The paper found same-model debates converge to groupthink — Sanctum's Council needs genuine perspective diversity for security and architecture decisions.
+
+**Effort:** Medium. Proxy routing config, Council Session format update, tribunal prompt templates.
+</Card>
+
+<Card title="Kitchen Loop — Memory Drift Control" icon="seti:db">
+Sanctum's four-layer memory stack (Working → Mem0 → Memory Vault → Neo4j) consolidates on different schedules with no cross-layer consistency checks. Mem0 and the Vault can diverge. Neo4j relationships can reference entities that no longer exist. Agents can cite memories that were superseded weeks ago. Apply Kitchen Loop drift gates to the memory pipeline: regression gate after each nightly consolidation, canary injection (write a known memory, verify it survives), drift threshold (quality drops 3+ cycles → pause writes), and backpressure (write queue overflow → drain mode, consolidate only).
+
+**Effort:** Full session. Memory quality oracle, canary injection harness, consolidation hook integration.
+</Card>
+
+<Card title="Kitchen Loop — Full Autonomous Loop" icon="seti:gulp">
+Once the spec surface, regression oracle, and canaries are stable, enable the complete six-phase Kitchen Loop: Backlog → Ideate → Triage → Execute → Polish → Regress. The system exercises itself as a power user, finds bugs, fixes them, verifies the fixes against ground truth, and measures drift — all during the night window while the household sleeps. Drain mode auto-triggers when PR queues back up. Pause gates stop the loop when quality degrades.
+
+**Blocked by:** Spec surface, L4 state deltas, regression oracle (items above).
+
+**Effort:** Multi-session. Kitchen Loop scaffolding (`kitchenloop.yaml` config), domain-specific phase prompts, UAT gate for haus automation, drift metrics pipeline.
 </Card>
 </CardGrid>
 

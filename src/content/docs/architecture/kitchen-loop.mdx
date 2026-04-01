@@ -1,0 +1,253 @@
+---
+title: The Kitchen Loop
+description: How an arxiv paper about autonomous software evolution became the blueprint for Sanctum's next immune system upgrade.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Tommy supervises the Kitchen Loop — six stations, one conveyor belt, zero regressions](../../../assets/illustrations/kitchen-loop-conveyor.png)
+
+The Living Force knows when something is broken. It does not know when something is *wrong*.
+
+The difference: broken means the service is down, the port is closed, the health check fails. Wrong means the goodnight automation ran, the lights turned off, the dashboard says "all clear" — but the front door never locked. Every system reports healthy. The family sleeps with an unlocked door. The watchdog saw nothing, because the watchdog checks L2 and the failure was L4.
+
+An arxiv paper landed in March 2026 (2603.25697) describing a framework that had autonomously merged 1,094 pull requests across two production systems with zero regressions. It wasn't about code generation — it was about *specification-driven verification*. AI agents exercising a product as power users at 1,000x human cadence, then fixing what breaks, proving the fixes against ground truth the implementer cannot fake, and measuring drift to ensure the system never gets worse. They called it the Kitchen Loop.
+
+Reading it felt like finding the blueprint for the thing we'd been building by hand. Not because Sanctum already does this — it doesn't, not fully — but because every piece of the framework maps to something the Living Force already attempted, half-built, or wished it had. This page documents how those pieces fit together, what we gain, and what changes.
+
+## The Four Pillars, Translated
+
+The Kitchen Loop is built on four concepts. Each one has a Sanctum analog that's either partial or absent.
+
+<CardGrid>
+  <Card title="1. Specification Surface" icon="document">
+    An enumerable matrix of everything the system claims to do. Not "we support Tuya lights" but "we support 55 Tuya lights across 12 rooms, each responding to 6 automation triggers, with cloud and local fallback paths." Every cell in the matrix is a testable claim. Sanctum's `instance.yaml` defines what *runs*. A spec surface defines what *works*.
+  </Card>
+  <Card title="2. As a User x1000" icon="rocket">
+    AI agents exercise the product as a power user would — not closing tickets, but systematically exhausting coverage. Foundation tier (30%) validates happy paths. Composition tier (50%) tests feature combinations — the seams where individual passing tests coexist with combinatorial failures. Frontier tier (20%) deliberately attempts things out of scope to identify the next valuable capability.
+  </Card>
+  <Card title="3. Unbeatable Tests" icon="heart">
+    Four-layer verification where each layer catches what the one below misses. L1: it compiles. L2: it runs. L3: the output parses. L4: the actual state changed correctly. The innovation is the integration mandate — passing L1-L3 means nothing if nobody attempted L4. Sanctum's Living Force checks "is the service alive?" but not "did the user-visible action produce the correct end-to-end state change?"
+  </Card>
+  <Card title="4. Drift Control" icon="warning">
+    Continuous quality measurement with automated pause gates. Not just "did this change break something?" but "are things getting worse over time?" Five gates: regression failure, canary escape, drift threshold, backpressure, and starvation. The system stops itself before humans need to.
+  </Card>
+</CardGrid>
+
+## What Sanctum Already Has
+
+The Living Force is not starting from zero. Several Kitchen Loop concepts already exist in some form:
+
+| Kitchen Loop | Sanctum Today | Gap |
+|---|---|---|
+| Regression Oracle | Fire drills (Phase 5) | Monthly and manual. Kitchen Loop runs every iteration. |
+| Multi-Model Tribunal | Council Sessions | Sanctum uses the same model family. Kitchen Loop uses heterogeneous models to prevent groupthink. |
+| Pause Gates | Crash-Loop Quarantine | Sanctum quarantines broken *services*. Kitchen Loop pauses broken *development velocity*. |
+| Spec Surface | `instance.yaml` | Config defines what runs. Spec surface defines what the system claims to do — and tests every claim. |
+| Self-Healing | Code-Forge + HA Self-Healer | Close match. Kitchen Loop formalizes the feedback loop with structured experience reports. |
+| Night Deployment | Night Window (02:00-05:00 ET) | Identical philosophy. Kitchen Loop adds the concept of drain mode when PR queues back up. |
+
+The gap is not capability — it's formalization. The Living Force heals reactively. The Kitchen Loop tests proactively, measures continuously, and stops itself when quality degrades.
+
+## The Specification Surface for Sanctum
+
+This is the highest-value integration point. Sanctum manages a sprawling matrix of devices, services, agents, and automations. Today, we know they're running. We don't systematically verify they're *working together*.
+
+The spec surface expresses Sanctum's claims as a testable matrix:
+
+```yaml
+# sanctum-spec-surface.yaml
+dimensions:
+  services:
+    - home-assistant
+    - sanctum-proxy
+    - denchclaw-gateway
+    - living-force-watchdog
+    - council-mlx
+    # ... 14+ services
+
+  integrations:
+    - tuya-cloud        # 55 lights
+    - ecobee-homekit    # 4 sensors
+    - ring-cameras      # 4 cameras
+    - sonos-bridge      # 10 speakers
+    - firewalla-api     # Router control
+    - alarmo            # Alarm panel
+
+  actions:
+    - turn-on
+    - turn-off
+    - set-value
+    - trigger-automation
+    - query-state
+    - failover
+
+  failure_modes:
+    - cloud-dropout     # Tuya API goes away
+    - bridge-down       # bridge100 severed
+    - container-restart # HA Docker restarts
+    - agent-timeout     # LLM provider slow
+    - memory-divergence # Mem0 vs Vault mismatch
+```
+
+Cross-product: 14 services x 6 integrations x 6 actions x 5 failure modes = **2,520 testable claims**. Not all combinations are valid — Alarmo doesn't have a `set-value` for Tuya lights — but the matrix forces you to explicitly declare which cells matter and which don't. The cells you skip are the cells that bite you at 4 AM.
+
+<Aside type="note">
+The paper's DeFi case study had ~1,000 combinations (14 chains x 30 protocols x 21 intents). Sanctum's matrix is larger but sparser — most cells are invalid combinations. The valid subset is roughly 400-600 meaningful scenarios, which is well within the framework's demonstrated capacity.
+</Aside>
+
+## L4 State Deltas: The Missing Layer
+
+The Living Force currently operates at L2 — it verifies services are running and responding. The Kitchen Loop's L4 verification checks that the *actual state changed correctly*:
+
+| Layer | What It Checks | Sanctum Example |
+|---|---|---|
+| L1 Compile | Config is valid | `instance.yaml` parses, plist generates, manifests validate |
+| L2 Execute | Service responds | Health endpoint returns 200, port is open |
+| L3 Parse | Output is structured | HA API returns valid entity states, proxy returns valid JSON |
+| **L4 State Delta** | **Reality changed** | **"Turn on living room lights" → Tuya API confirms state=on, HA entity updated, dashboard reflects change, memory logs event — all within 30 seconds** |
+
+L4 is where the March 22 bridge100 failure would have been caught *before* a human in his underwear. The watchdog said "all clear" because it was checking L2 (ports open) without checking L4 (can services actually reach each other and produce correct outcomes).
+
+Implementing L4 for Sanctum means:
+
+1. **Before-state snapshot** — capture HA entity states, Tuya cloud states, agent memory timestamps
+2. **Action** — trigger an automation, send a command, simulate a failure
+3. **After-state assertion** — verify every expected change occurred, and no unexpected changes happened
+4. **Timeout and rollback** — if the delta doesn't appear within the expected window, the test fails
+
+<Aside type="caution">
+L4 tests against real hardware are not idempotent. Turning lights on and off at 3 AM during a test run will wake people up. The test harness needs a simulation mode for physical actuators and a live mode for software-only verifications. The paper's DeFi case study used Anvil chain forks — Sanctum needs the equivalent: a shadow HA instance with mock integrations.
+</Aside>
+
+## Anti-Signal Canaries for Agent Quality
+
+The paper introduces a four-tier canary system that injects known-bad inputs to verify the quality gates catch them. This maps directly to Sanctum's agent council:
+
+| Tier | Definition | Sanctum Application |
+|---|---|---|
+| 1: Obviously Bad | Errors any gate should catch | Mundi recommends spending when budget is exceeded. Windu approves a firewall rule that opens all ports. |
+| 2: Shadow | Stale or low-novelty data | Jocasta reports a CVE that was patched two weeks ago. Qui-Gon recommends restarting a service that was decommissioned. |
+| 3: Adversarial | Real data, wrong conclusion | Cilghal correlates a temperature spike with HVAC failure when it was actually a sunny afternoon. |
+| 4: Mixed | Partially correct | Tommy's weather briefing has correct temperature but wrong precipitation forecast. |
+
+Currently, Council Sessions catch some of these through inter-agent debate. Formalizing canary injection makes quality measurement continuous rather than anecdotal. A Tier 1 escape — an obviously bad recommendation making it through council — would trigger an immediate alert. The paper achieved zero Tier 1 escapes across 163 iterations. That's the target.
+
+## Heterogeneous Model Tribunals
+
+The paper found that debates between instances of the same model family converge to groupthink rapidly. Three heterogeneous models (Gemini, GPT/Codex, Claude) produced genuine perspective diversity. Sanctum's Council currently routes through the same proxy chain.
+
+The integration point is surgical: for critical decisions (architectural changes, security policy updates, deployment approvals), route council votes through diverse model backends:
+
+```yaml
+# Council tribunal routing for critical decisions
+tribunal:
+  critical_decisions:
+    - model: claude-opus     # Primary reasoning
+      role: proposer
+    - model: gemini-pro      # Alternative perspective
+      role: challenger
+    - model: local-council   # No cloud dependency
+      role: grounding
+  consensus_required: 2_of_3
+  kill_gate: true  # Explicit "do not build" argument required
+```
+
+The paper's key finding: blind opening rounds eliminate first-speaker anchoring, and explicit kill gates prevent universal-action bias. Both are implementable in the existing Council Session format.
+
+<Aside type="tip">
+The paper measured 25% negative agreement rate — Claude conceding too readily in debates. For Sanctum's security-critical decisions (Windu's domain), this suggests Windu should *not* run on Claude when participating in tribunals. Route Windu through a model that argues harder.
+</Aside>
+
+## Drift Control for the Memory Stack
+
+Sanctum's four-layer memory system (Working → Mem0 → Memory Vault → Neo4j) is a drift risk the paper's framework was designed to catch. Over time:
+
+- Mem0 and the Memory Vault can diverge (different consolidation schedules)
+- Neo4j relationships can reference entities that no longer exist
+- Agent recommendations can cite memories that were superseded
+- Nightly consolidation can silently drop important context
+
+Kitchen Loop drift control applies here as five gates:
+
+1. **Regression gate** — after each memory consolidation, verify that key facts are still retrievable and correct
+2. **Canary gate** — inject a known memory and verify it survives consolidation intact
+3. **Drift threshold** — if memory retrieval quality drops 3+ consecutive cycles, pause writes and alert
+4. **Backpressure** — if the memory write queue exceeds threshold, enter drain mode (consolidate only, no new writes)
+5. **Starvation** — if no memories are written for N cycles, something is broken upstream
+
+## The Six-Phase Loop, Adapted
+
+The Kitchen Loop runs a continuous six-phase cycle. Here's how each phase maps to Sanctum operations:
+
+```
+┌─────────────────────────────────────────────────┐
+│  BACKLOG (15 min)                               │
+│  Evaluate spec surface coverage gaps.           │
+│  Which Sanctum claims haven't been tested?      │
+├─────────────────────────────────────────────────┤
+│  IDEATE (15-45 min)                             │
+│  Exercise a scenario as a real user would.      │
+│  "Turn on all lights, arm the haus, check      │
+│   cameras, trigger goodnight automation."        │
+│  Document what breaks — structured experience   │
+│  reports, not unit tests.                       │
+├─────────────────────────────────────────────────┤
+│  TRIAGE (5-10 min)                              │
+│  Convert findings to prioritized tickets.       │
+│  Deduplicate against known issues.              │
+│  Reopen tickets whose fixes didn't hold.        │
+├─────────────────────────────────────────────────┤
+│  EXECUTE (30-60 min)                            │
+│  Fix top-N tickets in isolated worktrees.       │
+│  Code-Forge skill handles implementation.       │
+│  Night window constraints apply.                │
+├─────────────────────────────────────────────────┤
+│  POLISH (10-90 min)                             │
+│  UAT gate: fresh evaluator with no context      │
+│  verifies the fix from user perspective.        │
+│  Tribunal review for critical changes.          │
+│  Merge or route back as new ticket.             │
+├─────────────────────────────────────────────────┤
+│  REGRESS (40-150 min)                           │
+│  Run regression oracle against full spec        │
+│  surface. Measure drift. Update metrics.        │
+│  Promote patterns to durable memory.            │
+│  Pause if quality gates fail.                   │
+└─────────────────────────────────────────────────┘
+```
+
+The REGRESS phase is where the Kitchen Loop diverges most from current Sanctum operations. Fire drills run monthly and test *infrastructure resilience*. The regression oracle runs every iteration and tests *functional correctness*. Both are necessary. Fire drills answer "can the system survive failure?" The oracle answers "does the system do what it claims?"
+
+## Implementation Path
+
+<Aside type="note">
+The Kitchen Loop framework is open source (MIT) at `github.com/0xagentkitchen/kitchenloop`. It ships as shell scripts and Python utilities designed to wrap around Claude Code. The integration with Sanctum would use its scaffolding directly, with domain-specific customization for haus automation.
+</Aside>
+
+The recommended sequence, ordered by value delivered per effort:
+
+1. **Specification Surface** — enumerate Sanctum's testable claims in YAML. This is documentation work with immediate value: it forces every "we support X" to become a testable assertion. No code required.
+
+2. **L4 State Delta Checks** — extend the Living Force watchdog to verify end-to-end outcomes, not just service health. Start with the five most common automations (goodnight scene, morning routine, presence detection, temperature regulation, security arm/disarm).
+
+3. **Regression Oracle** — build a repeatable test suite that answers "is Sanctum at least as good as yesterday?" Run it nightly during the existing night window. The oracle consumes the spec surface and produces a pass/fail matrix.
+
+4. **Anti-Signal Canaries** — inject known-bad inputs into the agent pipeline monthly. Measure catch rates. Track improvement over time. Start with Tier 1 (obviously bad) and graduate to Tier 3 (adversarial) as the system matures.
+
+5. **Heterogeneous Tribunals** — route critical council decisions through diverse model backends. Requires proxy routing changes but no architectural redesign.
+
+6. **Full Kitchen Loop** — once the oracle and spec surface are stable, enable the complete six-phase autonomous loop. The system exercises itself, finds bugs, fixes them, verifies the fixes, and measures drift — all while the household sleeps.
+
+## What This Changes
+
+The Living Force was born from a failure at 4 AM. It built an immune system — reactive, dependency-aware, self-healing. The Kitchen Loop adds a nervous system — proactive, specification-driven, self-testing. The immune system asks "is something broken?" The nervous system asks "does everything work the way we promised?"
+
+Together, they close the gap between "the service is running" and "the haus is actually doing what the family expects it to do." Which is, if you think about it, the only question that matters.
+
+## References
+
+- Roy, Y. (2026). "The Kitchen Loop: User-Spec-Driven Development for a Self-Evolving Codebase." arXiv:2603.25697
+- Kitchen Loop source: `github.com/0xagentkitchen/kitchenloop` (MIT license)
+- Living Force: [The Living Force](/architecture/living-force/) — Sanctum's existing self-healing architecture
+- Config System: [Config System](/architecture/config-system/) — the `instance.yaml` single source of truth
