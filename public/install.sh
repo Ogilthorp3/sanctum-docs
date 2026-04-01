@@ -328,6 +328,15 @@ if command -v git &>/dev/null; then
         spinner $! "Cloning documentation..."
         wait $! && ok "Documentation cloned" || detail "Skipped (not available yet)"
     fi
+
+    # Initialize the haus configuration repository
+    if [ ! -d "$HOME/$HOME_SLUG" ]; then
+        mkdir -p "$HOME/$HOME_SLUG"
+        (cd "$HOME/$HOME_SLUG" && git init -q && git commit --allow-empty -q -m "chore: initial commit for $HOME_NAME configuration")
+        ok "Initialized configuration repository at ~/$HOME_SLUG"
+    else
+        ok "Configuration repository ~/$HOME_SLUG already exists"
+    fi
 fi
 
 # Presidio containers for PII scrubbing
