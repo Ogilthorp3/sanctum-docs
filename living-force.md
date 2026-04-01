@@ -974,3 +974,9 @@ The session cost six hours of a Saturday night. The system will spend the rest o
 
 ---
 
+
+
+## Roadmap / Future Considerations
+
+- **Hardware Constraints for Large Models**: The `lmstudio-benchmark.sh` script has been updated with a memory safeguard. Attempting to load massive models (e.g., 122B parameter models) on the 64GB Mac Mini causes catastrophic overallocation, pushing swap usage beyond 10GB. This previously triggered the Qui-Gon memory triage to aggressively kill the MLX 27B model, resulting in a kernel panic due to a driver race condition. Benchmarking >100B models must be strictly isolated to the 128GB M4 Max machine.
+- **Qui-Gon Memory Triage Daemon**: If memory triage orchestration issues persist or performance degrades, consider porting the Python triage scripts (`qui_gon_triage_new.py`, `qui_gon_triage_resilient.py`) to Rust. This would provide better concurrency control and seamless integration with existing Rust microservices (like `sanctum-proxy` and `sanctum-idle`), though it is not strictly necessary as long as the current graceful shutdown (SIGTERM) logic remains stable.
