@@ -1,10 +1,10 @@
 # Contributing to Sanctum Docs
 
-You want to write documentation for a home automation platform that takes itself exactly seriously enough. Good. Here's how.
+You want to write documentation for a haus automation platform that takes itself exactly seriously enough. Good. Here's how.
 
 ## Voice & Tone
 
-Sanctum docs are technically precise and dryly self-aware. The humor comes from the gap between enterprise infrastructure and a house in Québec — never from trying to be funny.
+Sanctum docs are technically precise and dryly self-aware. The humor comes from the gap between enterprise infrastructure and a haus in Québec — never from trying to be funny.
 
 **The formula:** Lead with the technical fact. Follow with the human observation.
 
@@ -66,6 +66,28 @@ Real values. Real ports. Real paths. If you write `example.com` or `YOUR_TOKEN_H
 
 YAML blocks for configuration. Shell blocks for commands. Annotate with comments when the config isn't self-evident, but don't narrate the obvious.
 
+## The Haus Rule
+
+Sanctum uses **haus** instead of "house" or "home" when referring to the dwelling. It's the brand voice — German-inflected, deliberate, and consistent. The tagline is "Your haus, wittily managed." The docs follow.
+
+**Change to "haus":**
+- "your house" → "your haus" (the dwelling running Sanctum)
+- "the house" → "the haus" (when it's *this* haus)
+- "home automation" → "haus automation" (the domain, Sanctum-style)
+- "home intelligence" → "haus intelligence"
+- "someone is home" → "someone is haus"
+- "vacation house" → "vacation haus"
+
+**Keep as-is:**
+- **Home Assistant** — product name, always capitalized, never touched
+- **HomeKit**, **Apple Home** — product names
+- `/home/ubuntu/` — file paths are file paths
+- **"home office"**, **"home router"**, **"home server"** — standard English category terms
+- Idiomatic expressions where "house" is the joke — "makes house calls", "burning your house down"
+- Generic analogies about houses in general — "like every room in a house that lost power"
+
+When in doubt: if the sentence is about *this specific dwelling running Sanctum*, it's a haus. If it's about houses in general or a product name, leave it.
+
 ## Québécois Guidelines
 
 The French pages are Québécois joual — not Parisian French with a flannel shirt.
@@ -89,7 +111,7 @@ The QC version is not a translation. It is a rewrite. Same structure, same Aside
 - One hero image per page, wide format, PNG in `src/assets/illustrations/`
 - Alt text should describe *and* have personality
 - Memorial or emotional images where the page earns them
-- No stock photos. No clip art. This is a house, not a startup.
+- No stock photos. No clip art. This is a haus, not a startup.
 
 ## Port Naming — The Deadpool Convention
 
