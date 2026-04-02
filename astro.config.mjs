@@ -125,6 +125,7 @@ export default defineConfig({
 						{ label: 'Cilghal \u2014 Health', slug: 'agents/cilghal' },
 						{ label: 'Mundi \u2014 Finance', slug: 'agents/mundi' },
 						{ label: 'Jocasta \u2014 CRM', slug: 'agents/jocasta' },
+						{ label: 'Mothma \u2014 Operations', slug: 'agents/mothma' },
 						{ label: 'Ahsoka \u2014 Satellite', slug: 'agents/ahsoka' },
 					],
 				},
