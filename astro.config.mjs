@@ -92,6 +92,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'architecture/overview' },
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
+						{ label: 'Force Flow', slug: 'architecture/force-flow' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
