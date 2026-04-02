@@ -60,7 +60,7 @@ The Immune System phase sounds elegant in the abstract — anomaly detection, re
 
 The answer, with alarming regularity, is no.
 
-Home Assistant manages 55 Tuya smart lights (cloud API), 4 Ecobee sensors (HomeKit Controller), 4 Ring cameras, Alarmo (alarm panel), and 24 automations that do everything from turning on the porch light at sunset to arming the house when everyone leaves. Sonos speakers (10 of them) are managed by a separate native bridge on port 18421 that bypasses Docker entirely. Each integration has its own failure mode, its own opinion about reconnection, and its own way of dying silently while the dashboard stays green.
+Home Assistant manages 55 Tuya smart lights (cloud API), 4 Ecobee sensors (HomeKit Controller), 4 Ring cameras, 10 Sonos speakers, Alarmo (alarm panel), and 24 automations that do everything from turning on the porch light at sunset to arming the house when everyone leaves. Each integration has its own failure mode, its own opinion about reconnection, and its own way of dying silently while the dashboard stays green.
 
 The `ha-self-healer` skill at `~/Projects/openclaw-skills/ha-self-healer/` is Phase 2's concrete implementation. It runs a five-stage pipeline:
 
@@ -88,7 +88,7 @@ The distinction matters. A dumb retry loop would have hammered the Tuya API, hit
 
 Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes your containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network, which is a different thing entirely — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
 
-This matters when your haus automation system needs to discover Ecobee thermostats via HomeKit Controller, which uses Bonjour/mDNS, which broadcasts to the local subnet, which Docker Desktop's VM is not on.
+This matters when your home automation system needs to discover Ecobee thermostats via HomeKit Controller, which uses Bonjour/mDNS, which broadcasts to the local subnet, which Docker Desktop's VM is not on.
 
 On March 28, 2026, Docker Desktop was replaced with Colima — a lightweight alternative that is, at its core, just a Lima VM running a Docker daemon. No GUI. No update nags. No Kubernetes toggle that nobody asked for. It starts in 12 seconds via launchd and exposes a Unix socket at:
 
@@ -98,7 +98,7 @@ DOCKER_HOST=unix:///Users/neo/.colima/default/docker.sock
 
 The startup chain is intentionally sequential:
 
-1. `com.manoir.colima` LaunchAgent starts Colima at boot
+1. `com.sanctum.colima` LaunchAgent starts Colima at boot
 2. `launch-after-docker.sh` waits for the Docker socket to appear
 3. Once the socket is live, it starts the Home Assistant and signal-cli containers
 
@@ -125,7 +125,7 @@ Ten rules that emerged from the wreckage. None of them were obvious before March
 </Aside>
 
 <Aside type="tip" title="4. Human Timelines">
-  Claude writes code in minutes. Humans live in days. Shadow modes, observation periods, and phased rollouts need real calendar time, not AI calendar time. "Ship it now, observe for 30 days" is not a contradiction — it's the only sane approach when your deployment target is someone's haus.
+  Claude writes code in minutes. Humans live in days. Shadow modes, observation periods, and phased rollouts need real calendar time, not AI calendar time. "Ship it now, observe for 30 days" is not a contradiction — it's the only sane approach when your deployment target is someone's home.
 </Aside>
 
 <Aside type="tip" title="5. Co-located Truth">
@@ -158,9 +158,9 @@ Ten rules that emerged from the wreckage. None of them were obvious before March
 
 ## Where to Go from Here
 
-The Living Force is a roadmap, not a finished building. The latest addition is **Force Flow** — a unified notification hub that replaced three separate alerting stacks with one service that understands severity, time of day, and the difference between a raccoon and an intrusion. Every notification from HA, the watchdog, and the council agents now flows through a single brain that deduplicates, rate-limits, and routes to the right channel. The 7 AM Sonos incident of March 29 was the last straw. Each phase has its own detailed guide:
+The Living Force is a roadmap, not a finished building. Each phase has its own detailed guide:
 
-- **[Force Flow](/architecture/force-flow/)** — The unified notification hub. Every alert in the haus flows through one brain.
+- **[Agents & Council](/architecture/agents/)** — The full roster of specialized AI agents and their roles
 - **[Service Graph](/architecture/services/)** — The full service catalog and dependency model
 - **[Watchdog](/guides/watchdog/)** — Health monitoring and the remediation ladder
 - **[Skills](/guides/skills/)** — Agent capabilities, including code-forge and chaos-forge
@@ -170,9 +170,8 @@ The night of March 22 broke twenty-six services. It also broke the assumption th
 
 Which, if you think about it, is the most alive thing a system can do.
 
-
 ## Roadmap / Future Considerations
 
-- **Grand Refactoring for Public Release**: To make the `install.sh` universally deployable, the codebase needs a major refactor to remove hardcoded absolute paths (like `/Users/neo/...`) and consolidate the scattered microservice repositories. Following Principle 1 (Council Before Code) and Principle 4 (Human Timelines), this massive architectural change should NOT be done immediately after a major stabilization effort (like fixing the memory kernel panics). This refactoring should be planned for a future date, tackled incrementally on a separate branch, and tested in isolation.
 - **Hardware Constraints for Large Models**: The `lmstudio-benchmark.sh` script has been updated with a memory safeguard. Attempting to load massive models (e.g., 122B parameter models) on the 64GB Mac Mini causes catastrophic overallocation, pushing swap usage beyond 10GB. This previously triggered the Qui-Gon memory triage to aggressively kill the MLX 27B model, resulting in a kernel panic due to a driver race condition. Benchmarking >100B models must be strictly isolated to the 128GB M4 Max machine.
 - **Qui-Gon Memory Triage Daemon**: If memory triage orchestration issues persist or performance degrades, consider porting the Python triage scripts (`qui_gon_triage_new.py`, `qui_gon_triage_resilient.py`) to Rust. This would provide better concurrency control and seamless integration with existing Rust microservices (like `sanctum-proxy` and `sanctum-idle`), though it is not strictly necessary as long as the current graceful shutdown (SIGTERM) logic remains stable.
+
