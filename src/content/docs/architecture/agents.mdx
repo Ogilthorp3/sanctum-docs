@@ -1,0 +1,134 @@
+---
+title: Agent Roles & The Council
+description: The specialized AI agents distributed across the infrastructure to manage the absurdity of a haushold that runs on enterprise-grade virtualization.
+---
+
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
+import CouncilRoster from '../../../components/CouncilRoster.astro';
+
+![The Sanctum Council in session — Tommy the force-ghost cat at the head of the table, ringed by expensive minds and suspiciously coherent infrastructure plans.](./images/agent-council.png)
+
+Seven minds share one table, and on most questions they disagree. That is the point.
+
+A single model wearing five different robes is not a council — it is a costume change. So Sanctum runs a genuine bench of specialists, each routed to the model family best suited to its domain, [heterogeneous by default](/architecture/neurodiversity-doctrine/). The strategist and the security auditor do not think alike, and we pay for that on purpose.
+
+The chair at the head of the table belongs to a cat. Tommy has no tools, no permissions, and no pulse — a `force-ghost` who mostly watches. He is still the most trusted observer in the haus. The living agents do the work; he keeps them honest.
+
+## The Council
+
+The bench is distributed across the infrastructure on purpose: if the cloud goes dark over Tokyo, the haus in Québec can still decide which lightbulbs to turn on at sunset.
+
+Per-agent routing is generated from `~/.openclaw/openclaw.json` (per-agent primaries) and `~/.sanctum/sanctum-proxy/config.yaml` (tier resolution via `proxyd` on `:4040`). This page is the **single source-of-truth** for who runs on which model — every other page embeds `<CouncilRoster />` from the same data, so a champion swap is one JSON refresh and one rebuild away.
+
+<CouncilRoster />
+
+Council sessions are held via structured prompt exchange. The agents do not run as persistent daemons; the infrastructure invokes them on demand.
+
+## The Seats
+
+Six of the seven council seats hold a working domain outright — one robe each,
+and no two overlap. Here is who wears which. (Jocasta, the seventh, keeps the
+records, and she gets her own grid below; Ahsoka watches the chalet from
+outside the chamber entirely.)
+
+<CardGrid>
+  <Card title="Yoda" icon="star">
+    **Grand Master**
+    The senior lead of the Sanctum Council. Yoda handles council routing, final synthesis of complex decisions, and the daily "Morning Briefing" digest. Also runs as a dedicated voice agent (Python, port 1138 on Mac Mini) with Sanctum TTS (the Rust post-quantum `sanctum-tts` front door on port 8008, proxying to the Chatterbox `cbx-yoda` voice engine on 8011). He remains the ultimate authority on whether a raccoon constitutes a security breach.
+  </Card>
+  <Card title="Mon Mothma" icon="rocket">
+    **Operations** — *seated in the CLI council chamber; OpenClaw chair still reserved*
+    Chief of operations — not a Jedi, but the steady hand: deployments, runbooks, drift windows, backups, secret rotation. She holds a full seat in the `sanctum council` REPL (on `council-brain`), one of only two armed with instruments — `sanctum_status`, `sanctum_doctor`, `agent_list`, `logs_tail` — tool turns on Gemini 3.1 Pro. No `mothma` entry exists in `openclaw.json` yet; the 4 AM incident-correlation duties there stay with [Force Flow](/architecture/force-flow/) and `sanctum-triage` until her daemon robe is sewn.
+  </Card>
+  <Card title="Qui-Gon" icon="setting">
+    **Infrastructure**
+    The guardian of the machine — system health, Lima VM, automated recovery. His triage logic runs as a native Rust binary (`sanctum-triage`) on a 30-second interval. He is why you don't have to SSH into the machine every time it rains.
+  </Card>
+  <Card title="Windu" icon="setting">
+    **Security**
+    The master of defense. Windu conducts security audits, manages Firewalla and PF rules, gates the HA Gateway (port 8199, token-auth), and monitors the perimeter. He has a very low tolerance for unauthorized packets.
+  </Card>
+  <Card title="Cilghal" icon="heart">
+    **Health**
+    The biological bridge. Cilghal monitors wellness via Apple Health data and the `genome-mcp` service. She takes a person's cognitive style into account and suggests scaffolding for optimal productivity.
+  </Card>
+  <Card title="Ki-Adi-Mundi" icon="document">
+    **Finance**
+    The treasurer. Mundi manages Triptyq Capital deal flow and personal fiscal health. He ensures the system's operating costs don't exceed the actual value of the automation.
+  </Card>
+</CardGrid>
+
+## One Voice, Not Seven
+
+As of April 2026, the system runs a strict **True Council Architecture** (Memory Vault routing). The operative agents — Jocasta, the Meeting Prep Agent, the Deal Flow Radar — don't ping you directly. They write their intelligence continuously to the Memory Vault. Yoda, and only Yoda, routes outbound push notifications: he reads the Council's overlapping findings on a schedule, synthesizes the takeaways, and sends Strategic Master Briefings via [Force Flow](/architecture/force-flow/). One voice on the phone, not seven.
+
+## Satellite Council (planned)
+
+<CardGrid>
+  <Card title="Ahsoka" icon="external">
+    **Satellite Outpost** — *topology reserved, agent not yet deployed*
+    The Chalet is a real node in `instance.yaml` (`nodes.chalet`, a 16 GB M1) but reports `online: false`, and which model Ahsoka runs locally is still open: Codestral-22B won't fit in 16 GB, so the coder seat doesn't reach the cabin. Her job, once she ships, is local automation and offline resilience — family comfort that survives the internet not.
+  </Card>
+</CardGrid>
+
+## DenchClaw (Mac Mini Host)
+
+<CardGrid>
+  <Card title="Jocasta" icon="open-book">
+    **Archivist**
+    The keeper of records. Jocasta handles CRM data, communications, and tech-lookout scanning directly on the Mac Mini host. She operates through Claude Code — not as a persistent daemon, but invoked during council sessions and daily scans.
+  </Card>
+</CardGrid>
+
+## Autonomous Services
+
+These are not persona agents but Rust binaries that run continuously and act on the council's behalf.
+
+- **sanctum-triage** (`com.sanctum.triage`): Qui-Gon's immune response. Monitors system RAM every 30 seconds and unloads heavy models when pressure exceeds thresholds. Native Rust, zero Python.
+- **sanctum-watchdog** (port 2187): Health monitoring daemon. Checks service liveness at declared intervals.
+- **sanctum-memory** (port 42069): Persistent memory vault with MCP interface. The council's institutional memory.
+- **sanctum-server** (port 8055, BOSS): Rust smart router fronting four backends — `council-secure` (Qwen3.8-27B-4bit in one `sanctum-mlx` process on `:1337`, no adapter since 2026-10-02; the 35B MoE primary and its 27B secondary are retired), `coder` (Muse-Glimmer-30B-4bit via `haus.sanctum.mlx-coder` on `:3301` as of 2026-10-05, after Devstral; the former Qwen2.5-Coder-14B `:1338` seat and its `:1234` LM Studio bridge were retired 2026-06-07), `spatial` (Gemini 3.1 Pro), and `cloud` (Claude Opus — Max subscription, the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today — via Max proxy on `:3456`, OpenRouter fallback). Five tiers of routing, observability, breakers, and quality detectors. See [Smart Router Cathedral](/architecture/smart-router-cathedral/) for the full anatomy.
+
+## The CLI Council Chamber
+
+The roster above is the **OpenClaw runtime** layer — five persona daemons plus Jocasta on the host. The `sanctum council` REPL seats a bench of **seven**: the five Jedi, Jocasta, and Mon Mothma. Yoda and Mothma are the only tool-armed chairs (four read-only, audited instruments; every other seat chat-only by council ruling, 2026-06-12). Same minds, two rooms: the runtime does the continuous work, the chamber answers when summoned.
+
+## Interactive CLI Agents
+
+These are the primary interfaces for human interaction with the Council.
+
+- **The Terminal (Claude Code)**: The primary interface for high-speed infrastructure audits, security hardening, and codebase-wide refactoring. Deep MCP access to the Memory Vault, and the ability to rewrite the system in minutes. Runs on the MBP.
+- **Gemini CLI**: The systems-level partner. Specialized in headless migrations, security audits, LaunchDaemon orchestration, and ensuring the other agents haven't left artifacts in the shadows. Led the Phase 10 (Raccoon Theorem) headless QEMU migration. Runs on the MBP.
+
+## Agent Markdown Calibration
+
+The persona layer is not allowed to drift on vibes. The canonical agent markdown lives in the `mlx-finetune` workspaces; the runtime copies under `~/.openclaw/workspace*` are rendered artifacts that must stay mechanically aligned.
+
+- Canonical source: `~/Projects/mlx-finetune/workspaces/<agent>/{IDENTITY,SOUL,TOOLS,HEARTBEAT}.md` (one subdir per agent — `windu`, `quigon`, `cilghal`, `jocasta`, `mundi`, `yoda` — wired in `configs/agents.yaml`)
+- Runtime targets: `~/.openclaw/workspace*` on the local machine, plus reachable VM and MBP workspaces over SSH/Tailscale
+- Sync command: `python3 ~/.sanctum/scripts/sync_agent_markdown.py`
+- Drift check: `python3 ~/.sanctum/scripts/sync_agent_markdown.py --check`
+
+The sync model is deliberately boring:
+
+- local runtime is updated first; remote fanout to the VM and mobile nodes is best-effort — unreachable hosts are skipped, not treated as hard failures
+- the Mac Mini is the authoritative fanout source; mobile nodes without `~/.sanctum/instance.yaml` run in `fanout-target-only` mode and never become an accidental second source of truth
+- `sync_agent_markdown.py --check` exits non-zero if any reachable runtime differs from canonical; folding it into `sanctum doctor` is on the list
+- machine-readable sync state lands in `~/.sanctum/state/agent-markdown-sync.json`
+
+On the Mac hosts, `install_agent_markdown_sync.sh` installs the lot: a `com.sanctum.agent-markdown-sync` LaunchAgent (at login + every 5 minutes), `mlx-finetune` git hooks (`post-merge`, `post-checkout`, `post-commit`) so fresh pulls and training edits converge on their own, and absolute-path helper scripts under `~/.sanctum/scripts` so launchd doesn't have to improvise its way through macOS privacy theater.
+
+This keeps all four runtimes — VM, Mac Mini, MBP, and the overnight fine-tuning source — pointed at the same markdown truth, instead of slowly inventing four different versions of the same Jedi. Distributed systems are hard enough without letting the SOUL file freelance.
+
+<Aside type="note">
+The agents are not a hierarchy. They are a web — each one necessary, though some are significantly more expensive to run than others.
+</Aside>
+
+<Aside type="caution">
+If an agent begins to hallucinate about the network topology, refer to the [Service Graph](/guides/service-graph/) immediately. The graph is truth; the agent is just a very confident guesser.
+</Aside>
+
+---
+
+> "The Council is not a hierarchy, but a web. Each thread is necessary for the strength of the whole."
+> — Yoda
