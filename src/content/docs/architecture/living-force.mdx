@@ -84,6 +84,45 @@ Two incidents illustrate the difference between "monitoring" and "understanding"
 The distinction matters. A dumb retry loop would have hammered the Tuya API, hit rate limits, and made the recovery slower. The healer's diagnostic step — checking *whether* the failure pattern suggests a systemic cause before attempting fixes — is what separates Phase 2 from Phase 0.
 </Aside>
 
+## The Metal Crash That Nobody Noticed for Two Minutes
+
+On April 1, 2026, at 11:36 PM, `sanctum-server` spawned `mlx_lm.server` on the Mac Mini. Fifteen seconds later, MLX tried to JIT-compile a Metal compute shader during model initialization. The GPU's command buffer completed with an error — likely resource contention from a competing Metal consumer — and `libmlx.dylib` did what any self-respecting C++ library does when it encounters an unrecoverable GPU error: it called `abort()`.
+
+The Python process died with `SIGABRT` on Thread 31 (`com.Metal.CompletionQueueDispatch`). The crash report was 800 lines long. The actual problem was one line: `mlx::core::gpu::check_error(MTL::CommandBuffer*)`.
+
+Meanwhile, `sanctum-server` sat in its readiness loop, cheerfully polling `http://127.0.0.1:8900/v1/models` every 500 milliseconds, waiting for a process that had been dead for two minutes. It would have waited the full 120 seconds before returning a timeout error. No stderr capture. No child process death detection. No retry. The gateway was a bouncer checking IDs at the door of a building that had already burned down.
+
+### What Was Wrong
+
+| Problem | Impact |
+|---------|--------|
+| No `try_wait()` on child process during readiness poll | Dead backend goes undetected for up to 120s |
+| No stderr capture from crashed child | No diagnostic information — just a generic timeout |
+| No retry logic | A transient Metal error (GPU contention, stale driver state after 55h uptime) becomes a permanent failure |
+| E2E tests only tested the happy path | No phase simulated backend death during startup |
+
+### What Changed
+
+**sanctum-server** (`src/main.rs`):
+
+- `ensure_backend()` now retries up to 3 times with exponential backoff (3s, 6s)
+- Each attempt calls `try_spawn_backend()`, which polls `try_wait()` on every loop iteration
+- When the child dies, stderr is captured and pattern-matched against known failure signatures: Metal command buffer errors, OOM, or generic crash
+- Structured tracing logs the exit code, crash reason, and stderr tail — so the next 4 AM incident has a diagnostic trail instead of a shrug
+
+**e2e test suite** (`test_e2e_sanctum.sh`):
+
+- **Phase 4.5** kills a running backend with `kill -9` and verifies the gateway re-spawns it on the next request
+- **Phase 4.6** arms a background process that kills `mlx_lm.server` during startup (2 seconds after spawn) — reproducing the exact crash timeline from the incident — and verifies the retry logic recovers on attempt 2
+
+<Aside type="caution">
+Metal command buffer errors on Apple Silicon are non-deterministic. They correlate with GPU resource contention (LM Studio running concurrently), long uptimes (55+ hours without reboot), and memory pressure on the 64GB Mac Mini. The retry logic handles the transient case. If all 3 attempts fail, the GPU is genuinely unhappy and a reboot or competing process kill is needed.
+</Aside>
+
+A crash that previously cost 120 seconds of dead polling and a cryptic timeout now costs under 5 seconds, produces a clear error log, and self-heals on the next attempt. The e2e suite that previously couldn't catch it now actively reproduces it.
+
+Principle 10 strikes again: 30 passing tests didn't catch this because they tested the world where Metal works. The world where Metal doesn't work is the one that pages you at midnight.
+
 ## The Great Container Escape
 
 Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes your containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network, which is a different thing entirely — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
@@ -175,3 +214,45 @@ Which, if you think about it, is the most alive thing a system can do.
 - **Hardware Constraints for Large Models**: The `lmstudio-benchmark.sh` script has been updated with a memory safeguard. Attempting to load massive models (e.g., 122B parameter models) on the 64GB Mac Mini causes catastrophic overallocation, pushing swap usage beyond 10GB. This previously triggered the Qui-Gon memory triage to aggressively kill the MLX 27B model, resulting in a kernel panic due to a driver race condition. Benchmarking >100B models must be strictly isolated to the 128GB M4 Max machine.
 - **Qui-Gon Memory Triage Daemon**: If memory triage orchestration issues persist or performance degrades, consider porting the Python triage scripts (`qui_gon_triage_new.py`, `qui_gon_triage_resilient.py`) to Rust. This would provide better concurrency control and seamless integration with existing Rust microservices (like `sanctum-proxy` and `sanctum-idle`), though it is not strictly necessary as long as the current graceful shutdown (SIGTERM) logic remains stable.
 
+
+---
+
+## Phase 9: Force Flow (Port 4077 / Hawkeye)
+
+The notification problem required a triage unit. We named it after the 4077th M*A*S*H — the field hospital that sorted the dying from the merely wounded with gallows humor and surgical precision.
+
+Force Flow is a single HTTP endpoint. Every notification source in Sanctum — all 11 Home Assistant automations, the Living Force itself, `sanctum_notify()`, the proxy watchdog, weekly chaos drills — POSTs to `/notify` on port 4077. Force Flow makes the routing decision:
+
+- **Severity tiers:** CRITICAL bypasses everything and screams. HIGH respects quiet hours but logs. INFO is a whisper in the audit trail. DEBUG exists only for archaeologists.
+- **Quiet hours:** 22:00 to 08:00. The house sleeps. The system watches silently.
+- **Deduplication:** 120-second sliding window. The same event arriving through three channels produces one notification, not three.
+- **Rate limiting:** 10 notifications per hour per source.
+
+<Aside type="note">
+Zero remaining direct notification paths exist in the codebase. Every automation, script, and watchdog now speaks through Hawkeye.
+</Aside>
+
+## Phase 10: The Raccoon Theorem — The Headless Migration
+
+**Primary Agent:** Gemini CLI
+
+In this session, the council executed the final divorce from the GUI. The system was migrated to a **pure, headless QEMU architecture**.
+
+1.  **LaunchDaemon Orchestration**: The VM is now managed by a root-level LaunchDaemon (`com.sanctum.bootstrap`). No user login is required.
+2.  **Socket Networking**: Implemented `socket_vmnet` to provide `vmnet-host` networking without requiring Apple Developer ID entitlements.
+3.  **Namespace Unification**: The legacy `com.manoir` prefix was officially retired. All services now use the `com.sanctum` namespace.
+4.  **Intelligent Memory Triage**: Updated `qui_gon_triage.py` to allow LM Studio to run permanently, while automatically unloading "large" models (35B+) if system memory drops below 20%.
+5.  **Security Hardening**: Password authentication disabled on the VM in favor of Key-Only SSH.
+
+<Aside type="tip" title="Principle 15: The GUI is an artifact of debugging">
+  If a service cannot run without a window, it is not a service. True infrastructure is invisible. By removing the dependency on the GUI login session, we have moved Sanctum from a "desktop application suite" to a true server architecture.
+</Aside>
+
+## ACHIEVEMENTS: The Great Alignment (March 28, 2026)
+
+In a single focused session, the following systemic repairs were executed to achieve total infrastructure alignment:
+
+1.  **Engine Restoration**: Patched a critical bug in `service-graph.py` related to quoted SSH commands.
+2.  **Sudo Security Pass**: Global audit of all 28 manifests, bulk-fixing 9 legacy services to use absolute binary paths.
+3.  **Unified Bridge**: Established `navigator-sidecar.js` as the standardized bridge between Project monitors and the Holocron Archives sector.
+4.  **Zero-Error Validation**: Achieved 100% manifest validity across all sectors.
