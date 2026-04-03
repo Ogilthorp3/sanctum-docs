@@ -645,12 +645,12 @@ Sequenced according to council decisions. No skipping ahead.
 
 ### Near-Term (30 Days)
 
-- **Proxy Phase 3: Provider Health Ejection** — Needs 30 days of production routing data before the >30% error rate threshold can be calibrated. The data is already being collected.
+- **Proxy Phase 3: Provider Health Ejection (Completed)** — The proxy now natively differentiates between client errors (4xx) and provider outages (5xx/429). Providers exceeding a 30% failure rate are instantly ejected from the routing table and gracefully bypassed to save latency.
 - **Council agenda system** — Wire incident-learn.sh output into council agendas, not directly into code-forge. Incidents inform debate; debate produces proposals.
 
 ### Deferred (60+ Days)
 
-- **Proxy Phase 4: UCB1 Learning** — Multi-armed bandit for model selection. Council deferred 30 days minimum; requires Phase 3 observation data as input.
+- **Proxy Phase 4: UCB1 Learning** — Multi-armed bandit for model selection. Council deferred implementation (Principle 1 & 4) to ensure system stability following the Phase 3 deployment.
 - **Satellite node integration** — When the chalet Mac Mini comes online, its services need manifests, and the dependency graph needs to span two physical nodes.
 
 ---
