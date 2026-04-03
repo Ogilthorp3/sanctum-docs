@@ -110,6 +110,7 @@ export default defineConfig({
 						{ label: 'Service Graph', slug: 'guides/service-graph' },
 						{ label: 'Home Assistant', slug: 'guides/home-assistant' },
 						{ label: 'AI Agents', slug: 'guides/agents' },
+                                                { label: 'Agent Browser', slug: 'guides/agent-browser' },
 						{ label: 'Autoresearch', slug: 'guides/autoresearch' },
 						{ label: 'Skills', slug: 'guides/skills' },
 						{ label: 'Satellite Setup', slug: 'guides/satellite-setup' },
