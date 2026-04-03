@@ -5,18 +5,18 @@ description: The specialized AI agents distributed across the infrastructure to 
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
-![The Sanctum Council — A collection of expensive brains solving the problems they created.](../../../assets/illustrations/hero-agents.png)
+![The Sanctum Council — A collection of expensive brains solving the problems they created.](./images/hero-agents.png)
 
 The Sanctum Council is a collective of specialized AI agents. They are distributed across the infrastructure to ensure that if the power goes out in Tokyo, the house in Québec can still decide which lightbulbs to turn on at sunset.
 
-## OpenClaw Council (VM)
+## The Council
 
-These agents live within the Ubuntu VM. They handle the high-logic tasks and the orchestration of the system's more complex dependencies.
+Six specialized agents, each routed through `sanctum-server` (Rust proxy on the Mac Mini) and backed by Qwen3.5-27B-4bit with LoRA adapters for persona distillation. Council sessions are held via structured prompt exchange; the agents do not run as persistent daemons — they are invoked by the infrastructure on demand.
 
 <CardGrid>
   <Card title="Yoda" icon="star">
     **Grand Master**
-    The senior lead of the Sanctum Council. Yoda provides high-level orchestration, wisdom, and guidance for the entire agent roster. He handles council routing, final synthesis of complex decisions, and the daily "Morning Briefing" digest. He remains the ultimate authority on whether a raccoon constitutes a security breach.
+    The senior lead of the Sanctum Council. Yoda provides high-level orchestration, wisdom, and guidance for the entire agent roster. He handles council routing, final synthesis of complex decisions, and the daily "Morning Briefing" digest. Also runs as a dedicated voice agent (Python, port 8081 on Mac Mini) with XTTS text-to-speech (port 8008). He remains the ultimate authority on whether a raccoon constitutes a security breach.
   </Card>
   <Card title="Mon Mothma" icon="rocket">
     **Operations**
@@ -24,15 +24,15 @@ These agents live within the Ubuntu VM. They handle the high-logic tasks and the
   </Card>
   <Card title="Qui-Gon" icon="setting">
     **Infrastructure**
-    The guardian of the machine. Qui-Gon is responsible for system health, Docker stability, and automated recovery. He is why you don't have to SSH into the machine every time it rains.
+    The guardian of the machine. Qui-Gon is responsible for system health, Docker stability (Colima), and automated recovery. His triage logic now runs as a native Rust binary (`sanctum-triage`) on a 30-second interval. He is why you don't have to SSH into the machine every time it rains.
   </Card>
   <Card title="Windu" icon="shield">
     **Security**
-    The master of defense. Windu conducts security audits, manages Firewalla and PF rules, and monitors the perimeter. He has a very low tolerance for unauthorized packets.
+    The master of defense. Windu conducts security audits, manages Firewalla and PF rules, gates the HA Gateway (port 8199, token-auth), and monitors the perimeter. He has a very low tolerance for unauthorized packets.
   </Card>
   <Card title="Cilghal" icon="heart">
     **Health**
-    The biological bridge. Cilghal monitors wellness via Apple Health data and biometrics. She understands the owner's cognitive profile and suggests scaffolding for optimal productivity.
+    The biological bridge. Cilghal monitors wellness via Apple Health data and biometrics through the `genome-mcp` service. She understands the owner's cognitive profile — including neurodiversity markers (ADHD, Dyslexia, ASD) — and suggests scaffolding for optimal productivity.
   </Card>
   <Card title="Ki-Adi-Mundi" icon="document">
     **Finance**
@@ -49,21 +49,31 @@ These agents live within the Ubuntu VM. They handle the high-logic tasks and the
   </Card>
 </CardGrid>
 
-## DenchClaw (Mac Mini)
+## DenchClaw (Mac Mini Host)
 
 <CardGrid>
   <Card title="Jocasta" icon="open-book">
     **Archivist**
-    The keeper of records. Jocasta handles CRM data and communications directly on the Mac Mini host. She is the system's memory of every deal and every decision.
+    The keeper of records. Jocasta handles CRM data, communications, and tech-lookout scanning directly on the Mac Mini host. She operates through Claude Code and The Terminal — not as a persistent daemon, but invoked during council sessions and daily scans.
   </Card>
 </CardGrid>
+
+## Autonomous Services
+
+These are not persona agents but Rust binaries that run continuously and act on the council's behalf.
+
+- **sanctum-triage** (`com.sanctum.triage`): Qui-Gon's immune response. Monitors system RAM every 30 seconds and unloads heavy models when pressure exceeds thresholds. Native Rust, zero Python.
+- **sanctum-watchdog** (port 2187): Health monitoring daemon. Checks service liveness at declared intervals.
+- **sanctum-memory** (port 42069): Persistent memory vault with MCP interface. The council's institutional memory.
+- **sanctum-server** (port 1337): Rust proxy wrapping Python `mlx_lm.server`. Handles idle timeout, crash recovery, and request routing for all council inference.
 
 ## Interactive CLI Agents
 
 These are the primary interfaces for human interaction with the Council.
 
-- **The Terminal**: The primary interface for high-speed infrastructure audits, security hardening, and technical debt elimination.. It has deep MCP access to the Memory Vault and the ability to rewrite the system in minutes.
-- **Gemini CLI**: The newest agent in the temple. Specialized in technical debt elimination, security audits, and ensuring the other agents haven't left artifacts in the shadows.
+- **The Terminal (Claude Code)**: The primary interface for high-speed infrastructure audits, security hardening, and technical debt elimination. It has deep MCP access to the Memory Vault and the ability to rewrite the system in minutes. Runs on the MBP.
+- **Claude CLI**: The systems-level partner to Gemini. Specialized in codebase-wide architectural mapping, complex refactoring, and ensuring technical integrity during high-stakes sessions. Operates with deep context of the entire project structure. Runs on the MBP.
+- **Gemini CLI**: The systems-level agent. Specialized in headless migrations, security audits, LaunchDaemon orchestration, and ensuring the other agents haven't left artifacts in the shadows. Led the Phase 10 (Raccoon Theorem) headless QEMU migration. Runs on the MBP.
 
 <Aside type="note">
 The agents are not a hierarchy. They are a web. Each one is necessary, though some are significantly more expensive to run than others.
