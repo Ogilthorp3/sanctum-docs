@@ -1,0 +1,69 @@
+---
+title: Implementation Audit
+description: What is actually implemented across the workspace, runtime, and shared skills layer, and where the architecture still drifts.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Tommy at the audit desk — one paw on the manifests, one eye on the runtime](../../../assets/illustrations/implementation-audit-desk.png)
+
+This page is the reality check. The architecture docs describe a coherent system. The codebase, runtime, and operational tooling mostly back that up, but not in one repository and not from one source of truth. Sanctum is a federation: checked-in workspace code, `~/.sanctum` runtime state, and shared implementation in `~/Projects/openclaw-skills/`.
+
+The useful question is not whether the Living Force is real. It is. The useful question is where the real implementation lives, what is cleanly source-controlled, and what is still held together by local state and memory.
+
+## What Was Verified
+
+The implementation audit confirmed these components exist and are wired into the running system:
+
+- `service-graph.py` and the surrounding graph-oriented test harness in the shared skills layer
+- `navigator-sidecar.js` in the workspace, serving aggregate project status over HTTP
+- Checked-in Sanctum service manifests under `sanctum/services/`
+- Runtime configuration in `~/.sanctum/instance.yaml`
+- LaunchAgent-based operational wiring under `~/Library/LaunchAgents`
+
+## What Changed During Consolidation
+
+The workspace-owned slice was tightened first:
+
+- `sanctum/catalog.yaml` is now the canonical checked-in service catalog for the workspace manifests
+- `sanctum/render_services.py` deterministically renders `sanctum/services/*.yaml` from that catalog and `holocron-config.yaml`
+- `tests/test-sanctum-audit.sh` validates config rendering, service graph compatibility, sidecar behavior, and documentation wiring
+- `navigator-sidecar.js` now exposes aggregate status, scrubs obvious secrets, and supports env-configured paths and port selection
+
+<Aside type="tip">
+The key improvement was not another diagram. It was making one path through the system mechanically reproducible. A configuration model you can re-render is worth more than a promise in a paragraph.
+</Aside>
+
+## Current Split Of Truth
+
+There are still three layers with different responsibilities:
+
+| Layer | Path | Current role |
+|------|------|--------------|
+| Workspace | `~/Documents/Claude_Code` | Checked-in manifests, renderer, sidecar, audit tests |
+| Runtime | `~/.sanctum` | Live instance config, wrappers, scripts, generated state |
+| Shared skills | `~/Projects/openclaw-skills` | The larger Living Force and service-graph implementation |
+
+That split is workable, but it means any claim about Sanctum needs to say which layer it is talking about. Without that, the docs sound cleaner than the system really is.
+
+## Main Findings
+
+1. The architecture is materially real.
+   The graph-based healing and watchdog doctrine are not fiction. Core scripts and test harnesses exist and can be inspected.
+
+2. The workspace slice is now cleaner than the runtime slice.
+   The checked-in manifests have a canonical catalog and deterministic renderer. The runtime still depends on operational state under `~/.sanctum`.
+
+3. Documentation drift was caused more by boundary confusion than by missing code.
+   Older prose mixed stable architecture, dated migrations, and current operational claims into a single narrative voice.
+
+4. Absolute paths and machine-local assumptions remain the main portability risk.
+   Sanctum works like private infrastructure, not like a portable product, until more of the runtime model is rendered from source-controlled inputs.
+
+## Related Pages
+
+- [Operational State](/operations/operational-state/) for the current verified shape of the system
+- [Runtime Drift Audit](/operations/runtime-drift-audit/) for the live `~/.sanctum` and LaunchAgent remediation work
+- [Operational History](/operations/operational-history/) for the dated milestones and migration notes
+
+The architecture held up under inspection. The remaining work is consolidation, not invention. Which is less glamorous, but much cheaper than another 4 AM surprise.
