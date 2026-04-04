@@ -152,6 +152,7 @@ export default defineConfig({
 						{ label: 'Tooling', slug: 'operations/tooling' },
 						{ label: 'Operational State', slug: 'operations/operational-state' },
 						{ label: 'Implementation Audit', slug: 'operations/implementation-audit' },
+						{ label: 'Feature Status Matrix', slug: 'operations/feature-status-matrix' },
 						{ label: 'Runtime Drift Audit', slug: 'operations/runtime-drift-audit' },
 						{ label: 'Operational History', slug: 'operations/operational-history' },
 						{ label: 'Roadmap', slug: 'operations/roadmap' },
