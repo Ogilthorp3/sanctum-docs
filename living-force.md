@@ -8,6 +8,9 @@
 
 ---
 
+> Current docs live at `/architecture/living-force/`. For the verified machine shape and dated migration record, see `/operations/operational-state/`, `/operations/runtime-drift-audit/`, `/operations/implementation-audit/`, and `/operations/operational-history/`.
+
+
 ## The Night Everything Failed
 
 At 01:53 on March 22, 2026, the UTM virtual machine booted. Bridge100 did not.

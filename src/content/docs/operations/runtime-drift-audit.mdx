@@ -1,0 +1,69 @@
+---
+title: Runtime Drift Audit
+description: Audit and remediation of the live Sanctum runtime in ~/.sanctum and ~/Library/LaunchAgents.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Tommy on the launchd catwalk — staring down a row of plists that finally point somewhere real](../../../assets/illustrations/runtime-drift-launchagents.png)
+
+The checked-in workspace was only half the story. The live system still depended on `~/.sanctum`, generated wrappers, and a pile of LaunchAgents with varying opinions about whether their targets existed. This audit pushed into the runtime layer and cleaned up the drift that actually pages people.
+
+## Verified Runtime Surface
+
+The runtime audit covered:
+
+- `~/.sanctum/instance.yaml`
+- `~/.sanctum/services/`
+- `~/.sanctum/bin/*` wrappers
+- `~/Library/LaunchAgents/com.sanctum.*.plist`
+- The workspace auditors in `tests/test-sanctum-runtime-audit.sh` and `tools/audit_runtime_launchagents.py`
+
+## What Was Broken
+
+The initial pass found two structural mismatches and several stale launch targets:
+
+- `~/.sanctum/services` did not exist even though the documentation described runtime manifests
+- `com.sanctum.living-force.plist` referenced `~/.sanctum/living-force.sh`, which was missing
+- Several LaunchAgents pointed at files that no longer existed
+- The legacy validator produced false positives by treating arguments like `/health` as executable paths
+
+## What Was Fixed
+
+The remediation pass did six concrete things:
+
+1. Restored the wrapper layer under `~/.sanctum/bin`
+2. Created the missing `~/.sanctum/services` directory
+3. Added a runtime renderer so `~/.sanctum/services/*.yaml` is generated from `instance.yaml` plus auxiliary launchd-wired services instead of remaining an empty placeholder
+4. Added a compatibility shim at `~/.sanctum/living-force.sh`
+5. Re-enabled or corrected valid LaunchAgents such as `com.sanctum.proxy.plist` and `com.sanctum.health-center.plist`
+6. Retired clearly obsolete LaunchAgents by renaming them to `.disabled`
+
+<Aside type="note">
+One of the more useful findings was that not every red test was real drift. Some of it was just a bad auditor shouting confidently. Infrastructure work gets easier the moment the alarms stop lying.
+</Aside>
+
+## Current Status
+
+The runtime audit now passes cleanly:
+
+- `tools/audit_runtime_launchagents.py` reports `OK`
+- `tools/render_runtime_services.py --check` reports no drift
+- `tests/test-sanctum-runtime-audit.sh` reports `14 passed, 0 failed`
+
+That does not mean the runtime is portable. It means the live machine is internally consistent again, and the runtime manifest directory now contains actual graph inputs instead of a directory-shaped lie. The rendered set is now 32 manifests: 27 instance-backed services plus 5 auxiliary runtime services such as the proxy and SSH tunnels.
+
+## Remaining Architectural Gap
+
+The biggest unresolved question is still ownership of truth:
+
+- Should `~/.sanctum/instance.yaml` remain the native runtime source?
+- Or should runtime manifests eventually be rendered from the same canonical catalog approach used in the workspace slice?
+
+That is a product decision disguised as an ops decision. Either answer can work. Two answers will drift.
+
+## Related Pages
+
+- [Implementation Audit](/operations/implementation-audit/)
+- [Operational State](/operations/operational-state/)
+- [Roadmap](/operations/roadmap/)

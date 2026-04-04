@@ -197,8 +197,12 @@ Ten rules that emerged from the wreckage. None of them were obvious before March
 
 ## Where to Go from Here
 
-The Living Force is a roadmap, not a finished building. Each phase has its own detailed guide:
+The Living Force is a roadmap, not a finished building. Read the stable doctrine here, then use the operations pages for the machine as it actually exists:
 
+- **[Operational State](/operations/operational-state/)** — The current verified shape of the workspace, runtime, and docs layers
+- **[Implementation Audit](/operations/implementation-audit/)** — What is implemented, where it lives, and where truth still splits
+- **[Runtime Drift Audit](/operations/runtime-drift-audit/)** — The `~/.sanctum` and LaunchAgent remediation work
+- **[Operational History](/operations/operational-history/)** — Dated milestones, migrations, and incident-derived lessons
 - **[Agents & Council](/architecture/agents/)** — The full roster of specialized AI agents and their roles
 - **[Service Graph](/architecture/services/)** — The full service catalog and dependency model
 - **[Watchdog](/guides/watchdog/)** — Health monitoring and the remediation ladder
@@ -208,107 +212,3 @@ The Living Force is a roadmap, not a finished building. Each phase has its own d
 The night of March 22 broke twenty-six services. It also broke the assumption that a system this complex could be managed by a flat loop and a restart command. What replaced it is still growing — still learning from its own failures, still arguing with itself about what to build next.
 
 Which, if you think about it, is the most alive thing a system can do.
-
-## Infrastructure: Two-Machine Topology
-
-Sanctum spans two Apple Silicon machines connected via Tailscale.
-
-**Mac Mini (M4 Pro, 64 GB) — The Server.** Production inference on port 1337 (`sanctum-server` Rust proxy wrapping Python `mlx_lm.server` on backend port 8900), home automation (Home Assistant + Signal CLI via Colima/Docker), agent hosting (Yoda voice on :8081, XTTS on :8008, Sonos bridge on :1969), VM orchestration via headless QEMU over bridge100 (10.10.10.1/24). 12 active LaunchAgents. Key Rust services: sanctum-memory (:42069), sanctum-watchdog (:2187), sanctum-triage (30s interval).
-
-**MacBook Pro (M4 Max, 128 GB) — The Workstation.** Development, LoRA fine-tuning (nightly pipelines at 22:00), autonomous research experiments (02:00), and heavy model benchmarking. Runs its own `sanctum-server` instance on :8901. Eight adapter generations in `~/Projects/mlx-finetune/`.
-
-**MLX Serving (Production):** Agents → 10.10.10.1:1337 (`sanctum-server`, Rust) → 127.0.0.1:8900 (`mlx_lm.server`, Python) → Qwen3.5-27B-4bit + LoRA adapters → Metal GPU. Idle timeout: 300s kills the Python child. Crash retry: 3x exponential backoff with stderr pattern matching. Future: `sanctum-mlx` (pure Rust, 20/20 tests passing) replaces the Python backend once LoRA loading is implemented.
-
-## Roadmap / Future Considerations
-
-- **Hardware Constraints for Large Models**: The `lmstudio-benchmark.sh` script has been updated with a memory safeguard. Attempting to load massive models (e.g., 122B parameter models) on the 64GB Mac Mini causes catastrophic overallocation, pushing swap usage beyond 10GB. This previously triggered the Qui-Gon memory triage to aggressively kill the MLX 27B model, resulting in a kernel panic due to a driver race condition. Benchmarking >100B models must be strictly isolated to the 128GB M4 Max machine.
-
-
----
-
-## Phase 9: Force Flow (Port 4077 / Hawkeye)
-
-The notification problem required a triage unit. We named it after the 4077th M*A*S*H — the field hospital that sorted the dying from the merely wounded with gallows humor and surgical precision.
-
-Force Flow is a single HTTP endpoint. Every notification source in Sanctum — all 11 Home Assistant automations, the Living Force itself, `sanctum_notify()`, the proxy watchdog, weekly chaos drills — POSTs to `/notify` on port 4077. Force Flow makes the routing decision:
-
-- **Severity tiers:** CRITICAL bypasses everything and screams. HIGH respects quiet hours but logs. INFO is a whisper in the audit trail. DEBUG exists only for archaeologists.
-- **Quiet hours:** 22:00 to 08:00. The house sleeps. The system watches silently.
-- **Deduplication:** 120-second sliding window. The same event arriving through three channels produces one notification, not three.
-- **Rate limiting:** 10 notifications per hour per source.
-
-<Aside type="note">
-Zero remaining direct notification paths exist in the codebase. Every automation, script, and watchdog now speaks through Hawkeye.
-</Aside>
-
-## Phase 10: The Raccoon Theorem — The Headless Migration
-
-**Primary Agent:** Terminal Collaboration (Gemini CLI + Claude Code)
-
-In this session, the council executed the final divorce from the GUI. The system was migrated to a **pure, headless QEMU architecture**.
-
-1.  **LaunchDaemon Orchestration**: The VM is now managed by a root-level LaunchDaemon (`com.sanctum.bootstrap`). No user login is required.
-2.  **Socket Networking**: Implemented `socket_vmnet` to provide `vmnet-host` networking without requiring Apple Developer ID entitlements.
-3.  **Namespace Unification**: All services now use the `com.sanctum` namespace.
-4.  **Rust Memory Triage**: Ported the legacy `qui_gon_triage.py` to a native Rust binary (`sanctum-triage`).
-5.  **Hardening (The Fork-Bomb Lesson)**: Following an incident where redundant `launchd` and `cron` triggers caused a process exhaustion event, the triage daemon was strictly locked to a single `LaunchAgent` instance. This event led to the "Single Source of Truth" configuration mandate for all persistent daemons.
-
-<Aside type="tip" title="Principle 15: The GUI is an artifact of debugging">
-  If a service cannot run without a window, it is not a service. True infrastructure is invisible. By removing the dependency on the GUI login session, we have moved Sanctum from a "desktop application suite" to a true server architecture.
-</Aside>
-
-## ACHIEVEMENTS: The Qui-Gon Triage (April 3, 2026)
-
-The final piece of critical infrastructure was migrated to Rust, completing the stability arc:
-
-1.  **Native Memory Sentinel**: Replaced the Python triage daemon with `sanctum-triage` (Rust binary at `~/.sanctum/bin/sanctum-triage`), managed via `com.sanctum.triage` LaunchAgent on a 30-second interval.
-2.  **Zero-Warning Compilation**: Achieved 100% type safety and warning-free compilation for the core monitoring loop.
-3.  **Autonomous Recovery**: Hardened the service recovery logic for Sanctum Proxy and MLX Server, ensuring system self-healing even under extreme memory pressure.
-
-## ACHIEVEMENTS: sanctum-mlx — Zero Python Inference (April 2, 2026)
-
-A pure Rust replacement for the Python `mlx_lm.server` backend, built on `mlx-rs` bindings to Apple's MLX C API:
-
-1.  **Architecture**: axum HTTP server → `mlx-lm` Rust crate → `mlx-rs` → Metal GPU. Zero Python. Zero GIL. Zero garbage collector.
-2.  **Qwen3.5 Hybrid Model**: Custom `mlx-rs` fork with native support for the Qwen3.5 hybrid attention architecture (48 linear + 16 full attention layers).
-3.  **Fused Metal Kernel**: `metal_kernels.rs` implements a GatedDeltaNet SSM scan in raw MSL, dispatched as a single GPU kernel via `mlx_fast_metal_kernel` FFI — replacing per-timestep Rust loops with a single Metal dispatch.
-4.  **TurboQuant**: Experimental 3-bit KV cache compression (ICLR 2026). Random Hadamard rotation → Lloyd-Max quantization → QJL 1-bit error correction. 14/14 tests passing.
-5.  **SSE Streaming**: Full OpenAI-compatible streaming via tokio-stream + mpsc channels, with batched eval (every 8 tokens for streaming, every 64 for sync).
-6.  **Status**: 20/20 tests passing on both machines. LoRA adapter loading not yet implemented — this is the gate to replacing `sanctum-server`'s Python backend in production.
-
-## ACHIEVEMENTS: Efficiency-First Automation (April 3, 2026)
-
-Migrated the entire browser automation stack from Playwright to **Agent Browser**, achieving extreme context efficiency:
-
-1.  **Snapshot-Based Reference System**: Replaced raw DOM extraction with a compact accessibility tree. Snapshots are now ~20 lines instead of 2000+, reducing context usage by 99%.
-2.  **Universal Integration**: Ported all sector monitors (LinkedIn, OBLITERATUS, Holocron UI) to the new framework.
-3.  **Skill Provisioning**: Established `agent-browser` as a core workspace skill, enabling high-speed, reference-based UI interaction.
-
-## ACHIEVEMENTS: Trustworthy Oracles (April 3, 2026)
-
-Re-architected the test framework to be environment-aware, eliminating false failures:
-
-1.  **Instance-YAML Awareness**: Modified `test-framework.sh` to read `instance.yaml`. Tests for disabled services (e.g., Home Assistant, LM Studio) are now automatically skipped.
-2.  **Canonical Mapping**: Implemented `label_to_svc` and `port_to_svc` helpers to map system artifacts (LaunchAgents, TCP ports) back to the configuration layer.
-3.  **Zero-Noise Reporting**: Achieved a 100% trustworthy daily test report, providing a reliable regression oracle for future development.
-
-## ACHIEVEMENTS: The Great Alignment (March 28, 2026)
-
-In a single focused session, the following systemic repairs were executed to achieve total infrastructure alignment:
-
-1.  **Engine Restoration**: Patched a critical bug in `service-graph.py` related to quoted SSH commands.
-2.  **Sudo Security Pass**: Global audit of all 28 manifests, bulk-fixing 9 legacy services to use absolute binary paths.
-3.  **Unified Bridge**: Established `navigator-sidecar.js` as the standardized bridge between Project monitors and the Holocron Archives sector.
-4.  **Zero-Error Validation**: Achieved 100% manifest validity across all sectors.
-
-## ACHIEVEMENTS: The Carmack Optimization (April 2, 2026)
-
-In response to deep hardware profiling, the `mlx-finetune` architecture was overhauled for optimal Apple Silicon (M4 Max) Metal GPU efficiency:
-
-1.  **Compiler Protection (Sequence Bucketing)**: Replaced dynamic sequence lengths with fixed buckets (512, 1024, 2048) in `build_dataset.py`, eliminating `MTLCompilerService` crashes and stopping JIT thrashing.
-2.  **Kernel Fusion**: Stabilized the computation graph to allow pushing the config back to 32 layers and a 2048 context window without hitting `[metal::malloc]` limits.
-3.  **GIL Bypass**: Refactored `generate_synthetic.py` to use Python's `multiprocessing.Pool()`, enabling concurrent dataset generation across all 9 agent personas.
-4.  **E2E Validation**: Established automated end-to-end tests (`tests/test_e2e_pipeline.py`) validating everything from parallel data generation to live Metal inference.
-5.  **Hardware Profiling**: Introduced `scripts/profile_training.sh` using Apple Instruments (`xctrace`) for real-time monitoring of ALU occupancy and memory bandwidth.
-
-Read the full technical breakdown in [The Carmack Optimization](./carmack-optimization.mdx).
