@@ -50,8 +50,50 @@ The migration affected several parts of Sanctum that were previously paying far 
 - **LinkedIn Affinity**: Now uses `agent-browser` with cookie-based session state to monitor selector stability and extract profile names.
 - **OBLITERATUS**: Verifies Gradio UI hydration by checking the character density of the snapshot.
 - **Holocron UI**: Uses iframe inlining to verify the Command Center (port 1111) is correctly rendering inside the main UI (port 3333).
+- **Claude Team token repair harness**: Verifies the refresh path against a local fake OAuth page so the browser automation can be tested without waiting for Anthropic to have feelings about Cloudflare.
 
 The Holocron case is especially useful because it mirrors the actual debugging workflow. When the native app looked fine architecturally but rendered a black pane in practice, `agent-browser` was the tool that verified the visible UI state instead of politely trusting the theory. See [Holocron App](/guides/holocron-app/) for the resulting renderer hardening and packaged app workflow.
+
+## Claude Team OAuth Recovery
+
+This is the least glamorous use of browser automation in the haus, which is probably why it matters.
+
+Claude Code is configured to talk to the Sanctum Proxy at `http://127.0.0.1:4040`. The proxy, in turn, authenticates Anthropic requests using the `anthropic-api-key` secret in macOS Keychain. When that token expires, Claude Code does not fail with a noble error message explaining the exact repair path. It throws `invalid x-api-key` and waits for someone else to grow up.
+
+That someone is now a split-brain repair path: the default browser for the real login, and `agent-browser` for the hermetic test harness.
+
+The startup wrapper on `~/.local/bin/claude` runs a preflight script before launching the real Claude binary:
+
+- `tools/claude_session_preflight.sh`
+- `tools/refresh_claude_team_token.sh`
+
+If the Claude Team token is invalid, the refresh script:
+
+1. launches `claude setup-token`
+2. captures the OAuth URL emitted by Claude Code
+3. opens that URL in your default browser
+4. prompts for the returned code in the same terminal session
+5. if you explicitly opt into `CLAUDE_TEAM_BROWSER_MODE=agent-browser`, uses the named session `claude-team-oauth` to exercise the browser side automatically
+6. reads the refreshed token from `~/.openclaw/agents/main/agent/auth-profiles.json`
+7. writes it back into Keychain as `anthropic-api-key`
+8. restarts `com.sanctum.proxy`
+
+The important design choice is that `agent-browser` is not trying to become an identity provider. It is there to prove the browser half of the flow works when we need deterministic validation, not to pick a fight with Cloudflare in production.
+
+```bash
+# Audit current state
+bash ~/Documents/Claude_Code/tools/refresh_claude_team_token.sh --status
+
+# Force a refresh immediately
+bash ~/Documents/Claude_Code/tools/refresh_claude_team_token.sh --refresh
+
+# Exercise the browser-driven E2E harness locally
+bash ~/Documents/Claude_Code/tests/test-claude-team-refresh-e2e.sh
+```
+
+<Aside type="tip">
+  The named browser session `claude-team-oauth` is deliberate, but it is now for the harness and opt-in automation path. The real repair defaults to your normal browser because that is the one Cloudflare already believes is a person.
+</Aside>
 
 ## Why Holocron Uses It
 
@@ -71,6 +113,13 @@ The integration is verified by `tests/test-agent-browser-e2e.sh`, which validate
 - Navigation and snapshot density (~18 lines for Google).
 - Screenshot capture and storage.
 - Named session isolation.
+
+Claude Team repair adds a second browser-specific harness through `tests/test-claude-team-refresh-e2e.sh`, which validates:
+- fake `claude setup-token` URL capture
+- browser click-through on a local `file://` auth page
+- auth code capture from the page URL/body
+- token sync back into the auth profile and file-backed keychain
+- proxy restart signaling
 
 Holocron adds a second layer of validation through `tests/holocron-e2e.sh` in the app repo, where `agent-browser` drives the packaged UI path the way a human operator actually would.
 

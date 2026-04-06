@@ -82,6 +82,76 @@ Or for just the gateway token:
 openclaw setup-token
 ```
 
+## Claude Code Says `invalid x-api-key`
+
+**Symptom:** Claude Code retries forever with:
+
+```text
+401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}
+```
+
+This is the specific failure mode for the Claude Team token path routed through the Sanctum Proxy. The usual cause is not that Claude Code itself is logged out. The usual cause is that the proxy's Keychain copy of the Anthropic token is stale, invalid, or both.
+
+**What changed:** Sanctum now wraps the local `claude` entrypoint with a startup preflight:
+
+- `tools/claude_session_preflight.sh`
+- `tools/refresh_claude_team_token.sh`
+- `~/.local/bin/claude-wrapper`
+
+On every `claude` launch, the wrapper checks the Claude Team token state before starting the real binary. If the token is invalid, it starts the refresh flow automatically, opens the correct Claude Team OAuth page in your default browser, syncs the refreshed token into the Keychain entry `anthropic-api-key`, and restarts `com.sanctum.proxy`.
+
+**Check the current state:**
+
+```bash
+bash ~/Documents/Claude_Code/tools/refresh_claude_team_token.sh --status
+```
+
+Expected healthy output:
+
+```text
+Auth profile validity: valid
+Keychain validity: valid
+Sync state: in sync
+```
+
+If the tokens are in sync but both invalid, congratulations: the machine is being consistently wrong.
+
+**Force the refresh manually:**
+
+```bash
+bash ~/Documents/Claude_Code/tools/refresh_claude_team_token.sh --refresh
+```
+
+What this does:
+
+1. Runs `claude setup-token`
+2. Opens the Claude Team auth URL in your default browser
+3. Prompts for the returned code in the same terminal session
+4. Falls back to the `agent-browser` path only when you explicitly opt into browser automation
+5. Reads the refreshed token from `~/.openclaw/agents/main/agent/auth-profiles.json`
+6. Writes it to macOS Keychain under account `sanctum`, service `anthropic-api-key`
+7. Restarts `com.sanctum.proxy`
+
+**Test the machinery without Anthropic in the loop:**
+
+```bash
+bash ~/Documents/Claude_Code/tests/test-claude-team-refresh-e2e.sh
+```
+
+That harness replaces the real identity provider with a local `file://` page, runs the same refresh script with a fake `setup-token` binary, and verifies token sync plus proxy restart end to end. It is the difference between "I think the plumbing works" and "the plumbing just passed with receipts."
+
+**If startup preflight itself needs to be reinstalled:**
+
+```bash
+bash ~/Documents/Claude_Code/tools/install_claude_wrapper.sh
+```
+
+That recreates `~/.local/bin/claude-wrapper` and repoints `~/.local/bin/claude` at it. The wrapper resolves the latest Claude binary from `~/.local/share/claude/versions/` at runtime, so upgrades do not require hand-editing a versioned path like an animal.
+
+<Aside type="caution">
+  This flow is mostly automatic, not fully magic. If Anthropic requires a real interactive login, consent screen, or 2FA challenge, Sanctum can open the correct page and carry everything after that, but it cannot honestly pretend to be your thumbs.
+</Aside>
+
 ## Config Changes Not Taking Effect
 
 The JSON cache may be stale. The shell and TypeScript libraries read from `.instance.json`, not directly from `instance.yaml`. If you edited the YAML, the cache needs to catch up.

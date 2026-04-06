@@ -152,9 +152,49 @@ Notice `smart_route`. That flag is a scar from v0.1. The original code had a har
 
 The important practical split is this: `council-brain` stays the generalist tier, while `council-code` is the local coding lane. The proxy does the triage. Code-shaped requests can be rerouted to `council-code` at the routing layer, which means the decision is visible in config and logs instead of buried in agent prompt folklore.
 
+## Claude Code Startup Preflight
+
+Claude Code is no longer treated as a polite client that will either have valid auth or fail quietly in a corner. It has a dedicated startup preflight because the real-world failure mode was too annoying to leave to chance.
+
+The moving parts are:
+
+- Claude Code points `ANTHROPIC_BASE_URL` at `http://127.0.0.1:4040`
+- the proxy reads `anthropic-api-key` from macOS Keychain through `~/.sanctum/scripts/proxy-launcher.sh`
+- the local `claude` command is wrapped by `~/.local/bin/claude-wrapper`
+- that wrapper runs `tools/claude_session_preflight.sh` before executing the real Claude binary
+
+The preflight checks whether the Claude Team token in `~/.openclaw/agents/main/agent/auth-profiles.json` and the Keychain copy under `anthropic-api-key` are:
+
+1. present
+2. synchronized
+3. actually valid against Anthropic
+
+If the token is invalid, it calls `tools/refresh_claude_team_token.sh --refresh`, which:
+
+- runs `claude setup-token`
+- opens the Claude Team OAuth page in the operator's default browser
+- prompts for the returned code in the same terminal session
+- can optionally use `agent-browser` for the hermetic automation path
+- syncs the refreshed token back to Keychain
+- restarts `com.sanctum.proxy`
+
+This is not part of the proxy binary itself. That is deliberate. The proxy should route requests, not grow a browser and start roleplaying as an OAuth session manager. The preflight sits at the session boundary, where the repair can happen before the first real request hits the proxy and dies with `invalid x-api-key`.
+
+<Aside type="note">
+  The wrapper resolves the latest Claude binary dynamically from `~/.local/share/claude/versions/`. Claude updates do not require editing the wrapper unless the install layout itself changes, in which case the universe has chosen violence and you will know soon enough.
+</Aside>
+
+The repair path also has its own local E2E harness:
+
+```bash
+bash ~/Documents/Claude_Code/tests/test-claude-team-refresh-e2e.sh
+```
+
+That test swaps Anthropic out for a local `file://` auth page and a fake `setup-token` binary, then proves the URL capture, browser click-through, code handoff, token sync, and proxy restart all work end to end. This is a much better way to debug the plumbing than waiting for a real token to expire and hoping the identity provider is in a cooperative mood.
+
 ## Test Coverage
 
-70 tests. The original routing coverage is still there, but it now sits beside live checks for local LM Studio reachability, MLX idle-managed routing, fallback resilience, and Claude Code OAuth passthrough. Because if your local tiers are part of the promise, they belong in the test count and in the blame when they break.
+The coverage now sits beside live checks for local LM Studio reachability, MLX idle-managed routing, fallback resilience, Claude Code OAuth passthrough, and the local Claude Team auth-recovery harness. Because if your local tiers are part of the promise, they belong in the test count and in the blame when they break.
 
 The tests live in the service-doctor skill because the proxy is a service and the doctor makes house calls. It's also the only medical professional in the system that doesn't charge by the token.
 
