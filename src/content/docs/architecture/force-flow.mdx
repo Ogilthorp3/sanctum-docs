@@ -36,6 +36,8 @@ Force Flow is the fix. One service. One brain. Everything flows through it.
 
 Every notification hits the `/notify` endpoint with a source, severity, title, and message. Force Flow decides where it goes based on two things: how bad is it, and what time is it.
 
+The thing that makes this tractable is context discipline. Force Flow is the delivery brain, not the memory layer. When a council session needs message history, notes, calendar state, or local files to decide whether something is noise or a real escalation, that context comes from [Jocasta MCP](/architecture/jocasta-mcp/). Jocasta reads the archive; Force Flow decides whether the archive warrants waking a human up.
+
 ## Routing Table
 
 | Severity | 08:00–22:00 | 22:00–08:00 (Quiet) |
@@ -120,6 +122,15 @@ sanctum_notify "Service Down" "Gateway is unreachable" "error"
 
 Council agents sending alerts to Bert route through Force Flow instead of direct Signal messages. The escalation config in `escalation.json` defines severity thresholds; Force Flow handles the actual delivery.
 
+### Jocasta MCP
+
+Jocasta does not deliver notifications herself. She gives the council the missing record before a notification is sent: recent Messages context, calendar conflicts, Apple Notes fragments, prior files, and local system telemetry. That keeps Force Flow from becoming a bloated reasoning service. The split is deliberate:
+
+- Jocasta answers "what do we know?"
+- Force Flow answers "does Bert need to hear about this now?"
+
+For example, a council workflow can pull the last relevant thread from Jocasta, synthesize the risk, then hand Force Flow a single high-signal `warn` or `critical` event instead of three half-informed pings.
+
 ## History
 
 Every notification — sent, deduplicated, or rate-limited — is logged to SQLite at `~/.sanctum/force-flow/notifications.db`. This means you can answer "what woke me up last Tuesday" with a query instead of a guess.
@@ -163,6 +174,8 @@ Before Force Flow, the notification stack looked like this:
 | `escalation.json` (Council) | Severity → channel mapping | Config only, no enforcement |
 
 Five systems, zero awareness of each other. Force Flow is one system that knows everything.
+
+If Force Flow is the switchboard, [Jocasta MCP](/architecture/jocasta-mcp/) is the archive room behind it: less glamorous, more dangerous, and usually the reason the right alert reaches the right person with fewer false alarms.
 
 As of March 30, 2026, the migration is complete. Every notification source in the haus routes through Force Flow:
 
