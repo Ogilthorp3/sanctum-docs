@@ -93,6 +93,16 @@ The fix: `StreamUsageExtractor`, a state machine that captures token counts from
 
 Hard cap: 50 concurrent tracked streams. After that, new streams get estimated rather than buffered. The proxy protects itself from its own diligence. Even accounting has limits.
 
+## Automated Model Discovery (Model Scout)
+
+Because the proxy maintains static YAML configurations, staying ahead of new AI models could easily become a manual chore. To prevent this, Sanctum leverages a dedicated `model-scout` background service running on the Mac.
+
+The scout wakes up every Monday at 06:23 (via `com.sanctum.model-scout.plist`) and pings the OpenRouter and Google AI APIs. It parses the resulting JSON payloads against the current `config.yaml` state to dynamically rate models you *aren't* currently using. The scoring algorithm assigns points based on low input/output token costs, massively expanded context windows, and recent release timestamps. 
+
+When interesting candidates—such as a new zero-cost tier or a highly capable $2/M context giant—are detected, two things happen:
+1. **Memory Vault Report**: A structured Markdown event digest is deposited directly into `~/.sanctum/memory/events`, containing score breakdowns and cost metrics for offline observation.
+2. **Jedi Council Orchestration**: Using the `council-router`, the scout automatically fires a formal `normal` priority request directly to **Qui-Gon** (the infrastructure agent on the VM). Qui-Gon is explicitly instructed to review the new metrics and independently convene the rest of the Jedi Council to vote on structural proxy upgrades.
+
 ## Configuration
 
 The proxy reads a single `config.yaml` at startup. No hot-reload. No live patching. No "let me just tweak this one value in production." Change the file, restart the binary, twelve seconds of downtime. The agents will survive. They've been through worse -- see literally every other page in this documentation.
@@ -120,7 +130,12 @@ models:
     provider: openrouter
     quality_tier: 1
     smart_route: true
-    fallback: [qwen35-plus, gemini-25-pro, lm-studio, council-27b]
+    fallback: [minimax-m27, qwen35-plus, council-code, council-27b]
+  council-code:
+    provider: local
+    quality_tier: 1
+    smart_route: false
+    fallback: [lmstudio-qwen, council-27b, qwen35-plus]
   council-routine:
     provider: openrouter
     quality_tier: 2
@@ -134,6 +149,8 @@ budget:
 ```
 
 Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
+
+The important practical split is this: `council-brain` stays the generalist tier, while `council-code` is the local coding lane. The proxy does the triage. Code-shaped requests can be rerouted to `council-code` at the routing layer, which means the decision is visible in config and logs instead of buried in agent prompt folklore.
 
 ## Test Coverage
 

@@ -207,6 +207,7 @@ Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085)
 | Port | Codename | Reference |
 |------|----------|-----------|
 | 1111 | Make-A-Wish | 11:11 |
+| 1138 | Cell Block 1138 | THX/Star Wars |
 | 1234 | Password1 | Worst password ever |
 | 1337 | LEET | Hacker speak |
 | 1969 | Woodstock | Music everywhere |

@@ -69,7 +69,7 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 | LM Studio | 1234 | — | `com.sanctum.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
 | Council-27B MLX | `1337` | leet — the coding brain | `com.sanctum.idle-mlx` | **sanctum-mlx v0.2.0** — Pure Rust inference server. Qwen 3.5 27B 4-bit via mlx-rs bindings on Metal GPU. Fused GatedDeltaNet kernel, zero-copy GQA, ~13 tok/s decode. Zero Python. KeepAlive enabled. |
 | XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.sanctum.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
-| Voice Agent | 8090 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
+| Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
 | Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
 ### Model Routing
@@ -79,14 +79,15 @@ Agents use a **tiered model strategy** -- each agent tier has its own primary mo
 | Tier | Primary | Fallback Chain | Used By |
 |------|---------|----------------|---------|
 | `claude-opus-4-6` | Claude Opus 4.6 (Anthropic) | qwen35-plus → gemini-25-pro | Claude Code direct |
-| `council-brain` | Qwen 3.5 Plus (OpenRouter) | claude-opus-4-6 → qwen35-plus → LM Studio → council-27b | Yoda, Mon Mothma, Jocasta |
+| `council-brain` | Claude Opus 4.6 | minimax-m27 → qwen35-plus → council-code → council-27b | Yoda, Mon Mothma, Jocasta |
+| `council-code` | Qwen 2.5 Coder 14B (LM Studio) | lmstudio-qwen → council-27b → qwen35-plus | Any agent when the request is code-shaped |
 | `council-secure` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → LM Studio | Windu |
 | `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
 | `council-heartbeat` | Council 27B (local) | council-27b | All (heartbeat checks) |
 
 The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step pipeline before routing them to the appropriate model. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
 
-0. Smart content-based routing (Gemini-first for non-code tasks)
+0. Smart content-based routing (Gemini-first for non-code tasks, `council-code` for code-shaped work)
 1. Anthropic prompt caching injection
 2. Thinking block sanitization
 3. Empty content block fixes
@@ -110,7 +111,7 @@ services:
     port: 1337
   voice_agent:
     enabled: true
-    port: 8090
+    port: 1138
   tts:
     enabled: true
     port: 8008
@@ -313,7 +314,7 @@ Every port in Sanctum has a number, and most of those numbers mean something —
 | 4077 | Force Flow | Mac | Hawkeye | M\*A\*S\*H 4077th — the field hospital that triaged casualties with gallows humor and a still. Force Flow triages notifications with approximately the same energy. |
 | 5150 | Signal Proxy | VM | Van Halen | Eddie's hottest album and California's code for an involuntary psychiatric hold. Running a messaging proxy on it feels appropriate either way. |
 | 8008 | XTTS Voice | Mac | Calculator | Flip it upside down. You know what you did. Now it synthesizes speech, which is somehow less juvenile. |
-| 8090 | Voice Agent | Mac | Understudy | Living in 8008's shadow at a respectable 82-port distance. Handles voice routing without the calculator jokes. |
+| 1138 | Voice Agent | Mac | Cell Block 1138 | Reclaimed from the deprecated Neural Link, now keeping Yoda securely imprisoned in a Star Wars sandbox. |
 | 8123 | Home Assistant | Mac (Docker) | Default | HA's factory port. Sometimes the most radical act is not changing the default. |
 | 8888 | Kiwix | Mac | Lucky Eights | Four eights. Auspicious in Chinese numerology, overkill everywhere else. Houses the offline encyclopedia for when civilization gets patchy. |
 | 10101 | Health Ingester | Mac -> VM | Binary 21 | 10101 in binary is 21 — blackjack. The health ingester always hits, never stands. |
