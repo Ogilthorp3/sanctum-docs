@@ -97,6 +97,7 @@ export default defineConfig({
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
                                                 { label: 'Sanctum-MLX', slug: 'architecture/sanctum-mlx' },
+                                                { label: 'Dynamic Model Routing', slug: 'architecture/dynamic-model-routing' },
                                                 { label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
