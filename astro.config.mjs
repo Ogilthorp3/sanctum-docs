@@ -23,6 +23,7 @@ export default defineConfig({
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/Ogilthorp3' },
 			],
 			customCss: ['./src/styles/custom.css'],
+			disable404Route: true,
 			head: [
 				{
 					tag: 'link',
