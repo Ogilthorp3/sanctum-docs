@@ -112,7 +112,7 @@ Every doc page gets one hero image. No exceptions. No SVGs. No stock photos. No 
 
 ### The Style
 
-All illustrations are **black-and-white pencil sketches** generated with **Gemini image generation** (model: `gemini-3-pro-image-preview`). The style is hand-drawn, whimsical but technically grounded, on a white background.
+All illustrations are **black-and-white pencil sketches** generated with **Gemini image generation** (model: `gemini-3-pro-image-preview`). The style is hand-drawn, whimsical but technically grounded, on a white background, with a **subtle localized color halo** around the central technical object or focal glow.
 
 **Tommy the Abyssinian cat appears in every illustration** — lean, elegant, large ears, slightly smug, always observing or supervising the scene. He is the visual thread that ties the docs together.
 
@@ -124,7 +124,7 @@ All illustrations are **black-and-white pencil sketches** generated with **Gemin
 | Aspect ratio | `16:9` |
 | Resolution | `2K` (outputs 2752x1536) |
 | Format | PNG (convert from JPEG if Gemini returns JPEG — use `sips -s format png`) |
-| Color | Black and white only. No color except black lines and shading. |
+| Color | Black and white pencil style with one subtle color halo. The halo should be localized, soft, and restrained. |
 | Location | `src/assets/illustrations/` |
 
 ### Prompt Template
@@ -138,7 +138,7 @@ Black and white pencil sketch illustration, wide format.
 And end with this suffix:
 
 ```
-Hand-drawn pencil style on white background. No color except black lines and shading.
+Hand-drawn pencil style on white background. Mostly black and white, with one subtle colored halo or glow around the main focal element only.
 ```
 
 Between them, describe the scene with:
@@ -146,6 +146,7 @@ Between them, describe the scene with:
 2. **Tommy** — where he is, what he's doing, his expression
 3. **Labels and text** visible in the scene that ground it technically
 4. **Details** that reward a closer look
+5. **A restrained color halo** around the main focal object, interface, or energy source
 
 ### Prompt Pitfalls
 
@@ -166,7 +167,7 @@ Bad:  "Illustration of a cat near a switchboard"
 
 Before committing a new illustration, verify:
 
-- [ ] Black and white only (no color)
+- [ ] Black and white pencil style with one subtle, localized color halo
 - [ ] Tommy is recognizably an Abyssinian cat (lean, large ears, elegant)
 - [ ] Wide format (~16:9 aspect ratio, 2752x1536 or similar)
 - [ ] White/off-white background
@@ -178,7 +179,7 @@ Before committing a new illustration, verify:
 ### Do Not
 
 - **No SVGs for hero images.** SVGs are for inline technical diagrams only (architecture, topology, flow). Hero images are always PNG pencil sketches.
-- **No color illustrations.** The B&W pencil style is the brand.
+- **No fully colorized illustrations.** The halo is an accent, not a license to turn the whole page into a synthwave poster.
 - **No AI-generated images from other tools.** Gemini `gemini-3-pro-image-preview` only, for visual consistency.
 - **No placeholder 1x1 pixel PNGs.** If the image isn't ready, leave the page without a hero until it is.
 
