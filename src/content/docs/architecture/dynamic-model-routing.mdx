@@ -1,19 +1,20 @@
 ---
 title: Dynamic Model Routing
-description: Architecture for dynamic model loading and proxy routing in the Sanctum ecosystem.
+description: How we stopped hardcoding paths and started trusting a single YAML file to manage our local brains.
 ---
 
-# Dynamic Model Routing
+import { Aside, Steps } from '@astrojs/starlight/components';
 
-To ensure the Sanctum ecosystem remains flexible and "Excel-like" in its structure, we have moved away from hardcoded model paths in LaunchAgents.
+![A circuit diagram connecting a YAML file to a glowing brain in a jar, labeled "Single Source of Truth"](../../../assets/illustrations/dynamic-routing.png)
 
-## Single Source of Truth
+Hardcoding paths in LaunchAgents is a recipe for a 3 AM troubleshooting session where you realize you're running a model from last March because you forgot to update a plist. We've moved the brain's coordinates to a single source of truth.
 
-All model and adapter paths are now centralized in:
-`~/.sanctum/instance.yaml`
+## The Single Source of Truth
 
-Example configuration:
+All model and adapter paths are now centralized in `~/.sanctum/instance.yaml`. This is the core configuration for the house. If it isn't in here, the system doesn't know it exists.
+
 ```yaml
+# Actual configuration from instance.yaml
 services:
   mlx_server:
     enabled: true
@@ -23,25 +24,50 @@ services:
     venv: ~/Projects/mlx-finetune/.venv
 ```
 
+<Aside type="note">
+The port is 1337 because, let's face it, running a 27B model on a Mac Mini is exactly that.
+</Aside>
+
 ## The Dynamic Wrapper
 
-The `sanctum-server` (MLX) is no longer launched with direct arguments in its `.plist`. Instead, it uses a dynamic wrapper:
-`/Users/neo/.sanctum/bin/sanctum-server-dynamic`
+The MLX server no longer receives its orders from a static plist. Instead, it uses a dynamic wrapper script that parses the configuration at runtime.
 
-This script:
-1.  **Parses YAML:** Uses `yq` to extract the current active model and port from `instance.yaml`.
-2.  **Environment Isolation:** Sets `PYTHONPATH` and `VIRTUAL_ENV` to point to the correct MLX venv.
-3.  **Python Shim:** Prepends a shim directory to the `PATH` to force the Rust binary to use the venv's Python interpreter.
-4.  **Offline Enforcement:** Sets `HF_HUB_OFFLINE=1` to prevent unauthorized network calls or weight validation delays.
+### How It Works
+
+<Steps>
+1.  **Parse YAML:** The wrapper uses `yq` to extract the current active model, adapter, and port from `instance.yaml`.
+2.  **Environment Isolation:** It sets `PYTHONPATH` and `VIRTUAL_ENV` to point to the specific virtual environment required for the model.
+3.  **The Shim:** It prepends a shim directory to the `PATH` to force the `sanctum-server` binary to use the venv's Python interpreter instead of whatever Homebrew decided was the default this week.
+4.  **Offline Enforcement:** It sets `HF_HUB_OFFLINE=1`. We don't need the model trying to check its own birth certificate on HuggingFace every time it starts.
+</Steps>
 
 ## Proxy Integration
 
-The `sanctum-proxy` (port 4040) routes requests to the dynamic MLX port (default: 1337). This creates a complete end-to-end circuit:
-**User/Agent → Proxy (4040) → Dynamic Wrapper → MLX Server (1337) → Qwen 3.5 Weights.**
+The `sanctum-proxy` (port 4040) is the air traffic controller. It routes requests to the MLX server on its dynamic port.
+
+```yaml
+# sanctum-proxy/config.yaml
+- name: council-heartbeat
+  provider: local
+  api_model: /Users/neo/Projects/mlx-finetune/models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit
+  api_base: http://10.10.10.1:1337
+```
+
+<Aside type="caution">
+If the proxy and the server disagree on the port, the proxy will fallback to LM Studio, which will proceed to eat 22GB of your RAM while you're not looking.
+</Aside>
 
 ## Triage & Recovery
 
-The **Qui-Gon Triage** script (`qui_gon_triage.py`) has been updated to use `launchctl kickstart` for recovery. This ensures that when a service is restarted due to memory pressure or a crash, it always picks up the latest configuration from `instance.yaml`.
+**Qui-Gon Triage** (`qui_gon_triage.py`) monitors the health of these services. If it finds a service is down, it uses `launchctl kickstart` to revive it. Because of the dynamic wrapper, the revived service always wakes up with the latest settings from `instance.yaml`.
 
-### Thresholds
-- **Memory Recovery:** Triggered when system free memory < 30
+## Verification
+
+We don't guess if it's working. We run the Battle Test.
+
+```bash
+# Run the end-to-end verification
+/Users/neo/Documents/Claude_Code/tests/model-battle-test.sh
+```
+
+If you see green, the brain is connected. If you see red, check the ports. It's always the ports.
