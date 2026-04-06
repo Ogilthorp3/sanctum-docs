@@ -105,6 +105,8 @@ This is the config equivalent of turning it off and on again. The `touch` update
 
 If port 1111 is occupied by something that isn't the dashboard, you've found your problem. Kill the interloper, reload the LaunchAgent, and carry on.
 
+If the browser dashboard is fine but the packaged desktop shell is black, that is a different class of failure. See [Holocron App](/guides/holocron-app/) for the renderer-specific failure mode that previously involved the app politely killing itself.
+
 ## Watchdog False Alarms
 
 If the watchdog keeps alerting for a known-down service — one you've intentionally stopped, or one that's in maintenance — the deduplication state may need clearing.
@@ -227,4 +229,40 @@ fallbacks:
 
 <Aside type="tip">
   Rule of thumb: every fallback chain should end with at least one model on a different provider than where it started. Local-only chains are a single point of failure. A free OpenRouter model like `nemotron-free` or `minimax-m25-free` costs nothing and prevents total blackout.
+</Aside>
+
+## Holocron App Starts Black
+
+**Symptom:** `/Applications/The Holocron.app` launches, the window appears, and then all you get is a black rectangle contemplating its choices.
+
+The browser dashboard can still be healthy while the packaged Electron shell is busy sabotaging itself. They are related, not identical.
+
+**Check:**
+```bash
+ps -ef | rg '/Applications/The Holocron.app/Contents/MacOS/The Holocron'
+tail -50 ~/.openclaw/logs/living-force.log
+tail -50 ~/Library/Application\ Support/the-holocron/logs/main.log 2>/dev/null
+```
+
+**Common root cause:** `run_sanctum.sh` used an overly broad process cleanup rule:
+
+```bash
+pkill -f "the-holocron"
+```
+
+That matched Electron helper processes via the user-data path and killed the renderer just after launch. Technically precise. Spiritually deranged.
+
+**Fix:**
+```bash
+# Only target Holocron dev/Vite processes, never the packaged app
+pkill -f '/Users/neo/Projects/the-holocron/.*vite' || true
+pkill -f 'vite --host 127.0.0.1 --port 3333' || true
+
+# Reinstall the current tested app bundle
+cd /Users/neo/Projects/the-holocron
+npm run update:app
+```
+
+<Aside type="caution">
+If you use `pkill -f` with a vague substring around Electron, you are delegating process selection to chaos. Chaos is enthusiastic but not detail-oriented.
 </Aside>
