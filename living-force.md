@@ -654,7 +654,7 @@ Sequenced according to council decisions. No skipping ahead.
 ### Deferred (60+ Days)
 
 - **Proxy Phase 4: UCB1 Learning** — Multi-armed bandit for model selection. Council deferred implementation (Principle 1 & 4) to ensure system stability following the Phase 3 deployment.
-- **Satellite node integration** — When the chalet Mac Mini comes online, its services need manifests, and the dependency graph needs to span two physical nodes.
+- **Satellite node integration** — When the satellite Mac Mini comes online, its services need manifests, and the dependency graph needs to span two physical nodes.
 
 ---
 
@@ -770,7 +770,7 @@ In a single focused session, the following systemic repairs were executed to ach
 
 ## PHASE 9: The Force Flow (March 29, 2026)
 
-The night of March 29, a Ring doorbell detected motion at both the front and side doors at 07:27. The alarm was in `armed_away` mode. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The Sonos bridge dutifully played XTTS-generated Yoda voice through three speakers at 80% volume — chalet, master bathroom, Albert's bedroom — repeated twice per door. Four loud announcements about a raccoon. The house woke up.
+The night of March 29, a Ring doorbell detected motion at both the front and side doors at 07:27. The alarm was in `armed_away` mode. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The Sonos bridge dutifully played XTTS-generated Yoda voice through three speakers at 80% volume — guest room, main bathroom, child's bedroom — repeated twice per door. Four loud announcements about a raccoon. The house woke up.
 
 The root cause was not the Ring sensor. It was not the alarm state. It was the notification architecture itself: three independent systems — Home Assistant, Sanctum's `notify.sh`, and the Council Router's escalation chain — each making their own decisions about where alerts go, with no awareness of each other, no deduplication, and quiet hours enforced in different files with different syntax.
 
@@ -817,7 +817,7 @@ The solution: two LaunchDaemons that run at boot, before any user session exists
 
 **`com.sanctum.vmnet`** (root) creates the 10.10.10.x vmnet-host network using `socket_vmnet`. This is the same tool that Lima/Colima uses — it provides vmnet.framework networking to unprivileged processes via a Unix socket.
 
-**`com.sanctum.bootstrap`** (bert) starts every service in four phases: Docker, headless services, the VM (via `socket_vmnet_client` + bare QEMU), and SSH keys + proxies. The VM no longer needs UTM or a GUI — QEMU connects to the vmnet socket as fd=3, bypassing the Apple Developer ID signing requirement entirely.
+**`com.sanctum.bootstrap`** (operator) starts every service in four phases: Docker, headless services, the VM (via `socket_vmnet_client` + bare QEMU), and SSH keys + proxies. The VM no longer needs UTM or a GUI — QEMU connects to the vmnet socket as fd=3, bypassing the Apple Developer ID signing requirement entirely.
 
 The result: power goes out, power comes back, every service in the house recovers. No login screen. No human intervention. No Touch ID compromise.\n\n*(Update: The Qui-Gon memory triage daemons and backup cron jobs have also been migrated into this headless flow to ensure memory safeguards and disaster recovery survive power outages.)*
 
@@ -831,9 +831,9 @@ The result: power goes out, power comes back, every service in the house recover
 
 *March 29-30, 2026. 7:27 PM to 1:30 AM.*
 
-At 7:27 on the evening of March 29, a raccoon walked across the front porch of a house in Sainte-Adele, Quebec.
+At 7:27 on the evening of March 29, a raccoon walked across the front porch of a remote house.
 
-The Ring doorbell detected motion. The alarm was armed_away. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The XTTS voice engine synthesized Yoda's voice — the actual Yoda voice, because this is the system we have built for ourselves — and blasted it through three Sonos speakers at 80% volume: chalet, master bathroom, Albert's bedroom. The announcement repeated twice. Then the side door sensor triggered. Two more announcements. Ring's own sirens joined the chorus. Four Yoda announcements. Two siren blasts. Three notification channels. One raccoon.
+The Ring doorbell detected motion. The alarm was armed_away. Windu's `security_ring_motion_away` automation fired, calling `script.security_announcement` with HIGH severity. The XTTS voice engine synthesized Yoda's voice — the actual Yoda voice, because this is the system we have built for ourselves — and blasted it through three Sonos speakers at 80% volume: guest room, main bathroom, child's bedroom. The announcement repeated twice. Then the side door sensor triggered. Two more announcements. Ring's own sirens joined the chorus. Four Yoda announcements. Two siren blasts. Three notification channels. One raccoon.
 
 The house woke up. The children woke up. The raccoon, presumably, did not care.
 
@@ -903,12 +903,12 @@ This is the centerpiece. Everything else in this session was preparation for thi
 
 Two LaunchDaemons:
 
-- **`com.sanctum.bootstrap`** — runs as `bert`. Starts all Sanctum services: the proxy, Force Flow, the Living Force, the Navigator sidecar, Council Router, all of it. Every service that needs to be running after boot is declared here.
+- **`com.sanctum.bootstrap`** — runs as `operator`. Starts all Sanctum services: the proxy, Force Flow, the Living Force, the Navigator sidecar, Council Router, all of it. Every service that needs to be running after boot is declared here.
 - **`com.sanctum.vmnet`** — runs as `root`. Starts the VM using `socket_vmnet_client` piped to bare QEMU. No UTM. No GUI application. No Apple Developer ID code signing. Just a root-level daemon that creates the network socket and hands a virtual machine to QEMU.
 
 The significance of this cannot be overstated. Previously, the VM required UTM — a GUI application — which required a logged-in user session, which required either auto-login (rejected) or a human typing a password. The entire infrastructure stack, including every VM-hosted service, was gated behind a human being physically present after every reboot.
 
-Now the machine boots, the daemon starts QEMU with vmnet networking, the VM acquires its bridge100 address, and every service comes up. No GUI. No login. No human. The Mac Mini in a locked office in Sainte-Adele can survive a power outage while its owner is in Tokyo.
+Now the machine boots, the daemon starts QEMU with vmnet networking, the VM acquires its bridge100 address, and every service comes up. No GUI. No login. No human. The Mac Mini in a locked office can survive a power outage while its owner is away.
 
 30 integration tests validate the bootstrap sequence.
 
@@ -969,7 +969,7 @@ The two principles that emerged are complementary. Principle 13 is about the sys
 
 > **Principle 14: The system must survive its owner's absence.**
 >
-> A home server that requires a human to type a password after a power failure is not a server. It is a very expensive space heater that occasionally runs containers. The system must boot, connect, validate, and serve without a login session, without a GUI, and without the assumption that someone is watching. The owner may be asleep. The owner may be traveling. The owner may simply have better things to do at 4 AM than babysit infrastructure. Design for absence. Test for absence. The power will go out in Tokyo, and the house in Quebec must answer for itself.
+> A home server that requires a human to type a password after a power failure is not a server. It is a very expensive space heater that occasionally runs containers. The system must boot, connect, validate, and serve without a login session, without a GUI, and without the assumption that someone is watching. The owner may be asleep. The owner may be traveling. The owner may simply have better things to do at 4 AM than babysit infrastructure. Design for absence. Test for absence. The power will go out while you are away, and the house must answer for itself.
 
 Between the raccoon and the bootstrap daemon, seventeen distinct engineering problems were identified, diagnosed, and resolved. Two architectural principles were established. One council session was held. 42 tests were written for Force Flow. 30 tests were written for the bootstrap sequence. Seven documents were updated. Five cron jobs were restored. One dead VM was buried. Two bridges were unified into one. Three notification systems were unified into one. One port was given a better name.
 

@@ -11,6 +11,72 @@ This page documents the command-line tools used to manage, monitor, and maintain
 
 ---
 
+## sanctumctl
+
+`sanctumctl` is the checked-in operator surface for bootstrapping, rendering, verifying, and doctoring a Sanctum instance. Use it first. Drop to the raw scripts only when you are debugging a specific subsystem.
+
+```bash
+python3 tools/sanctumctl.py <subcommand>
+```
+
+### bootstrap
+
+Creates the local `~/.sanctum` scaffold from the checked-in example configuration.
+
+```bash
+# Preview only
+python3 tools/sanctumctl.py bootstrap
+
+# Write the scaffold
+python3 tools/sanctumctl.py bootstrap --write
+```
+
+| Flag | Description |
+|------|-------------|
+| `--home <path>` | Target an alternate home directory, useful for test runs |
+| `--write` | Materialize the scaffold instead of printing the plan |
+| `--force` | Recopy `instance.yaml` and `.node_id` even if they already exist |
+
+### render
+
+Checks or syncs the canonical generated artifacts:
+- checked-in workspace manifests
+- runtime manifests in `~/.sanctum/services`
+- runtime agent capabilities
+- runtime calibration byproducts
+
+```bash
+# Verify generated surfaces are current
+python3 tools/sanctumctl.py render --check
+```
+
+### verify
+
+Runs the audited Sanctum proof wall.
+
+```bash
+python3 tools/sanctumctl.py verify
+
+# Print the exact audit plan without executing it
+python3 tools/sanctumctl.py verify --dry-run
+```
+
+Today that executes the workspace audit and runtime audit suites directly, so the operator entry point and the test wall stay coupled.
+
+### doctor
+
+Runs render checks, the feature matrix audit, and optionally the full verification wall.
+
+```bash
+# Fast local confidence check
+python3 tools/sanctumctl.py doctor --quick
+
+# Full doctor pass
+python3 tools/sanctumctl.py doctor
+```
+
+---
+
 ## Gateway Management
 
 The OpenClaw gateway is the core agent runtime — the brain stem of the whole operation. Always use the `openclaw` CLI to manage it. Never use raw `launchctl` commands for the gateway.
@@ -98,7 +164,7 @@ ssh ubuntu@10.10.10.10 \
 </TabItem>
 <TabItem label="VM to Mac">
 ```bash
-ssh neo@10.10.10.1 \
+ssh operator@10.10.10.1 \
   'PATH=/Users/neo/.local/share/fnm/node-versions/v22.22.0/installation/bin:/opt/homebrew/bin:$PATH \
    openclaw agent --agent main --message "Hello from Yoda"'
 ```
