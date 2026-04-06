@@ -1,0 +1,47 @@
+---
+title: Dynamic Model Routing
+description: Architecture for dynamic model loading and proxy routing in the Sanctum ecosystem.
+---
+
+# Dynamic Model Routing
+
+To ensure the Sanctum ecosystem remains flexible and "Excel-like" in its structure, we have moved away from hardcoded model paths in LaunchAgents.
+
+## Single Source of Truth
+
+All model and adapter paths are now centralized in:
+`~/.sanctum/instance.yaml`
+
+Example configuration:
+```yaml
+services:
+  mlx_server:
+    enabled: true
+    port: 1337
+    model_path: ~/Projects/mlx-finetune/models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit
+    adapter_path: ~/Projects/mlx-finetune/adapters-carmack-overnight
+    venv: ~/Projects/mlx-finetune/.venv
+```
+
+## The Dynamic Wrapper
+
+The `sanctum-server` (MLX) is no longer launched with direct arguments in its `.plist`. Instead, it uses a dynamic wrapper:
+`/Users/neo/.sanctum/bin/sanctum-server-dynamic`
+
+This script:
+1.  **Parses YAML:** Uses `yq` to extract the current active model and port from `instance.yaml`.
+2.  **Environment Isolation:** Sets `PYTHONPATH` and `VIRTUAL_ENV` to point to the correct MLX venv.
+3.  **Python Shim:** Prepends a shim directory to the `PATH` to force the Rust binary to use the venv's Python interpreter.
+4.  **Offline Enforcement:** Sets `HF_HUB_OFFLINE=1` to prevent unauthorized network calls or weight validation delays.
+
+## Proxy Integration
+
+The `sanctum-proxy` (port 4040) routes requests to the dynamic MLX port (default: 1337). This creates a complete end-to-end circuit:
+**User/Agent → Proxy (4040) → Dynamic Wrapper → MLX Server (1337) → Qwen 3.5 Weights.**
+
+## Triage & Recovery
+
+The **Qui-Gon Triage** script (`qui_gon_triage.py`) has been updated to use `launchctl kickstart` for recovery. This ensures that when a service is restarted due to memory pressure or a crash, it always picks up the latest configuration from `instance.yaml`.
+
+### Thresholds
+- **Memory Recovery:** Triggered when system free memory < 30
