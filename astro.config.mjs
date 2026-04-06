@@ -158,6 +158,7 @@ export default defineConfig({
 						{ label: 'Feature Status Matrix', slug: 'operations/feature-status-matrix' },
 						{ label: 'Runtime Drift Audit', slug: 'operations/runtime-drift-audit' },
 						{ label: 'Operational History', slug: 'operations/operational-history' },
+						{ label: 'Stability Window', slug: 'operations/stability-window' },
 						{ label: 'Roadmap', slug: 'operations/roadmap' },
 					],
 				},
