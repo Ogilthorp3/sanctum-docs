@@ -93,6 +93,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'architecture/overview' },
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
+						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
                                                 { label: 'Sanctum-MLX', slug: 'architecture/sanctum-mlx' },
                                                 { label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
