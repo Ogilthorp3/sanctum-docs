@@ -13,7 +13,11 @@ The difference: broken means the service is down, the port is closed, the health
 
 An arxiv paper landed in March 2026 (2603.25697) describing a framework that had autonomously merged 1,094 pull requests across two production systems with zero regressions. It wasn't about code generation — it was about *specification-driven verification*. AI agents exercising a product as power users at 1,000x human cadence, then fixing what breaks, proving the fixes against ground truth the implementer cannot fake, and measuring drift to ensure the system never gets worse. They called it the Kitchen Loop.
 
-Reading it felt like finding the blueprint for the thing we'd been building by hand. Not because Sanctum already does this — it doesn't, not fully — but because every piece of the framework maps to something the Living Force already attempted, half-built, or wished it had. This page documents how those pieces fit together, what we gain, and what changes.
+Reading it felt like finding the blueprint for the thing we'd been building by hand. That is no longer just a good metaphor. Sanctum now has a checked-in Kitchen Loop surface: canonical spec and canary YAML, a tribunal model, a six-phase runner, pause gates, and an end-to-end harness proving both a healthy cycle and a forced canary escape. This page documents how the model maps onto Sanctum and what still remains to deepen it.
+
+<Aside type="tip">
+The important shift is this: Kitchen Loop is no longer a roadmap paragraph. It is now an audited subsystem in the workspace slice. The remaining work is expansion of coverage, not invention of the mechanism.
+</Aside>
 
 ## The Four Pillars, Translated
 
@@ -34,20 +38,20 @@ The Kitchen Loop is built on four concepts. Each one has a Sanctum analog that's
   </Card>
 </CardGrid>
 
-## What Sanctum Already Has
+## What Sanctum Now Has
 
-The Living Force is not starting from zero. Several Kitchen Loop concepts already exist in some form:
+The Living Force is not starting from zero anymore. The core Kitchen Loop scaffolding is now checked in and mechanically verified:
 
 | Kitchen Loop | Sanctum Today | Gap |
 |---|---|---|
-| Regression Oracle | Fire drills (Phase 5) | Monthly and manual. Kitchen Loop runs every iteration. |
-| Multi-Model Tribunal | Council Sessions | Sanctum uses the same model family. Kitchen Loop uses heterogeneous models to prevent groupthink. |
-| Pause Gates | Crash-Loop Quarantine | Sanctum quarantines broken *services*. Kitchen Loop pauses broken *development velocity*. |
-| Spec Surface | `instance.yaml` | Config defines what runs. Spec surface defines what the system claims to do — and tests every claim. |
-| Self-Healing | Code-Forge + HA Self-Healer | Close match. Kitchen Loop formalizes the feedback loop with structured experience reports. |
-| Night Deployment | Night Window (02:00-05:00 ET) | Identical philosophy. Kitchen Loop adds the concept of drain mode when PR queues back up. |
+| Regression Oracle | `tools/run_kitchen_loop.py` writes an oracle artifact every cycle | Coverage depth is still modest compared to the full house surface. |
+| Multi-Model Tribunal | Checked-in `kitchenloop-tribunal.yaml` defines proposer, challenger, grounding, blind opening rounds, and kill gates | The current tribunal is modeled and audited, not yet wired into every critical council workflow. |
+| Pause Gates | Canary escape and pause behavior are mechanically proven in `test-sanctum-kitchen-loop.sh` | Drift, starvation, and backpressure are modeled, but their inputs are still synthetic in this workspace slice. |
+| Spec Surface | `sanctum-spec-surface.yaml` defines dimensions, valid combinations, and declared scenarios | The current scenario set is credible, not exhaustive. |
+| Self-Healing | Code Forge plus the six-phase loop now formalize a closed execution path | The loop currently writes proposals and tribunal records rather than patching live systems autonomously. |
+| Night Deployment | `kitchenloop.yaml` encodes the night window and execution shape | Scheduling and productized rollout remain later concerns. |
 
-The gap is not capability — it's formalization. The Living Force heals reactively. The Kitchen Loop tests proactively, measures continuously, and stops itself when quality degrades.
+The gap is no longer formalization. The gap is breadth. The Living Force now has a proactive nervous system; it just needs more of the house wired into it.
 
 ## The Specification Surface for Sanctum
 
@@ -219,25 +223,22 @@ The Kitchen Loop runs a continuous six-phase cycle. Here's how each phase maps t
 
 The REGRESS phase is where the Kitchen Loop diverges most from current Sanctum operations. Fire drills run monthly and test *infrastructure resilience*. The regression oracle runs every iteration and tests *functional correctness*. Both are necessary. Fire drills answer "can the system survive failure?" The oracle answers "does the system do what it claims?"
 
-## Implementation Path
+## Audited Implementation
 
 <Aside type="note">
 The Kitchen Loop framework is open source (MIT) at `github.com/0xagentkitchen/kitchenloop`. It ships as shell scripts and Python utilities designed to wrap around Claude Code. The integration with Sanctum would use its scaffolding directly, with domain-specific customization for haus automation.
 </Aside>
 
-The recommended sequence, ordered by value delivered per effort:
+The current checked-in implementation lives in the audited workspace slice:
 
-1. **Specification Surface** — enumerate Sanctum's testable claims in YAML. This is documentation work with immediate value: it forces every "we support X" to become a testable assertion. No code required.
+1. **Specification Surface** — `sanctum-spec-surface.yaml` defines dimensions, valid combinations, and declared scenarios.
+2. **Anti-Signal Canaries** — `kitchenloop-canaries.yaml` declares Tier 1-3 traps and their expected reviewers and verdicts.
+3. **Heterogeneous Tribunal Model** — `kitchenloop-tribunal.yaml` encodes proposer, challenger, grounding, blind rounds, and kill gates.
+4. **Six-Phase Runner** — `run_kitchen_loop.py` writes backlog, ideate, triage, execute, polish, regress, and durable-memory artifacts into an isolated state directory.
+5. **Pause-Gate Proof** — `test-sanctum-kitchen-loop.sh` proves both the healthy cycle and the forced canary-escape path.
+6. **Operator Surface** — `sanctumctl kitchen-loop {validate|plan|run}` exposes the loop through the same checked-in CLI as the rest of the audit surface.
 
-2. **L4 State Delta Checks** — extend the Living Force watchdog to verify end-to-end outcomes, not just service health. Start with the five most common automations (goodnight scene, morning routine, presence detection, temperature regulation, security arm/disarm).
-
-3. **Regression Oracle** — build a repeatable test suite that answers "is Sanctum at least as good as yesterday?" Run it nightly during the existing night window. The oracle consumes the spec surface and produces a pass/fail matrix.
-
-4. **Anti-Signal Canaries** — inject known-bad inputs into the agent pipeline monthly. Measure catch rates. Track improvement over time. Start with Tier 1 (obviously bad) and graduate to Tier 3 (adversarial) as the system matures.
-
-5. **Heterogeneous Tribunals** — route critical council decisions through diverse model backends. Requires proxy routing changes but no architectural redesign.
-
-6. **Full Kitchen Loop** — once the oracle and spec surface are stable, enable the complete six-phase autonomous loop. The system exercises itself, finds bugs, fixes them, verifies the fixes, and measures drift — all while the household sleeps.
+The remaining work is expansion, not existence: deeper L4 state deltas, broader scenario coverage, and tighter attachment to the live household runtime.
 
 ## What This Changes
 
