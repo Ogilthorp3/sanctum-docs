@@ -107,6 +107,7 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Dashboard', slug: 'guides/dashboard' },
+						{ label: 'Holocron App', slug: 'guides/holocron-app' },
 						{ label: 'Watchdog', slug: 'guides/watchdog' },
 						{ label: 'Service Graph', slug: 'guides/service-graph' },
 						{ label: 'Home Assistant', slug: 'guides/home-assistant' },
