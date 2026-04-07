@@ -137,7 +137,39 @@ A crash that previously cost 120 seconds of dead polling and a cryptic timeout n
 
 Principle 10 strikes again: 30 passing tests didn't catch this because they tested the world where Metal works. The world where Metal doesn't work is the one that pages you at midnight.
 
-## The Great Container Escape
+## The Phantom Heal Loop
+
+On the night of April 6, 2026, the Living Force performed 28 heals in four hours. Three services — `model-scout`, `post-boot`, and `vm` — cycled through restart after restart, each one hitting the 3-per-hour budget, waiting for the budget to roll, then doing it again. The watchdog was working exactly as designed. The problem was that the design was wrong.
+
+All three services are **one-shot tasks**, not daemons. `model-scout` is a weekly scheduled script that fetches model catalogs, scores candidates, and exits. `post-boot` runs boot-time tasks and exits. `vm` is a wrapper that launches QEMU and exits — the actual VM process (`qemu-system-aarch64`) was running fine with 114+ hours of uptime.
+
+But their manifests declared `type: process` liveness checks pointing at the wrapper scripts. The watchdog dutifully checked whether the wrapper was running, found nothing (because the script had finished its job and exited), declared the service unhealthy, and restarted it. The script ran, completed, exited. The watchdog found nothing again. Restart. Exit. Restart. Exit. Twenty-eight times.
+
+### What Was Wrong
+
+| Problem | Impact |
+|---------|--------|
+| One-shot tasks declared as `type: service` with process liveness checks | Infinite heal loop — watchdog "fixes" services that aren't broken |
+| Wrapper script used as health check target instead of actual workload | VM reported unhealthy while QEMU ran for 114+ hours |
+| Manifests generated from `render_runtime_services.py` with no override mechanism for service type or health | No way to mark scheduled/oneshot tasks without editing generated files |
+
+### What Changed
+
+**`runtime_catalog.yaml`** — Added `instance_overrides` for all three services:
+
+- `model_scout`: `type: scheduled`, `health: {}` (no liveness probe — it's a cron job)
+- `post_boot`: `type: oneshot`, `health: {}` (no liveness probe — it runs at boot and exits)
+- `vm`: `type: oneshot`, liveness checks the actual QEMU binary (`/opt/homebrew/bin/qemu-system-aarch64`) instead of the wrapper script
+
+**`render_runtime_services.py`** — Extended `build_manifest()` to respect `type`, `health`, and `cooldown` overrides from the runtime catalog, so the renderer no longer blindly assigns `type: process` checks to every service with a LaunchAgent.
+
+**Cooldowns** increased from 60s to 3600s for all three services. If a scheduled task genuinely fails, retrying it every minute is not useful — once per hour is more than sufficient.
+
+<Aside type="caution">
+The root cause was not a bug in the watchdog. The watchdog correctly detected a missing process and correctly attempted remediation. The bug was in the *contract* — the manifest promised a persistent process, and the service delivered a one-shot script. When the contract is wrong, perfect execution of the contract makes things worse. This is Principle 9 in action: honest health means the manifest must describe what the service actually *is*, not what the template assumed it would be.
+</Aside>
+
+After the fix, the Living Force reported `overall: healthy` with zero root causes. The 28 phantom heals per night dropped to zero.
 
 Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes your containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network, which is a different thing entirely — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
 
