@@ -171,6 +171,63 @@ The root cause was not a bug in the watchdog. The watchdog correctly detected a 
 
 After the fix, the Living Force reported `overall: healthy` with zero root causes. The 28 phantom heals per night dropped to zero.
 
+## Pre-Restart: Teaching the Immune System Root Cause
+
+Fixing the phantom heal loop exposed a deeper problem: the watchdog's only remediation tool was restart. Every failure got the same treatment — `launchctl kickstart` — regardless of whether the root cause was a stale Docker container, a port held by an orphan process, or a pip dependency that got upgraded past its compatibility window. Restarting a service whose port is blocked by an orphan process just creates a second crash. Restarting a service whose Python dependency is broken just crashes it again, faster.
+
+The same night that produced the phantom heal loop also produced eight other LaunchAgent failures, each with a different root cause:
+
+| Service | Root Cause | Restart Would Help? |
+|---------|-----------|-------------------|
+| Sonos Bridge | Orphan Python process holding port 1969 | No — new instance can't bind |
+| Docker Startup | Ghost container `8ad7a58e84ff` stuck in Colima metadata | No — `docker compose up` hits the ghost every time |
+| XTTS Server | `transformers` pip package upgraded to 5.x, breaking `BeamSearchScorer` import | No — same import error on every boot |
+| Agent Markdown Sync | LaunchAgent plist pointed to `~/Documents/`, blocked by macOS TCC | No — same permission error on every boot |
+| Post-Boot | VM health checks used stale port numbers (1977 instead of 18789) | No — code fix required |
+
+Three of these are **runtime-healable** — the watchdog can detect the specific failure condition and apply a targeted fix before attempting a restart. The other two require code changes that no amount of restarting will solve.
+
+### The Pre-Restart Manifest Extension
+
+Each service manifest now supports two optional fields in its `remediation` section:
+
+**`pre_restart`** — An ordered list of fix commands to try before restarting. Each step has a `when` condition that gates execution:
+
+```yaml
+remediation:
+  restart_cmd: launchctl kickstart -k gui/$(id -u)/com.openclaw.sonos-bridge
+  pre_restart:
+    - name: kill_orphan_port
+      when: port_blocked
+      command: "kill $(lsof -ti :1969) 2>/dev/null || true"
+      timeout: 10
+```
+
+**`pin_deps`** — Version pins for Python dependencies. The watchdog checks the installed version first, only reinstalls if it drifted:
+
+```yaml
+remediation:
+  restart_cmd: launchctl kickstart -k gui/$(id -u)/com.sanctum.xtts-server
+  pin_deps:
+    - name: transformers
+      version: "4.44.2"
+      pip: /opt/homebrew/bin/pip3.11
+```
+
+The remediation flow becomes: detect failure → run `pre_restart` fixes → verify liveness → if healed, skip restart entirely. A successful pre-restart does not count against the restart budget, because no restart occurred. The watchdog can apply these fixes indefinitely without triggering quarantine.
+
+<Aside type="note">
+The `when` conditions are cheap runtime checks — one `lsof` call for `port_blocked`, one `docker ps` for `docker_stale`. They run in under a second with zero false-positive risk. This is deliberately simpler than log-pattern matching, which would require tailing files, maintaining handles, and parsing varying formats for marginal benefit.
+</Aside>
+
+Three services ship with pre-restart recipes:
+
+1. **Sonos Bridge** (`port_blocked`): kills the orphan process holding port 1969, then lets launchd restart clean
+2. **Post-Boot** (`docker_stale`): runs `docker container prune -f` to clear dead containers before re-running the boot sequence
+3. **XTTS Server** (`pin_deps`): pins `transformers==4.44.2` — the last version compatible with Coqui TTS's `BeamSearchScorer` import
+
+The pattern is extensible. Any port-bound service can add a `port_blocked` pre-restart. Any service with Python dependencies can add `pin_deps`. The `always` condition runs unconditionally — useful for cache clears, config reloads, or socket resets that might resolve transient failures without a full restart.
+
 Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes your containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network, which is a different thing entirely — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
 
 This matters when your home automation system needs to discover Ecobee thermostats via HomeKit Controller, which uses Bonjour/mDNS, which broadcasts to the local subnet, which Docker Desktop's VM is not on.
