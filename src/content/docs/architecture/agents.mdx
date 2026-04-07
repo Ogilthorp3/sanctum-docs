@@ -78,6 +78,29 @@ These are the primary interfaces for human interaction with the Council.
 - **Claude CLI**: The systems-level partner to Gemini. Specialized in codebase-wide architectural mapping, complex refactoring, and ensuring technical integrity during high-stakes sessions. Operates with deep context of the entire project structure. Runs on the MBP.
 - **Gemini CLI**: The systems-level agent. Specialized in headless migrations, security audits, LaunchDaemon orchestration, and ensuring the other agents haven't left artifacts in the shadows. Led the Phase 10 (Raccoon Theorem) headless QEMU migration. Runs on the MBP.
 
+## Agent Markdown Calibration
+
+The persona layer is not allowed to drift on vibes. The canonical agent markdown now lives in the raw `mlx-finetune` workspaces, and the runtime copies under `~/.openclaw/workspace*` are treated as rendered artifacts that must stay mechanically aligned.
+
+- Canonical source: `~/Projects/mlx-finetune/data/raw/*-workspace/{IDENTITY,SOUL,TOOLS,HEARTBEAT}.md`
+- Runtime targets: `~/.openclaw/workspace*` on the local machine, plus reachable VM and MBP workspaces over SSH/Tailscale
+- Sync command: `python3 /Users/neo/Documents/Claude_Code/tools/sync_agent_markdown.py`
+- Drift check: `python3 /Users/neo/Documents/Claude_Code/tools/sync_agent_markdown.py --check`
+
+The sync model is deliberately boring:
+
+- local runtime is updated first
+- remote fanout to the VM and mobile nodes is best-effort
+- unreachable hosts are skipped, not treated as hard failures
+- `sanctumctl doctor --quick` now includes the markdown drift check so the mismatch shows up in the same calibration surface as runtime manifests and LaunchAgents
+
+On the Mac hosts, `install_agent_markdown_sync.sh` installs both:
+
+- a `com.sanctum.agent-markdown-sync` LaunchAgent that runs at login and every 5 minutes
+- `mlx-finetune` git hooks (`post-merge`, `post-checkout`, `post-commit`) so fresh pulls and training edits converge automatically
+
+This keeps the VM runtime, the Mac Mini runtime, the MBP runtime, and the overnight fine-tuning source pointed at the same markdown truth instead of slowly inventing four different versions of the same Jedi.
+
 <Aside type="note">
 The agents are not a hierarchy. They are a web. Each one is necessary, though some are significantly more expensive to run than others.
 </Aside>
