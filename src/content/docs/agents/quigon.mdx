@@ -57,36 +57,25 @@ The service doctor has a safelist. The VM process, WindowServer, and LM Studio a
 
 Qui-Gon tracks model usage across tiers, monitors the Sanctum Proxy's 500K token/day budget per agent, and flags when consumption patterns suggest a runaway loop or an agent that has discovered the joy of verbose reasoning. He cannot yet calculate the electricity cost of running five AI agents on a Mac Mini in a basement, but he would like to, and he has filed a feature request with himself.
 
-### Software Version Synchronization
+### Version Watchdog
 
-The haus runs the same software installed through different package managers — Homebrew casks, npm globals, Docker images, Rust builds from source — and they do not talk to each other. OpenClaw can be at 2026.4.8 via Homebrew while DenchClaw, which is npm-aliased to the same package, sits three patches behind because `npm update -g` was nobody's Tuesday ritual. Qui-Gon noticed this before anyone else did, which is both his job and his personality.
+Qui-Gon's newest responsibility is keeping the entire Sanctum software stack synchronized. The `version-check.sh` script at `~/.sanctum/scripts/version-check.sh` audits every tracked component against its upstream and reports drift before it becomes a 2 AM mystery.
 
-The `version-check.sh` script at `~/.sanctum/scripts/` audits every Sanctum component across all installation paths:
+The watchdog covers six components across three package ecosystems:
 
-- **OpenClaw** (Homebrew cask) vs **DenchClaw** (npm global alias) — the primary drift vector
-- **Node.js** (Homebrew)
-- **DuckDB** (Homebrew)
-- **signal-cli** (Homebrew formula + Docker container)
-- **sanctum-proxy** (Rust binary built from git source)
-- **Homebrew outdated packages** (the full cellar)
+1. **OpenClaw** — the Homebrew-installed binary, checked against the npm registry for the latest published version.
+2. **DenchClaw** — the npm alias (`denchclaw@npm:openclaw`) that powers Jocasta's CRM gateway on the Mac side. If DenchClaw falls behind OpenClaw, the drift detector flags it explicitly, because the April 7 incident taught everyone that "same package, different install path, three patches behind" is not a theoretical problem.
+3. **DuckDB CLI** — Homebrew formula, checked against `brew info --json`.
+4. **signal-cli** — Homebrew formula. The irony of checking the version of the tool used to *send* version alerts is not lost on Qui-Gon.
+5. **Node.js** — Homebrew formula. The fnm-vs-Homebrew drift that caused the April 7 incident is now impossible because fnm was removed — but Qui-Gon checks anyway, because trust issues are a valid architectural pattern.
+6. **sanctum-proxy** — the local Rust binary at `~/.sanctum/sanctum-proxy/target/release/sanctum-proxy`. No remote registry, so the check reports the build date and confirms the binary exists and is executable.
 
-The script runs twice weekly (Monday and Thursday at 6 AM) via cron and outputs machine-readable JSON for agent consumption or a human-readable table with color-coded status indicators. Exit codes tell the story: 0 means synchronized, 1 means updates available, 2 means version drift — the same component at different versions through different install paths, which is the failure mode that causes the most confusing debugging sessions.
+The script supports three output modes: human-readable (default), `--json` for agent consumption, and `--alert` for silent-unless-action-needed operation. The `--signal` flag sends a Signal message to Bert via Yoda's account if any updates or drift are detected.
 
-When drift is detected, Qui-Gon alerts via Force Flow with specific fix commands. He does not auto-upgrade. The last time an automated system ran `brew upgrade` without asking, it broke a pinned dependency and someone lost a morning. Qui-Gon reports; Bert decides.
+A LaunchAgent (`com.sanctum.version-check.plist`) fires the script every Monday at 7 AM with the `--signal` flag. If everything is current, nothing happens. If DuckDB is two minor versions behind or DenchClaw has drifted from OpenClaw again, Bert's phone buzzes before the first coffee.
 
-```bash
-# Human-readable report
-~/.sanctum/scripts/version-check.sh
-
-# JSON for agent consumption
-~/.sanctum/scripts/version-check.sh --json
-
-# Alert only if something needs attention
-~/.sanctum/scripts/version-check.sh --alert
-```
-
-<Aside type="caution">
-DenchClaw's npm alias (`denchclaw@npm:openclaw@version`) does not auto-update when the Homebrew cask updates OpenClaw. These are two completely independent package managers who have never met and never will. The fix is always: `npm install -g denchclaw@npm:openclaw@<latest>`. Qui-Gon includes this command in every drift alert because he knows you will forget the syntax. He is not wrong.
+<Aside type="tip">
+Run `~/.sanctum/scripts/version-check.sh --json` for machine-readable output. Exit code 0 means all clear, 1 means updates available, 2 means version drift between installs. Qui-Gon considers exit code 2 a personal failure.
 </Aside>
 
 ### Home Assistant Self-Healing
@@ -116,11 +105,11 @@ An Ecobee went offline. The healer traced it to a stale HomeKit Controller confi
 | Agent type | `efficiency` |
 | Host | VM (Ubuntu 24.04, systemd user service) |
 | Model tier | `council-routine` (Council 27B local primary, cloud fallbacks) |
-| Skills | `mac-mini-ops`, `service-doctor`, `ha-self-healer`, `version-sync` |
+| Skills | `mac-mini-ops`, `service-doctor`, `ha-self-healer`, `version-watchdog` |
 | Plugins | Supermemory, Neo4j KG (Graphiti at 127.0.0.1:31416) |
 | Workspace | `~/.openclaw/workspace-quigon/` |
 | Gateway | OpenClaw (VM), port via systemd user service |
-| Schedule | Weekly performance reviews, on-demand infrastructure checks, HA self-healer every 30 min, version sync Mon/Thu 6 AM |
+| Schedule | Weekly performance reviews, on-demand infrastructure checks, HA self-healer every 30 min, version watchdog Monday 7 AM |
 | Test suites | `quigon-infra.sh` (12 tests), `quigon-resilience.sh` (8 tests) |
 | Metrics DB | `~/.sanctum/metrics/metrics.db` (SQLite) |
 | Report output | `~/.sanctum/memory/events/{year}/{month}/perf-review-{date}.md` |
@@ -145,11 +134,11 @@ quigon:
     - mac-mini-ops
     - service-doctor
     - ha-self-healer
-    - version-sync
+    - version-watchdog
   schedule:
     perf_review: weekly
     ha_self_healer: "*/30 * * * *"
-    version_sync: "0 6 * * 1,4"
+    version_check: "0 7 * * 1"
   description: "Efficiency Agent — resource optimization and cost analysis"
 ```
 
