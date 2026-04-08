@@ -1,0 +1,146 @@
+---
+title: "2026-04-07: Provider Overhaul"
+description: Five provider paths, self-healing fallbacks, a Signal migration, and the quiet death of fnm.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The haus woke up this morning routing all LLM traffic through OpenRouter. By the time the work was done, it had five independent provider paths, a fallback chain deep enough to survive any single provider going dark, and a Signal integration that no longer depends on a Docker container that was, let's be honest, held together by port mappings and optimism.
+
+This page records the full scope of changes made on April 7, 2026. It is dated material. It belongs here and not in the architecture pages, which have their own dignity to maintain.
+
+## The Problem
+
+OpenRouter had renamed and removed model slugs without sending a card. Several models in the proxy config were pointing at endpoints that no longer existed. The system was functional only because the primary model happened to still resolve. One slug rotation away from a cascade failure across all agents.
+
+Meanwhile, every provider path ran through OpenRouter. A single billing hiccup, rate limit, or API outage would have taken down the entire council. This is the infrastructure equivalent of keeping all your eggs in one basket and then balancing the basket on a unicycle.
+
+## Provider Path Architecture
+
+The proxy now maintains five independent paths to LLM inference. If any one provider goes down, the others continue operating. If all cloud providers go down simultaneously, the haus falls back to Apple Silicon running on the same desk. The AI equivalent of "the generator kicked in."
+
+| Path | Provider | Role | Why it exists |
+|------|----------|------|---------------|
+| 1 | OpenRouter | Multi-model aggregator | Access to dozens of models through one API key. The original and still the Swiss Army knife. |
+| 2 | Anthropic API (direct) | Claude Opus 4.6 primary | Direct connection to Anthropic. No middleman. No aggregator markup. No slug renames at 2 AM. |
+| 3 | Google AI Studio (direct) | Gemini 3.1 Pro for council-secure, Imagen 4 for generation | Direct Google access. Windu's secure tier and image generation both bypass OpenRouter entirely. |
+| 4 | xAI (direct) | Grok models | Direct xAI access for Grok-family models. Another independent path that doesn't care what OpenRouter is doing today. |
+| 5 | Local (council-local MLX + LM Studio) | On-device fallback | Apple Silicon inference on the Mac Mini. Zero network dependency. Zero billing. Runs until the power goes out or the thermal paste gives up. |
+
+<Aside type="note">
+Four API keys are now injected at launch by `keychain-start.sh`: OpenRouter, Anthropic, Google AI Studio, and xAI. All four are pulled from the macOS Keychain. If you add a fifth provider, update the script or the keys won't be there when the proxy wakes up.
+</Aside>
+
+## Model Changes
+
+### Primary: Claude Opus 4.6 via Anthropic Direct
+
+The primary model for the council is now Claude Opus 4.6, routed directly through the Anthropic API. No OpenRouter intermediary. The request goes from the proxy to Anthropic and back. One hop. One billing relationship. One fewer thing to debug at 3 AM.
+
+### First Fallback: Qwen 3.6 Plus
+
+Qwen 3.6 Plus is the new first fallback model. It brings a 1M context window and 65K max output tokens — enough headroom to handle any agent task that would normally go to Claude, just with slightly less existential flair. When Opus is unavailable, Qwen 3.6 Plus catches the ball before it reaches the local models.
+
+### Agent-Tier Assignments
+
+| Tier | Agent(s) | Model Config | Primary → Fallback |
+|------|----------|--------------|-------------------|
+| council-brain | Yoda, Jocasta | Deep reasoning, long context | Claude Opus 4.6 → Qwen 3.6 Plus → council-local |
+| council-secure | Windu | Security-sensitive operations | Gemini 3.1 Pro (Google AI Studio direct) |
+| council-local | All (final fallback) | On-device inference | MLX Qwen 3.5 27B → LM Studio Qwen 3.5 35B |
+
+<Aside type="tip">
+The council-local URL was corrected from `10.10.10.1` to `127.0.0.1`. The MLX server runs on localhost. It always ran on localhost. The old IP was a relic from a network topology that existed briefly in someone's imagination and then persisted in config for weeks because nobody questioned a working system.
+</Aside>
+
+### Vision and Multimodal
+
+Eight models now have vision/multimodal enabled for image analysis. Agents can accept and reason about images — screenshots, diagrams, photos of whiteboards that someone insists contain a strategy. The proxy passes multimodal payloads through to any model flagged with vision support in the config.
+
+### Image Generation: Imagen 4
+
+Imagen 4 is now available for image generation via Google AI Studio direct. This is a generation endpoint, not an analysis endpoint. Agents can request image creation through the proxy, which routes to Google's Imagen 4 API. The haus can now see pictures and make pictures, which is more than can be said for most haus automation systems.
+
+## Proxy Internal Fixes
+
+### Model Name Mapping
+
+The sanctum-proxy's internal model name mapping was corrected. When an agent requests a model by its friendly name (e.g., `council-brain`), the proxy resolves it to a concrete provider model ID. Several of these mappings had drifted as OpenRouter renamed slugs. The mapping table now reflects the actual model IDs that exist on each provider as of today.
+
+### Stale OpenRouter Slugs
+
+Multiple OpenRouter model slugs were updated to match their current names. OpenRouter periodically renames or retires model endpoints. The proxy config had accumulated references to models that no longer existed under those names. This is the infrastructure version of calling someone by their maiden name at a reunion — technically not wrong, but the request isn't going to land.
+
+## Signal Migration
+
+### From Docker to Native
+
+Signal integration moved from `signal-cli-rest-api` (a Docker container) to native `signal-cli` installed via Homebrew. The Docker container (`signal-yoda`) has been stopped and removed.
+
+<Aside type="caution">
+The Docker container `signal-yoda` no longer exists. If any script or config still references it, that reference is now pointing at a ghost. Update it or remove it.
+</Aside>
+
+The native `signal-cli` runs directly on macOS, managed by a LaunchAgent. No Docker daemon dependency. No container networking. No wondering why Signal messages stopped arriving and discovering that Docker Desktop decided to update itself during dinner.
+
+## Node.js Toolchain: The fnm Removal
+
+All Node.js and OpenClaw paths now use Homebrew exclusively. The `fnm` (Fast Node Manager) installation has been removed. References to `fnm` have been cleaned from `.zshrc` and all LaunchAgent plists.
+
+This is a simplification, not a migration. fnm was managing a Node version that Homebrew was also managing. Two package managers agreeing on a Node version is a coincidence, not a strategy. Now there is one Node, managed by one tool, and the LaunchAgent plists point to `/opt/homebrew/bin/node` without needing to evaluate fnm's shell initialization to find a binary that was right there all along.
+
+### LaunchAgent Plist Updates
+
+The launchd plist for the OpenClaw gateway was updated to use Homebrew paths directly. No more `fnm exec` wrappers. No more `eval "$(fnm env)"` in shell wrappers that launchd sources at boot before anyone has had coffee. The plist now has a `ProgramArguments` array that points directly at the Homebrew node binary and the OpenClaw entry point. Explicit. Debuggable. Boring in the best way.
+
+## OpenClaw Update
+
+OpenClaw was updated from version 2026.3.7 to 2026.4.5. This is the agent gateway that Yoda, Jocasta, and the rest of the council use to interact with the world. The update was applied via Homebrew after the fnm removal, confirming that the Homebrew-only toolchain works end to end for OpenClaw lifecycle management.
+
+## Keychain Integration
+
+`keychain-start.sh` now injects all four API keys at proxy launch:
+
+```bash
+# Keys pulled from macOS Keychain at startup
+OPENROUTER_API_KEY    # OpenRouter aggregator
+ANTHROPIC_API_KEY     # Anthropic direct (Claude Opus 4.6)
+GOOGLE_AI_API_KEY     # Google AI Studio (Gemini 3.1 Pro, Imagen 4)
+XAI_API_KEY           # xAI direct (Grok family)
+```
+
+All keys live in the macOS Keychain. None are hardcoded in config files, environment variables, or shell profiles. The proxy receives them as environment variables at launch time and holds them in memory. If you need to rotate a key, update the Keychain entry and restart the proxy. The old key dies with the old process.
+
+<Aside type="danger">
+If `keychain-start.sh` doesn't inject a key, the provider path that needs it will fail silently at request time. The proxy won't crash — it will route to that provider, get a 401, and cascade to the next fallback. You'll notice when your Opus requests are suddenly being answered by a 27B model running on the desk. Check the keys.
+</Aside>
+
+## Cleanup Summary
+
+| Item | Action | Status |
+|------|--------|--------|
+| Stale OpenRouter model slugs | Updated to current provider IDs | Done |
+| council-local URL (`10.10.10.1`) | Corrected to `127.0.0.1` | Done |
+| Docker container `signal-yoda` | Stopped and removed | Done |
+| `signal-cli-rest-api` Docker image | Replaced by native `signal-cli` via Homebrew | Done |
+| fnm Node.js installation | Removed entirely | Done |
+| fnm references in `.zshrc` | Removed | Done |
+| fnm references in LaunchAgent plists | Replaced with Homebrew paths | Done |
+| OpenClaw version | Updated 2026.3.7 → 2026.4.5 | Done |
+| `keychain-start.sh` | Now injects 4 API keys (was 1) | Done |
+| Vision/multimodal | Enabled on 8 models | Done |
+| Imagen 4 | Added via Google AI Studio | Done |
+
+## What Changed in the Architecture Pages
+
+The `dynamic-model-routing.mdx` page had a code example showing `api_base: http://10.10.10.1:1337` for the council-local MLX path. This was corrected to `http://127.0.0.1:1337` in the same commit. Architecture pages should reflect current truth, not historical coordinates.
+
+No other architecture pages were modified. The proxy page, services page, and other doctrine documents remain accurate or will be updated in a subsequent pass if drift is detected.
+
+## Related Pages
+
+- [Dynamic Model Routing](/architecture/dynamic-model-routing/)
+- [Sanctum Proxy](/architecture/proxy/)
+- [Services](/architecture/services/)
+- [Operational State](/operations/operational-state/)
+- [Operational History](/operations/operational-history/)
