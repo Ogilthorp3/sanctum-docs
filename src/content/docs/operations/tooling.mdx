@@ -156,6 +156,34 @@ The generated config includes the correct endpoint URL, all three authentication
   Health Auto Export may not import headers from the JSON file. If the test returns 401 or 403 after importing, add the three headers manually from the values in the Keychain (`cf-access-health-client-id`, `cf-access-health-client-secret`, and the bearer token from VM SOPS). This is one of those delightful iOS behaviors that works perfectly in testing and then doesn't in production. Sound familiar?
 </Aside>
 
+## backup-retention.sh
+
+Manages the lifecycle of daily backups in iCloud. Without this, the backup directory grows until iCloud sends you a passive-aggressive storage notification and you spend a Saturday morning manually deleting timestamped folders like a person who doesn't have an automation platform.
+
+```bash
+# Dry run — show what would be pruned
+~/.sanctum/scripts/backup-retention.sh
+
+# Actually prune
+~/.sanctum/scripts/backup-retention.sh --confirm
+```
+
+**Retention policy:**
+
+| Tier | Rule |
+|------|------|
+| Daily backups (0–14 days) | Kept in full |
+| Bi-weekly archives (14+ days) | One backup per two-week period retained |
+| Everything else | Purged |
+
+Runs weekly via automated job. Logs all deletions to `~/.sanctum/logs/backup-retention.log`.
+
+The initial deployment freed ~23 GB from iCloud. That's 23 GB of timestamped directories that had been accumulating since the backup system was first set up, each one faithfully preserving a snapshot of the haus that nobody was ever going to restore from because the more recent ones existed. Retention policy is the part of backup strategy that everyone agrees is important and nobody implements until their cloud storage bill arrives.
+
+<Aside type="caution">
+The script requires `--confirm` to actually delete anything. Without it, you get a preview. This is not overcaution — it's the only sane default for a script whose entire job is to destroy backups. The irony of a backup deletion script causing data loss is the kind of thing that would be funny in a talk and devastating in production.
+</Aside>
+
 ## generate-instance.sh
 
 Interactive wizard that creates a new `instance.yaml` for a fresh Sanctum installation. Asks about your household, network, optional services, and notifications, then generates a complete config file.
