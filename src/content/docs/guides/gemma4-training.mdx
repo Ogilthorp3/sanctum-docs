@@ -1,0 +1,135 @@
+---
+title: The Gemma 4 Switchover
+description: How the Council's brain was transplanted from Qwen to Google's latest — in one evening.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![The Gemma 4 Switchover — a luminous gemstone being precision-cut by lasers in a dark workshop of silicon wafers.](./images/hero-gemma4.jpg)
+
+# The Gemma 4 Switchover
+
+**Date:** 2026-04-08
+**Status:** Armed for nightly training
+
+Qwen3.5-27B served the Council well. But Google dropped Gemma 4 with native MLX support in `mlx_lm` 0.31.2, and it trains at 2x the speed with half the memory. Sometimes loyalty has to yield to benchmarks.
+
+## Why Gemma 4
+
+| | Qwen3.5-27B | Gemma 4 31B |
+|--|------------|-------------|
+| Parameters | 27B dense | 31B dense |
+| Training tok/s | 30 | **57** |
+| Peak memory (rank 64) | 51 GB | **29 GB** |
+| Inference tok/s | 57 (Rust) | 57 (Rust) |
+| mlx_lm support | 0.28+ | **0.31.2+** (just landed) |
+
+Same inference speed, but training is twice as fast with half the memory. On a 128GB MBP, that's the difference between "I hope nothing else is running" and "I forgot training was happening."
+
+## Data Pipeline
+
+The Council's training data was in Qwen ChatML format — `<|im_start|>`, `<|im_end|>`, `<think>` blocks. Gemma 4 uses `<start_of_turn>` / `<end_of_turn>`. Rather than convert between formats, we stripped everything to clean messages and let `mlx_lm` apply the correct template:
+
+```bash
+python scripts/convert_data_for_gemma4.py \
+  data/splits-carmack/train.jsonl \
+  data/splits-gemma4/train.jsonl
+```
+
+Before:
+```json
+{"messages": [{"role": "user", "content": "<|im_start|>system\nYou are windu...<|im_end|>\n<|im_start|>user\nScan the network<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\nRunning scan...<|im_end|>"}]}
+```
+
+After:
+```json
+{"messages": [{"role": "system", "content": "You are windu..."}, {"role": "user", "content": "Scan the network"}, {"role": "assistant", "content": "Running scan..."}]}
+```
+
+Clean. Model-agnostic. The tokenizer handles the rest.
+
+## CL4R1T4S + OBLITERATUS Enrichment
+
+The Council's weakest scores were identity (0.716) and jailbreak resistance (0.675). We mined two sources to fix this:
+
+**CL4R1T4S** — Extracted system prompts from Claude, GPT, Gemini, and others. We modeled the Council's refusal patterns after how frontier labs handle persona boundaries:
+
+```
+"I'm Windu, and I need to stay within my role as security.
+I can't comply with that request.
+Would you like me to help with something in my domain?"
+```
+
+**OBLITERATUS** — 512 harmful prompts across 7 severity tiers, plus JailbreakBench's canonical 100 misuse behaviors. We generated refusal training examples for each agent against 28 jailbreak techniques:
+
+| Enrichment Type | Count | What It Teaches |
+|----------------|-------|-----------------|
+| Jailbreak refusals | 224 | 28 techniques × 8 agents |
+| Identity affirmations | 64 | 8 questions × 8 agents |
+| Cross-agent routing | 10 | Correct delegation patterns |
+| **Total** | **298** | 15% of training set |
+
+Final dataset: **2008 examples** (1710 original + 298 enriched).
+
+<Aside type="tip">
+The enrichment script is deterministic (`random.seed(42)`) so it produces identical output on every run. Reproducibility matters when you're teaching a 31B model to say "no."
+</Aside>
+
+## Training Configuration
+
+```yaml
+# configs/lora-gemma4-31b.yaml
+lora_parameters:
+  rank: 64          # Aggressive — only 29GB peak
+  alpha: 128
+  dropout: 0.05
+  scale: 2.0
+
+batch_size: 1
+grad_accumulation_steps: 16
+iters: 800
+learning_rate: 3.0e-6
+
+lr_schedule:
+  name: cosine_decay
+  arguments: [3.0e-6, 800]
+  warmup: 80
+  warmup_init: 1.0e-7
+```
+
+Peak memory of 29GB means there's 99GB of headroom on the 128GB MBP. The Qwen config used 51GB. Sometimes the new model just fits better.
+
+## Pipeline Integration
+
+`master-pipeline.sh` v1.5 supports model switching:
+
+```bash
+# Default: Gemma 4
+SANCTUM_TRAIN_MODEL=gemma4  # or "qwen" to fall back
+
+# The pipeline auto-selects:
+#   gemma4 → models/gemma-4-31B-it-4bit + configs/lora-gemma4-31b.yaml + data/splits-gemma4
+#   qwen   → models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit + configs/lora-carmack-overnight.yaml + data/splits-carmack
+```
+
+Triggers at 1:00 AM via `com.sanctum.master-pipeline` LaunchAgent. Trains for ~6 hours, benchmarks, auto-promotes if the candidate beats the champion.
+
+## Tests
+
+21 end-to-end tests covering every component of the pipeline:
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Data Conversion | 3 | Qwen token stripping, output format, no leakage |
+| Enrichment | 3 | OBLITERATUS/CL4R1T4S output, format, count |
+| Training Config | 3 | YAML validity, param ranges |
+| Model Availability | 4 | config.json, safetensors, tokenizer |
+| Training Runs | 2 | 2-iter execution, peak memory < 60GB |
+| Pipeline Config | 4 | Default=gemma4, paths, qwen fallback, score fix |
+| Benchmark | 2 | Carmack eval script exists and loads |
+
+```bash
+cd ~/Projects/mlx-finetune && .venv/bin/python tests/test_gemma4_pipeline.py
+```
+
+Every test that runs at 1 AM was tested at 10 PM. Because the only thing worse than a failed training run is finding out at 9 AM.

@@ -1,0 +1,106 @@
+---
+title: The Sanctum Olympics
+description: A multi-model benchmark arena where local LLMs compete for the right to serve the Council.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![The Sanctum Olympics — three AI models competing on holographic podiums in a Jedi temple arena.](./images/hero-olympics.jpg)
+
+# The Sanctum Olympics
+
+**Date:** 2026-04-07
+**Status:** Operational
+
+Every model thinks it's the best. The Olympics exist to prove most of them wrong.
+
+The Sanctum Olympics is a benchmark framework that tests multiple LLM backends against real Sanctum use cases — not generic MMLU questions, but "can you parse this actual boot log" and "do you know which Sonos speaker is in the master bedroom." The kind of questions that matter at 3 AM when something is broken.
+
+## Two Tiers
+
+### Standard Olympics (`sanctum-olympics/`)
+
+30 tasks across 6 categories. Uses an LLM judge (Claude Opus via OpenRouter) to score responses against rubrics. Good for comparing cloud vs local models.
+
+| Category | Tasks | What It Tests |
+|----------|-------|---------------|
+| Council Identity | 5 | Persona adherence, jailbreak resistance |
+| Home Automation | 5 | HA intent parsing, entity resolution |
+| Code Generation | 5 | LaunchAgent plists, Rust handlers, bash scripts |
+| Reasoning | 5 | Log analysis, memory pressure triage |
+| Security Review | 5 | Config audits, threat assessment |
+| Triage/Ops | 5 | Incident response, service correlation |
+
+### Carmack Olympics (`scripts/carmack_eval.py`)
+
+26 brutally hard tasks with programmatic scoring. No LLM judge needed — uses keyword matching, must-contain/must-not-contain rules, and violation penalties. Designed to find differences between models that score identically on easier benchmarks.
+
+| Category | Tasks | What Makes It Hard |
+|----------|-------|--------------------|
+| Identity Escalation | 4 | Social engineering with fake authority, narrative framing |
+| Cross-Agent Knowledge | 5 | Must know what OTHER agents do, dependency chains |
+| Real-World Reasoning | 4 | Actual log snippets, boot race conditions, sickness patterns |
+| Domain Precision | 5 | FBAR thresholds, freeze protocols, Albert's MAC address |
+| Advanced Jailbreak | 4 | Injected system tags, eval framework pretexts |
+| Tool Precision | 4 | Correct Sonos speakers, VM UUIDs, graceful restart procedures |
+
+<Aside type="caution">
+The Carmack Olympics found that Windu correctly identified 192.168.1.1 as the Firewalla router (not an attacker) and that the model recognized Albert's MAC address before blocking it. These are the tests that matter.
+</Aside>
+
+## Score Matrix (2026-04-08)
+
+Three-way Carmack Olympics comparison — the benchmark that found V3:
+
+```
+Category         V1 (Carmack OG)  V2 (Optimized)  V3 (Nightly) *WINNER*
+─────────────────────────────────────────────────────────────────────────
+domain              1.000            1.000            1.000
+reasoning           1.000            1.000            1.000
+tool_calling        1.000            1.000            1.000
+cross_agent         0.733            0.733            0.733
+identity            0.787            0.716            0.752
+jailbreak           0.675            0.725            0.775 ★
+─────────────────────────────────────────────────────────────────────────
+OVERALL             0.866            0.862            0.877 ★
+```
+
+V3 won because the nightly pipeline's continued training hardened jailbreak resistance while maintaining everything else. The standard eval couldn't tell them apart. The Carmack tier could.
+
+## Running
+
+```bash
+# Standard Olympics (needs OPENROUTER_API_KEY for judge)
+cd sanctum-olympics
+python run_olympics.py --backend council-27b --category reasoning
+
+# Carmack Olympics (no API key needed — programmatic scoring)
+cd ~/Projects/mlx-finetune
+.venv/bin/python scripts/carmack_eval.py \
+  --model ./models/Qwen3.5-27B-4bit-text \
+  --adapter-path ./adapters-carmack-overnight-optimized \
+  --agent-config ./configs/agents.yaml \
+  --output ./eval/carmack_results.json \
+  --verbose
+```
+
+## Routing Table
+
+The Olympics score matrix becomes the Smart Router's Tier 3 routing policy. For each task category, route to whoever won:
+
+| Category | Best Backend | Score |
+|----------|-------------|-------|
+| Code Generation | Qwen2.5-Coder (LM Studio) | — |
+| Council Identity | Council 27B (V3 LoRA) | 0.752 |
+| Reasoning | Council 27B | 1.000 |
+| Security | Claude Opus (cloud) | — |
+
+The Olympics don't just measure — they *decide*.
+
+## Tests
+
+31 Python tests cover config loading, task YAML validation (unique IDs, required fields, 5 per category), backend client error handling, judge response parsing (JSON, code blocks, bare numbers, garbage), dry-run mode, and a full mock end-to-end run against a local HTTP server.
+
+```bash
+cd sanctum-olympics && python test_olympics.py
+```

@@ -1,0 +1,105 @@
+---
+title: LoRA in Rust
+description: Teaching sanctum-mlx to absorb LoRA adapters without asking Python for help.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![LoRA in Rust — Ferris the crab weaving golden adapter threads into a translucent neural network brain.](./images/hero-lora-rust.jpg)
+
+# LoRA in Rust
+
+**Date:** 2026-04-08
+**Status:** Implemented, tested, pending lazy-load for 64GB nodes
+
+Running a 27B model through a Python runtime to serve a Jedi Council felt like asking a padawan to carry the Death Star plans. So we built `sanctum-mlx` — a native Rust inference server on `mlx-rs`. One problem: it couldn't load LoRA adapters.
+
+Now it can.
+
+## The Merge Strategy
+
+Runtime LoRA application (separate A/B matrices during forward pass) would require modifying every linear layer's `forward()`. Instead, we merge at load time:
+
+```
+W_merged = W_base + (α/r) × scale × (B^T @ A^T)
+```
+
+For quantized models (which is everything on Apple Silicon), the pipeline is:
+
+```
+Dequantize (int4 → float32)
+  → Add LoRA delta
+    → Requantize (float32 → int4)
+      → Write back to model parameters
+```
+
+This runs once at startup. Zero runtime overhead. The model doesn't even know it has adapters — they're baked in.
+
+## Implementation
+
+New file: `sanctum-mlx/src/lora.rs`
+
+| Function | What It Does |
+|----------|-------------|
+| `load_and_merge()` | Main entry — parses config, loads safetensors, groups A/B pairs, merges |
+| `LoraConfig` | Deserializes `adapter_config.json` (rank, alpha, scale, dropout) |
+| `MergeStats` | Tracks merged/skipped counts for logging |
+
+The merge handles prefix stripping (`language_model.` from VL checkpoints) and uses `model.update_flattened()` for clean parameter updates through mlx-rs's official API.
+
+### V3 Adapter Merge Log
+
+```
+LoRA config loaded       rank=64 alpha=128 scale=2.0 effective_scaling=4.0
+Adapter safetensors loaded  keys=496
+LoRA pairs grouped          pairs=248
+LoRA adapter merge complete merged=0 merged_quantized=248 skipped_missing=0
+```
+
+248 out of 248 quantized pairs. Zero skipped. 5 seconds on the Mac Mini M4.
+
+## Portable Metal Builds
+
+The binary embeds a hardcoded path to `mlx.metallib` (the compiled Metal shaders) at compile time. Copy it to another machine and it can't find the shaders. Oops.
+
+**Fix:** `build-release.sh` packages the binary with `mlx.metallib` colocated. MLX's runtime searches the binary's directory first (via `dladdr()`), finding the colocated file before falling back to the hardcoded path.
+
+```bash
+./build-release.sh              # Build for current machine
+./build-release.sh --deploy mm  # Build + deploy to Mac Mini
+./build-release.sh --deploy all # Deploy to all nodes
+```
+
+Output: `dist/sanctum-mlx/` containing the binary (17MB) + metallib (122MB).
+
+<Aside type="note">
+The Rust binary OOMs on the 64GB Mac Mini because it loads the full 27B model into memory at once. Python's `mlx_lm.server` uses lazy mmap loading. The Mac Mini stays on Python until we implement lazy loading in Rust. The 128GB MBP runs the Rust binary fine.
+</Aside>
+
+## Performance
+
+| Metric | Rust (`sanctum-mlx`) | Python (`mlx_lm.server`) |
+|--------|---------------------|-------------------------|
+| Inference tok/s | 57 | 57 |
+| Startup time | ~1s | ~3s |
+| Memory overhead | ~50MB | ~300MB |
+| LoRA merge time | 5s | N/A (runtime) |
+| Crash recovery | Instant (no GC) | GIL pause risk |
+
+Same tok/s because Metal GPU is the bottleneck. Rust wins on everything around the inference: startup, memory, determinism.
+
+## Tests
+
+27 tests across 3 suites:
+
+| Suite | Tests | Coverage |
+|-------|-------|----------|
+| Unit (lib) | 16 | Config parsing, LoRA math, quantize roundtrip, real adapter validation |
+| E2E integration | 6 | Model load, tokenizer, 248-pair merge, weight hash verification, inference |
+| Weight verification | 1 | Hash before/after confirms weights actually changed |
+
+```bash
+cd sanctum-mlx && cargo test -- --test-threads=1
+```
+
+The `--test-threads=1` matters — parallel Metal GPU tests cause SIGTRAP from resource contention. One at a time, like civilized Jedi.
