@@ -1,73 +1,102 @@
 ---
-title: Dynamic Model Routing
-description: How we stopped hardcoding paths and started trusting a single YAML file to manage our local brains.
+title: The Smart Router
+description: How sanctum-server learned to stop worrying and route to the right brain.
 ---
 
-import { Aside, Steps } from '@astrojs/starlight/components';
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-![Tommy watching a YAML crown radiate authority over the local model stack](../../../assets/illustrations/yaml-crown.png)
+![The Smart Router — three neural pathways branching from a central node, each leading to a different brain.](./images/hero-smart-router.jpg)
 
-Hardcoding paths in LaunchAgents is a recipe for a 3 AM troubleshooting session where you realize you're running a model from last March because you forgot to update a plist. We've moved the brain's coordinates to a single source of truth.
+# The Smart Router
 
-## The Single Source of Truth
+**Date:** 2026-04-07
+**Status:** Production (sanctum-server v0.2.0)
 
-All model and adapter paths are now centralized in `~/.sanctum/instance.yaml`. This is the core configuration for the house. If it isn't in here, the system doesn't know it exists.
+It turns out that sending a coding question to a model trained exclusively on Jedi personas produces... unhelpful results. Who knew.
 
-```yaml
-# Actual configuration from instance.yaml
-services:
-  mlx_server:
-    enabled: true
-    port: 1337
-    model_path: ~/Projects/mlx-finetune/models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit
-    adapter_path: ~/Projects/mlx-finetune/adapters-carmack-overnight
-    venv: ~/Projects/mlx-finetune/.venv
+The Smart Router extends `sanctum-server` (Rust/Axum) with multi-backend dispatch. One port, multiple brains. Requests are routed based on the `model` field, glob patterns, or intent classification from the prompt content.
+
+## Architecture
+
+```
+Client Request (:1337)
+    │
+    ▼
+┌─────────────────────────┐
+│   sanctum-server         │
+│   ┌───────────────────┐ │
+│   │   Smart Router     │ │
+│   │                     │ │
+│   │  1. Exact match     │ │
+│   │  2. Glob pattern    │ │
+│   │  3. Intent keywords │ │
+│   │  4. Default          │ │
+│   └───────┬─────────────┘ │
+└───────────┼───────────────┘
+            │
+    ┌───────┼───────┐
+    ▼       ▼       ▼
+ Council   Coder   Claude
+ (1337)    (1234)  (2001)
 ```
 
-<Aside type="note">
-The port is 1337 because, let's face it, running a 27B model on a Mac Mini is exactly that.
-</Aside>
+## Routing Tiers
 
-## The Dynamic Wrapper
+| Tier | Mechanism | Example | Latency |
+|------|-----------|---------|---------|
+| 1 | Exact model name | `"model": "coder"` → Coder backend | 0ms |
+| 2 | Glob pattern | `"model": "council-heartbeat"` matches `council-*` | 0ms |
+| 3 | Intent keywords | Prompt contains "debug" + "python" → Coder | ~1ms |
+| 4 | Default | No match → Council (configurable) | 0ms |
 
-The MLX server no longer receives its orders from a static plist. Instead, it uses a dynamic wrapper script that parses the configuration at runtime.
+## Configuration
 
-### How It Works
-
-<Steps>
-1.  **Parse YAML:** The wrapper uses `yq` to extract the current active model, adapter, and port from `instance.yaml`.
-2.  **Environment Isolation:** It sets `PYTHONPATH` and `VIRTUAL_ENV` to point to the specific virtual environment required for the model.
-3.  **The Shim:** It prepends a shim directory to the `PATH` to force the `sanctum-server` binary to use the venv's Python interpreter instead of whatever Homebrew decided was the default this week.
-4.  **Offline Enforcement:** It sets `HF_HUB_OFFLINE=1`. We don't need the model trying to check its own birth certificate on HuggingFace every time it starts.
-</Steps>
-
-## Proxy Integration
-
-The `sanctum-proxy` (port 4040) is the air traffic controller. It routes requests to the MLX server on its dynamic port.
+Router config lives in `~/.sanctum/instance.yaml` under the `router:` key:
 
 ```yaml
-# sanctum-proxy/config.yaml
-- name: council-heartbeat
-  provider: local
-  api_model: /Users/neo/Projects/mlx-finetune/models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit
-  api_base: http://127.0.0.1:1337
+router:
+  backends:
+    council:
+      url: http://127.0.0.1:1337/v1
+      models: ["council-*", "qwopus", "heartbeat"]
+    coder:
+      url: http://127.0.0.1:1234/v1
+      models: ["coder", "code-*", "*coder*"]
+    claude:
+      url: http://127.0.0.1:2001/v1
+      models: ["claude-*", "opus"]
+  default: council
+  intent_keywords:
+    coder: ["function", "debug", "refactor", "rust", "python"]
+    council: ["yoda", "windu", "lights", "alarm"]
+    claude: ["explain why", "analyze", "summarize"]
 ```
 
-<Aside type="caution">
-If the proxy and the server disagree on the port, the proxy will fallback to LM Studio, which will proceed to eat 22GB of your RAM while you're not looking.
+## Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /v1/chat/completions` | Routed chat — selects backend automatically |
+| `GET /v1/models` | Lists all registered backends |
+| `GET /v1/backends` | Backend names + patterns |
+| `GET /health` | Reports `"mode": "routed"` or `"single"` |
+
+## Implementation
+
+The router is a new Rust module in `sanctum-server/src/router.rs`. The `HttpProxyBackend` in `backend.rs` handles the actual proxying to any OpenAI-compatible endpoint, with automatic detection of streaming (SSE) vs non-streaming (JSON) responses.
+
+Non-quantized and quantized backends both work. The proxy handles think-tag stripping (`strip_thinking` flag) regardless of which backend processes the request.
+
+<Aside type="tip">
+The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure which brain is answering.
 </Aside>
 
-## Triage & Recovery
+## Tests
 
-**Qui-Gon Triage** (`qui_gon_triage.py`) monitors the health of these services. If it finds a service is down, it uses `launchctl kickstart` to revive it. Because of the dynamic wrapper, the revived service always wakes up with the latest settings from `instance.yaml`.
-
-## Verification
-
-We don't guess if it's working. We run the Battle Test.
+23 tests total: 18 unit (pattern matching, think-tag stripping) + 5 e2e (mock backends, full binary, pattern routing, intent classification, default fallback).
 
 ```bash
-# Run the end-to-end verification
-/Users/neo/Documents/Claude_Code/tests/model-battle-test.sh
+cd sanctum-server && cargo test
 ```
 
-If you see green, the brain is connected. If you see red, check the ports. It's always the ports.
+The e2e tests spin up 3 mock Axum servers, launch the actual `sanctum-server` binary with a temp config, and verify requests land on the correct backend. Because trust, but verify.
