@@ -336,3 +336,74 @@ npm run update:app
 <Aside type="caution">
 If you use `pkill -f` with a vague substring around Electron, you are delegating process selection to chaos. Chaos is enthusiastic but not detail-oriented.
 </Aside>
+
+
+## Signal CLI REST API Returns 404
+
+**Symptom:** `curl http://127.0.0.1:8080/v1/about` returns `404 Not Found` with `No context found for request`. All REST-style paths (`/v1/about`, `/api/v1/accounts`, `/v2/send`) return 404.
+
+**Root cause:** You're hitting port 8080, which runs the **native signal-cli `--http` mode**. The native mode only speaks JSON-RPC at a single endpoint (`POST /api/v1/rpc`). It does not serve REST endpoints at all. Those live on the Docker wrapper containers on ports 18081 and 18082.
+
+This is not a misconfiguration. It is three different services that all have "signal-cli" in their name but serve different protocols on different ports. See the [Signal CLI API Reference](/reference/signal-cli-api/) for the full breakdown.
+
+**Quick fix:**
+
+```bash
+# If you want REST endpoints, use port 18081 or 18082
+curl -s http://127.0.0.1:18081/v1/about
+
+# If you want to use port 8080, speak JSON-RPC
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"version","id":1}' \
+  http://127.0.0.1:8080/api/v1/rpc
+```
+
+**If the Docker containers are down:**
+
+```bash
+# Check container status
+docker ps --filter name=signal --format '{{.Names}} {{.Status}}'
+
+# Restart both containers
+cd ~/.openclaw/signal-cli && docker compose up -d
+```
+
+<Aside type="note">
+OpenClaw/Yoda messaging does not use any HTTP API — it shells out to `/opt/homebrew/bin/signal-cli` directly. So Signal messaging can work perfectly while every HTTP endpoint returns 404. The HTTP interfaces are for tooling, not the primary message path.
+</Aside>
+
+## signal-yoda Container Won't Start (Docker Compose Stale Reference)
+
+**Symptom:** `docker compose up -d` fails with `Error response from daemon: No such container: <hash>`. The `signal-yoda` container shows as "Created" but with a mangled name like `8ad7a58e84ff_signal-yoda`.
+
+**Root cause:** Docker Compose v5 has a bug where it caches a reference to a previous container ID in its project state. When that container gets removed outside of compose (crash, manual `docker rm`, system restart), compose tries to "Recreate" a container that no longer exists and enters an unrecoverable loop.
+
+**Fix:**
+
+```bash
+# 1. Stop and remove all signal containers manually
+docker stop $(docker ps -q --filter name=signal) 2>/dev/null
+docker rm $(docker ps -aq --filter name=signal) 2>/dev/null
+docker rm $(docker ps -aq --filter name=yoda) 2>/dev/null
+
+# 2. Recreate the rest-api container via compose (this one usually works)
+cd ~/.openclaw/signal-cli
+docker compose up -d signal-cli-rest-api
+
+# 3. Create the yoda container manually with correct name
+docker run -d \
+  --name signal-yoda \
+  --restart unless-stopped \
+  -e MODE=json-rpc \
+  -p 127.0.0.1:18082:8080 \
+  -p 127.0.0.1:6002:6001 \
+  -v ~/.openclaw/signal-cli/data-yoda:/home/.local/share/signal-cli \
+  bbernhard/signal-cli-rest-api:latest
+
+# 4. Verify both are healthy
+sleep 15 && docker ps --filter name=signal --format '{{.Names}} {{.Status}}'
+```
+
+<Aside type="caution">
+The regression test (`test-connections.sh`) checks for containers named exactly `signal-cli-rest-api` and `signal-yoda`. A mangled name like `8ad7a58e84ff_signal-yoda` will fail the test even if the container is running and healthy. The `docker run` approach above ensures the correct name.
+</Aside>

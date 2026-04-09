@@ -1,0 +1,189 @@
+---
+title: Signal CLI API Reference
+description: Three signal interfaces, three protocols, three ports. A field guide to not getting 404s.
+---
+
+import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+Sanctum runs three separate Signal interfaces. They share a name and a purpose but almost nothing else. Confusing them is the most common source of 404 errors in the stack, because "signal-cli on port 8080" and "signal-cli on port 18081" are not the same service, the same protocol, or the same API. They are three strangers with the same surname who happen to live in the same building.
+
+## The Three Interfaces
+
+| Interface | Port | Protocol | Container / Process | API Style |
+|-----------|------|----------|---------------------|-----------|
+| signal-cli native | `8080` | JSON-RPC | Homebrew binary (PID on Mac) | `POST /api/v1/rpc` |
+| signal-cli-rest-api | `18081` | REST | Docker: `signal-cli-rest-api` | `/v1/...`, `/v2/...` |
+| signal-yoda | `18082` | REST | Docker: `signal-yoda` | `/v1/...`, `/v2/...` |
+
+
+<Aside type="danger">
+Port 8080 does **not** serve REST endpoints. Hitting `/v1/about` or `/api/v1/accounts` on port 8080 will always return `404 Not Found` with `No context found for request`. This is not a bug. The native `--http` mode only speaks JSON-RPC. The REST endpoints live on ports 18081 and 18082 via the bbernhard Docker wrapper.
+</Aside>
+
+## 1. signal-cli Native (Port 8080)
+
+The Homebrew-installed `signal-cli 0.14.2` binary running as a daemon with `--http 127.0.0.1:8080`. This is OpenClaw's primary bridge — Yoda sends and receives messages through this interface.
+
+**Process:** `signal-cli -a +1XXXXXXXXXX daemon --http 127.0.0.1:8080 --no-receive-stdout`
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/v1/rpc` | JSON-RPC 2.0 endpoint (the only real endpoint) |
+| `GET` | `/api/v1/events` | Server-Sent Events stream for incoming messages |
+| `GET` | `/api/v1/check` | Health check |
+
+Everything else returns 404. There is no `/v1/about`. There is no `/api/v1/accounts`. Those paths belong to the Docker wrapper, not this interface.
+
+
+### JSON-RPC Examples
+
+**Send a message:**
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"send","params":{"recipient":["+1XXXXXXXXXX"],"message":"Hello from Sanctum"},"id":1}' \
+  http://127.0.0.1:8080/api/v1/rpc
+```
+
+**Get version:**
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"version","id":2}' \
+  http://127.0.0.1:8080/api/v1/rpc
+# Returns: {"jsonrpc":"2.0","result":{"version":"0.14.2"},"id":2}
+```
+
+**List groups:**
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"listGroups","id":3}' \
+  http://127.0.0.1:8080/api/v1/rpc
+```
+
+**Check if a number is registered:**
+```bash
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"getUserStatus","params":{"recipient":["+1XXXXXXXXXX"]},"id":4}' \
+  http://127.0.0.1:8080/api/v1/rpc
+```
+
+### Available JSON-RPC Methods
+
+Key methods (camelCase, passed as `"method"` in the JSON-RPC request): `send`, `sendReceipt`, `listGroups`, `updateGroup`, `getUserStatus`, `version`, `sendSyncRequest`, `listContacts`, `block`, `unblock`, `startLink`, `finishLink`, `subscribeReceive`, `unsubscribeReceive`.
+
+Full method list: [signal-cli-jsonrpc(5) man page](https://github.com/AsamK/signal-cli/blob/master/man/signal-cli-jsonrpc.5.adoc).
+
+
+## 2. signal-cli-rest-api (Port 18081)
+
+The [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker wrapper. Provides a proper REST API with versioned endpoints. Runs its own signal-cli instance internally with a separate data directory (`data-rest-api/`).
+
+**Container:** `signal-cli-rest-api` on `127.0.0.1:18081`
+
+### Key REST Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/v1/about` | Version info, capabilities, mode |
+| `GET` | `/v1/accounts` | List registered accounts |
+| `POST` | `/v2/send` | Send a message (v2 — supports quotes, mentions) |
+| `GET` | `/v1/groups/{number}` | List groups for an account |
+| `GET` | `/v1/receive/{number}` | Receive pending messages |
+
+### REST Example
+
+```bash
+# Check version
+curl -s http://127.0.0.1:18081/v1/about
+# Returns: {"versions":["v1","v2"],"build":2,"mode":"json-rpc","version":"0.98",...}
+
+# Send a message
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"message":"Hello","number":"+1XXXXXXXXXX","recipients":["+1XXXXXXXXXX"]}' \
+  http://127.0.0.1:18082/v2/send
+```
+
+## 3. signal-yoda (Port 18082)
+
+Identical to the REST API above but with a separate data directory (`data-yoda/`). This is the Yoda-specific Signal identity used by the agent council. Same image, same API, different account.
+
+**Container:** `signal-yoda` on `127.0.0.1:18082`
+
+
+## Docker Compose
+
+Both Docker containers are defined in `~/.openclaw/signal-cli/compose.yaml`:
+
+```yaml
+services:
+  signal-cli-rest-api:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-cli-rest-api
+    restart: unless-stopped
+    environment:
+      - MODE=json-rpc
+    ports:
+      - "127.0.0.1:18081:8080"
+      - "127.0.0.1:6001:6001"
+    volumes:
+      - ./data-rest-api:/home/.local/share/signal-cli
+
+  signal-cli-yoda:
+    image: bbernhard/signal-cli-rest-api:latest
+    container_name: signal-yoda
+    restart: unless-stopped
+    environment:
+      - MODE=json-rpc
+    ports:
+      - "127.0.0.1:18082:8080"
+      - "127.0.0.1:6002:6001"
+    volumes:
+      - ./data-yoda:/home/.local/share/signal-cli
+```
+
+<Aside type="caution" title="Docker Compose container naming bug">
+Docker Compose v5 has a known issue where stale container references corrupt the project state. If `docker compose up` fails with `Error response from daemon: No such container: <hash>`, the fix is: stop and remove all signal containers manually, then recreate the yoda container with `docker run` using the exact same flags from the compose file. The compose state for the yoda service gets stuck referencing a deleted container ID and no amount of `docker compose down` will clear it.
+</Aside>
+
+## OpenClaw Integration
+
+OpenClaw connects to signal-cli via the **native CLI binary**, not through any HTTP API. The relevant config in `openclaw.json`:
+
+```json
+{
+  "channels": {
+    "signal": {
+      "accounts": {
+        "yoda": {
+          "name": "Yoda Signal",
+          "enabled": true,
+          "account": "+1XXXXXXXXXX",
+          "cliPath": "/opt/homebrew/bin/signal-cli"
+        }
+      },
+      "enabled": true
+    }
+  }
+}
+```
+
+This means OpenClaw messaging works even when the HTTP/REST interfaces are down. The CLI binary talks directly to the signal-cli daemon via its internal socket, not via HTTP. The HTTP API is for external tooling, health checks, and regression tests — not for the primary message flow.
+
+## Quick Diagnostic
+
+```bash
+# Native JSON-RPC (should return version)
+curl -s -X POST -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"version","id":1}' \
+  http://127.0.0.1:8080/api/v1/rpc
+
+# REST API container 1 (should return about info)
+curl -s http://127.0.0.1:18081/v1/about
+
+# REST API container 2 / Yoda (should return about info)
+curl -s http://127.0.0.1:18082/v1/about
+
+# Docker container status (both should be "running")
+docker inspect --format '{{.State.Status}}' signal-cli-rest-api signal-yoda
+```
