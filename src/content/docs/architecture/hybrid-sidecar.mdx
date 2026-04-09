@@ -1,0 +1,288 @@
+---
+title: "Hybrid Sidecar Architecture (0x7F-MACSYNTH)"
+description: How we split the brain between macOS and Docker — isolating the logic, exposing the hardware, and pretending this was the plan all along.
+---
+
+import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![Tommy perched atop a Mac Mini, one paw resting on a Docker whale, supervising the handoff between host and container like a customs officer who also happens to live here](../../../assets/illustrations/hybrid-sidecar.png)
+
+The Mac Mini is an Apple Silicon machine with opinions about who gets to touch its Neural Engine. Docker is a Linux-first abstraction layer that would prefer you forgot macOS exists. The Hybrid Sidecar Architecture is the peace treaty between them — a dual-plane system where the host retains hardware control and the container handles application logic, communicating through Unix sockets and loopback TCP like two neighbors who share a wall and a very specific set of rules about noise.
+
+This architecture was formalized in Council Decree 0x7F-MACSYNTH. What follows is the operational reality of that decree.
+
+<Aside type="note">
+This replaces any prior assumptions about full-system containerization. The Mac Mini's ARM64 topology and macOS kernel constraints make that approach roughly as practical as teaching a cat to fetch — theoretically possible, universally inadvisable.
+</Aside>
+
+## The Dual-Plane Design
+
+The system operates across two planes with a strict division of labor.
+
+**The Host Plane (macOS Native)** is the Hardware Abstraction Layer. It manages the Apple Neural Engine via the MLX framework, handles the macOS networking stack (firewall, DNS), runs the user-facing GUI/CLI interfaces, and provides the [Sanctum Proxy](/architecture/proxy/) as a loopback gateway into the container. Everything that needs Metal API access or native macOS TTY registration lives here.
+
+**The Container Plane (Docker/Colima)** is the Logic Execution Engine. It houses the OpenClaw core, the `claw-gateway` daemon, and a lightweight MLX client that offloads heavy inference back to the host. It operates as a sidecar — it doesn't replace the host, it augments it.
+
+The two planes communicate exclusively via Unix Domain Sockets (for low-latency IPC) and Loopback TCP (for proxying). The container never touches physical network interfaces or hardware accelerators directly. It asks politely, through sanctioned gateways, and the host decides whether to comply.
+
+## Component Placement
+
+The Council decreed strict segregation of duties. Here's where everything lives.
+
+| Component | Plane | Port | Interface | Notes |
+|-----------|-------|------|-----------|-------|
+| Signal CLI | Host | 8080 | `127.0.0.1` | Native — containerization breaks TTY registration and device pairing |
+| LM Studio | Host | 1234 | `127.0.0.1` | Native — requires direct Metal API for GPU acceleration |
+| Sanctum Proxy | Host | 4040 | `127.0.0.1` | Go/Rust daemon — traffic cop between external connections and container |
+| MLX Runtime | Host | 1337 | `127.0.0.1` | High-performance inference path via ANE. See [Dynamic Model Routing](/architecture/dynamic-model-routing/) |
+| Docker Engine | Host | — | — | Colima runtime for the container plane |
+| OpenClaw Core | Container | 1977 | `0.0.0.0` (internal) | **Not** exposed to host network — accessed only via `claw-gateway` or proxy |
+| claw-gateway | Container | Unix socket | `/var/run/claw/gateway.sock` | Internal nervous system — receives host commands via TLV protocol |
+| MLX Client | Container | — | `host.docker.internal:1337` | Lightweight client that offloads inference to the host's MLX service |
+
+<Aside type="caution">
+Port 1977 inside the container is deliberately unexposed. If you find it reachable from the host network, something has gone wrong and you should check whether someone added a `ports:` directive to the compose file. They shouldn't have. Stop them.
+</Aside>
+
+## Docker Compose Specification
+
+The canonical `docker-compose.yml` for the Mac Mini uses bridge networking and `host.docker.internal` to let the container reach host services without exposing itself to the world.
+
+```yaml
+version: '3.8'
+
+services:
+  openclaw-core:
+    image: sanctum/openclaw:mac-arm64
+    container_name: claw-core
+    restart: unless-stopped
+    network_mode: bridge
+
+    environment:
+      - SIGNAL_CLI_HOST=host.docker.internal
+      - SIGNAL_CLI_PORT=8080
+      - LM_STUDIO_HOST=host.docker.internal
+      - LM_STUDIO_PORT=1234
+      - MLX_HOST=host.docker.internal
+      - MLX_PORT=1337
+      - GATEWAY_SOCKET=/var/run/claw/gateway.sock
+
+    volumes:
+      - claw-data:/app/data
+      - /tmp/claw-ipc:/var/run/claw
+      - ./config:/app/config:ro
+
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/claw
+
+    healthcheck:
+      test: ["CMD", "sh", "-c", "echo 'ping' | nc -w 1 127.0.0.1 1977 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  claw-data:
+    driver: local
+```
+
+The routing logic works in three hops: external traffic hits the Sanctum Proxy on port 4040, the proxy forwards to `host.docker.internal` on port 1977, and when the container needs MLX or Signal, it resolves `host.docker.internal` back to the host's native services. It's a round trip that never leaves the machine.
+
+<Aside type="tip">
+The container's root filesystem is read-only. Writes go to `tmpfs` or the persistent `claw-data` volume. This means a compromised container can't modify its own binaries — which is the kind of paranoia that feels excessive until the one time it isn't.
+</Aside>
+
+## The claw-gateway Daemon
+
+The `claw-gateway` is the container's internal nervous system. It decouples the OpenClaw Core from the network stack, allowing the host to issue commands via a secure Unix socket without the container ever needing to know what's on the other side of the wall.
+
+### Socket Configuration
+
+The gateway binds to `/var/run/claw/gateway.sock` with permissions `0660` (owner: root, group: `claw-user`). It speaks a binary TLV (Type, Length, Value) protocol — no HTTP, no REST, no JSON-over-WebSocket. Just bytes, because this is IPC and we're not building a startup.
+
+### Command Types
+
+| Command ID | Type | Payload | Action |
+|-----------|------|---------|--------|
+| `0x01` | `QUERY_STATUS` | Empty | Returns JSON status of OpenClaw Core, MLX connection, and Signal CLI link |
+| `0x02` | `INJECT_SIGNAL` | Binary Signal packet | Forwards a raw signal packet from the host's Signal CLI to the Core |
+| `0x03` | `REQUEST_INFERENCE` | JSON `{prompt, model_id}` | Routes the prompt to the host's MLX service via `host.docker.internal:1337` |
+| `0x04` | `PROXY_FORWARD` | `{target_port, data}` | Dynamic port forwarder for host services not pre-configured |
+| `0x05` | `HEARTBEAT` | Timestamp | Keeps the socket alive; triggers Core auto-restart on timeout |
+| `0xFF` | `EMERGENCY_HALT` | Auth token | Immediately terminates the Core and flushes buffers |
+
+### Dispatch Logic
+
+<Steps>
+1. **Bind:** The daemon binds to the Unix socket on startup and waits.
+2. **Validate:** On receiving a frame, the dispatcher checks the source — only the host's `sanctum-proxy` or a local admin socket are permitted senders.
+3. **Route:** `REQUEST_INFERENCE` opens a TCP connection to `host.docker.internal:1337`, sends the payload, and pipes the response back. `INJECT_SIGNAL` writes binary data directly to the Core's internal input queue.
+4. **Log:** Every transaction is logged to `/var/log/claw-gateway.log` with a `TRACE_ID`. When something goes wrong at 3 AM, you'll be grateful for this one.
+</Steps>
+
+<Aside type="note">
+The `EMERGENCY_HALT` command (`0xFF`) requires an auth token. This is the kill switch — it terminates the Core immediately and flushes all buffers. It exists because sometimes the only fix is turning it off and pretending it never happened.
+</Aside>
+
+## Startup Sequence
+
+The host doesn't wait for you to press buttons. The entire stack is dependency-locked and managed via `launchd`. For the full plist reference, see [LaunchAgents & LaunchDaemons](/reference/launchagents/).
+
+### Phase 1: Host Gateway Boot
+
+The `com.sanctum.claw-gateway` plist lives in `/Library/LaunchDaemons/` and is the first process to wake on boot.
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.sanctum.claw-gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/sanctum/bin/claw-gateway</string>
+        <string>--mode=host-init</string>
+        <string>--config=/etc/sanctum/claw.conf</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+        <key>SuccessfulExit</key>
+        <false/>
+        <key>PathExists</key>
+        <string>/var/run/sanctum/heartbeat</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>/var/sanctum</string>
+    <key>StandardOutPath</key>
+    <string>/var/log/sanctum/claw-gateway.out</string>
+    <key>StandardErrorPath</key>
+    <string>/var/log/sanctum/claw-gateway.err</string>
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>4096</integer>
+    </dict>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>LOG_LEVEL</key>
+        <string>INFO</string>
+        <key>HOST_MODE</key>
+        <string>TRUE</string>
+    </dict>
+</dict>
+</plist>
+```
+
+On execution, `claw-gateway` health-checks the Docker socket, initializes the `sanctum` network bridge, and triggers `docker-compose up -d`. It doesn't exit — it enters a watchdog state, monitoring container health indefinitely. It's the adult in the room.
+
+### Phase 2: Container Orchestration
+
+The `docker-compose.yml` is invoked by the gateway. Inside, the OpenClaw container uses `tini` (or `dumb-init`) for signal propagation.
+
+<Steps>
+1. **Secrets Injection:** The container mounts `/run/secrets` (populated by the gateway) before any application logic runs.
+2. **Network Binding:** The container binds to `127.0.0.1` internally; the gateway handles NAT/port mapping to the host.
+3. **Readiness Probe:** The application exposes `/healthz`. The gateway polls this every 5 seconds.
+4. **Service Activation:** Only after `/healthz` returns `200 OK` does the gateway register the service in mDNS (Bonjour) as `sanctum.local`.
+</Steps>
+
+### Phase 3: System Extensions
+
+Components requiring kernel-level access (raw socket capture, hardware passthrough) are managed as additional `launchd` plists in `/Library/LaunchDaemons/`, started by `claw-gateway` via `launchctl boot`:
+
+- **`com.sanctum.net-filter`** — A lightweight BPF filter daemon. Starts only after `claw-gateway` confirms the Docker network is active.
+- **`com.sanctum.hw-sync`** — Hardware synchronization daemon. Starts only after OpenClaw signals "Ready".
+
+## Security Model
+
+The Sanctum operates on Zero-Trust Isolation. No component is trusted by default. All interactions are mediated. For the broader security posture, see [Security](/operations/security/).
+
+### Secrets Management
+
+All secrets — API keys, TLS certificates, database passwords — live in `/var/sanctum/vault/` on the host, encrypted via macOS Keychain (the `security` CLI) or a dedicated vault binary with a master key derived from the hardware UUID. The `claw-gateway` decrypts at runtime and injects into the container via Docker secrets at `/run/secrets/`.
+
+Secrets are never written to disk inside the container. They exist only in memory (`/dev/shm`) and are wiped on termination. The gateway supports a `rotate-secrets` signal — on receipt, it re-fetches from the vault and restarts the container with fresh credentials.
+
+<Aside type="danger">
+If the vault can't be decrypted at startup, the gateway refuses to launch the container. It logs `VAULT_LOCKED` and waits for manual intervention. This is not a bug. This is the system choosing data integrity over availability, which is the correct choice when the alternative is running with stale secrets and hoping for the best.
+</Aside>
+
+### Network Isolation
+
+The `sanctum` Docker network is a private bridge on `10.100.0.0/16` with no route to the public internet. Outbound traffic from OpenClaw is blocked by the host's `pf` firewall except for specific whitelisted ports (NTP, designated API endpoints) defined in the gateway config.
+
+Inbound traffic is equally locked down. The host firewall blocks everything to the `sanctum` network. Only `claw-gateway` listens on the host's public interface (port 8443), terminating TLS and validating client certificates before forwarding traffic to the container. If you don't have a valid cert, you don't get in. The bouncer doesn't care about your feelings.
+
+### Permissions and Sandboxing
+
+The OpenClaw container runs as a non-root user (`uid=1000`, `gid=1000`), drops all Linux capabilities (`--cap-drop=ALL`), and adds back only `NET_BIND_SERVICE` (and `SYS_PTRACE` when debugging is explicitly enabled). Host directories are mounted `:ro` by default. Write access is restricted to ephemeral volumes (`/data`, `/logs`) mapped to isolated host directories with `chmod 700` owned by the `sanctum` user.
+
+The `claw-gateway` daemon itself runs in a sandboxed `launchd` profile, preventing access to user haus directories or system config outside `/var/sanctum`.
+
+## Failure Modes and Self-Healing
+
+The system degrades gracefully and recovers without human intervention. Most of the time. The rest of the time, it tells you exactly what went wrong and waits patiently while you fix it.
+
+### Component Failure Matrix
+
+| Component | Failure Mode | Detection | Self-Healing Action |
+|-----------|-------------|-----------|-------------------|
+| `claw-gateway` | Crash / Segfault | `launchd` detects exit code ≠ 0 | Immediate restart. After 3 consecutive failures: Safe Mode (halts container startup), alerts admin |
+| OpenClaw | Crash / OOM | Gateway health check timeout (>30s) | `docker-compose restart openclaw`. If startup fails within 60s: Backoff state (5 min wait) |
+| Docker Engine | Socket unreachable | Gateway socket check | Gateway attempts `launchctl kickstart -k system/com.docker`. If Docker won't start: halt and alert |
+| Network Bridge | IP conflict / drop | Packet loss >5% on `sanctum` interface | Gateway flushes bridge (`ifconfig sanctum0 down/up`), re-registers container |
+| Secrets Vault | Decryption failure | Gateway can't read vault | Refuses to start container. Logs `VAULT_LOCKED`. Waits for manual intervention |
+
+### The Circuit Breaker
+
+If the OpenClaw container restarts more than 5 times within a 10-minute window, the gateway triggers a circuit breaker:
+
+<Steps>
+1. Stop attempting to restart the container.
+2. Switch the `sanctum` network interface to Drain state (no new connections accepted).
+3. Write a `LOCKED` flag to `/var/run/sanctum/status`.
+4. Send a high-priority alert via the configured notification channel (PagerDuty, Slack, or local syslog).
+5. Wait. The system stays locked until an administrator manually clears the flag and restarts the gateway.
+</Steps>
+
+This is deliberate. After five crashes in ten minutes, the system has decided it doesn't know what's wrong and that continuing to try is worse than stopping. It's the infrastructure equivalent of "I need an adult."
+
+### Data Integrity
+
+Logs are written to a circular buffer in `/var/log/sanctum/` with a 500MB cap. Older logs are rotated and compressed. Application state lives in the persistent volume — on restart, the container mounts it. If the volume is corrupted (detected by checksum mismatch), the container refuses to mount and enters Data Recovery mode, prompting the admin to restore from backup. See [Backup & Restore](/operations/backup-restore/) for the recovery procedure.
+
+## Migration Path
+
+The transition from bare-metal to the hybrid `claw-gateway` architecture is designed to be seamless and reversible. You don't flip a switch. You turn a dial.
+
+### Phase 1: Shadow Mode (Week 1)
+
+Install `claw-gateway` and the Docker environment alongside existing bare-metal services. Configure the gateway to run OpenClaw in Shadow Mode — the container receives a copy of all incoming traffic via a TAP interface or `iptables` mirroring, but does not process it. Bare-metal services continue handling production traffic. Compare logs between both systems to validate identical processing.
+
+### Phase 2: Canary Routing (Week 2)
+
+Enable Canary Mode in the gateway. Route 5% of incoming traffic to the OpenClaw container, 95% to bare-metal. Monitor error rates and latency. If the container error rate exceeds 0.1%, the gateway automatically reverts to 100% bare-metal. No manual intervention required — the system trusts the numbers more than it trusts your optimism.
+
+### Phase 3: Full Cutover (Week 3)
+
+Once stability is confirmed, route 100% of traffic to OpenClaw. Then decommission: stop bare-metal services, archive config and data to `/var/sanctum/archive/bare-metal/`, remove old binaries, and update the host firewall to block the decommissioned ports.
+
+### Phase 4: Rollback Capability
+
+The migration script generates a `rollback.sh` script. If the hybrid system fails post-cutover, `rollback.sh` stops the gateway and container, restores the original `pf` firewall rules, restarts the archived bare-metal services, and restores original network routing.
+
+<Aside type="caution">
+The bare-metal services must be kept in warm standby — data synced, binaries present — for 30 days post-cutover before final deletion. This is non-negotiable. Thirty days of disk space is cheaper than one night of discovering your rollback plan was theoretical.
+</Aside>
+
+---
+
+The `claw-gateway` is the heart. The containers are the organs. The security model is the immune system. They function as one. So it is decreed.
