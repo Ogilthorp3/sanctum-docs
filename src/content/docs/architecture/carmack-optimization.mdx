@@ -1,56 +1,67 @@
 ---
 title: The Carmack Optimization
-description: Deep architectural fixes to the mlx-finetune pipeline for optimal Apple Silicon (M4 Max) Metal GPU efficiency.
+description: How we stopped the Metal GPU from having a panic attack every time we trained the Council.
 ---
+
+import { Aside } from '@astrojs/starlight/components';
 
 ![The Carmack Optimization — robotic arms defragmenting Metal GPU shaders like a Formula 1 pit stop for silicon.](./images/hero-carmack.jpg)
 
 # The Carmack Optimization
 
 **Date:** 2026-04-02
-**Subject:** `mlx-finetune` Pipeline Architecture
 **Status:** Implemented and Verified
 
-Following an analysis of the training architecture—inspired by John Carmack's philosophy on unified memory and hardware profiling—several critical optimizations were implemented to prevent hardware crashes and maximize training efficiency for the **Mothma 9-agent Council** (Qwopus 27B).
+Training a 27-billion-parameter model on a laptop is either visionary or reckless. For a while, it was both.
 
-## Phase 1: Sequence Bucketing (Compiler Protection)
+The `mlx-finetune` pipeline was crashing mid-training with Metal GPU errors that read like cry-for-help suicide notes from the shader compiler. Inspired by John Carmack's philosophy — "if you don't understand the hardware, you don't understand the problem" — we profiled everything and found four distinct failure modes. Each one was the kind of bug that only appears when you push consumer hardware to the edge of what Apple probably imagined anyone would do with it.
 
-**The Issue:** Training with `batch_size: 1` on unpadded datasets caused MLX to compile a new Metal shader for every unique sequence length. This JIT thrashing exhausted the `MTLCompilerService`, leading to "Broken Pipe" errors mid-training.
+## Phase 1: Sequence Bucketing
 
-**The Fix:**
-- `build_dataset.py` was refactored to calculate exact token lengths using the Qwen 3.5 tokenizer.
-- All examples are now padded to fixed buckets: **512, 1024, or 2048** tokens.
-- **Impact:** The compiler only sees 3 distinct graph shapes, eliminating the crashes and drastically reducing CPU overhead.
+**The Issue:** Training with `batch_size: 1` on unpadded datasets caused MLX to compile a new Metal shader for every unique sequence length. Every. Single. One. The `MTLCompilerService` eventually threw a "Broken Pipe" — Apple's polite way of saying "I give up."
 
-## Phase 2: Kernel Fusion & Graph Deframgmentation
+**The Fix:** All training examples are now padded to fixed buckets: **512, 1024, or 2048** tokens. The compiler sees 3 graph shapes instead of 3,000.
 
-**The Issue:** Deep LoRA layers and high gradient accumulation steps created an explosion of tiny, dynamic memory allocations, hitting the `[metal::malloc]` resource limit (499,000).
+<Aside type="tip">
+This is the single highest-impact optimization in the entire pipeline. If your MLX training crashes with "Broken Pipe" errors, bucket your sequences first. Everything else is optimization. This is survival.
+</Aside>
 
-**The Fix:**
-- Initially stabilized by reducing `num_layers` and `rank`.
-- Once the graph shapes were locked (via Phase 1), we successfully pushed the configuration back to **32 layers** and a **2048 context window** without triggering OOM or allocation limit crashes.
-- The computation engine now processes a highly stable, consolidated computational graph.
+## Phase 2: Kernel Fusion & Graph Defragmentation
+
+**The Issue:** Deep LoRA layers with high gradient accumulation created an explosion of tiny memory allocations, hitting Metal's `[metal::malloc]` resource limit at 499,000 allocations. The GPU was spending more time managing memory than doing math.
+
+**The Fix:** Once sequence bucketing locked the graph shapes (Phase 1), the allocation pattern stabilized. We pushed back to **32 layers** and **2048 context** without hitting the limit. The computation graph went from a Jackson Pollock painting to a circuit diagram.
 
 ## Phase 3: Python GIL Bypass
 
-**The Issue:** The `generate_synthetic.py` script relied on single-threaded Python string manipulation, bottlenecking dataset generation as the council expanded to 9 agents.
+**The Issue:** Synthetic data generation was single-threaded. Nine agents, each needing 700+ training examples, all waiting in line behind Python's Global Interpreter Lock. Generating the dataset took longer than training on it.
 
-**The Fix:**
-- Refactored `generate_synthetic.py` to use Python's `multiprocessing.Pool()`.
-- **Impact:** Removed the Global Interpreter Lock (GIL) bottleneck, allowing the dataset generation to execute concurrently across all available CPU cores.
+**The Fix:** `multiprocessing.Pool()`. All CPU cores now participate. The GIL gets to watch from the sidelines while actual work happens.
 
-## Phase 4: Hardware Profiling Pipeline
+## Phase 4: Hardware Profiling
 
-**The Issue:** Configuration tweaks were based on trial and error rather than actual hardware metrics.
+**The Issue:** Configuration changes were vibes-based. "This crashed, so reduce rank. That didn't crash, so increase context. Repeat until the model converges or you lose patience."
 
-**The Fix:**
-- Created `scripts/profile_training.sh`.
-- Wraps the MLX training command with Apple Instruments: `xcrun xctrace record --template 'Metal System Trace'`.
-- Allows real-time tracking of ALU occupancy, shader compilation time, and unified memory bandwidth utilization.
+**The Fix:** `scripts/profile_training.sh` wraps training with Apple Instruments:
+
+```bash
+xcrun xctrace record --template 'Metal System Trace' -- python -m mlx_lm.lora ...
+```
+
+Real-time ALU occupancy, shader compilation time, unified memory bandwidth. No more guessing. Carmack would approve.
+
+<Aside type="note">
+The profiler revealed that peak Metal memory during training was 51GB for Qwen 27B at rank 64 — but only 29GB for Gemma 4 31B. Same rank, bigger model, less memory. Architecture matters more than parameter count.
+</Aside>
 
 ## E2E Validation
 
-A dedicated End-to-End Test Suite (`tests/test_e2e_pipeline.py`) was built to enforce these standards:
-1.  **Data Generation:** Validates parallel execution.
-2.  **Sequence Bucketing:** Validates padding and dropping logic.
-3.  **Live Inference:** Sends HTTP payloads to the local `mlx_lm.server` to prove the deployed adapter is actively streaming tokens.
+A dedicated test suite (`tests/test_e2e_pipeline.py`) enforces all four optimizations:
+
+| Test | What It Validates |
+|------|-------------------|
+| Data Generation | Parallel execution across CPU cores |
+| Sequence Bucketing | Padding and dropping logic, no unbucketed sequences |
+| Live Inference | HTTP payloads to `mlx_lm.server` prove the adapter streams tokens |
+
+Because the only thing worse than a crash at 3 AM is a crash at 3 AM that you thought you'd fixed.
