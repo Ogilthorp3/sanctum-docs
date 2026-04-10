@@ -48,7 +48,7 @@ library:
   port: 8888
 ```
 
-The renderer is intentionally thin. It owns the shell, navigation, theme state, idle mode, and fallback panels. The actual work still lives in the local services. This is good. When the shell breaks, you debug a shell. When the shell also contains the whole backend, you debug a lifestyle.
+The renderer is intentionally thin. It owns the shell, navigation, theme state, and fallback panels. The actual work still lives in the local services. This is good. When the shell breaks, you debug a shell. When the shell also contains the whole backend, you debug a lifestyle.
 
 ## Why It Was Black
 
@@ -97,16 +97,17 @@ For reference, the npm script resolves to:
 bash /Users/neo/Projects/the-holocron/scripts/install-latest-holocron.sh
 ```
 
-The updater runs:
+The updater now runs the full release path:
 
 ```sh
 npm run build
 npm run test:e2e
-npx electron-builder --dir
+bash scripts/sign-holocron-app.sh /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app
+bash scripts/notarize-holocron-app.sh /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app
 ditto /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app /Applications/The\ Holocron.app
 ```
 
-That means the app in `/Applications` is the app that just passed validation. A surprisingly modern concept.
+That means the app in `/Applications` is the app that just passed browser e2e, release signing, Apple notarization, and post-install validation. A surprisingly modern concept, especially for a bridge app that used to black-screen itself on principle.
 
 ## End-to-End Validation
 
@@ -132,6 +133,7 @@ It validates:
 - health tab
 - library tab or library fallback
 - screenshot artifacts in `tests/artifacts/`
+- installed notarized release launch, signature, and stapled ticket in release mode
 
 The suite uses `agent-browser` instead of Playwright. This is not ideology. It is because the fastest way to debug the Holocron is to make the browser tell you what it sees, not to spend an afternoon constructing a browser abstraction layer so a test runner can lie more formally.
 
@@ -139,21 +141,66 @@ The suite uses `agent-browser` instead of Playwright. This is not ideology. It i
 If the UI server is not already running, the e2e script starts Vite on `127.0.0.1:3333` automatically. The browser automation details live in [Agent Browser](/guides/agent-browser/), because once a tool becomes important enough, it earns the dignity of having its own page.
 </Aside>
 
+The suite now has three modes:
+
+```sh
+HOLOCRON_E2E_MODE=web bash tests/holocron-e2e.sh
+HOLOCRON_E2E_MODE=native bash tests/holocron-e2e.sh
+HOLOCRON_E2E_MODE=release HOLOCRON_E2E_EXPECT_STAPLED=1 bash tests/holocron-e2e.sh
+```
+
+- `web` drives the Vite surface on `127.0.0.1:3333`
+- `native` attaches `agent-browser` to an installed debug-style Electron window through CDP
+- `release` verifies the installed app the way macOS actually sees it: signed, stapled, launchable, and not immediately dead
+
+That split exists because a hardened notarized release should be treated like a release artifact, not bullied into behaving like a debug target with a remote debugging port jammed into it at runtime. Apple gets touchy. In this case, correctly.
+
+## Signing and Notarization
+
+Holocron is now shipped as a real macOS app:
+
+```sh
+spctl -a -vv /Applications/The\ Holocron.app
+```
+
+Expected result:
+
+```text
+accepted
+source=Notarized Developer ID
+origin=Developer ID Application: Bertrand Nepveu (GJ994MN2YF)
+```
+
+The release pipeline uses:
+
+- explicit recursive Developer ID signing with hardened runtime and secure timestamps
+- explicit `notarytool` submission through the `holocron-notarization` keychain profile
+- stapling before install
+- staple validation after install
+
+This is intentionally explicit. Electron Builder's auto-signing path was more magical than reliable, and magic is just a future incident with better branding.
+
 ## Known Limits
 
-Holocron now has a reliable local update path. It does not yet have real in-app autoupdate.
+Holocron now has a reliable local update path, proper macOS signing, and notarization. It still does not have real in-app autoupdate.
 
-That is deliberate. Proper macOS autoupdate should wait for valid signing and notarization. Local packaging works fine. Unsigned self-update infrastructure is the sort of convenience feature that eventually becomes an incident report.
+That is deliberate. Proper macOS autoupdate should wait for stable release artifacts and a publish story that is slightly more mature than "we can do it by hand now, which is already a huge improvement."
 
 The correct order is:
 
 ```text
-1. fix signing
-2. notarize the app
-3. add electron-updater
-4. publish a real update feed
+1. keep signing and notarization boring
+2. add electron-updater
+3. publish a real update feed
+4. stop thinking about Gatekeeper for a few blessed minutes
 ```
 
-Until then, `npm run update:app` is the operational truth. It is not elegant. It is, however, honest, repeatable, and notably less dramatic than the previous version of events.
+Until then, `npm run update:app` is the operational truth. It is not elegant. It is, however, signed, notarized, repeatable, and notably less dramatic than the previous version of events.
+
+## Idle Behavior
+
+The Holocron used to drop into an idle "screensaver" mode that grabbed fullscreen and always-on-top behavior after two minutes. That was thematically coherent and operationally irritating.
+
+Idle screensaver behavior is currently disabled in the renderer. If you leave the app open while you make tea, it now mostly minds its own business. This is the sort of restraint we should encourage when possible.
 
 If the installed app goes black again, the first stop is [Troubleshooting](/operations/troubleshooting/). We try very hard not to repeat incidents. We also keep having enough material to stay in business.
