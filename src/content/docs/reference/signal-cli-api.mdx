@@ -187,3 +187,68 @@ curl -s http://127.0.0.1:18082/v1/about
 # Docker container status (both should be "running")
 docker inspect --format '{{.State.Status}}' signal-cli-rest-api signal-yoda
 ```
+
+
+## Health Monitoring
+
+The `signal-health.sh` script provides military-grade monitoring of all Signal interfaces with auto-recovery capabilities.
+
+**Location:** `~/.sanctum/scripts/signal-health.sh`
+
+### Usage
+
+```bash
+# Check-only mode (human-readable)
+~/.sanctum/scripts/signal-health.sh
+
+# Auto-fix mode (restarts failed components)
+~/.sanctum/scripts/signal-health.sh --fix
+
+# Machine-readable JSON output
+~/.sanctum/scripts/signal-health.sh --json
+
+# Silent mode (log only, no stdout)
+~/.sanctum/scripts/signal-health.sh --fix --quiet
+```
+
+### What It Checks
+
+| Component | Check | Auto-Fix Action |
+|-----------|-------|-----------------|
+| Native daemon (`:8080`) | JSON-RPC `version` call | Restart via launchctl or direct launch |
+| signal-cli-rest-api (`:18081`) | `/v1/accounts` returns expected account | `docker restart signal-cli-rest-api` |
+| signal-yoda (`:18082`) | `/v1/accounts` returns Yoda number | `docker restart signal-yoda` |
+| OpenClaw bridge (`:1977`) | Gateway listening + node bridge connected to `:8080` | Report only (manual) |
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0` | All components healthy |
+| `1` | One or more components were down but auto-recovered |
+| `2` | Manual intervention required |
+
+### LaunchAgent (Periodic Monitoring)
+
+A LaunchAgent runs the health check every 5 minutes with `--fix --quiet`:
+
+**Plist:** `~/Library/LaunchAgents/com.sanctum.signal-health.plist`
+
+```bash
+# Check status
+launchctl list | grep signal-health
+
+# Reload after edits
+launchctl unload ~/Library/LaunchAgents/com.sanctum.signal-health.plist
+launchctl load ~/Library/LaunchAgents/com.sanctum.signal-health.plist
+```
+
+### Logs
+
+All health check results are appended to `~/.sanctum/logs/signal-health.log`. LaunchAgent stdout/stderr go to `~/.sanctum/logs/signal-health-stdout.log` and `signal-health-stderr.log`.
+
+### Architecture Notes
+
+<Aside type="tip">
+The 18081 container (`signal-cli-rest-api`) runs account `+15555550101` — a **different number** from Yoda. The Yoda account (`+15555550100`) lives on the native daemon (`:8080`) and the signal-yoda container (`:18082`). Trying to send as Yoda via `:18081` will always return "Specified account does not exist" — this is expected behavior, not a bug.
+</Aside>
