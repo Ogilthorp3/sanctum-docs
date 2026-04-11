@@ -407,3 +407,65 @@ sleep 15 && docker ps --filter name=signal --format '{{.Names}} {{.Status}}'
 <Aside type="caution">
 The regression test (`test-connections.sh`) checks for containers named exactly `signal-cli-rest-api` and `signal-yoda`. A mangled name like `8ad7a58e84ff_signal-yoda` will fail the test even if the container is running and healthy. The `docker run` approach above ensures the correct name.
 </Aside>
+
+## Signal Desktop Stealing WebSocket (ConnectedElsewhereException)
+
+**Symptom:** Yoda stops receiving Signal messages. signal-cli logs show `ConnectedElsewhereException` in an infinite reconnection loop. Messages sent to +15555550100 are delivered to Signal Desktop instead of signal-cli/OpenClaw.
+
+**Root cause:** Signal only allows one active WebSocket connection per account. Signal Desktop (the Electron app) and signal-cli both try to maintain a persistent WebSocket to Signal's servers for +15555550100. When Signal Desktop is running, it wins the connection race and signal-cli gets kicked off with `ConnectedElsewhereException` every time it tries to reconnect. This creates an infinite loop: connect → kicked → reconnect → kicked.
+
+OpenClaw spawns signal-cli as a child process and will auto-restart it on crash, but each restart hits the same wall because Signal Desktop is still holding the connection.
+
+**Diagnosis:**
+
+```bash
+# Check if Signal Desktop is running (this is your culprit)
+pgrep -f '/Applications/Signal.app/Contents/MacOS/Signal'
+
+# Confirm signal-cli is in a reconnect loop
+# (OpenClaw logs or signal-cli stderr will show ConnectedElsewhereException)
+ps aux | grep signal-cli | grep -v grep
+
+# The health check now detects this automatically
+~/.sanctum/scripts/signal-health.sh
+```
+
+**Fix:**
+
+```bash
+# 1. Quit Signal Desktop gracefully
+osascript -e 'tell application "Signal" to quit'
+
+# 2. If signal-cli is stuck, kill it — OpenClaw will auto-restart cleanly
+kill $(pgrep -f 'signal-cli.*daemon.*8080') 2>/dev/null
+
+# 3. Wait for Signal's servers to release the connection (~5 seconds)
+sleep 5
+
+# 4. OpenClaw auto-restarts signal-cli. Verify it's healthy:
+curl -s -X POST http://127.0.0.1:8080/api/v1/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"version","id":1}'
+
+# 5. Confirm it's actively receiving (this error is actually good — means daemon is listening)
+curl -s -X POST http://127.0.0.1:8080/api/v1/rpc \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","method":"receive","id":2,"params":{"timeout":1}}'
+# Expected: "Receive command cannot be used if messages are already being received."
+```
+
+**Or use the health check with auto-fix:**
+
+```bash
+~/.sanctum/scripts/signal-health.sh --fix
+```
+
+The health check now runs the Signal Desktop conflict detection first, before any other checks. If `--fix` is passed and Signal Desktop is found, it kills it automatically.
+
+<Aside type="danger">
+Do not run Signal Desktop on this machine. It is not compatible with signal-cli for the same account. They cannot coexist — Signal's server enforces one WebSocket per account number, period. If you need to check Signal messages visually, use Signal on your phone or a different device.
+</Aside>
+
+<Aside type="note">
+**Key detail:** OpenClaw (PID for `openclaw-gateway`) is the parent process of signal-cli. You do not need to manually restart signal-cli after killing it — OpenClaw detects the child exit and spawns a new instance automatically. Just make sure Signal Desktop is dead first, otherwise the new instance will hit the same ConnectedElsewhereException wall.
+</Aside>
