@@ -1,0 +1,125 @@
+---
+title: Engineering Discipline
+description: 166 tests, zero hardcoded keys, and the paranoia required to run AI agents in your house.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Engineering Discipline — the security fortress where every commit is tested and every key is rotated.](./images/hero-engineering-discipline.png)
+
+# Engineering Discipline
+
+**Date:** 2026-04-11
+**Status:** Active
+
+Running AI agents in your house is either a flex or a liability. The difference is engineering discipline.
+
+This page documents the standards that keep Sanctum from becoming a cautionary tale. Every number below is verified by automated tests. If it's not tested, it doesn't exist.
+
+## Test Coverage
+
+166 tests across 10 components. No untested code ships.
+
+| Component | Tests | What They Verify |
+|-----------|------:|------------------|
+| Smart Router (Rust) | 23 | Pattern matching, intent classification, mock backend dispatch |
+| LoRA in Rust | 27 | Config parsing, quantize roundtrip, 248-pair merge, weight hash |
+| Sanctum Olympics | 31 | Config loading, task YAML validation, judge parsing, mock e2e |
+| Gemma 4 Pipeline | 21 | Data conversion, enrichment, training config, 2-iter run, memory |
+| Cloud Proxy | 16 | Health, models, daily caps, fallback chain, agent extraction, audit |
+| Carmack Eval v2 | 19 | Task structure, scoring rules, partial scores, HTTP error handling |
+| Key Rotation | 5 | Dry-run, verify, keychain access, mask function |
+| Secret Rotation | 10 | Scan, keychain audit, token patterns, usage display |
+| Docs Quality | 8 | Frontmatter, CSS hygiene, inline styles, image paths, hero uniqueness |
+| Build Release | 6 | Prerequisites, binary, metallib, dist packaging, deploy flags |
+| **Total** | **166** | |
+
+```bash
+# Run everything
+cd sanctum-rs && cargo test -- --test-threads=1     # 60 Rust tests
+cd sanctum-olympics && python test_olympics.py       # 31 Python tests
+cd mlx-finetune && python tests/test_gemma4_pipeline.py  # 21 pipeline tests
+cd mlx-finetune && python tests/test_carmack_v2.py   # 19 eval tests
+python tests/test_cloud_proxy.py                      # 16 proxy tests
+bash tests/test_sanctum_docs.sh                       # 8 docs tests
+bash ~/.sanctum/tests/test_rotate_openrouter.sh       # 5 rotation tests
+bash ~/.sanctum/tests/test_secret_rotation.sh         # 10 secret tests
+bash tests/test_build_release.sh                      # 6 build tests
+```
+
+## Secret Management
+
+Zero hardcoded API keys. Anywhere. Verified across 31 repos in 2 GitHub organizations.
+
+| Check | Status |
+|-------|--------|
+| Hardcoded keys in source files | **0** (all repos, both machines) |
+| Hardcoded keys in public repos | **0** (Ogilthorp3 + Triptyq-Capital) |
+| API keys in git history | **Neutralized** (old keys revoked) |
+| OpenRouter key storage | macOS Keychain (both machines) |
+| OpenRouter Management key | macOS Keychain (for programmatic rotation) |
+| Key rotation | Zero-touch via `rotate-openrouter.sh` |
+| Secret scanning | 6-phase sweep via `secret-rotation.sh` |
+
+<Aside type="tip">
+The secret rotation script runs a 6-phase sweep: git remote scan, remote fix, deep file content scan, keychain audit, loose file check, and SOPS vault status. Run `secret-rotation.sh --full` anytime you're paranoid. Which should be always.
+</Aside>
+
+### Key Rotation Architecture
+
+```
+macOS Keychain
+  ├── openrouter-api-key      → Used by cloud proxy + benchmarks
+  ├── openrouter-mgmt-key     → Used by rotation script (admin-only)
+  └── anthropic-api-key       → Used by coding-llm-bench
+
+rotate-openrouter.sh:
+  1. Create new key (via Management API)
+  2. Verify new key works (test completion)
+  3. Store in Keychain (both machines)
+  4. Delete old key (via Management API)
+  Zero browser. Zero human. Zero downtime.
+```
+
+## Infrastructure Quality
+
+| Metric | Before | After |
+|--------|--------|-------|
+| LaunchAgents: disabled/backup files | 23 | **0** |
+| Shell scripts without `set -euo pipefail` | 13 | **0** |
+| Rust compiler warnings | 4 | **0** |
+| Stale adapter directories | 51 GB | **1.9 GB** (2 active) |
+| CSS `!important` overrides | 36 | **0** |
+| Inline `style=` in MDX | 9 | **0** |
+| Legacy image path conventions | 55 | **0** |
+| `instance.yaml` stale services | 5+ | **0** (all annotated) |
+
+<Aside type="note">
+The 51 GB of stale adapters were 11 directories from previous training experiments. Only 2 are active (Qwen V3 production + Gemma 4 candidate). The rest were archived or deleted. Your SSD thanks you.
+</Aside>
+
+## Cloud Proxy Hardening
+
+The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and OpenRouter. Five layers of protection:
+
+| Layer | What It Does |
+|-------|-------------|
+| **Key security** | API key from macOS Keychain only — never in code, env, or git |
+| **Fallback chain** | Cloud → Coder-14B → Council MLX → error |
+| **Cost control** | Per-agent daily caps ($2/day Windu, $0.50 default) |
+| **Audit trail** | Every cloud call logged: agent, tokens, cost, latency |
+| **Rate limiting** | Circuit breaker on spending caps |
+
+## The Standard
+
+Every commit follows the same discipline:
+
+1. **Code** — write it
+2. **Test** — prove it works
+3. **Document** — explain why it exists
+4. **Scan** — verify no secrets leaked
+5. **Push** — ship it
+
+If any step fails, the commit doesn't ship. This is not optional. This is not aspirational. This is how the house runs.
+
+Because the only thing worse than an AI agent making a mistake is an AI agent making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives.

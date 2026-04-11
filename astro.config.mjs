@@ -102,6 +102,7 @@ export default defineConfig({
 						{ label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
 						{ label: 'Sanctum Olympics', slug: 'architecture/sanctum-olympics' },
 						{ label: 'Model Comparison', slug: 'architecture/model-comparison' },
+						{ label: 'Engineering Discipline', slug: 'architecture/engineering-discipline' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
