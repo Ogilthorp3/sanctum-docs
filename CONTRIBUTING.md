@@ -30,7 +30,7 @@ description: What the thing does, in one sentence.
 
 import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-![Descriptive alt text that adds personality](../../../assets/illustrations/the-thing.png)
+![Descriptive alt text that adds personality](./images/hero-the-thing.png)
 
 Opening paragraph. Hook the reader. Acknowledge the absurdity if there is absurdity to acknowledge.
 
@@ -108,80 +108,69 @@ The QC version is not a translation. It is a rewrite. Same structure, same Aside
 
 ## Illustrations
 
-Every doc page gets one hero image. No exceptions. No SVGs. No stock photos. No clip art.
+Every doc page gets one unique hero image. No exceptions. No SVGs. No stock photos. No clip art.
 
-### The Style
+### The Style (Phase 2)
 
-All illustrations are **black-and-white pencil sketches** generated with **Gemini image generation** (model: `gemini-3-pro-image-preview`). The style is hand-drawn, whimsical but technically grounded, on a white background, with a **subtle localized color halo** around the central technical object or focal glow.
+As of April 2026, the illustration style is **cinematic sci-fi concept art** in a **pencil sketch** format.
 
-**Tommy the Abyssinian cat appears in every illustration** — lean, elegant, large ears, slightly smug, always observing or supervising the scene. He is the visual thread that ties the docs together.
+- **Format:** Square or Wide (~16:9) pencil sketches.
+- **Background:** Dark / Black.
+- **Lighting:** One subtle localized color halo (Teal or Amber).
+- **Lines:** Clean, technically precise but with a hand-drawn pencil feel.
+- **Themes:** Digital horizons, technical interfaces, and metaphors for automation.
+- **Uniqueness:** **Never** reuse a hero image from another page.
 
-### Generation Spec
+### Generation Tool
 
-| Property | Value |
-|----------|-------|
-| Model | `gemini-3-pro-image-preview` |
-| Aspect ratio | `16:9` |
-| Resolution | `2K` (outputs 2752x1536) |
-| Format | PNG (convert from JPEG if Gemini returns JPEG — use `sips -s format png`) |
-| Color | Black and white pencil style with one subtle color halo. The halo should be localized, soft, and restrained. |
-| Location | `src/assets/illustrations/` |
+We use a centralized tool in the main repository to generate these via **Google Imagen 4 Ultra**.
+
+```bash
+# From the root of Claude_Code
+python3 tools/gen_hero_image.py "Your detailed prompt here..." src/content/docs/[path]/images/hero-name.png
+```
+
+The tool automatically:
+- Pulls the `GOOGLE_AI_API_KEY` from your macOS Keychain.
+- Uses the `imagen-4.0-ultra-generate-001` model.
+- Ensures the "cinematic sci-fi, dark background, pencil sketch" style matches existing docs.
 
 ### Prompt Template
 
-Every prompt must begin with this prefix:
+Every prompt should follow this structure:
 
-```
-Black and white pencil sketch illustration, wide format.
-```
+`[Subject Description]. Cinematic sci-fi concept art, dark background, clean lines, pencil sketch style, [Teal/Amber] localized accent lighting, no text.`
 
-And end with this suffix:
-
-```
-Hand-drawn pencil style on white background. Mostly black and white, with one subtle colored halo or glow around the main focal element only.
-```
-
-Between them, describe the scene with:
-1. **A visual metaphor** for the technical concept (conveyor belt for CI/CD, bouncer for routing, lemonade stand for pricing)
-2. **Tommy** — where he is, what he's doing, his expression
-3. **Labels and text** visible in the scene that ground it technically
-4. **Details** that reward a closer look
-5. **A restrained color halo** around the main focal object, interface, or energy source
-
-### Prompt Pitfalls
-
-- Avoid trademarked character names (Yoda, Jedi, lightsaber) — Gemini content filters will block them. Use neutral descriptions instead.
-- Keep prompts under 500 characters for best results.
-- If a generation fails with `PROHIBITED_CONTENT`, rephrase — don't retry the same prompt.
+**Example:**
+> A technical pencil sketch of a secure communication device projecting a holographic signal wave. Detailed circuitry and antenna patterns visible. Dark background, soft amber glow, clean lines, no text.
 
 ### Alt Text
 
 Alt text must describe the scene **and** have personality. It's both accessibility and brand voice:
 
 ```
-Good: "Tommy at the Force Flow switchboard — routing every alert in the haus through one brain"
-Bad:  "Illustration of a cat near a switchboard"
+Good: "Sanctum Proxy — a technical pencil sketch of a secure gateway gatekeeper with glowing teal authentication nodes."
+Bad:  "An image of a server with some lights."
 ```
 
 ### Consistency Checklist
 
 Before committing a new illustration, verify:
 
-- [ ] Black and white pencil style with one subtle, localized color halo
-- [ ] Tommy is recognizably an Abyssinian cat (lean, large ears, elegant)
-- [ ] Wide format (~16:9 aspect ratio, 2752x1536 or similar)
-- [ ] White/off-white background
-- [ ] Pencil sketch / hand-drawn line quality
-- [ ] Metaphor is immediately readable without explanation
-- [ ] Technical concept is embedded in the visual (not just decorative)
-- [ ] File is real PNG (not JPEG with .png extension — use `file` to check)
+- [ ] Black/dark background with one subtle, localized color halo (Teal or Amber).
+- [ ] Pencil sketch / hand-drawn line quality.
+- [ ] Wide or Square format.
+- [ ] Metaphor is immediately readable without explanation.
+- [ ] Technical concept is embedded in the visual (not just decorative).
+- [ ] File is real PNG (not JPEG with .png extension).
+- [ ] **Image is unique** — not used on any other page.
 
 ### Do Not
 
-- **No SVGs for hero images.** SVGs are for inline technical diagrams only (architecture, topology, flow). Hero images are always PNG pencil sketches.
-- **No fully colorized illustrations.** The halo is an accent, not a license to turn the whole page into a synthwave poster.
-- **No AI-generated images from other tools.** Gemini `gemini-3-pro-image-preview` only, for visual consistency.
-- **No placeholder 1x1 pixel PNGs.** If the image isn't ready, leave the page without a hero until it is.
+- **No SVGs for hero images.** SVGs are for inline technical diagrams only.
+- **No fully colorized illustrations.** The halo is an accent.
+- **No AI-generated images from other tools.** Use the `gen_hero_image.py` tool for visual consistency.
+- **No placeholder images.**
 
 ## Port Naming — The Deadpool Convention
 
@@ -201,24 +190,6 @@ Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085)
 4. **No explanation required.** If the reference needs a paragraph to land, pick a different one. 1977 (Star Wars) works. 1895 (year Marconi sent the first wireless signal) does not. The test: would someone in the room get it without Googling?
 5. **Update the Port Summary table.** Every new port gets a row with a Codename and Commentary. The commentary is one sentence — technically accurate, culturally aware, and exactly as amused as the situation warrants.
 6. **Update `expected-ports.json`.** The council-router test suite validates that expected ports are listening. A new service that isn't in the list will trigger a Windu security alert.
-
-**Current codenames for reference:**
-
-| Port | Codename | Reference |
-|------|----------|-----------|
-| 1111 | Make-A-Wish | 11:11 |
-| 1138 | Cell Block 1138 | THX/Star Wars |
-| 1234 | Password1 | Worst password ever |
-| 1337 | LEET | Hacker speak |
-| 1969 | Woodstock | Music everywhere |
-| 1977 | A New Hope | Star Wars |
-| 1984 | Big Brother | Orwell |
-| 4040 | Forty Cal | .40 caliber |
-| 4077 | Hawkeye | M\*A\*S\*H |
-| 5150 | Van Halen | Album / psych hold |
-| 8008 | Calculator | Flip it upside down |
-| 42069 | Nice. | The internet |
-
 
 ## Typography
 
