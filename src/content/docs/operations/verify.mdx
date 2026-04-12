@@ -1,0 +1,115 @@
+---
+title: Verify
+description: The operator guide for proving a Sanctum instance is healthy without relying on vibes.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Sanctum has enough moving parts that "it seems fine" is not an acceptable verification method. The operator path is now explicit: start with the checked-in CLI, escalate to the audit wall, and only then start poking at subsystems by hand.
+
+## Fast Confidence Check
+
+For the shortest useful answer, run:
+
+```bash
+python3 tools/sanctumctl.py doctor --quick
+```
+
+That checks:
+
+- workspace manifests
+- runtime manifests
+- agent capabilities
+- agent markdown drift
+- runtime calibration
+- plist audit
+- feature matrix
+- Kitchen Loop source validity
+
+If `doctor --quick` is red, stop there and fix the drift first. A dirty generated surface makes every other result less trustworthy.
+
+<Aside type="tip">
+`doctor --quick` is the morning roll call. It is the fastest way to tell whether Sanctum is still the system you think you are operating.
+</Aside>
+
+## Full Verification Wall
+
+For the audited end-to-end proof path, run:
+
+```bash
+python3 tools/sanctumctl.py verify
+```
+
+Today that executes three suites:
+
+- workspace audit
+- runtime audit
+- system E2E
+
+If you want the exact plan before running it:
+
+```bash
+python3 tools/sanctumctl.py verify --dry-run
+```
+
+## What Each Layer Proves
+
+### Workspace Audit
+
+The workspace audit checks the checked-in slice:
+
+- workspace manifest rendering
+- docs wiring
+- sidecar behavior
+- feature matrix consistency
+- linked subsystem harnesses
+
+Use this when you changed repository-owned logic and need to confirm the checked-in surface is still coherent.
+
+### Runtime Audit
+
+The runtime audit checks the machine-owned slice:
+
+- `~/.sanctum/services` render drift
+- runtime calibration artifacts
+- launchagent alignment
+- runtime graph edges
+- health export canary integration
+
+Use this when you suspect local machine drift rather than repo logic drift.
+
+### System E2E
+
+The system E2E checks live surfaces:
+
+- dashboards
+- health endpoints
+- proxy
+- navigator sidecar
+- Tommy supervisor
+- Claude Team auth recovery
+- agent markdown sync fanout
+- pre-restart remediation metadata
+
+Use this when you need to know whether the running system is actually serving, not just whether the files look tidy.
+
+## Recommended Operator Flow
+
+<Steps>
+1. Run `python3 tools/sanctumctl.py doctor --quick`.
+2. If that passes, run `python3 tools/sanctumctl.py verify`.
+3. If `verify` fails, read the failing phase name first, not the entire scrollback.
+4. Repair the smallest real fault.
+5. Re-run the narrowest relevant check, then the full wall.
+</Steps>
+
+## When To Escalate
+
+Drop below `sanctumctl` only when the higher-level command has already told you what class of problem you have.
+
+- Use [Troubleshooting](/operations/troubleshooting/) for incident patterns and common breakages.
+- Use [CLI Reference](/reference/cli/) when you need exact subcommands.
+- Use [Runtime Drift Audit](/operations/runtime-drift-audit/) when the problem smells like generated-state divergence.
+
+The goal is not to avoid low-level debugging forever. The goal is to avoid starting there by reflex.
+
