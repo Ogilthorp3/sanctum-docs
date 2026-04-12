@@ -12,9 +12,11 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 **Date:** 2026-04-07
 **Status:** Production (sanctum-server v0.2.0)
 
-It turns out that sending a coding question to a model trained exclusively on Jedi personas produces... unhelpful results. Who knew.
+The Jedi Council has six agents. Three model tiers. One port. And for longer than anyone wants to admit, every request went to the same backend regardless of what it was asking for.
 
-The Smart Router extends `sanctum-server` (Rust/Axum) with multi-backend dispatch. One port, multiple brains. Requests are routed based on the `model` field, glob patterns, or intent classification from the prompt content.
+This meant Yoda — wise, measured, trained on Council doctrine — was fielding questions about Python async patterns. And Coder-14B, a model that has never heard of the Living Force and does not care, was being asked to channel Qui-Gon's infrastructure wisdom. The results were exactly as useful as you'd expect. Sending a coding question to a model trained exclusively on Jedi personas produces responses that are spiritually rich and syntactically devastating.
+
+The Smart Router extends `sanctum-server` (Rust/Axum) with multi-backend dispatch. One port, multiple brains. Requests are routed based on the `model` field, glob patterns, or intent classification from the prompt content. The right question goes to the right brain, and the brains stop having identity crises.
 
 ## Architecture
 
@@ -22,12 +24,16 @@ The Smart Router extends `sanctum-server` (Rust/Axum) with multi-backend dispatc
 
 ## Routing Tiers
 
+Four tiers, in order of precedence. The router tries the cheapest match first and escalates only when it has to think.
+
 | Tier | Mechanism | Example | Latency |
 |------|-----------|---------|---------|
 | 1 | Exact model name | `"model": "coder"` → Coder backend | 0ms |
 | 2 | Glob pattern | `"model": "council-heartbeat"` matches `council-*` | 0ms |
 | 3 | Intent keywords | Prompt contains "debug" + "python" → Coder | ~1ms |
 | 4 | Default | No match → Council (configurable) | 0ms |
+
+Tier 1 and 2 are pure string matching — zero overhead. Tier 3 scans the prompt for keywords, which sounds expensive until you realize it's checking a dozen strings against a single message. The ~1ms is generous. Tier 4 is the safety net: if nothing matches, send it to Council and let the persona model do what it was trained for.
 
 ## Configuration
 
@@ -52,6 +58,8 @@ router:
     claude: ["explain why", "analyze", "summarize"]
 ```
 
+The `models` arrays are glob patterns. The `intent_keywords` are plain strings matched against the last user message. If you're wondering whether regex would be more powerful here — yes, and also no. Keyword matching is predictable, debuggable, and has never once woken anyone up at 3 AM with a catastrophic backtrack.
+
 ## Endpoints
 
 | Endpoint | Description |
@@ -65,10 +73,10 @@ router:
 
 The router is a new Rust module in `sanctum-server/src/router.rs`. The `HttpProxyBackend` in `backend.rs` handles the actual proxying to any OpenAI-compatible endpoint, with automatic detection of streaming (SSE) vs non-streaming (JSON) responses.
 
-Non-quantized and quantized backends both work. The proxy handles think-tag stripping (`strip_thinking` flag) regardless of which backend processes the request.
+Non-quantized and quantized backends both work. The proxy handles think-tag stripping (`strip_thinking` flag) regardless of which backend processes the request. The router doesn't care what the backend is running — MLX, LM Studio, a cloud API behind a cost-capped proxy — as long as it speaks OpenAI-compatible HTTP. This is the correct amount of opinion for a routing layer to have.
 
 <Aside type="tip">
-The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure which brain is answering.
+The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure which brain is answering. Because at some point you will be staring at a response and thinking "this doesn't sound like Yoda" and you'll want to know whether the problem is the model or the route.
 </Aside>
 
 ## Tests
@@ -79,4 +87,6 @@ The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure
 cd sanctum-server && cargo test
 ```
 
-The e2e tests spin up 3 mock Axum servers, launch the actual `sanctum-server` binary with a temp config, and verify requests land on the correct backend. Because trust, but verify.
+The e2e tests spin up 3 mock Axum servers, launch the actual `sanctum-server` binary with a temp config, and verify requests land on the correct backend. Three fake brains, one real router, zero ambiguity about who answered.
+
+The router exists because "send everything to the same model" is a strategy in the same way that "forward every email to the CEO" is a strategy. It works until it doesn't, and then it fails in ways that are obvious to everyone except the system that's doing it.

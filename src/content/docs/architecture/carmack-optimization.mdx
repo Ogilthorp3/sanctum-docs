@@ -14,13 +14,13 @@ import { Aside } from '@astrojs/starlight/components';
 
 Training a 27-billion-parameter model on a laptop is either visionary or reckless. For a while, it was both.
 
-The `mlx-finetune` pipeline was crashing mid-training with Metal GPU errors that read like cry-for-help suicide notes from the shader compiler. Inspired by John Carmack's philosophy — "if you don't understand the hardware, you don't understand the problem" — we profiled everything and found four distinct failure modes. Each one was the kind of bug that only appears when you push consumer hardware to the edge of what Apple probably imagined anyone would do with it.
+The `mlx-finetune` pipeline was crashing mid-training with Metal GPU errors that read like suicide notes from the shader compiler. Not "out of memory" — nothing that civilized. The errors said things like "Broken Pipe" and "resource limit exceeded at 499,000 allocations," which is Apple's way of telling you the GPU has given up on you as a person. Inspired by John Carmack's philosophy — "if you don't understand the hardware, you don't understand the problem" — we profiled everything and found four distinct failure modes. Each one was the kind of bug that only appears when you push consumer hardware past the edge of what Apple probably imagined anyone would do with it.
 
 ## Phase 1: Sequence Bucketing
 
-**The Issue:** Training with `batch_size: 1` on unpadded datasets caused MLX to compile a new Metal shader for every unique sequence length. Every. Single. One. The `MTLCompilerService` eventually threw a "Broken Pipe" — Apple's polite way of saying "I give up."
+**The Issue:** Training with `batch_size: 1` on unpadded datasets caused MLX to compile a new Metal shader for every unique sequence length. Every. Single. One. Three thousand training examples, three thousand unique graph shapes, three thousand shader compilations. The `MTLCompilerService` eventually threw a "Broken Pipe" — Apple's polite way of saying "I give up."
 
-**The Fix:** All training examples are now padded to fixed buckets: **512, 1024, or 2048** tokens. The compiler sees 3 graph shapes instead of 3,000.
+**The Fix:** All training examples are now padded to fixed buckets: **512, 1024, or 2048** tokens. The compiler sees 3 graph shapes instead of 3,000. The difference between "crashes after 200 steps" and "runs to completion" was literally just padding.
 
 <Aside type="tip">
 This is the single highest-impact optimization in the entire pipeline. If your MLX training crashes with "Broken Pipe" errors, bucket your sequences first. Everything else is optimization. This is survival.
@@ -28,19 +28,19 @@ This is the single highest-impact optimization in the entire pipeline. If your M
 
 ## Phase 2: Kernel Fusion & Graph Defragmentation
 
-**The Issue:** Deep LoRA layers with high gradient accumulation created an explosion of tiny memory allocations, hitting Metal's `[metal::malloc]` resource limit at 499,000 allocations. The GPU was spending more time managing memory than doing math.
+**The Issue:** Deep LoRA layers with high gradient accumulation created an explosion of tiny memory allocations, hitting Metal's `[metal::malloc]` resource limit at 499,000 allocations. The GPU was spending more time managing memory than doing math — like a librarian who spends all day organizing the card catalog and never actually shelves a book.
 
-**The Fix:** Once sequence bucketing locked the graph shapes (Phase 1), the allocation pattern stabilized. We pushed back to **32 layers** and **2048 context** without hitting the limit. The computation graph went from a Jackson Pollock painting to a circuit diagram.
+**The Fix:** Once sequence bucketing locked the graph shapes (Phase 1), the allocation pattern stabilized. We pushed back to **32 layers** and **2048 context** without hitting the limit. The computation graph went from a Jackson Pollock painting to a circuit diagram. Same parameters, same data, same hardware — just a GPU that could finally see the forest for the allocations.
 
 ## Phase 3: Python GIL Bypass
 
-**The Issue:** Synthetic data generation was single-threaded. Nine agents, each needing 700+ training examples, all waiting in line behind Python's Global Interpreter Lock. Generating the dataset took longer than training on it.
+**The Issue:** Synthetic data generation was single-threaded. Nine agents, each needing 700+ training examples, all waiting in line behind Python's Global Interpreter Lock. Generating the dataset took longer than training on it, which is the computational equivalent of spending more time packing for vacation than being on vacation.
 
-**The Fix:** `multiprocessing.Pool()`. All CPU cores now participate. The GIL gets to watch from the sidelines while actual work happens.
+**The Fix:** `multiprocessing.Pool()`. All CPU cores now participate. The GIL gets to watch from the sidelines while actual work happens. Generation time dropped from "go make coffee" to "the coffee isn't ready yet and we're already done."
 
 ## Phase 4: Hardware Profiling
 
-**The Issue:** Configuration changes were vibes-based. "This crashed, so reduce rank. That didn't crash, so increase context. Repeat until the model converges or you lose patience."
+**The Issue:** Configuration changes were vibes-based. "This crashed, so reduce rank. That didn't crash, so increase context. Repeat until the model converges or you lose patience." This is not engineering. This is dowsing.
 
 **The Fix:** `scripts/profile_training.sh` wraps training with Apple Instruments:
 
@@ -48,10 +48,10 @@ This is the single highest-impact optimization in the entire pipeline. If your M
 xcrun xctrace record --template 'Metal System Trace' -- python -m mlx_lm.lora ...
 ```
 
-Real-time ALU occupancy, shader compilation time, unified memory bandwidth. No more guessing. Carmack would approve.
+Real-time ALU occupancy, shader compilation time, unified memory bandwidth. No more guessing. The profiler doesn't care about your intuition — it cares about what the silicon is actually doing. Carmack would approve.
 
 <Aside type="note">
-The profiler revealed that peak Metal memory during training was 51GB for Qwen 27B at rank 64 — but only 29GB for Gemma 4 31B. Same rank, bigger model, less memory. Architecture matters more than parameter count.
+The profiler revealed that peak Metal memory during training was 51GB for Qwen 27B at rank 64 — but only 29GB for Gemma 4 31B. Same rank, bigger model, less memory. Architecture matters more than parameter count. This is the kind of discovery that only happens when you stop guessing and start measuring.
 </Aside>
 
 ## E2E Validation
@@ -64,4 +64,4 @@ A dedicated test suite (`tests/test_e2e_pipeline.py`) enforces all four optimiza
 | Sequence Bucketing | Padding and dropping logic, no unbucketed sequences |
 | Live Inference | HTTP payloads to `mlx_lm.server` prove the adapter streams tokens |
 
-Because the only thing worse than a crash at 3 AM is a crash at 3 AM that you thought you'd fixed.
+Because the only thing worse than a crash at 3 AM is a crash at 3 AM that you thought you'd fixed. The tests don't just verify that the pipeline works — they verify that each specific failure mode from each specific phase stays dead. Bugs that expensive don't get to come back.

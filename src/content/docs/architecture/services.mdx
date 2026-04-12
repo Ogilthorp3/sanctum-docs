@@ -72,22 +72,22 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 | Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
 | Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
 
-### Model Routing
+### Model Routing — 3-Tier Architecture
 
-Agents use a **tiered model strategy** -- each agent tier has its own primary model and fallback chain. When the primary model is unavailable (billing error, rate limit, solar flare), traffic cascades down through increasingly local alternatives until it hits a quantized model running on the same machine. The AI equivalent of "the generator kicked in."
+Agents use a **3-tier model strategy** ranked by the Carmack Olympics benchmark system. The Smart Router dispatches each request based on model field, glob patterns, or intent keywords. When the primary tier is unavailable, traffic cascades down through the chain until it hits local Metal inference. The generator always kicks in.
 
-| Tier | Primary | Fallback Chain | Used By |
-|------|---------|----------------|---------|
-| `claude-opus-4-6` | Claude Opus 4.6 (Anthropic) | qwen35-plus → gemini-25-pro | Claude Code direct |
-| `council-brain` | Claude Opus 4.6 | minimax-m27 → qwen35-plus → council-code → council-27b | Yoda, Mon Mothma, Jocasta |
-| `council-code` | Qwen 2.5 Coder 14B (LM Studio) | lmstudio-qwen → council-27b → qwen35-plus | Any agent when the request is code-shaped |
-| `council-secure` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → LM Studio | Windu |
-| `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-27b | Qui-Gon, Cilghal, Mundi |
-| `council-heartbeat` | Council 27B (local) | council-27b → minimax-m25-free | All (heartbeat checks) |
+| Tier | Model | Port | Agents | Fallback |
+|------|-------|------|--------|----------|
+| `cloud` | Claude Opus 4.6 (Anthropic) | :4040 proxy | Windu, Mothma, Jocasta | Coder-14B → Council MLX → error |
+| `council-ops` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | Yoda, QuiGon, Ahsoka | Council MLX → error |
+| `council-secure` | Gemma4+LoRA (sanctum-mlx) | :1337 | Cilghal, Mundi | error |
+| `coder` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | all coding tasks | Council MLX → error |
+
+Cloud tier runs through the Sanctum Proxy on :4040 with daily cost caps, audit logging, and automatic fallback to local models when the budget circuit breaker fires. The cloud proxy does not negotiate. It does math.
 
 The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step pipeline before routing them to the appropriate model. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
 
-0. Smart content-based routing (Gemini-first for non-code tasks, `council-code` for code-shaped work)
+0. Smart content-based routing (model field, glob patterns, intent keywords)
 1. Anthropic prompt caching injection
 2. Thinking block sanitization
 3. Empty content block fixes

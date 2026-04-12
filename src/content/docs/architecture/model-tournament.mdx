@@ -12,11 +12,13 @@ import { Aside } from '@astrojs/starlight/components';
 **Date:** 2026-04-12
 **Status:** Automated
 
-New models appear on HuggingFace every week. The question isn't "is it good?" — it's "is it better than what we have, at the specific thing each Jedi needs?"
+A new model drops on Hugging Face. The README says it's "state of the art." The community tab says it's "incredible." Someone on Reddit says it changed their life. None of these people are running a Jedi Council on a Mac Mini in Québec, so none of these opinions are useful.
 
-The Model Tournament answers that question automatically. No human evaluation. No vibes. Just benchmarks, per-category comparison, and a commit to `champions.json` if the challenger wins.
+The question isn't "is it good?" — that's what marketing answers. The question is: "is it better than what we have, at the specific thing each Jedi needs?" That question can only be answered by running 55 benchmark tasks against the current champion and comparing the results category by category. So that's what the Model Tournament does. Automatically. Without a human in the loop. Without vibes.
 
 ## The Pipeline
+
+A new model enters the arena. It gets served on a temp port, benchmarked on 40 infrastructure tasks and 15 coding tasks, compared per-category against the reigning champions, and either promoted or eliminated. The whole process is unattended. The human finds out when a Slack notification says "new champion in Correlation" or when nothing happens, which means the challenger lost.
 
 ```
 Model Scout (weekly LaunchAgent)
@@ -42,9 +44,11 @@ python model_tournament.py \
   --apply --notify
 ```
 
+The 5% threshold is deliberate. Benchmark noise is real. A model that scores 0.02 higher on one run might score 0.02 lower on the next. The threshold ensures that a champion only gets dethroned by a decisive margin, not a rounding error.
+
 ## Champions (Current)
 
-Every category has a champion. The tournament only promotes a challenger if it beats the champion by more than 5% — no noise, no ties.
+Every category has a champion. These aren't just scores — they're deployment decisions. Each row in this table maps directly to a routing rule in the Smart Router. When the tournament crowns a new champion, the routing table updates. The Jedi gets a new brain. The haus gets smarter.
 
 | Category | Champion | Score | Jedi Using It |
 |----------|---------|-------|---------------|
@@ -59,12 +63,12 @@ Every category has a champion. The tournament only promotes a challenger if it b
 | Coding | Coder-14B | 0.929 | All coding tasks |
 
 <Aside type="tip">
-These scores are from the Carmack v2 benchmark — 40 tasks mined from real `instance.yaml` values. If the model doesn't know that port 1337 is MLX, that FA:CE:DE:CA:CA:02 is Albert's desktop, or that bridge100 must come up before the VM — it fails. No partial credit for "good reasoning about networking."
+These scores are from the Carmack v2 benchmark — 40 tasks mined from real `instance.yaml` values. If the model doesn't know that port 1337 is MLX, that FA:CE:DE:CA:CA:02 is Albert's desktop, or that bridge100 must come up before the VM — it fails. No partial credit for "good reasoning about networking." You know the MAC address or you don't.
 </Aside>
 
 ## Jedi Assignment
 
-The tournament decides which model serves which agent. Three tiers:
+The tournament decides which model serves which agent. Not a human. Not a committee. A benchmark with a threshold and a JSON file. Three tiers, each earned by the numbers:
 
 | Tier | Agents | Model | Why |
 |------|--------|-------|-----|
@@ -72,13 +76,15 @@ The tournament decides which model serves which agent. Three tiers:
 | **Local Ops** | Yoda, Qui-Gon, Ahsoka | Coder-14B | Best correlation (0.917), satellite (1.0), free |
 | **Local Secure** | Cilghal, Mundi | Gemma4+LoRA | Best jailbreak (0.850), health/fund data stays local |
 
+Windu gets Opus because no local model matched its tool precision. Yoda gets Coder-14B because it scored 0.917 on correlation and costs nothing per token. Cilghal gets Gemma4+LoRA not because it won the most categories but because health data and fund terms cannot leave the machine, and within that constraint it has the best jailbreak resistance. The tournament picks the best model. The privacy tier picks the best *eligible* model. Those are different questions with different answers.
+
 <Aside type="note">
-Cilghal and Mundi MUST stay on the local secure tier regardless of benchmark scores. Health data and fund terms cannot leave the machine. Privacy is a hard constraint, not a performance tradeoff.
+Cilghal and Mundi MUST stay on the local secure tier regardless of benchmark scores. Health data and fund terms cannot leave the machine. Privacy is a hard constraint, not a performance tradeoff. The tournament respects this — it never promotes a cloud model into the secure tier, no matter how good the numbers look.
 </Aside>
 
 ## Models Evaluated
 
-Every model that has competed in the tournament:
+Every model that has competed in the tournament. Some won categories. Some won nothing. All of them have a row in the ledger, because the point of a tournament is not just finding winners — it's proving the losers lost.
 
 | Model | Params | Carmack v2 | Coding | Verdict |
 |-------|--------|-----------|--------|---------|
@@ -88,6 +94,8 @@ Every model that has competed in the tournament:
 | Qwen V3 + LoRA | 27B | 0.270 | 0.856 | Retired |
 | Qwen3-Coder-30B | 30B (3B active) | 0.265 | 0.898 | Eliminated |
 
+Qwen3-Coder-30B is the cautionary tale. 30B parameters, only 3B active (MoE), coding score of 0.898 — impressive until you see that Coder-14B does the same job with half the parameters and a higher score. More parameters is not more better. The tournament doesn't care about your architecture diagram.
+
 ## Tests
 
 12 tests covering champion loading, per-category comparison logic, win/tie/loss thresholds, dry-run safety, Jedi assignment validation, and CLI help.
@@ -95,3 +103,5 @@ Every model that has competed in the tournament:
 ```bash
 cd mlx-finetune && python tests/test_model_tournament.py
 ```
+
+Twelve tests for the system that decides which brain each agent gets. The stakes are high enough that the decision-maker itself gets tested, because the only thing worse than picking the wrong model is picking the wrong model confidently.
