@@ -132,18 +132,18 @@ These services only run on the hub and are not deployed to satellites:
 
 ## Hub Network — The Bridge
 
-The Mac Mini hub runs two virtual machines: the Ubuntu VM (UTM/QEMU) and the Docker VM (Colima). Both need network access, but only one needs a bridge to the 10.10.10.0/24 subnet.
+The Mac Mini hub runs two virtual machines: the Ubuntu VM (QEMU) and the Docker VM (Colima). Both need network access, but only one needs a bridge to the 10.10.10.0/24 subnet.
 
 ### The Single Bridge Rule
 
-UTM creates a macOS vmnet bridge (`bridge100`) for the Ubuntu VM. This bridge carries all agent traffic, SSH tunnels, and inter-node communication on the 10.10.10.0/24 subnet. The Mac host is 10.10.10.1, the VM is 10.10.10.10.
+QEMU (via socket_vmnet) creates a macOS vmnet bridge (`bridge100`) for the Ubuntu VM. This bridge carries all agent traffic, SSH tunnels, and inter-node communication on the 10.10.10.0/24 subnet. The Mac host is 10.10.10.1, the VM is 10.10.10.10.
 
-Colima (Docker) uses user-mode networking with port forwarding. It does **not** need vmnet. Its `network.address` setting is `false` in `~/.colima/default/colima.yaml`. This is deliberate: if Colima creates a vmnet bridge, it races UTM for `bridge100` and the VM ends up on `bridge102` — a different bridge with a different host IP (10.10.10.2), which breaks every socat proxy, SSH tunnel, and service health check that expects 10.10.10.1.
+Colima (Docker) uses user-mode networking with port forwarding. It does **not** need vmnet. Its `network.address` setting is `false` in `~/.colima/default/colima.yaml`. This is deliberate: if Colima creates a vmnet bridge, it races QEMU for `bridge100` and the VM ends up on `bridge102` — a different bridge with a different host IP (10.10.10.2), which breaks every socat proxy, SSH tunnel, and service health check that expects 10.10.10.1.
 
-This was learned the hard way on March 29, 2026, when a dual-bridge conflict caused half the test suite to fail. The fix: one vmnet user (UTM), one bridge (bridge100), one subnet.
+This was learned the hard way on March 29, 2026, when a dual-bridge conflict caused half the test suite to fail. The fix: one vmnet user (QEMU), one bridge (bridge100), one subnet.
 
 <Aside type="caution">
-If Colima ever needs vmnet re-enabled (e.g., for direct container-to-VM communication), change `network.address: true` in the Colima config. But ensure UTM's LaunchAgent starts **before** Colima's, or UTM will get `bridge102` and nothing will work. The current naming (`com.sanctum.openclaw.colima` sorts after `com.sanctum.utm-autostart`) was not sufficient — Colima still won the race. Disabling vmnet entirely was the only reliable fix.
+If Colima ever needs vmnet re-enabled (e.g., for direct container-to-VM communication), change `network.address: true` in the Colima config. But ensure QEMU's LaunchAgent starts **before** Colima's, or QEMU will get `bridge102` and nothing will work. The current naming (`com.sanctum.openclaw.colima` sorts after `com.sanctum.utm-autostart`) was not sufficient — Colima still won the race. Disabling vmnet entirely was the only reliable fix.
 </Aside>
 
 ### Boot Sequence
@@ -165,7 +165,7 @@ The Mac Mini starts every service — including the VM — without a GUI login. 
 4. **Phase 4: SSH + proxies** — Loads SSH keys from Keychain, starts socat proxies for VM-to-Mac service access
 
 <Aside type="note">
-The VM runs via bare QEMU with `socket_vmnet_client`, not UTM. UTM requires a GUI session (Aqua domain) which doesn't exist until someone logs in. `socket_vmnet` provides the vmnet.framework networking that QEMU needs, running as a root LaunchDaemon. The QEMU binary only needs the `com.apple.security.hypervisor` entitlement (which Homebrew's build already has). No Apple Developer ID signing required.
+The VM runs via bare QEMU with `socket_vmnet_client`, not UTM (which has been removed). UTM required a GUI session (Aqua domain) which doesn't exist until someone logs in. `socket_vmnet` provides the vmnet.framework networking that QEMU needs, running as a root LaunchDaemon. The QEMU binary only needs the `com.apple.security.hypervisor` entitlement (which Homebrew's build already has). No Apple Developer ID signing required.
 </Aside>
 
 ```bash
