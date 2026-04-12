@@ -112,18 +112,36 @@ Every doc page gets one unique hero image. No exceptions. No SVGs. No stock phot
 
 ### The Style (Phase 2)
 
-As of April 2026, the illustration style is **cinematic sci-fi concept art** in a **pencil sketch** format.
+As of April 2026, illustrations follow a **section-aware hybrid style**:
+
+#### Architecture Section — Hybrid Style
+
+The architecture section uses a **two-tier visual language**:
+
+1. **Hero images (top of page):** Colorful, cinematic sci-fi concept art. Full color with teal/amber lighting. These are the eye candy — they draw you in. Think movie poster meets technical blueprint.
+
+2. **Inline illustrations (within the prose):** Pencil-sketch technical drawings on dark paper. One subtle teal or amber accent halo. These explain — they're the technical diagrams that make you understand the architecture while making it look gorgeous.
+
+This hybrid approach gives each architecture page a visual arc: colorful hook → technical depth with hand-drawn illustrations that feel like they were sketched on a napkin by an engineer who happens to be an artist.
+
+#### All Other Sections — Pencil Sketch
+
+Everything outside the architecture sidebar (guides, operations, reference, agents, getting-started) uses the **pencil sketch** format for all images:
 
 - **Format:** Square or Wide (~16:9) pencil sketches.
 - **Background:** Dark / Black.
 - **Lighting:** One subtle localized color halo (Teal or Amber).
 - **Lines:** Clean, technically precise but with a hand-drawn pencil feel.
 - **Themes:** Digital horizons, technical interfaces, and metaphors for automation.
+
+#### Universal Rules
+
 - **Uniqueness:** **Never** reuse a hero image from another page.
+- **ASCII art is banned in final docs.** If you need a diagram, use an SVG (for technical flow diagrams) or a generated illustration (for conceptual diagrams). ASCII art in code blocks is lazy and ugly. The one exception: inline terminal output examples where ASCII is what the user actually sees.
 
 ### Generation Tool
 
-We use a centralized tool in the main repository to generate these via **Google Imagen 4 Ultra**.
+We use a centralized tool in the main repository to generate these via **Google Gemini / Imagen**.
 
 ```bash
 # From the root of Claude_Code
@@ -131,18 +149,31 @@ python3 tools/gen_hero_image.py "Your detailed prompt here..." src/content/docs/
 ```
 
 The tool automatically:
-- Pulls the `GOOGLE_AI_API_KEY` from your macOS Keychain.
-- Uses the `imagen-4.0-ultra-generate-001` model.
-- Ensures the "cinematic sci-fi, dark background, pencil sketch" style matches existing docs.
+- Pulls the API key from macOS Keychain (`gemini-api-key` or `Google AI Studio`).
+- Uses the best available Imagen/Gemini model for image generation.
+- Outputs PNG to the specified path.
 
-### Prompt Template
+**Never use Rube/Composio for image generation.** Rube is deprecated. Use `gen_hero_image.py` or direct Gemini API calls via the keychain-stored API key. All external service access uses direct APIs or native MCP integrations — no intermediary platforms.
 
-Every prompt should follow this structure:
+### Prompt Templates
+
+**For architecture heroes (colorful):**
+
+`[Subject Description]. Cinematic sci-fi concept art, dark background, volumetric lighting, teal and amber accent colors, no text, no words, no letters.`
+
+> Example: "A futuristic holographic routing switchboard in a dark command center. Three glowing neural pathways branch from a central node — one teal, one amber, one white. Each path leads to a different floating brain made of circuits. Cinematic sci-fi concept art, dark background, volumetric lighting, no text."
+
+**For architecture inline illustrations (pencil sketch):**
+
+`[Subject Description]. Technical pencil sketch, dark background, clean lines, [Teal/Amber] localized accent lighting, hand-drawn feel, no text.`
+
+> Example: "Golden filaments merging into neural network nodes at each layer. Technical pencil sketch, dark background, amber accent, no text."
+
+**For all other sections (pencil sketch heroes):**
 
 `[Subject Description]. Cinematic sci-fi concept art, dark background, clean lines, pencil sketch style, [Teal/Amber] localized accent lighting, no text.`
 
-**Example:**
-> A technical pencil sketch of a secure communication device projecting a holographic signal wave. Detailed circuitry and antenna patterns visible. Dark background, soft amber glow, clean lines, no text.
+> Example: "A technical pencil sketch of a secure communication device projecting a holographic signal wave. Detailed circuitry and antenna patterns visible. Dark background, soft amber glow, clean lines, no text."
 
 ### Alt Text
 
@@ -167,10 +198,25 @@ Before committing a new illustration, verify:
 
 ### Do Not
 
-- **No SVGs for hero images.** SVGs are for inline technical diagrams only.
-- **No fully colorized illustrations.** The halo is an accent.
-- **No AI-generated images from other tools.** Use the `gen_hero_image.py` tool for visual consistency.
+- **No SVGs for hero images.** SVGs are for inline technical flow diagrams only.
+- **No fully colorized illustrations outside architecture heroes.** The pencil sketch sections use accent halos only.
+- **No Rube/Composio for image generation.** Direct API via keychain only.
 - **No placeholder images.**
+- **No ASCII art diagrams in final docs.** Replace with SVGs or generated illustrations. If a diagram is complex enough to draw, it's complex enough to draw properly.
+- **No stock photos, clip art, or generic AI imagery.** Every image must be specific to Sanctum.
+
+### Architecture Section — Specific Visual Rules
+
+The architecture pages in the sidebar have the highest visual bar. Each page should have:
+
+1. A **colorful hero** at the top (16:9, cinematic sci-fi)
+2. At least one **pencil-sketch inline illustration** within the technical content
+3. **Tables over prose** for specs, ports, and configurations
+4. **SVGs** for complex flow diagrams (not ASCII art in code blocks)
+
+The visual arc should feel like: "wow, that's beautiful" (hero) → "oh, I understand how this works" (inline sketch) → "I can actually configure this" (tables and code blocks).
+
+Think of it as: the hero gets you in the door, the pencil sketch keeps you reading, and the code block makes you productive.
 
 ## Port Naming — The Deadpool Convention
 
@@ -194,6 +240,27 @@ Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085)
 ## Typography
 
 Body text is justified (`text-align: justify`). This gives clean left and right edges across all documentation pages. Do not override this with centered or left-aligned prose blocks — the justified layout is a deliberate choice for readability.
+
+## Technical Accuracy — Current Architecture
+
+Keep these facts current across all docs. If any page contradicts these, it's stale and needs updating:
+
+**VM Hypervisor:** QEMU headless (not UTM — UTM was removed). The LaunchAgent is still named `com.sanctum.utm-autostart` (identifier preserved for compatibility).
+
+**Model Routing (3-tier):**
+- **Cloud tier** (Opus 4.6 via cloud proxy :4040): Windu, Mothma, Jocasta
+- **Local ops tier** (Coder-14B via LM Studio :1234): Yoda, Qui-Gon, Ahsoka, coding tasks
+- **Local secure tier** (Gemma4+LoRA via mlx_lm :1337): Cilghal, Mundi (privacy: health/fund data stays local)
+
+**Key Services:**
+- sanctum-server (Rust): Smart Router with pattern/intent dispatch
+- sanctum-mlx (Rust): Native inference with LoRA adapter merging
+- sanctum-cloud-proxy (Python): Cost-capped Opus access with fallback chain
+- Model Tournament: Automated eval + deploy of new model candidates
+
+**External Service Access:** Direct APIs only. No Rube/Composio. API keys stored in macOS Keychain. Image generation via Gemini API (keychain-stored key). Slack via webhook. Outlook via Microsoft 365 MCP.
+
+**Testing:** 178 tests across 11 components. Nothing ships without tests.
 
 ## What Not To Do
 

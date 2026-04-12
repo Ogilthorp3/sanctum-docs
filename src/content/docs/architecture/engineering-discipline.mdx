@@ -1,6 +1,6 @@
 ---
 title: Engineering Discipline
-description: 166 tests, zero hardcoded keys, and the paranoia required to run AI agents in your house.
+description: 166 tests, zero hardcoded keys, and the paranoia required to run AI agents in your haus.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -12,13 +12,13 @@ import { Aside } from '@astrojs/starlight/components';
 **Date:** 2026-04-11
 **Status:** Active
 
-Running AI agents in your house is either a flex or a liability. The difference is engineering discipline.
+Running AI agents in your haus is either professional engineering or professional negligence. There is no middle ground. The same system that controls your kid's screen time also holds your API keys, your health data, and the credentials to your fund's deal flow pipeline. If that sentence doesn't make you want to write tests, nothing will.
 
-This page documents the standards that keep Sanctum from becoming a cautionary tale. Every number below is verified by automated tests. If it's not tested, it doesn't exist.
+This page documents the standards that keep Sanctum from becoming a cautionary tale — the kind that gets forwarded around Hacker News with subject lines like "man lets AI agents manage home, discovers API key on public GitHub three weeks later." Every number below is verified by automated tests. If it's not tested, it doesn't exist.
 
 ## Test Coverage
 
-166 tests across 10 components. No untested code ships.
+166 tests across 10 components. No untested code ships. No exceptions. No "we'll add tests later." Later is where bugs go to breed.
 
 | Component | Tests | What They Verify |
 |-----------|------:|------------------|
@@ -47,9 +47,13 @@ bash ~/.sanctum/tests/test_secret_rotation.sh         # 10 secret tests
 bash tests/test_build_release.sh                      # 6 build tests
 ```
 
+Every test suite runs independently. Every test suite can be run by a human who just woke up and doesn't remember what day it is. This is a design requirement, not an accident.
+
 ## Secret Management
 
-Zero hardcoded API keys. Anywhere. Verified across 31 repos in 2 GitHub organizations.
+Zero hardcoded API keys. Anywhere. Verified across 31 repos in 2 GitHub organizations. This is the line in the sand that does not move.
+
+The API key was hardcoded in a Python file pushed to a public GitHub repo. For three weeks. Nobody noticed. The key had full API access. The bill was... educational. That was the last time a secret touched source control, and the infrastructure that prevents it from ever happening again is aggressive by design.
 
 | Check | Status |
 |-------|--------|
@@ -62,7 +66,7 @@ Zero hardcoded API keys. Anywhere. Verified across 31 repos in 2 GitHub organiza
 | Secret scanning | 6-phase sweep via `secret-rotation.sh` |
 
 <Aside type="tip">
-The secret rotation script runs a 6-phase sweep: git remote scan, remote fix, deep file content scan, keychain audit, loose file check, and SOPS vault status. Run `secret-rotation.sh --full` anytime you're paranoid. Which should be always.
+The secret rotation script runs a 6-phase sweep: git remote scan, remote fix, deep file content scan, keychain audit, loose file check, and SOPS vault status. Run `secret-rotation.sh --full` anytime you're paranoid. Which should be always. Paranoia is not a personality flaw when your API keys are in the same system as your thermostat.
 </Aside>
 
 ### Key Rotation Architecture
@@ -81,6 +85,8 @@ rotate-openrouter.sh:
   Zero browser. Zero human. Zero downtime.
 ```
 
+The rotation script doesn't ask for permission. It creates the new key, proves it works, stores it, and kills the old one. The entire cycle takes under ten seconds. If you're still rotating API keys by logging into a dashboard and clicking buttons, you're doing it wrong — and more importantly, you're doing it rarely, which means your keys are old, which means the blast radius when one leaks is measured in months.
+
 ## Infrastructure Quality
 
 | Metric | Before | After |
@@ -94,13 +100,15 @@ rotate-openrouter.sh:
 | Legacy image path conventions | 55 | **0** |
 | `instance.yaml` stale services | 5+ | **0** (all annotated) |
 
+Every row in that table represents a class of problem that existed, was measured, and was eliminated. The 23 disabled LaunchAgent files were ghosts from previous configurations — not hurting anything, not helping anything, just cluttering the namespace and making it harder to tell what was real. The 13 shell scripts without `set -euo pipefail` were time bombs waiting for a failed command to silently continue. The 51 GB of stale adapters were eleven training experiments that nobody cleaned up because nobody knew which ones were active.
+
 <Aside type="note">
 The 51 GB of stale adapters were 11 directories from previous training experiments. Only 2 are active (Qwen V3 production + Gemma 4 candidate). The rest were archived or deleted. Your SSD thanks you.
 </Aside>
 
 ## Cloud Proxy Hardening
 
-The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and OpenRouter. Five layers of protection:
+The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and OpenRouter. It exists because giving six AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
 
 | Layer | What It Does |
 |-------|-------------|
@@ -109,6 +117,8 @@ The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and Ope
 | **Cost control** | Per-agent daily caps ($2/day Windu, $0.50 default) |
 | **Audit trail** | Every cloud call logged: agent, tokens, cost, latency |
 | **Rate limiting** | Circuit breaker on spending caps |
+
+The fallback chain is the interesting part. When Opus is unavailable or the daily cap is hit, the request falls to Coder-14B. When Coder-14B is down, it falls to Council MLX. When everything is down, the system returns an honest error instead of a hallucinated response. Graceful degradation, not graceful lying.
 
 ## The Standard
 
@@ -120,6 +130,6 @@ Every commit follows the same discipline:
 4. **Scan** — verify no secrets leaked
 5. **Push** — ship it
 
-If any step fails, the commit doesn't ship. This is not optional. This is not aspirational. This is how the house runs.
+If any step fails, the commit doesn't ship. This is not optional. This is not aspirational. This is how the haus runs.
 
-Because the only thing worse than an AI agent making a mistake is an AI agent making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives.
+Because the only thing worse than an AI agent making a mistake is an AI agent making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives. The discipline isn't paranoia. It's the minimum viable responsibility for running this kind of infrastructure in a place where people sleep.
