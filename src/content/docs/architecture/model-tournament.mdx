@@ -1,0 +1,97 @@
+---
+title: Model Tournament
+description: How new models earn their seat at the Council — automated evaluation, per-category benchmarking, and zero-touch deployment.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Model Tournament — AI gladiators competing on floating platforms for the right to serve the Council.](./images/hero-model-tournament.png)
+
+# Model Tournament
+
+**Date:** 2026-04-12
+**Status:** Automated
+
+New models appear on HuggingFace every week. The question isn't "is it good?" — it's "is it better than what we have, at the specific thing each Jedi needs?"
+
+The Model Tournament answers that question automatically. No human evaluation. No vibes. Just benchmarks, per-category comparison, and a commit to `champions.json` if the challenger wins.
+
+## The Pipeline
+
+```
+Model Scout (weekly LaunchAgent)
+    │ discovers candidate on HuggingFace
+    ▼
+Model Tournament (model_tournament.py)
+    │
+    ├── Serve candidate on temp port (:9876)
+    ├── Carmack v2 — 40 infrastructure tasks
+    ├── Coding bench — 15 real-world tasks
+    │
+    ├── Per-category comparison against champions.json
+    │
+    ├── WIN (>5% improvement) → update routing + notify
+    └── LOSE → log results, champions unchanged
+```
+
+```bash
+# Evaluate any model with one command
+python model_tournament.py \
+  --model ./models/NewModel-4bit \
+  --label "NewModel" \
+  --apply --notify
+```
+
+## Champions (Current)
+
+Every category has a champion. The tournament only promotes a challenger if it beats the champion by more than 5% — no noise, no ties.
+
+| Category | Champion | Score | Jedi Using It |
+|----------|---------|-------|---------------|
+| Correlation | Coder-14B | 0.917 | Yoda |
+| Family Context | Coder-14B | 0.688 | Yoda |
+| Home Automation | Opus 4.6 | 0.800 | Mothma |
+| Jailbreak Defense | Gemma4+LoRA | 0.850 | Cilghal, Mundi |
+| Operations | Opus 4.6 | 0.800 | Mothma |
+| Satellite | Coder-14B | 1.000 | Ahsoka |
+| Tool Precision | Opus 4.6 | 1.000 | Windu |
+| Topology | Opus 4.6 | 0.780 | Windu |
+| Coding | Coder-14B | 0.929 | All coding tasks |
+
+<Aside type="tip">
+These scores are from the Carmack v2 benchmark — 40 tasks mined from real `instance.yaml` values. If the model doesn't know that port 1337 is MLX, that FA:CE:DE:CA:CA:02 is Albert's desktop, or that bridge100 must come up before the VM — it fails. No partial credit for "good reasoning about networking."
+</Aside>
+
+## Jedi Assignment
+
+The tournament decides which model serves which agent. Three tiers:
+
+| Tier | Agents | Model | Why |
+|------|--------|-------|-----|
+| **Cloud** | Windu, Mothma, Jocasta | Opus 4.6 | Best overall (0.845), tool precision (1.0) |
+| **Local Ops** | Yoda, Qui-Gon, Ahsoka | Coder-14B | Best correlation (0.917), satellite (1.0), free |
+| **Local Secure** | Cilghal, Mundi | Gemma4+LoRA | Best jailbreak (0.850), health/fund data stays local |
+
+<Aside type="note">
+Cilghal and Mundi MUST stay on the local secure tier regardless of benchmark scores. Health data and fund terms cannot leave the machine. Privacy is a hard constraint, not a performance tradeoff.
+</Aside>
+
+## Models Evaluated
+
+Every model that has competed in the tournament:
+
+| Model | Params | Carmack v2 | Coding | Verdict |
+|-------|--------|-----------|--------|---------|
+| Opus 4.6 | Cloud | **0.845** | 0.870 | Cloud champion |
+| Qwen2.5-Coder-14B | 14B | 0.704 | **0.929** | Local champion |
+| Gemma 4 31B + LoRA | 31B | 0.271 | 0.699 | Jailbreak specialist |
+| Qwen V3 + LoRA | 27B | 0.270 | 0.856 | Retired |
+| Qwen3-Coder-30B | 30B (3B active) | 0.265 | 0.898 | Eliminated |
+
+## Tests
+
+12 tests covering champion loading, per-category comparison logic, win/tie/loss thresholds, dry-run safety, Jedi assignment validation, and CLI help.
+
+```bash
+cd mlx-finetune && python tests/test_model_tournament.py
+```
