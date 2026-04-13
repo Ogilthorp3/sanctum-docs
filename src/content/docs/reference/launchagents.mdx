@@ -27,19 +27,36 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 These agents stand up the VM, the gateway, and the firewall bridge. Without them, the rest of the stack is a collection of orphaned processes with nowhere to send their feelings.
 
-#### com.sanctum.utm-autostart
+#### com.sanctum.vm-autostart
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.utm-autostart` |
-| **Purpose** | Launch QEMU headless, start the VM, and set the bridge100 IP to the configured `mac_bridge_ip` |
+| **Label** | `com.sanctum.vm-autostart` |
+| **Purpose** | Launch headless QEMU, restore the bridge100 IP, and re-establish the VM-facing Mac bridge surfaces |
 | **Required Service** | `vm` |
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Runs a startup script that launches QEMU headless, waits for the VM to boot, and configures the bridge interface IP via `sudo ifconfig`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
+Runs the startup script that launches QEMU headless, waits for the VM to boot, configures the bridge interface IP via `sudo ifconfig`, and restores the VM-facing Mac service bridges after the network comes back. In the current runtime that specifically includes the LM Studio bridge exposed on `10.10.10.1:1234`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
 
-The first domino. Everything else assumes the VM is running and the bridge exists. If this one fails, enjoy your very expensive space heater.
+The first domino. Everything else assumes the VM is running and the bridge exists. If this one fails, enjoy your very expensive aluminum rectangle doing absolutely nothing useful.
+
+---
+
+#### com.sanctum.lmstudio-bridge
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.lmstudio-bridge` |
+| **Purpose** | Expose the Mac-local LM Studio listener to the VM bridge address |
+| **Required Service** | `vm` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `10.10.10.1:1234` |
+
+This small bridge LaunchAgent forwards the VM-facing `10.10.10.1:1234` listener to the Mac-local LM Studio process bound on `127.0.0.1:1234`. The VM does not need the whole desktop. It needs one reliable door.
+
+`com.sanctum.vm-autostart` is responsible for ensuring this bridge exists once the bridge network comes back. The bridge itself is launchd-managed so it stays resident after the one-shot VM bootstrap work is finished.
 
 ---
 
