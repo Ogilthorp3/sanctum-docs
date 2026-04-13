@@ -89,6 +89,46 @@ The Model Tournament exists because "it feels better" is not a metric. Every tra
 The nightly pipeline now includes a promotion gate: the candidate must beat the champion by >5% on at least one category to be promoted. This prevents catastrophic forgetting from reaching production. The gate saved us this time — the 0.252 model was never deployed.
 </Aside>
 
+## The Enriched System Prompt Breakthrough
+
+If training Coder-14B destroys it, and we can't improve it with LoRA, is 0.704 the ceiling?
+
+No. The ceiling is **0.765** — and the tool that broke through it was a YAML file.
+
+Instead of training the model's weights, we enriched the system prompts in `agent_prompts.yaml`. Each agent received:
+
+- **Structured port tables** with codenames and services
+- **MAC address tables** for all family devices
+- **Home Assistant entity IDs** (Sonos speakers, HVAC, alarms, lights)
+- **Network topology** (IPs, Tailscale addresses, SSH aliases)
+- **Few-shot Q&A examples** — 2-3 realistic exchanges per agent showing how to reason about domain-specific scenarios
+
+| Approach | Carmack v2 Score | Delta from Base |
+|----------|:----------------:|:---------------:|
+| Base Coder-14B (no training, basic prompt) | 0.704 | — |
+| LoRA rank 64, 800 iters | 0.252 | -0.452 |
+| LoRA rank 16, 200 iters (light) | 0.271 | -0.433 |
+| **Enriched system prompts** | **0.765** | **+0.061** |
+
+<Aside type="tip">
+Enriched system prompts improved Coder-14B by 8.7% without touching a single weight. The few-shot examples are the key — they teach the model *how to reason* about the domain, not *what to memorize*. When Windu sees "MAC FA:CE:DE:CA:CA:01 at 2AM," the few-shot example shows it should identify the device (Albert's iPhone), check the time against screen-time policy, and recommend action. No training required.
+</Aside>
+
+The cost? A YAML file. The benefit? A model that's better than any fine-tuned version we produced. The lesson: if the model already understands your domain from context, give it better context rather than burning your domain into its weights.
+
+## Nightly Pipeline — Bugs We Caught
+
+The promotion pipeline (`master-pipeline.sh`) ran for 4 consecutive nights (Apr 9-12) without ever promoting a candidate. Not because the candidates were bad — because the benchmarking had two bugs:
+
+1. **`get_score()` always returned 0** — a `pipefail` + SIGPIPE interaction where `ls | head -1` triggered a broken pipe exit code, which `set -euo pipefail` silently swallowed
+2. **Missing `pkill` between V1 and candidate benchmarks** — the V1 server was never killed before starting the candidate, so both benchmarks tested the same model on the same port
+
+Both produced identical scores (0.699 vs 0.699), both returned as 0, and every night the pipeline "rejected" the candidate. Four nights of training, zero promotions, zero errors logged.
+
+<Aside type="caution">
+The promotion gate correctly prevented bad models from deploying — but it also prevented good models from deploying, because the scoring was broken. Test your tests. Monitor your monitors. The pipeline that validates your model is itself a system that needs validation.
+</Aside>
+
 ## Current Best Configuration
 
 Based on all experiments:
@@ -96,7 +136,7 @@ Based on all experiments:
 | Agent | Model | Training | Why |
 |-------|-------|----------|-----|
 | Windu, Mothma, Jocasta | Opus 4.6 (cloud) | None | Best overall, prompt-only |
-| Yoda, Qui-Gon, Ahsoka | Coder-14B (local) | **None** | Best untrained. Training hurts. |
+| Yoda, Qui-Gon, Ahsoka | Coder-14B (local) | **Enriched prompts** | 0.765 — prompts beat LoRA |
 | Cilghal, Mundi | Gemma4+LoRA (local) | LoRA on enriched data | Privacy + jailbreak hardening |
 | Coding | Coder-14B (local) | **None** | 0.929 — don't touch it |
 
