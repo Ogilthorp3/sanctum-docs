@@ -27,13 +27,46 @@ The VM lives in a sealed room with one door. If you can't reach it, either the r
 **Fix:**
 ```bash
 # Restart VM autostart (QEMU headless) (reconfigures bridge100)
-launchctl bootout gui/$(id -u)/com.sanctum.utm-autostart
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.utm-autostart.plist
+launchctl bootout gui/$(id -u)/com.sanctum.vm-autostart
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.vm-autostart.plist
 ```
 
 <Aside type="note">
-If bridge100 doesn't exist at all, QEMU either hasn't started the VM or macOS decided the bridge interface wasn't important enough to keep around. The `utm-autostart` script recreates it via `sudo ifconfig`. The sudoers entry at `/etc/sudoers.d/vmnet-bridge` makes this passwordless.
+If bridge100 doesn't exist at all, QEMU either hasn't started the VM or macOS decided the bridge interface wasn't important enough to keep around. The `vm-autostart` script recreates it via `sudo ifconfig` and re-establishes the VM-facing LM Studio bridge on `10.10.10.1:1234`. The sudoers entry at `/etc/sudoers.d/vmnet-bridge` makes the interface repair passwordless.
 </Aside>
+
+## VM Can Reach OpenClaw But Not Local Models
+
+**Symptom:** The VM can talk to the Mac gateway on `10.10.10.1:1977`, but model calls to `10.10.10.1:1337` or `10.10.10.1:1234` fail.
+
+That means the VM bridge exists, but the model-serving side of the Mac has drifted. Usually one of two things is true:
+
+1. The MLX model server is down or bound incorrectly.
+2. The LM Studio bridge listener on `10.10.10.1:1234` is gone.
+
+**Check from the VM:**
+
+```bash
+ssh openclaw "curl -fsS http://10.10.10.1:1337/v1/models | jq '.data | length'"
+ssh openclaw "curl -fsS http://10.10.10.1:1234/v1/models | jq '.data | length'"
+```
+
+**Check on the Mac:**
+
+```bash
+curl -fsS http://127.0.0.1:1337/v1/models
+curl -fsS http://127.0.0.1:1234/v1/models
+lsof -nP -iTCP@10.10.10.1:1234 -sTCP:LISTEN
+```
+
+**Fix:**
+
+```bash
+# Re-run the VM startup path to restore the bridge surfaces
+bash ~/.openclaw/scripts/vm-autostart.sh
+```
+
+If `127.0.0.1:1337` is down too, the MLX server itself is the problem, not the bridge. Fix the model server first, then re-run `vm-autostart` so the VM-side path matches reality again.
 
 ## Service Down
 
