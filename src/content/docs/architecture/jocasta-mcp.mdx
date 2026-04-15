@@ -7,30 +7,48 @@ import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
 ![Jocasta MCP — a vast library of floating data crystals and holographic scrolls weaving a unified data stream.](./images/hero-jocasta-mcp.png)
 
-Jocasta is the ultimate local-first AI data gateway. Rather than relying on cloud API scraping or headless browser hacks (which are notoriously brittle), `sanctum-jocasta-mcp` connects directly to the underlying `SQLite` databases running silently on the Mac Mini host. It exposes 16 discrete tool sets that are shared centrally among the Jedi Council.
+Jocasta is the ultimate local-first AI data gateway. Rather than relying on cloud API scraping or headless browser hacks (which are notoriously brittle), `sanctum-jocasta-mcp` connects directly to the underlying `SQLite` databases running silently on the Mac Mini host. It exposes 23 discrete tool sets that are shared centrally among the Jedi Council.
 
-Because all the databases queried (Messages, iOS Notes, Health) live entirely offline under `~/Library`, data egress costs and latency are basically zero. 
+Because all the databases queried (Messages, iOS Notes, Health) live entirely offline under `~/Library`, data egress costs and latency are basically zero.
+
+**Source**: [github.com/Ogilthorp3/jocasta-mcp](https://github.com/Ogilthorp3/jocasta-mcp) (private) — `~/Projects/jocasta-mcp/`
 
 ## The Architectural Design
 The MCP operates through two unified streams:
 
 1. **The MCP Server (`index.ts`)**: For autonomous LLM agents speaking standard `.stdio` RPC.
-2. **The Terminal CLI (`cli.ts`)**: For SSH automation and bare Bash scripting (`npx sanctum-jocasta <command>`).
+2. **The Terminal CLI (`cli.ts`)**: For SSH automation and bare Bash scripting (`pnpm sanctum-jocasta <command>`).
 
-## Complete Unified Capabilities (The 16 Connectors)
+### SanctumBridge (Port 4078)
+
+As of April 2026, Jocasta's read connectors for **iMessage**, **WhatsApp**, **Contacts**, and **Calendar** route queries through SanctumBridge — a lightweight HTTP proxy running on the host with Full Disk Access. This means jocasta-mcp itself no longer needs FDA granted. One less thing that can silently break after a macOS update.
+
+The bridge accepts `POST /bridge/query` with a body of `{"db": "imessage|whatsapp|contacts|calendar", "sql": "...", "params": []}` and returns `{"rows": [...], "count": N}`. Every refactored connector attempts the bridge first. If the bridge is unreachable (crashed, not started, port blocked), the connector falls back to direct SQLite access — which still works if the node process has FDA. Graceful degradation, not graceful surrender.
+
+The bridge URL defaults to `http://127.0.0.1:4078` and is configurable via the `SANCTUM_BRIDGE_URL` environment variable. Port 4078 was chosen because it's one digit off 4077 (Force Flow) — Jocasta is the library next door.
+
+<Aside type="note">
+  Write operations — sending iMessages, creating Notes, scheduling Calendar events — still use the AppleScript/osascript pipeline directly. The bridge is read-only. If you need to send a PagerDuty text at 3 AM, that still goes through `osascript`, not HTTP.
+</Aside>
+
+### Health Check
+
+The `jocasta_health` tool reports server status and bridge connectivity in one call. It tells you whether queries are routing through the bridge or falling back to direct DB access, which is the first thing you want to know when something returns empty results.
+
+## Complete Unified Capabilities (23 Tools)
 
 <CardGrid>
   <Card title="Apple Mail" icon="email">
     Reads `~/Library/Mail/V*` and queries the primary `Envelope Index`. It maps sender aliases and email subjects instantaneously.
   </Card>
   <Card title="Messages & Protocols" icon="comment">
-    Seamlessly parses `chat.db` for natively synced iMessage and SMS. Also hooks straight into Catalyst bundles for **WhatsApp** and **Telegram**, and decodes the `config.json` master key to decrypt **Signal's** local SQLCipher `db.sqlite`.
+    Parses `chat.db` for natively synced iMessage and SMS, and hooks into Catalyst bundles for **WhatsApp** and **Telegram**. iMessage and WhatsApp now route through SanctumBridge (:4078) by default, with direct DB fallback. Signal still decodes the `config.json` master key to decrypt its local SQLCipher `db.sqlite` directly — the bridge doesn't handle encrypted databases.
   </Card>
   <Card title="Electron Bundles" icon="warning">
     **Slack** and **Discord** data is heavily blocked due to Electron's use of LevelDB packet chunks (`Local Storage/leveldb`). Those tools respond with graceful failures for now.
   </Card>
   <Card title="Apple Core Data" icon="apple">
-    Jocasta queries `NoteStore.sqlite` for uncompressed **Apple Notes** brainstorming, extracts iOS/Mac **Calendar & Reminders* schedules out of `Calendar.sqlitedb`, and natively parses `AddressBook.abcddb` to perform **CRM correlation** of cell numbers to actual names effortlessly.
+    Jocasta queries `NoteStore.sqlite` for uncompressed **Apple Notes** brainstorming, extracts **Calendar** schedules out of `Calendar Cache`, and parses `AddressBook-v22.abcddb` for **CRM correlation** of cell numbers to names. Calendar and Contacts route through SanctumBridge by default. Notes stays on direct SQLite — the bridge doesn't serve it yet.
   </Card>
   <Card title="Offline Knowledge" icon="open-book">
     Provides access to Wikipedia and encyclopedias by proxying requests securely to a local `.zim` unzipper (`kiwix-serve`).
@@ -41,7 +59,7 @@ The MCP operates through two unified streams:
 </CardGrid>
 
 ## Active Operations (The Native executioner's blade)
-Because Jocasta operates via secure `sqlite3.OPEN_READONLY` connections for speed, she utilizes a separate isolated AppleScript pipeline (`osascript`) to enact destructive actions securely. This avoids Core Data corruption natively:
+Because Jocasta operates via secure `sqlite3.OPEN_READONLY` connections for reads (or SanctumBridge for the four bridged databases), she utilizes a separate isolated AppleScript pipeline (`osascript`) to enact destructive actions securely. This avoids Core Data corruption natively:
 - **`jocasta_write_note`**: Scaffolds an organized document in your default iCloud Apple Notes directory natively.
 - **`jocasta_write_calendar`**: Ingests ISO datetimes to programmatically schedule meetings and events directly in the Calendar app without manual scraping.
 - **`jocasta_send_imessage`**: Invokes the Mac's background Messages daemon to dispatch iMessages/SMS seamlessly.
@@ -65,6 +83,15 @@ For systems failure tracking and massive unstructured document ingest:
 1. **Jocasta Sysmon** (`jocasta_read_syslog` & `jocasta_read_process_list`): Exposes raw memory profiling (unix `ps`) and macOS Unified Logs (`log show --predicate`). To protect the LLM context window, these outputs are hard-truncated precisely to 500 records.
 2. **Universal Files** (`jocasta_read_file`): Equipped with `pdf-parse` and `mammoth`, Jocasta can slice through generic `.docx`, `.pdf`, `.md`, and `.csv` items downloaded into iCloud.
 
+## Package Manager
+
+Jocasta runs on **pnpm** (10.33.0). The `packageManager` field is set in `package.json` and native module builds (sqlcipher, sqlite3, esbuild) are explicitly allowlisted via `pnpm.onlyBuiltDependencies`. If you run `npm install` instead of `pnpm install`, you will have a bad time — Manoir's global npm config has `omit=dev`, which silently skips TypeScript.
+
+```bash
+pnpm install
+pnpm build
+```
+
 ## Testing and E2E
 
-Like `.mlx` components, Jocasta asserts viability with an explicitly built `test_e2e_jocasta.sh`. The test builds the TypeScript outputs cleanly, calls all Core CLI functions checking for intact `stdout`/`stderr` structures, tests telemetry, and gracefully evaluates unknown paths for exception management.
+Like `.mlx` components, Jocasta asserts viability with an explicitly built `test_e2e_jocasta.sh`. The test builds the TypeScript outputs cleanly via pnpm, calls all Core CLI functions checking for intact `stdout`/`stderr` structures, tests telemetry, and gracefully evaluates unknown paths for exception management. Connectors that hit missing databases (Calendar Cache on Manoir, for instance) return readable errors that the test suite validates as expected failures — not silent crashes.
