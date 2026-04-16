@@ -29,24 +29,34 @@ Jocasta connects to [Affinity CRM](https://www.affinity.co/) for structured rela
 
 She can query contacts, update records, log interactions, and surface relationship context when you need it. The LinkedIn browser extension feeds her new connections automatically. You meet someone at a conference; by the time you're back at your desk, she already knows.
 
-### Messaging
+### Messaging & Military-Grade ETL Pipeline
 
-Through the `apple-toolkit` skill, Jocasta has direct access to four messaging channels:
+Through the `apple-toolkit` skill and automated ETL pipelines, Jocasta has direct access to five messaging channels, which she continuously syncs into her DuckDB memory (`workspace.duckdb`):
 
 <CardGrid>
+  <Card title="Apple Mail" icon="email">
+    Via JXA bridge (`mail-to-duckdb.py`), distinguishing Personal vs Business by domain.
+  </Card>
   <Card title="iMessage" icon="apple">
-    Native macOS Messages integration. Read and send from any synced conversation.
+    Native macOS Messages integration (`chat.db`).
   </Card>
   <Card title="WhatsApp" icon="phone">
-    Via WhatsApp Web bridge on the Mac. Group and individual messaging.
+    Via WhatsApp local sandbox database (`ChatStorage.sqlite`).
   </Card>
   <Card title="Signal" icon="star">
-    Local Signal database access. The most private channel, handled accordingly.
+    Local SQLCipher database, decrypted securely using Keychain.
   </Card>
-  <Card title="Slack" icon="comment">
-    Workspace messaging for professional contexts.
+  <Card title="Telegram" icon="telegram">
+    Via Telethon (`telegram-to-duckdb.py`) securely pulling from the API.
   </Card>
 </CardGrid>
+
+To ensure these pipelines never fail silently or corrupt her memory, Jocasta's ETL daemons are hardened with **5 military-grade measures**:
+1. **Concurrency Locking**: Strict UNIX file locks (`fcntl.flock`) prevent DuckDB write collisions across parallel hourly cron jobs.
+2. **Dead Man's Switch**: Global `try...except` loops intercept any script crashes and `POST` stack traces directly to Force Flow, alerting you on Signal instantly.
+3. **Bulletproof Timezones**: All incoming dates are parsed into strict UTC timezone-aware objects, mitigating edge cases with Daylight Saving Time or differing local protocols.
+4. **Zero-Trust Secrets**: Telegram's `API_ID` and `API_HASH` are stored exclusively in the Mac's hardware Keychain, fetched in-memory at runtime via `/usr/bin/security`.
+5. **Pre-Sync DB Snapshots**: A pristine `workspace.duckdb.bak` is cloned automatically the second the script gets a lock, ensuring 1-hour rollback safety in case of power failure during writes.
 
 She does not combine these channels recklessly. A message that belongs on Signal stays on Signal. A contact who prefers WhatsApp gets WhatsApp. Jocasta understands that channel preference is itself a form of relationship intelligence.
 
