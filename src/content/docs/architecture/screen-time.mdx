@@ -11,7 +11,7 @@ Every parental control app on the market assumes you can install something on th
 
 Screen Time takes a different approach. It runs inside [Force Flow](/architecture/force-flow/) on port 4077 and enforces curfews at the network level via Firewalla. No agent on the device. No MDM profile. No app to uninstall. If it has a MAC address and it's on your WiFi, it follows the rules of the haus.
 
-The key insight that makes this work: **phone presence equals consciousness**. If Albert's iPhone is on WiFi, Albert is awake. If the phone drops off for 10 minutes, Albert is in bed. This one heuristic drives the entire shared-device enforcement model. It is not sophisticated. It is correct roughly 98% of the time, which is better than asking a 12-year-old to self-report.
+The key insight that makes this work: **the network is the only authority that can't be uninstalled**. Every device in the haus routes through Firewalla. If a MAC address exists on this subnet, Firewalla can pause it, block specific services on it, or cut it off entirely. No app to delete. No profile to remove. No clever workaround that doesn't involve physically leaving the building.
 
 ## Enforcement Model
 
@@ -25,11 +25,13 @@ Three tiers, because not every screen is the same screen.
 
 ### Tier 2: Shared Gaming Devices
 
-**Presence-based blocking.** The PS5, VRVANA-PC, and shared consoles are blocked when Albert's phone is detected on WiFi past curfew. Once his phone has been off the network for 10 minutes, the system assumes he's in bed and unblocks the devices -- so Bert and Andreanne can use them without filing a support ticket with their own haus.
+**Hard curfew.** The VRVANA-PC and any auto-discovered consoles (PS5, Switch, Xbox, Steam Deck) block at Albert's curfew time and unblock at 10:00. No phone-presence heuristics, no "is he awake?" guessing. Curfew means curfew. Parents who want to use the PS5 after hours can manually unblock via the API, PWA, or by asking an agent.
+
+Previously this tier used phone-presence detection (phone on WiFi = child awake), but it wasn't reliable enough. A phone charging in the bedroom with WiFi on would keep the PS5 blocked all night. A phone in airplane mode would unblock everything immediately. Hard curfew is simpler and more predictable.
 
 ### Tier 3: Screens (TVs and PCs)
 
-**Hard curfew.** Apple TVs and the main PC get a fixed cutoff. But the Apple TV in the living room doubles as the HomeKit hub, so this tier uses service-level blocking: Netflix, YouTube, Disney+ get blocked. Bell Fibe TV and HomeKit traffic are preserved. The haus doesn't stop being smart just because it's bedtime.
+**Hard curfew with service-level precision.** Apple TVs and the VRVANA-PC get a fixed cutoff at 22:00 (10 PM), unblock at 10:00. The First Floor Apple TV doubles as the HomeKit hub, so it uses service-level blocking: Netflix, YouTube, Disney+, Crave, Crunchyroll, and 10 other streaming apps get blocked. Bell Fibe TV and HomeKit traffic are preserved. The haus doesn't stop being smart just because it's bedtime.
 
 <Aside type="caution">
 Service-level blocking depends on Firewalla's domain-group rules. If Netflix rotates CDN domains faster than the block list updates, you'll get brief windows of access. This is a known tradeoff of not running a full proxy. In practice, a 12-year-old navigating CDN rotation at 11 PM deserves the access.
@@ -39,11 +41,11 @@ Service-level blocking depends on Firewalla's domain-group rules. If Netflix rot
 
 Three schedule tiers, resolved in priority order by `_get_effective_schedule()`:
 
-| Priority | Schedule | Curfew | Source |
-|----------|----------|--------|--------|
-| 1 (highest) | Quebec school holiday | 23:00 | `holidays.yaml` |
-| 2 | Weekend (Fri/Sat night) | 23:00 | Day-of-week check |
-| 3 (default) | Weekday | 21:30 | Default config |
+| Priority | Schedule | Curfew | Wake | Source |
+|----------|----------|--------|------|--------|
+| 1 (highest) | Quebec school holiday | 23:00 | 10:00 | `holidays.yaml` |
+| 2 | Weekend (Fri/Sat night) | 23:00 | 10:00 | Day-of-week check |
+| 3 (default) | Weekday | 21:30 | 10:00 | Default config |
 
 Holiday detection uses a curated `holidays.yaml` with Quebec school calendar dates -- semaine de relache, Noel, summer break. The file is maintained manually because Quebec's school calendar is published as a PDF, which is exactly the kind of government decision this system was built to route around.
 
@@ -53,13 +55,15 @@ Weekend detection: Friday is `weekday() == 4`, Saturday is `weekday() == 5`. Sun
 
 ## Gradual Wind-Down
 
-Curfew isn't a cliff -- it's a slope. Three phases, each with a French Sonos announcement:
+Curfew isn't a cliff -- it's a slope. Three phases of progressive service blocking:
 
-| Offset | Action | Sonos Message |
-|--------|--------|---------------|
-| -30 min | Social media blocked (TikTok, Instagram, Snapchat, YouTube) | "Albert, les reseaux sociaux sont fermes. 30 minutes avant le couvre-feu." |
-| -15 min | Gaming blocked (Steam, PSN, Xbox Live, Epic) | "Albert, les jeux sont fermes. 15 minutes." |
-| 0 min | Everything blocked (full curfew) | "Couvre-feu. Bonne nuit." |
+| Offset | Action |
+|--------|--------|
+| -30 min | Social media blocked (TikTok, Instagram, Snapchat, Discord, Reddit, Twitter, Facebook) |
+| -15 min | Gaming blocked (Steam, Epic, Roblox, Minecraft, Fortnite) |
+| 0 min | Everything blocked (full curfew) |
+
+Wind-down blocks are explicitly cleaned up at wake time. The system tracks which MACs had services blocked during wind-down and sends batch-unblock commands when daytime resumes. No orphaned DNS rules surviving into the next day.
 
 The `service_categories` config in `devices.yaml` defines which domains belong to which category. Adding a new service is one YAML entry, not a code change.
 
@@ -91,6 +95,32 @@ MAC randomization detection: if a device with a locally-administered MAC bit app
 ### Weekly Digest
 
 Every **Sunday at 6 PM**, a digest is sent via Signal and push notification. Contents: average bedtime for the week, number of overrides, credits earned and redeemed, any guest device activity. It's the parental equivalent of a sprint retrospective, except the sprint is "did the 12-year-old go to bed on time."
+
+## Enforcement Resilience
+
+The system enforces curfews through Firewalla's API, but APIs fail. The Firewalla Purple's `policy:delete` endpoint has a known firmware bug where it returns "invalid policy" for every PID. If you trust the API alone, devices get blocked at night and never unblocked in the morning.
+
+Three layers of defense:
+
+### 1. Persisted Block State
+
+Every block and unblock is recorded in a `blocked_state` SQLite table. On startup, Force Flow restores in-memory state from the DB. A restart at 3 AM no longer means the system "forgets" what's blocked and skips the morning unblock.
+
+### 2. SSH Iptables Fallback
+
+The Firewalla bridge wraps every `policy:delete` call with an SSH fallback. If the API fails, the bridge SSHes directly into the Firewalla box and removes the iptables rules by their comment tag. Same for `policy:create` — if the MAC-level block rule can't be created via API (stale policy ID), the bridge adds DROP rules via SSH. Batch operations use a single SSH call for all PIDs.
+
+### 3. Daily Safety Net
+
+Every enforcement tick checks: if it's daytime and a device should be unblocked, send the unblock command even if the in-memory state says "not blocked." This fires once per day per device. It's idempotent — a redundant unblock on an already-unblocked device is a no-op. But if the state was lost (restart, crash, Firewalla reboot), the safety net catches it within 30 seconds of the next enforcement cycle.
+
+<Aside type="note">
+The bridge endpoint `POST /host/:mac/unrules` batch-removes all DNS block rules scoped to a MAC with SSH fallback. One call cleans up 30+ wind-down rules in seconds. The alternative — individual API deletes with per-PID SSH fallback — would take minutes.
+</Aside>
+
+### Migration Export
+
+`GET /export` on the bridge (port 18094) dumps the full Firewalla configuration: all hosts, active policies, custom DNS records, and service domain mappings. Combined with the `firewalla-export.sh` and `firewalla-import.sh` scripts, the entire enforcement state can be backed up and restored on a new Firewalla box (hello, Gold Pro) without reconfiguring anything by hand.
 
 ## Interfaces
 
@@ -240,8 +270,17 @@ api_token: "redacted-but-you-get-the-idea"
 
 Two blocking modes exist and they fail differently:
 
-- **Soft pause** (service-level): Firewalla domain-group rules. Check that the domain list in `service_categories` is current. Some services use CDN domains that rotate. `nslookup` from the device to verify what it's resolving.
-- **Hard block** (MAC-level): Direct Firewalla device quarantine. If this fails, the Firewalla API token may have expired, or the device MAC changed (see: MAC randomization). Check `~/.sanctum/screen-time/usage.db` for the last known MAC.
+- **Soft pause** (service-level): DNS block rules per domain, scoped to the device MAC. Check that the domain list in `service_categories` is current. Some services use CDN domains that rotate. `nslookup` from the device to verify what it's resolving.
+- **Hard block** (MAC-level): ACL=false plus iptables DROP rules. If ACL-only is set (no iptables rules), existing connections survive — the device stays online until it tries to open something new. Check the bridge logs for "[pause] MAC block rule API failed" — this means the API couldn't create the rule and the SSH fallback should have kicked in.
+
+### "Device didn't unblock in the morning"
+
+Check in this order:
+
+1. **Force Flow running?** `lsof -i :4077` on manoir. If it restarted, the `blocked_state` DB should have restored state. Check logs for "RESTORED blocked state."
+2. **Bridge running?** `lsof -i :18094`. The bridge handles the actual Firewalla API calls and SSH fallback.
+3. **Stale iptables rules?** SSH to Firewalla and check: `sudo iptables -S | grep <MAC>`. If rules exist but Force Flow thinks the device is unblocked, the safety net should catch it within 30 seconds. If not, manually unblock via `POST /screen/unblock`.
+4. **Stale DNS rules?** `POST /host/:mac/unrules` on the bridge (port 18094) batch-removes all DNS blocks for a MAC with SSH fallback.
 
 ### "URL doesn't resolve" (force.home)
 
@@ -281,7 +320,7 @@ MDM (Mobile Device Management) is the "enterprise" answer to parental controls. 
 Apple Screen Time on personal devices + Firewalla at the network layer covers every device in the haus without installing anything on any of them. The only software that runs is on the Mac Mini, which is the one machine in the building that no 12-year-old has the SSH key to.
 
 <Aside type="tip">
-The entire Screen Time engine is one file: `~/.sanctum/force-flow/screen_time.py` (1715 lines). Config at `~/.sanctum/screen-time/devices.yaml`. Database at `~/.sanctum/screen-time/usage.db`. If you're debugging, that's three files. Not a microservice mesh. Three files.
+The entire Screen Time engine is one file: `~/.sanctum/force-flow/screen_time.py`. Config at `~/.sanctum/screen-time/devices.yaml`. Database at `~/.sanctum/screen-time/usage.db`. The Firewalla bridge at `~/.openclaw/firewalla-bridge.js` handles the hardware layer with SSH fallback. If you're debugging, that's four files. Not a microservice mesh. Four files.
 </Aside>
 
 ## Service Details
@@ -290,10 +329,12 @@ The entire Screen Time engine is one file: `~/.sanctum/force-flow/screen_time.py
 |----------|-------|
 | Port | 4077 (shared with Force Flow) |
 | Engine | `~/.sanctum/force-flow/screen_time.py` |
+| Bridge | `~/.openclaw/firewalla-bridge.js` (port 18094) |
 | Config | `~/.sanctum/screen-time/devices.yaml` |
 | Holidays | `~/.sanctum/screen-time/holidays.yaml` |
 | Database | `~/.sanctum/screen-time/usage.db` |
 | PWA | `~/.sanctum/screen-time/pwa/` |
 | HA Package | `~/.openclaw/homeassistant/packages/screen_time.yaml` |
 | Holocron | `~/Projects/the-holocron/src/renderer/components/ScreenTimePanel.tsx` |
+| Export | `tools/firewalla-export.sh` / `firewalla-import.sh` |
 | Digest | Sunday 18:00 via Signal + push |
