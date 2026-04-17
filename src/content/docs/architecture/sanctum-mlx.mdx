@@ -95,17 +95,118 @@ MLX uses lazy evaluation — operations build a computation graph that only exec
 
 Q/K RMS normalization uses a `ones_weight` vector and scale factors (`inv_scale²` for Q, `inv_scale` for K). Previously allocated fresh each forward call — 48 layers × 2 arrays × every token = a lot of unnecessary allocation. Now computed once at model construction and cached in the struct.
 
+## The April 2026 Cutover
+
+For a while, sanctum-mlx was a science project. It loaded models, it ran the forward pass, it produced valid tensors — it just wasn't the thing answering your questions. Production still routed through the Python `mlx_lm.server` that sanctum-server babysat. The plan was to flip the switch eventually. April 2026 is when we flipped it.
+
+What landed in a single sustained push:
+
+<CardGrid>
+  <Card title="LoRA Merge at Load" icon="puzzle">
+    `AppState::load` calls `lora::load_and_merge` when `--adapter-path` is supplied. Quantized path dequantizes → adds the delta → requantizes at `group_size=64, bits=4`. Non-quantized path just adds. `AdapterInfo { name, rank, alpha, merged_pairs }` is carried on the app state and surfaced in `system_fingerprint`.
+  </Card>
+  <Card title="Full Sampling Pipeline" icon="rocket">
+    A new `sampling` module replaces the single-temp `qwen3_5::sample()`. Pipeline: repetition penalty → top-p nucleus → temperature → argmax or categorical. `RecentTokens` is a bounded dedup-aware ring buffer. OpenAI-style `stop` is accepted as string-or-array; a `StopSeqBuffer` carries max-stop-length bytes across SSE batches so a stop sequence split across the 8-token flush boundary still trips.
+  </Card>
+  <Card title="Custom Decode Loop" icon="approve-check">
+    `sampling::decode` drives `Model::forward` directly with a `Control::Continue`/`Stop` callback. The callback batches token IDs for the caller to decode + stream + check stops. Replaces `qwen3_5::Generate` so top_p and repetition_penalty actually affect logits without patching vendored mlx-lm.
+  </Card>
+  <Card title="Multimodal Config Support" icon="setting">
+    The production `mlx-community/Qwen3.5-27B-4bit` checkpoint is the VL variant — `text_config` nests the text-model fields. `get_qwen3_5_model_args` now flattens `text_config` into the root before deserializing, so both flat and nested configs load. Root-level keys still win on conflict.
+  </Card>
+</CardGrid>
+
+Along the way we fixed two bugs that would have made production unusable:
+
+- **`Array::deep_clone()` on unevaluated lazy tensors segfaults** inside `mlx_array_data_bfloat16` because the buffer pointer is null until `eval()` runs. The "no-op" branches of `sample`, `apply_top_p`, and `apply_repetition_penalty` were cloning the prefill logits that hadn't been materialized yet. Fix: the pipeline passes `&Array` through every stage and only materializes when a transform actually runs. There is now a fast path for `temp=0` + no rep-penalty that goes straight to argmax with zero intermediate Arrays.
+- **Missing `<think>…</think>` generation-prompt prefix.** Python runs with `--chat-template-args {"enable_thinking": false}`, which causes the Qwen3.5 chat template to emit `<|im_start|>assistant\n<think>\n\n</think>\n\n`. We were sending only `<|im_start|>assistant\n`. Without the empty think block the model slipped into open-ended reasoning and emitted degenerate token loops. `messages_to_prompt` now matches production exactly.
+
+## Autoregressive SSM State — The Hybrid-Attention Cache
+
+This is the piece that took the longest to find and the shortest to fix.
+
+When you load a Qwen3.5-27B base model and send one prompt, sanctum-mlx would produce a few coherent tokens and then collapse:
+
+```
+Prompt:  "Say hello."
+Output:  "Hello, and the 190/ / 190/ / 190/ / 190/ / …"
+```
+
+The tokenization was right. The special tokens were right. The sampler was right. The model weights were right. And yet.
+
+The bug was that the **linear-attention layers had no way to carry state across forward calls.** Qwen3.5 is a hybrid — 48 layers of Mamba-style GatedDeltaNet SSM interleaved with 16 full-attention layers. Full attention has a KV cache. Linear attention didn't. Every decode step (`L=1`) entered the forward pass with:
+
+- A fresh zero SSM recurrent state `h ∈ ℝ^{B × H_v × D_v × D_k}`
+- A depthwise causal `Conv1d` left-padded with zeros
+
+The full-attention KV cache carried the prompt context, which was enough to keep the first few tokens coherent. After that, the linear-attention layers — running with amnesia — produced garbage that cascaded through the residual stream until greedy decode locked onto a self-reinforcing token.
+
+### The Fix
+
+Two pieces of state get threaded through the decode loop now:
+
+```rust
+pub struct LinearAttentionState {
+    /// GatedDeltaNet matrix memory: h[t] = state * g + k * ((v − state@k) * beta)
+    pub ssm_state: Array,     // [B, num_value_heads, value_head_dim, key_head_dim]
+    /// Previous (conv_kernel_dim - 1) raw QKV projections.
+    pub conv_buffer: Array,   // [B, K-1, qkv_dim]
+}
+```
+
+`LinearAttention::forward_with_cache(&mut self, x, cache: &mut Option<LinearAttentionState>)` replaces the old stateless `forward()`:
+
+- `None` on entry → prefill. Conv is left-padded with zeros, SSM starts from `Array::zeros`. On exit the cache gets populated with the final SSM state and the last `conv_kernel_dim - 1` raw QKV projections.
+- `Some(state)` on entry → decode continuation. Conv is left-padded with `state.conv_buffer` (the rolling tail from the previous call), SSM starts from `state.ssm_state`. Works for any `L ≥ 1`, which is to say every single-token decode step.
+
+`ModelInput` gained an `ssm_cache: Option<&mut Vec<Option<LinearAttentionState>>>` field; `Qwen3_5InnerModel::forward` dispatches each layer's cache slot to the right layer type (full-attn layers see their KV slot; linear-attn layers see their SSM slot). The old `Module::forward(&Array)` still exists and delegates with a `None` cache so one-shot prefill-only callers — benchmarks, tests, the hybrid sidecar — work unchanged.
+
+### The Correctness Test
+
+The unit test that says "this is right" is short and brutal:
+
+```rust
+// Full prefill of L=6:
+let y_full = la.forward_with_cache(&x6, &mut None)?;
+
+// Prefill L=5, then decode L=1:
+la.forward_with_cache(&x5, &mut cache)?;
+let y_step = la.forward_with_cache(&x1, &mut cache)?;
+
+// The 6th-position output must match both ways.
+assert!(max_abs_diff(&y_full.last(), &y_step) < 1e-3);
+```
+
+If the cache correctly represents the state after `L=5`, then running one more step through it has to produce the same output as scanning all six tokens at once. It does.
+
+### End-to-End on the Real Model
+
+```
+Prompt:  "Say hello."
+Before:  "Hello, and the 190/ / 190/ / 190/ / …"
+After:   "Hello! How can I help you today? Whether you need help
+          with a specific task, need clarification, or have a
+          question, I'm here to help!"
+```
+
+Python `mlx_lm.server` on the same prompt emits EOS at "today?" — earlier than ours. The 50-ish-token drift before we diverge is a numerical-parity refinement, tracked separately. The model is now producing usable, grammatical output against real weights on a 64 GB Mac Mini with zero Python anywhere in the request path, which is the whole point.
+
 ## Testing
 
 The server ships with a comprehensive e2e test suite:
 
 | Metric | Value |
 |--------|-------|
-| Unit tests | 20/20 |
+| Unit tests (sampling + server + lora + turboquant) | 74/74 |
+| SSM cache tests (`prefill`, `decode`, `full == prefill+decode`) | 3/3 |
 | E2E tests | 34/34 |
 | Phases | 10 (build, health, deep health, models, non-stream, stream, errors, multi-turn, content arrays, shutdown) |
 
 The test script (`test_e2e_sanctum_mlx.sh`) supports `--skip-build` for rapid iteration and covers the full OpenAI-compatible API surface including error handling and graceful SIGTERM shutdown.
+
+<Aside type="caution">
+Run unit tests serialized: `just test-mlx` (or `cargo test -p sanctum-mlx -- --test-threads=1`). Parallel tests that touch Metal trigger `AGXG16XFamilyCommandBuffer` encoder collisions and abort the suite with SIGABRT. This is not our bug, but it's our problem.
+</Aside>
 
 ## Performance Baseline (M4 Pro 128GB, 2026-04-02)
 
@@ -122,8 +223,10 @@ The prefill speed is unchanged because it's dominated by the initial matrix mult
 
 | File | Description |
 |------|-------------|
-| `sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup |
-| `sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, prompt formatting |
-| `mlx-rs/mlx-lm/src/models/qwen3_5.rs` | Full Qwen3.5 model: LinearAttention (GatedDeltaNet), FullAttention (gated Q), quantized loading |
-| `mlx-rs/mlx-lm/src/metal_kernels.rs` | Fused Metal GPU kernel + safe FFI wrappers |
-| `sanctum-mlx/test_e2e_sanctum_mlx.sh` | 34-test e2e suite, 10 phases |
+| `sanctum-rs/services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup |
+| `sanctum-rs/services/sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, ChatML prompt formatting, `StopSeqBuffer`, `sampling_params_from_request` |
+| `sanctum-rs/services/sanctum-mlx/src/sampling.rs` | Full sampling pipeline: `SamplingParams`, `RecentTokens` ring buffer, `apply_repetition_penalty`, `apply_top_p`, `sample`, and the callback-based `decode` loop that replaces `qwen3_5::Generate` |
+| `sanctum-rs/services/sanctum-mlx/src/lora.rs` | LoRA adapter load + dequantize-merge-requantize pipeline |
+| `sanctum-rs/vendor/mlx-rs/mlx-lm/src/models/qwen3_5.rs` | Full Qwen3.5 model: `LinearAttention` (GatedDeltaNet) with `forward_with_cache`, `LinearAttentionState`, VL config flattening, `FullAttention` (gated Q), quantized loading |
+| `sanctum-rs/vendor/mlx-rs/mlx-lm/src/metal_kernels.rs` | Fused Metal GPU kernel + safe FFI wrappers |
+| `sanctum-rs/services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | 34-test e2e suite, 10 phases |
