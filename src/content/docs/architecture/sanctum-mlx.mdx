@@ -219,6 +219,67 @@ Run unit tests serialized: `just test-mlx` (or `cargo test -p sanctum-mlx -- --t
 
 The prefill speed is unchanged because it's dominated by the initial matrix multiplications through 64 quantized layers — the SSM scan is a small fraction of that cost. Decode is where the fused kernel shines, because the recurrent scan becomes the bottleneck when you're generating one token at a time.
 
+## Production Cutover — 2026-04-17 21:36 local
+
+After eight months of "it works in the shadow, let's ship it in one more sprint," the Rust server replaced Python on the Mac Mini in a 65-second blue-green swap. Sixty-three of those seconds were Metal loading 27 billion 4-bit parameters into the GPU, which is not something one optimises. The other two were `launchctl`.
+
+### What changed
+
+- `com.sanctum.server-mlx.plist` (Python wrapper on `mlx_lm.server`) unloaded.
+- `com.sanctum.mlx.plist` (pure-Rust `sanctum-mlx` binary) loaded on the same port `:1337`, with `KeepAlive=true`, `LimitLoadToSessionType=Aqua`, `ThrottleInterval=30`.
+- `council-guardian.sh` rewritten to use `launchctl kickstart -k gui/<uid>/$ACTIVE_AGENT` instead of the old `pkill mlx_lm.server + nohup wrapper` pattern. Respects `KeepAlive + ThrottleInterval` by design. Rollback is flipping `ACTIVE_AGENT` back to `com.sanctum.server-mlx`.
+- Guardian probe latency fell from ~870 ms to ~485 ms. That's a ping, not a generation — but it is now a faster ping.
+
+### Parity at cutover
+
+- 7/10 byte-exact on the smoke battery at `temperature=0`. The remaining three differ only in single-word synonyms — bf16 ULP drift that accumulates after ~100 characters. Argmax is identical for the first ~40 tokens on every test prompt.
+- The winning fix: a `C: Default` trait bound on the cache generic plus `(0..self.layers.len()).map(|_| Some(C::default())).collect()` at the top of `forward()`. Without it, `FullAttention` saw an empty `cache` `Vec`, fell through to the no-cache branch, and silently recomputed keys/values every decode step. One three-line change, parity jumped 4/10 → 7/10, and nobody was going to catch it with a unit test.
+- The fix before that: renaming a field from `a_log` to `A_log`. The `ModuleParameters` derive macro uses `stringify!(field)` for checkpoint lookup, and Qwen's safetensors key is `A_log`. Lowercase silently mismatched, `exp(0)=1` collapsed the GatedDeltaNet decay, every decode step was corrupted. This is the software equivalent of losing a year to a missing semicolon, and it will happen again somewhere, to someone, probably to us.
+
+### The rollback plan
+
+One line:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.sanctum.mlx.plist && \
+  launchctl load ~/Library/LaunchAgents/com.sanctum.server-mlx.plist
+```
+
+Both plists stay on disk. `server-mlx.plist` is the escape hatch, not legacy debt. We keep it until the 24-hour watch is clean and a week of guardian probes have the same 100% success rate the Python era used to have.
+
+### The macOS Application Firewall ambush
+
+Localhost worked. The guardian worked. Every probe from the Mini itself said "yes, the Force is strong with this one." Every probe from the MacBook Pro over Tailscale got `curl: (56) Recv failure: Connection reset by peer`.
+
+The `socketfilterfw` ruleset had silently added the unsigned Rust binary to the BLOCK list — probably during an earlier shadow test, when the Application Firewall popup asked about incoming connections and there was no one at the Mini's screen to click Allow. The block rule persisted. Localhost bypassed the filter, so every developer probe looked fine.
+
+Diagnosis:
+
+```bash
+/usr/libexec/ApplicationFirewall/socketfilterfw --getappblocked \
+  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
+# → "Incoming connection to ... is blocked."
+```
+
+Fix (one-shot, requires sudo):
+
+```bash
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \
+  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
+```
+
+This only bites once, per binary path. A rebuild at the same path keeps the rule. If the binary is moved, the new path starts in the default-deny state again and has to be explicitly allowed. Python `mlx_lm.server` never hit this because its executable was `Python.app` — already in the allow list for decades' worth of reasons. Rust binaries produced by `cargo build --release` are ad-hoc-signed (`codesign -dv` shows `Signature=adhoc`) and enjoy no such privilege.
+
+### Observed latency post-cutover (Mac Mini, 64 GB)
+
+| Workload | Latency | Throughput |
+|----------|---------|------------|
+| Guardian ping (`max_tokens=2`) | ~450 ms | — |
+| Short chat (`max_tokens=8`, warm) | ~520 ms | ~15 tok/s |
+| Paragraph (`max_tokens=80`) | ~4.2 s | ~13 tok/s |
+
+Warm-up on the first request after plist load is ~15 s (Metal context + kernel JIT). Subsequent requests are flat until the KV cache grows past the working-set window, at which point the linear-attention recurrent state keeps memory bounded instead of the usual "quadratic heartburn at the 32K mark."
+
 ## File Map
 
 | File | Description |
