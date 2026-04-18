@@ -195,6 +195,31 @@ If you're running Docker Desktop and wondering why your HomeKit integrations can
 
 The migration itself was uneventful, which is the highest compliment infrastructure work can receive. Stop Desktop, start Colima, point `DOCKER_HOST` at the new socket, bring up the containers. The Ecobee sensors appeared in HA's discovery panel within seconds. They had been broadcasting the entire time. Docker Desktop just couldn't hear them.
 
+## The Enforcement That Said Yes and Meant No
+
+On April 18, 2026, a wife reported that the Apple TV block "wasn't working anymore." Force Flow's log said `BLOCKED 40:CB:C0:ED:E0:73 — manual` seven times in a row. Seven MACs. Seven `BLOCKED` lines. Textbook.
+
+Five of those seven were still streaming Netflix.
+
+The handler was elegantly, catastrophically trusting:
+
+```python
+result = await _bridge_post(session, f"/host/{mac}/pause")
+if result:
+    log.info(f"BLOCKED {mac} — {reason}")
+```
+
+The bridge was cheerfully returning `{"success": false, "errors": [{}]}` on HTTP 200 for five of the MACs — the Firewalla SDK was in a state where it accepted the command and dropped it on the floor. `if result:` is truthy for any non-empty dict, including one that explicitly says the thing you asked for did not happen. Force Flow logged the happy path anyway and moved on with its day.
+
+This is the enforcement equivalent of shouting "sit!" at a dog and then walking away, and writing a log entry that says the dog sat.
+
+The fix was a two-line change and a load-bearing principle:
+
+1. `if not result or not result.get("success"):` — treat the explicit failure as a failure.
+2. Re-read `/host/MAC` and verify `policy.acl` actually landed as expected. One retry, then escalate with `BLOCK DRIFT` / `BLOCK ESCALATION` in the log so the next Living Force sweep can see it.
+
+We also discovered, in the same debugging session, that `acl: false` means *blocked* and `acl: true` means *allowed* — the Firewalla SDK inverts the intuition. Which is fine. Documentation exists for exactly this kind of trap. This one now is that documentation.
+
 ## The Desktop Sync Healers
 
 On April 15, 2026, the Living Force was expanded to manage stateful desktop applications critical for local ETL pipelines. Apple Mail, Apple Messages, WhatsApp, Signal Desktop, and Telegram all rely on local SQLite databases that only sync when their respective UI applications are running.
@@ -247,6 +272,10 @@ Ten rules that emerged from the wreckage. None of them were obvious before March
 
 <Aside type="tip" title="11. Biological Context Informs Collaboration">
   An agent that understands the owner's genetic cognitive profile can provide better support. If the owner has high novelty-seeking markers, the agent should prioritize variety and rapid progress. If phonological processing differences are present, the agent should prioritize visual and structured output over dense text.
+</Aside>
+
+<Aside type="tip" title="12. Closed-Loop Enforcement — Never Trust the Command, Verify the State">
+  A command that returns "success" is a claim, not a fact. Every write to an external control plane (Firewalla, launchd, a router, a thermostat) must be followed by a read of the resulting state, and the two must be compared. `if result:` is not verification. `assert new_state == intended_state` is. When they disagree, log DRIFT — loudly and with the observed value — and retry once before escalating. The April 18 Apple TV incident happened because the code trusted a bridge response that literally said `success: false` on HTTP 200. Five devices kept streaming while the log insisted they were blocked. The system was lying about its own work. Principle 9 says dashboards can't lie; this is its operational twin — commands can't lie either.
 </Aside>
 
 ## Where to Go from Here

@@ -1,0 +1,142 @@
+---
+title: Screen Time Enforcement — Closed-Loop Edition
+description: How a silent-success bug made the Apple TV curfew lie about doing its job for two nights, and the closed-loop fix that now catches that class of failure at the source.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+# Screen Time Enforcement — Closed-Loop Edition
+
+**Date:** 2026-04-18
+**Status:** Live on manoir, E2E-tested, regression-gated
+
+A screen-time system that says "blocked" but streams Netflix is worse than one that admits it's broken. This page documents what went wrong on April 16–18, 2026 and the closed-loop contract that now governs every enforcement action.
+
+## What broke
+
+Force Flow's `_block_mac()` called the Firewalla bridge and logged `BLOCKED <mac> — curfew` based on whether the response was truthy:
+
+```python
+# Before
+async def _block_mac(session, mac, reason="curfew"):
+    result = await _bridge_post(session, f"/host/{mac}/pause")
+    if result:
+        log.info(f"BLOCKED {mac} — {reason}")
+    return result
+```
+
+The Firewalla SDK, when it got into a certain stale-policy state, would answer HTTP 200 with `{"success": false, "errors": [{}]}`. That's a non-empty dict. `if result:` is truthy. `BLOCKED` got logged. The Firewalla did nothing.
+
+The first night this happened (April 16), five of seven curfewed MACs stayed online. Log said they were blocked. They weren't. Nobody noticed because everyone was asleep, which was what the curfew was supposed to guarantee.
+
+The second night (April 17), same five MACs, same silent pass. The parents noticed because streaming was happening during "quiet hours."
+
+## Two traps, stacked
+
+Debugging the incident surfaced a second trap that amplified the confusion:
+
+<Aside type="caution" title="Firewalla ACL semantics are inverted">
+`policy.acl: false` means the device is **blocked** (ACL enforced, traffic dropped). `policy.acl: true` means the device is **allowed** (no ACL restriction). This is opposite to the "ACL = rule enforced = blocked" intuition most people start with. The pause endpoint literally runs `sendSet("policy", { acl: false }, mac)`. Read the bridge code before you write the runbook.
+</Aside>
+
+Combined effect: while diagnosing live, the first pass of verification **reported the wrong conclusion** — said devices were blocked when they were passing. Which is how we ended up telling the parent "🔴 tout est bloqué" when the opposite was true. (The parent, to their credit, asked "es-tu certain que ya plus rien qui passe?" and the cross-check caught it.)
+
+## The fix — closed-loop contract
+
+Every write to the Firewalla now goes through a three-step contract. No exceptions.
+
+```python
+async def _verify_acl(session, mac, expected):
+    await asyncio.sleep(1.0)
+    current = await _bridge_get(session, f"/host/{mac}")
+    acl = (current or {}).get("policy", {}).get("acl")
+    return acl is expected
+
+
+async def _block_mac(session, mac, reason="curfew"):
+    result = await _bridge_post(session, f"/host/{mac}/pause")
+
+    # 1. Require explicit success, not truthy non-empty dict
+    if not result or not result.get("success"):
+        log.error(f"BLOCK FAILED {mac} — {reason}: bridge returned {result}")
+        return None
+
+    # 2. Verify the side effect landed on the control plane
+    if not await _verify_acl(session, mac, expected=False):
+        log.warning(f"BLOCK DRIFT {mac} — {reason}: bridge ok but acl stayed true; retrying once")
+        # 3. Retry once, then escalate
+        retry = await _bridge_post(session, f"/host/{mac}/pause")
+        if not retry or not retry.get("success") or not await _verify_acl(session, mac, expected=False):
+            log.error(f"BLOCK ESCALATION {mac} — {reason}: retry did not stick; Firewalla drift")
+            return None
+
+    log.info(f"BLOCKED {mac} — {reason}")
+    return result
+```
+
+Same shape for `_unblock_mac` — asserts `acl == True` after the call, retries on drift, escalates to `UNBLOCK ESCALATION` on failure.
+
+### Why "closed-loop" and not just "check the response"
+
+The bridge's `success` field is a partial signal. The Firewalla SDK can accept the command, return `success: true`, and still not propagate the change to the enforcement tier (happened to us with the metallib-stalled SDK state). The only authoritative signal is re-reading the target's policy on the Firewalla itself. **If the observed state doesn't match the intended state, the action didn't happen, regardless of what any intermediary said.**
+
+This is Living Force principle 12: *commands can't lie either*.
+
+## The log grammar
+
+The new enforcement path emits exactly four terminal states per MAC, and nothing else can produce a `BLOCKED` line:
+
+| Log line | Meaning | Action |
+|---|---|---|
+| `BLOCKED <mac> — <reason>` | Success: bridge said `success: true` AND `policy.acl == false` confirmed | None — working |
+| `BLOCK FAILED <mac> — <reason>: bridge returned <dict>` | Bridge said failure explicitly | Dispatch to Living Force queue; surface the bridge dict |
+| `BLOCK DRIFT <mac> — <reason>: bridge ok but acl stayed true; retrying once` | Bridge succeeded but state didn't change | Self-retry fires immediately |
+| `BLOCK ESCALATION <mac> — <reason>: retry did not stick; Firewalla drift` | Retry failed too | Operator attention — Firewalla SDK may need a bridge restart |
+
+Unblock has mirror lines (`UNBLOCKED`, `UNBLOCK FAILED`, `UNBLOCK DRIFT`, `UNBLOCK ESCALATION`).
+
+## The E2E regression gate
+
+`tests/test-screen-time-enforcement.sh` exercises the full closed-loop in under 30 seconds:
+
+- Endpoint + bridge token reachability
+- `/screen/block` → observe `acl=False` on the bridge
+- Log assertions: `BLOCKED` present, no `FAIL`/`DRIFT`/`ESCALATION`
+- `/screen/unblock` → observe `acl=True` restored
+- 12h auto-override cleanup (the override `/screen/unblock` creates would otherwise suppress the next curfew)
+- Nintendo's standalone 22:30 schedule (moved out of `shared_devices` so it doesn't inherit Albert's 23:00 phone curfew)
+- God Mode parent-override path for both consoles
+- Self-cleaning final state
+
+Currently **18 pass / 0 fail**. Any regression to truthy-check silent-success will fail L3 ("no FAIL/DRIFT/ESCALATION") loudly.
+
+## God Mode — the parent override
+
+Parents can override both consoles (VRVANA PC + Nintendo Switch) from the Holocron dashboard. The button is styled after Doom's `IDDQD` cheat, red palette, three duration presets:
+
+| Button | Effect |
+|---|---|
+| **+30 MIN** | Override `vrvana_pc` and `nintendo_switch` for 30 minutes |
+| **+60 MIN** | Same, 60 minutes |
+| **+120 MIN** | Same, 120 minutes (the backend max from `override_max_minutes`) |
+| **STOP** | Clear both overrides immediately (`minutes: 0`) |
+
+Album's phone curfew is unaffected — the phone keeps its 23:00 weekend bedtime so he can read or play chess while falling asleep. Only the consoles get bumped.
+
+## Rollback
+
+Layer by layer. Each step is reversible in one command.
+
+```bash
+# Revert the closed-loop code fix only (keep docs/tests)
+ssh neo@100.0.0.25 'cp /Users/neo/.sanctum/screen-time/screen_time.py.bak-20260418-152105 \
+                           /Users/neo/.sanctum/screen-time/screen_time.py && \
+                         launchctl kickstart -k gui/$(id -u)/com.sanctum.force-flow'
+
+# Full restore from the weekly snapshot
+shasum -a 256 -c ~/Backups/sanctum-mini/sanctum-mini-20260418-*.tgz.sha256
+```
+
+<Aside type="note">
+The Nintendo was moved from `shared_devices` to `screens` in the same session so it could carry its own 22:30 weekend/holiday schedule. That's a yaml change, not a code change — reverting `devices.yaml` from the backup puts it back under "shared inherits from Albert."
+</Aside>
