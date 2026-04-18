@@ -1,0 +1,130 @@
+---
+title: Council Always-Alive
+description: Three independent layers of defense to keep council-mlx reachable even when the wider orchestrator can't act.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+# Council Always-Alive
+
+**Date:** 2026-04-17
+**Status:** Active on manoir
+
+The council is the inference substrate for every agent in the house. When it hangs, Yoda goes mute, Cilghal stops watching your HRV, Mothma loses her eyes on the boot sequence. For most of early April 2026 the phrase "always alive" was marketing. This page is what it took to make it load-bearing.
+
+## The three failure modes we found
+
+One night the council accepted TCP connections, responded `200 OK` on `/v1/models`, and returned nothing at all on `/v1/chat/completions` for eight straight minutes. The watchdog declared it healthy the entire time. Three separate problems, stacked:
+
+1. **The probe was the wrong shape.** `services/council-mlx.yaml` declared `type: port` as its liveness check — a TCP listen test. `mlx_lm.server` keeps the port open long after inference has deadlocked. Every health check for months had been answering "is the lightbulb in the socket?" when the question was "is the lightbulb on?"
+
+2. **An upstream KV-cache bug in `mlx_lm`.** `models/qwen3_5.py:158` throws `ValueError: [concatenate] shapes (1,3,10240), (2,67,10240), axis=1` when a cached `conv_state` from a prior `B=1` prefill collides with a `B>1` continuation. The handler catches nothing, the request hangs forever, the process stays alive. Definitively in the server log; non-deterministic to trigger on demand.
+
+3. **The circuit breaker ate our own recovery.** `sanctum-watchdog` halts all remediation when root_cause count ≥ 4 (`WATCHDOG_CIRCUIT_BREAKER=4`). That morning seven unrelated services were down — so even if the probe had been honest, the watchdog would have refused to act. A safety mechanism working as designed, shadowing a real outage.
+
+<Aside type="caution">
+The lesson generalizes: a safety mechanism that correctly suppresses cascading restarts during a real cascade will also correctly suppress the one restart you actually needed. Critical services need their own dedicated watchdog path that doesn't vote in the committee.
+</Aside>
+
+## Three layers, three independent rollbacks
+
+### L1 — Upstream patch
+
+`mlx_lm/models/qwen3_5.py:149` gains three lines that reset `conv_state` when its batch dimension doesn't match the current input. Reversible in one command:
+
+```bash
+# Rollback
+cp ~/Projects/mlx-finetune/.venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py.orig \
+   ~/Projects/mlx-finetune/.venv/lib/python3.14/site-packages/mlx_lm/models/qwen3_5.py
+pkill -9 -f mlx_lm.server
+```
+
+The patch file itself lives at `~/Projects/mlx-finetune/patches/mlx_lm-qwen3_5-conv_state-reset.patch` — PR-ready for upstream submission.
+
+### L2 — Upgraded Living Force probe
+
+`~/.sanctum/services/council-mlx.yaml` readiness and liveness both became `type: command` with a real POST to `/v1/chat/completions` and a `grep '"content"'` success check. Timeouts are tuned for `mlx_lm.server`'s single-connection reality — 75s curl / 90s probe wrapper / 120s interval for liveness.
+
+```yaml
+liveness:
+  type: command
+  command: 'curl -sf --max-time 75 -X POST http://127.0.0.1:1337/v1/chat/completions
+    -H "Content-Type: application/json"
+    -d "{\"model\":\"...\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":2,\"temperature\":0}"
+    | grep -q "\"content\""'
+  timeout: 90
+  interval: 120
+```
+
+The original is backed up to `council-mlx.yaml.bak-<timestamp>` next to it. Rollback is `cp` in one direction.
+
+### L3 — Council-guardian daemon
+
+The critical layer, because L2 is still inside the watchdog's circuit-breaker decision tree. The guardian runs outside that tree entirely:
+
+```
+~/.sanctum/scripts/council-guardian.sh          # probe + rate-limited restart
+~/Library/LaunchAgents/com.sanctum.council-guardian.plist  # StartInterval=60s
+~/.sanctum/state/council-guardian.json           # consecutive-fail + restart window
+~/.openclaw/logs/council-guardian.log            # structured JSON events
+```
+
+Every 60 seconds the guardian performs a real inference probe with a 20-second budget. Two consecutive failures within the window trigger a `launchctl kickstart -k` on the configured active agent (defaults to `com.sanctum.mlx`). Rate-limited to **3 restarts per 300s** — the 4th attempt logs `rate_limit` and exits with code 2 for manual intervention rather than thrashing.
+
+Events are newline-delimited JSON:
+
+```json
+{"ts": 1776475647.56, "level": "info", "event": "probe_ok", "probe_ms": 656, "agent": "com.sanctum.mlx"}
+{"ts": 1776475708.4,  "level": "warn", "event": "probe_fail", "probe_ms": 20000, "consecutive": 1, "snippet": "..."}
+{"ts": 1776475769.2,  "level": "warn", "event": "restarting", "action": "kickstart", "agent": "com.sanctum.mlx"}
+{"ts": 1776475830.1,  "level": "info", "event": "restart_requested", "rc": 0}
+```
+
+### Skip-if-busy — making it safe during evals
+
+A real-inference probe that runs every 60 seconds would false-positive during any long-running Carmack Olympics burst on the same endpoint. The guardian reads both backends' access logs and defers when either has emitted a successful response in the last 90 seconds:
+
+- **Python `mlx_lm.server`** → `~/.openclaw/logs/sanctum-server.err`, pattern `POST /v1/chat/completions HTTP/1.1" 200`
+- **Rust `sanctum-mlx`** → `~/.openclaw/logs/sanctum-mlx.log`, pattern `request completed`
+
+Busy ≠ hung. The guardian knows the difference.
+
+## Activating the LaunchAgent
+
+The plist is already in `~/Library/LaunchAgents/`. SSH sessions can't bootstrap it into the user GUI domain on macOS — run this once from a GUI terminal on manoir:
+
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.council-guardian.plist
+launchctl kickstart -k gui/$(id -u)/com.sanctum.council-guardian
+launchctl list | grep council-guardian
+```
+
+## Verification
+
+```bash
+# T1 — happy path
+/Users/neo/.sanctum/scripts/council-guardian.sh
+tail -1 ~/.openclaw/logs/council-guardian.log   # expect {"event":"probe_ok",...}
+
+# T2 — induced failure, observe auto-restart
+pkill -9 -f mlx_lm.server
+for _ in 1 2; do /Users/neo/.sanctum/scripts/council-guardian.sh; done
+grep restarting ~/.openclaw/logs/council-guardian.log
+pgrep -af mlx_lm.server   # should show a fresh PID within ~5s
+
+# T3 — skip-if-busy (during active eval)
+# With an eval running against :1337, run the guardian manually — it should log
+# probe_skip_busy with recent_success_age_s < 90 instead of escalating.
+/Users/neo/.sanctum/scripts/council-guardian.sh
+grep probe_skip_busy ~/.openclaw/logs/council-guardian.log | tail -1
+```
+
+## Known side-finding worth flagging
+
+`~/.sanctum/instance.yaml` has `services.council_mlx.adapter_path: null`. The currently-served model is therefore **bare Qwen3.5-27B-4bit with no council LoRA adapter applied**. That explains the `carmack_v2_production.json` overall score sitting at 0.27. If the council adapter is meant to be active in production, set `adapter_path` in `instance.yaml` and kick `sanctum-server-dynamic`.
+
+## Related
+
+- [The Living Force](./../architecture/living-force) — the watchdog and its 10 principles
+- [Engineering Discipline](./../architecture/engineering-discipline) — test coverage philosophy
+- [Eval Harness — Apple-Grade](./../architecture/eval-harness) — how the harness that consumes this endpoint stays honest
