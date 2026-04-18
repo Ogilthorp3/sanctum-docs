@@ -128,6 +128,31 @@ Exit 1 if any holdout overlaps training content above threshold. No external dep
 The `extract_turns()` loader ships with a placeholder schema — point `--log-dir` at your actual conversation logs and adapt `extract_turns()` to match. The harness does the heavy lifting; you wire the source.
 </Aside>
 
+## Authenticating against the Tailscale-exposed council
+
+`sanctum-mlx` enforces Bearer-token auth on every peer that isn't `127.0.0.1`. Any eval pointed at `http://100.0.0.25:1337/v1` (or the `manoir.tailnet` hostname) must send `Authorization: Bearer <token>`.
+
+The token lives at `~/.sanctum/secrets/council-mlx.token` on manoir (mode 600). Two convenience flows:
+
+```bash
+# One-off: export into the current shell
+export COUNCIL_API_KEY=$(ssh neo@100.0.0.25 'cat ~/.sanctum/secrets/council-mlx.token')
+
+# Pass through to the eval
+.venv/bin/python scripts/carmack_eval_http.py \
+  --url http://100.0.0.25:1337/v1 \
+  --model 45797d2985a12c55e6473686e9ea91b95e959553 \
+  --label council-remote \
+  --api-key-env COUNCIL_API_KEY \
+  --output eval/council-remote.json
+```
+
+`scripts/test_eval_harness.sh` auto-discovers the token: if `COUNCIL_API_KEY` isn't set, it non-interactively ssh-fetches from manoir (`BatchMode=yes`, 4s timeout) and proceeds. Localhost probes (e.g. the council-guardian running on the Mini itself) bypass auth via the `sanctum-mlx` loopback rule — no token needed there.
+
+<Aside type="caution">
+The Rust `sanctum-mlx` backend returns its model ID as a raw snapshot hash (`45797d2985a12c55...`) rather than the friendly `mlx-community/Qwen3.5-27B-4bit` that the Python `mlx_lm.server` returned. The harness's model-ID parser handles both, but if you're scripting around `/v1/models` directly, don't assume the friendly name.
+</Aside>
+
 ## Weekend workflow
 
 ```bash
