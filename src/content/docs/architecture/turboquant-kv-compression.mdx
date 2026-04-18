@@ -286,6 +286,36 @@ At `(k=4, v=6)` the group sizes 32, 64, 128 all land within 0.04 absolute — no
 
 On a 54-token eval we cannot responsibly discriminate between these at the 0.3-boundary. Protocol Principle 5 applies: **do not flip a default without a confirmed winner**. The `--turboquant` flag remains opt-in; wider eval (wikitext-2, ≥1024 tokens) is the gate for default change.
 
+## Slice 1b — wider eval, Bold vindicated
+
+Ran both candidates on a **1256-token** corpus drawn from the sanctum-docs architecture pages (real technical prose the model has seen many variants of). Baseline shifted up — real prose is harder than the 54-token calibration string — but that's a fairer measurement.
+
+| Candidate | Δppl abs | Rel | Est. Compression |
+|---|---|---|---|
+| Safe: `k=4, v=4, g=128, QJL=off` | **0.157** | 1.18% | ~3.2× |
+| Bold: `k=3, v=4, g=128, QJL=on`  | **0.196** | 1.47% | ~4.0× |
+
+Both decisively inside the 0.3 abs / 5% rel budgets. The wider sample firmed up what the short eval hinted: Bold's borderline 0.34 tightened to 0.20, Safe's 0.12 drifted to 0.16. Signal is stable.
+
+### Verdict — Bold is the consecrated default
+
+`TurboQuantConfig::default()` stays `key_bits=3, value_bits=4, use_qjl=true` — the original scaffold had the right intent. What we earned through the protocol is **evidence** that it was right, not just a hunch.
+
+**Safe remains the documented fallback** for operators who want a tighter quality gate or are running on a model we haven't validated. Two env vars flip to Safe:
+
+```bash
+SANCTUM_TQ_KEY_BITS=4 SANCTUM_TQ_VALUE_BITS=4 SANCTUM_TQ_USE_QJL=false \
+  sanctum-mlx --turboquant
+```
+
+### `--turboquant` stays opt-in
+
+Even with a validated default config, the flag stays opt-in until:
+- Slice 4 (Metal-fused dequant) lands — current CPU-side path has O(T²) cost that surprises operators
+- Model coverage widens — Qwen3.5-27B is one data point; Qwen3.6-35B, Qwen2.5-Coder, Gemma4-31B each deserve their own protocol run before auto-on
+
+Evidence dictates defaults. Evidence is narrower than ambition. Keep the knob.
+
 ## The knowledge we now carry forward
 
 Two things are load-bearing going into Slice 2+:
