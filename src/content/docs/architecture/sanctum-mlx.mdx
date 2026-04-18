@@ -270,6 +270,31 @@ sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \
 
 This only bites once, per binary path. A rebuild at the same path keeps the rule. If the binary is moved, the new path starts in the default-deny state again and has to be explicitly allowed. Python `mlx_lm.server` never hit this because its executable was `Python.app` — already in the allow list for decades' worth of reasons. Rust binaries produced by `cargo build --release` are ad-hoc-signed (`codesign -dv` shows `Signature=adhoc`) and enjoy no such privilege.
 
+### The guardian that ate itself
+
+The council-guardian was rewritten in the same session to use `launchctl kickstart -k` instead of the old `pkill mlx_lm.server + nohup` pattern. It passed every test. Then we pointed the Sanctum Olympics benchmark at the Mini with 512-token prompts, and the guardian decided the server was dead.
+
+It wasn't. sanctum-mlx serializes Metal inference — one GPU context, one kernel graph at a time. A `POST /v1/chat/completions` health probe with `max_tokens=2` still queues behind a `max_tokens=512` request in flight. The probe timed out after 20 seconds waiting for its turn, the guardian read that as "hung", and ran `launchctl kickstart -k`. Thirty seconds of Metal reload later, the next guardian probe hit the same queue again. Three restarts in eight minutes; none of them were necessary, all of them were outages.
+
+Fix: probe `GET /v1/models` instead. It's a static-ish route that returns the model list in ~25 ms regardless of inference load, because it never touches the model graph. Tightened the timeout from 20s to 10s (small enough to notice real hangs fast), loosened `FAILS_BEFORE_RESTART` from 2 to 3 (big enough to absorb a single network blip).
+
+```bash
+# Before
+URL="http://127.0.0.1:1337/v1/chat/completions"
+curl -X POST "$URL" -d '{"messages":[{"role":"user","content":"ping"}],"max_tokens":2}'
+#   ^ queues behind in-flight inference under load
+
+# After
+URL="http://127.0.0.1:1337/v1/models"
+curl "$URL"  # GET, 25 ms, bypasses inference queue
+```
+
+If the model graph itself goes sideways (HTTP alive, inference broken), this probe won't catch it. That's a separate monitor with a slower cadence — noted for the roadmap, not retrofitted into a 60 s loop.
+
+<Aside type="caution">
+This is the second-order lesson: monitors that share a queue with the thing they're monitoring can become the failure they're supposed to detect. For any single-resource server — Metal context, GIL, mutex-guarded state — the health probe must live on a different code path than the work path. Cheap GET routes exist for this reason.
+</Aside>
+
 ### Observed latency post-cutover (Mac Mini, 64 GB)
 
 | Workload | Latency | Throughput |
