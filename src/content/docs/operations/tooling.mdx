@@ -7,6 +7,30 @@ import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Sanctum ships with a set of operational scripts in `~/.sanctum/scripts/` that automate the most common maintenance tasks. These are designed to be run from the Mac Mini hub.
 
+**Complement on the MBP side:** `~/Documents/Claude_Code/tools/` holds laptop-resident utilities — `gui-exec.sh` (reach into manoir's Aqua session from any SSH shell), `backup-sanctum.sh` (weekly pull-backup, documented under [Backup & Restore](./backup-restore)), and `keychain-read.sh` (read a manoir keychain secret remotely). Together they bridge "things you can do from a terminal" with "things that require GUI session state."
+
+## gui-exec.sh (MBP)
+
+The one-liner you reach for when something works on the Mini's desktop but returns cryptic errors over SSH — keychain access, biometric prompts, `launchctl bootstrap gui/<uid>/...`, anything that checks whether the caller is inside the Aqua session. It bridges the gap by asking Terminal.app on the remote to run the command for you, which lives inside the Aqua session and therefore has the right credentials and launchd domain.
+
+```bash
+# Bootstrap a user-domain LaunchAgent from an SSH shell
+~/Documents/Claude_Code/tools/gui-exec.sh neo@100.0.0.25 \
+  'launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.council-guardian.plist'
+```
+
+**How it works:** SSHes to the remote, invokes `osascript` to `tell application "Terminal" to do script "<cmd>; echo DONE_<epoch>"`. Terminal.app opens a tab in the logged-in user's session, runs the command with full Aqua state, and appends a `DONE_<epoch>` marker so you can grep stdout for the unique tag.
+
+<Aside type="note">
+Requires "Remote Login" (sshd) on the remote and a user currently logged in to its GUI. The Mac Mini sitting in the closet satisfies both by default. If neither is true, fall back to the raw `osascript` pattern — or just accept that you need to walk over to the machine.
+</Aside>
+
+Common triggers for `gui-exec.sh`:
+- `launchctl bootstrap | enable | kickstart gui/<uid>/...` failing with `125: Domain does not support specified action`
+- `security add-*-password` / keychain ops returning `-36: User interaction is not allowed`
+- `op signin` biometric prompts that can't reach Touch ID over SSH
+- Anything a user-authored LaunchAgent needs to touch during install.
+
 ![The cron clock tower — automation runs on schedule](./images/cron-clock-tower.png)
 
 Your haus has a health check suite, a sync pipeline, an auto-healing watchdog, and a diagnostic tool. There are Fortune 500 companies with worse observability. We're not going to dwell on what that says about the state of enterprise software or the mental state of people who build haus intelligence platforms. We're just going to document the tools.

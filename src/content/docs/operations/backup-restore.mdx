@@ -11,7 +11,7 @@ If you're reading this calmly, on a Tuesday afternoon, with a cup of coffee — 
 
 If you're reading this at 3 AM because a disk just made a sound disks should never make — we're sorry. But this is exactly why this page exists, and past-you was smart enough to set up backups. Unless past-you didn't, in which case present-you has our deepest condolences.
 
-## Daily Backup
+## Daily Backup (on manoir)
 
 Runs automatically at 4:15am via cron — an hour when nothing good or bad is happening, which is precisely the hour you want for the thing standing between you and oblivion.
 
@@ -100,5 +100,62 @@ Phase 5 is a re-download, not a restore. Multi-gigabyte model files don't back u
 | `vm-snapshot.sh` | Weekly VM disk snapshot |
 | `rotate-secrets.sh` | Monthly secret rotation |
 | `backup-retention.sh` | Weekly iCloud backup pruning (14-day daily + bi-weekly archive) |
+| `backup-sanctum.sh` (MBP) | Weekly cross-machine snapshot, pulls ~/.sanctum/ from manoir to MBP — see below |
 
 Five scripts between you and starting from scratch. Treat them with the respect you'd give a fire extinguisher — boring until the day they're the only thing that matters.
+
+## Weekly Cross-Machine Snapshot (MBP pulls from manoir)
+
+The daily backup lives on the Mini. If the Mini itself is compromised — disk failure, filesystem corruption, malicious actor — that backup is gone with it. The weekly snapshot is the second dimension: pulled from manoir to the MBP every Saturday 04:30, SHA256-pinned, rotated to last 8.
+
+```bash
+# Manual run from MBP
+~/Documents/Claude_Code/tools/backup-sanctum.sh
+```
+
+### Pipeline
+
+- `tools/backup-sanctum.sh` tars `~/.sanctum/{scripts,services,state,docs,bin,boot,instance.yaml}` plus critical LaunchAgent plists on manoir via SSH.
+- `~/.sanctum/secrets/` is **excluded** — secrets live in keychain / 1Password / SOPS, not this tarball.
+- `~/.sanctum/logs/` is excluded — too large, not load-bearing.
+- The tarball is pulled to `~/Documents/Claude_Code/backups/sanctum-mini-<timestamp>.tgz`.
+- A `.sha256` trailer is written alongside. `shasum -a 256 -c <file>.sha256` verifies integrity.
+- Rotation keeps the newest 8 snapshots (≈2 months of weekly history).
+
+### Schedule
+
+`~/Library/LaunchAgents/com.sanctum.backup.plist` (template in-repo at `Claude_Code/tools/launchagents/`):
+
+```xml
+<key>StartCalendarInterval</key>
+<dict>
+    <key>Weekday</key>   <integer>6</integer>  <!-- Saturday -->
+    <key>Hour</key>      <integer>4</integer>
+    <key>Minute</key>    <integer>30</integer>
+</dict>
+```
+
+Activate with:
+```bash
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.backup.plist
+launchctl enable gui/$(id -u)/com.sanctum.backup
+```
+
+### Verify a snapshot
+
+```bash
+cd ~/Documents/Claude_Code/backups
+shasum -a 256 -c sanctum-mini-20260417-222652.tgz.sha256   # expect: OK
+
+# See what's inside
+tar -tzf sanctum-mini-20260417-222652.tgz | head
+
+# Restore a single file onto manoir
+tar -xzf sanctum-mini-20260417-222652.tgz \
+    Users/bert/.sanctum/services/council-mlx.yaml \
+  -O | ssh neo@100.0.0.25 'cat > /Users/neo/.sanctum/services/council-mlx.yaml'
+```
+
+<Aside type="caution">
+The tarball stores paths as `Users/bert/...` (no leading slash). Extract to `/` if you want the filesystem layout restored in place, or extract to a staging directory and `rsync` selectively. Never `tar -xzf` into `/` without reading the contents first — the snapshot includes LaunchAgent plists that will start services on next load.
+</Aside>
