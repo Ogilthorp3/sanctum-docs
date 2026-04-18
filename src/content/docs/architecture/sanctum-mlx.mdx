@@ -305,14 +305,73 @@ This is the second-order lesson: monitors that share a queue with the thing they
 
 Warm-up on the first request after plist load is ~15 s (Metal context + kernel JIT). Subsequent requests are flat until the KV cache grows past the working-set window, at which point the linear-attention recurrent state keeps memory bounded instead of the usual "quadratic heartburn at the 32K mark."
 
+## Operational hardening (P4 — 2026-04-17)
+
+With the Rust binary on :1337 and the cutover stable, the remaining gap was operational: nobody would notice if the server started answering wrong but still 200-OK'd, nobody would notice if a hand-edited plist drifted from the repo, and nobody would catch a corrupted weights file before it served a bad token. Four additions closed those gaps in the same session.
+
+### 1. Canary — a slow probe that asks a real question
+
+`council-guardian` runs every 60 s and hits `GET /v1/models`. That proves the HTTP server is alive, nothing more. A model with bit-flipped weights would still happily list itself.
+
+`council-canary` runs every 10 min and POSTs a fixed prompt:
+
+> What is 2+2? Respond with only the number.
+
+The response has to contain `4` or the canary increments a consecutive-failures counter. Two in a row and it alerts Force Flow `/notify`, the same pipe signal-health uses. Cooldown is 30 min to avoid spamming the same outage. Canary does not trigger restarts — guardian owns that — it exists purely to tell a human the model has become smart enough to still respond but stupid enough to answer wrong. That's a surprisingly common failure class.
+
+### 2. Drift detection — nobody edits prod without somebody knowing
+
+`council-drift` runs hourly and SHA-256-compares every deployed plist, script, and manifest against the canonical copies in `services/sanctum-mlx/deploy/` in the Mini's own `sanctum-rs` checkout. It also checks the Application Firewall state for the binary (because we already got bitten by that once) and asserts every expected agent is loaded in `launchctl`.
+
+Any drift → structured log entry at level=error and a Force Flow alert. Running the `deploy-sanctum-mlx.sh verify` command on demand prints the same checks interactively.
+
+### 3. Deploy script — the cutover you don't type twice
+
+`scripts/deploy-sanctum-mlx.sh` wraps the entire install/upgrade/rollback dance as a single tool with subcommands. `install` is idempotent — every artifact gets SHA-compared against the repo copy before being overwritten, and no-ops when they already match. `upgrade` rebuilds the binary on the Mini (native arm64 + Metal linkage), probes the MBP shadow as a pre-flight, `unload+load`s the agent (not `kickstart -k` — see below), runs a post-flight chat probe, and auto-rolls-back if that probe fails. `rollback` flips back to `com.sanctum.server-mlx` for the Python escape hatch.
+
+The plist-reload gotcha earned a dedicated comment block in the source:
+
+```bash
+# `launchctl kickstart -k` restarts the process BUT reads
+# ProgramArguments from the already-loaded plist, not from disk.
+# When the plist content changes (e.g., adding --manifest), we must
+# unload + load or the new args are silently ignored.
+```
+
+We learned this the direct way when the first rollout of the manifest check silently did nothing because the running plist was a stale in-memory copy.
+
+### 4. Weight integrity manifest — don't trust, verify
+
+`manifest.rs` reads a coreutils-format `shasum -a 256` manifest (committed at `services/sanctum-mlx/deploy/qwen35-27b-4bit.manifest.sha256`), parallel-hashes every listed file under `--model` using rayon, and refuses to bind the listener on any mismatch. Six unit tests cover the happy path, tampered file, missing file, missing manifest, bad syntax, and comment-line handling.
+
+Perf: 10.5 s for 9 files / 16 GB on the Mini's NVMe. Six cores saturate SHA-256 throughput; the disk is the bottleneck. Startup went from ~27 s to ~38 s — a cost we pay once per restart to know the 27 billion parameters we're about to run haven't silently corrupted.
+
+The manifest itself isn't cryptographically signed. An attacker with write access to both the model directory and the manifest can roll both together. Closing that gap means Developer-ID signing on a signed manifest-of-manifests, which is listed on the roadmap, not shipped. What this layer does defend against is the much larger and more likely threat surface: bit-rot on the SSD, corrupt downloads, accidental truncation, and the classic "I re-pulled the model and forgot to re-pull the manifest" self-inflicted wound.
+
+### Deferred (named, not done)
+
+| Item | Why not this session |
+|------|----------------------|
+| Developer-ID signing + notarization | Needs a paid Apple Developer cert |
+| Close the 3/10 bf16 ULP parity gap | Reduction-order surgery in the Metal kernel or selective fp32 promotions — not a 30-min fix |
+| Auth on :1337 (mTLS or bearer) | Tailnet ACLs are the current defence; mTLS is a refactor |
+| Prometheus/statsd metrics → Holocron | Requires designing the metric model and wiring the dashboard |
+| Zero-downtime blue-green via front-proxy | Caddy in front of a :1337/:1338 pair, non-trivial plumbing |
+| Parity smoke battery in CI | GitHub Actions runner can't drive Metal; needs a self-hosted arm64 runner |
+
+None of these block day-to-day operation. They're the shape of "what comes after apple-like and military-grade": the layers that keep you boring when boring is what you want.
+
 ## File Map
 
 | File | Description |
 |------|-------------|
-| `sanctum-rs/services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup |
+| `sanctum-rs/services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup, manifest gate before Metal load |
 | `sanctum-rs/services/sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, ChatML prompt formatting, `StopSeqBuffer`, `sampling_params_from_request` |
 | `sanctum-rs/services/sanctum-mlx/src/sampling.rs` | Full sampling pipeline: `SamplingParams`, `RecentTokens` ring buffer, `apply_repetition_penalty`, `apply_top_p`, `sample`, and the callback-based `decode` loop that replaces `qwen3_5::Generate` |
 | `sanctum-rs/services/sanctum-mlx/src/lora.rs` | LoRA adapter load + dequantize-merge-requantize pipeline |
+| `sanctum-rs/services/sanctum-mlx/src/manifest.rs` | Coreutils-format SHA-256 weight manifest verify, rayon-parallel; refuses to serve on mismatch |
+| `sanctum-rs/services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift + weight manifest; canonical copies for drift check |
+| `sanctum-rs/scripts/deploy-sanctum-mlx.sh` | install / upgrade / rollback / status / verify wrapper |
 | `sanctum-rs/vendor/mlx-rs/mlx-lm/src/models/qwen3_5.rs` | Full Qwen3.5 model: `LinearAttention` (GatedDeltaNet) with `forward_with_cache`, `LinearAttentionState`, VL config flattening, `FullAttention` (gated Q), quantized loading |
 | `sanctum-rs/vendor/mlx-rs/mlx-lm/src/metal_kernels.rs` | Fused Metal GPU kernel + safe FFI wrappers |
 | `sanctum-rs/services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | 34-test e2e suite, 10 phases |
