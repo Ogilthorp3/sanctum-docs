@@ -361,6 +361,69 @@ The manifest itself isn't cryptographically signed. An attacker with write acces
 
 None of these block day-to-day operation. They're the shape of "what comes after apple-like and military-grade": the layers that keep you boring when boring is what you want.
 
+## P5 — the "actually military-grade" pass (2026-04-17)
+
+After P4 landed, the honest answer to "is this military-grade?" was "apple-like-adjacent, B+". Five remaining gaps, closed in one push.
+
+### 1. Bearer-token auth with a loopback bypass
+
+`auth.rs` is an axum middleware that looks at the request's connect-info peer address. If it's `127.0.0.1` or `::1`, pass through — that's the Mini's own guardian, canary, and `sanctum-server` hitting `:1337` over the kernel loopback path. Anyone else must present `Authorization: Bearer <token>`. Constant-time compare via `subtle` to block timing oracles.
+
+Token lives at `/Users/neo/.sanctum/secrets/council-mlx.token`, 0600, 64 bytes of `secrets.token_hex(32)`. Plist wires `--auth-token-file` to that path. Missing token + non-loopback request = 401 by default — fail-closed. Operators who explicitly want the old open behaviour set `SANCTUM_MLX_DISABLE_AUTH=1` and accept the blame.
+
+10 unit tests cover: loopback IPv4/IPv6 bypass, non-loopback without token rejected, with correct token accepted, with wrong token rejected, missing header, wrong scheme (Basic instead of Bearer), wrong length, case-insensitive prefix.
+
+### 2. Bind to loopback + Tailscale — never `0.0.0.0`
+
+`--host` is now repeatable. Default is a single `127.0.0.1`. Production plist adds `100.0.0.25` (the Mini's Tailscale IP). LAN devices at `192.168.1.x` cannot connect to `:1337` directly — the socket doesn't exist on that interface. Bridge100 (`10.10.10.1`) is owned by `sanctum-triage`, a proxy that normalizes VM traffic and forwards to loopback, so the VM path is intact.
+
+Non-loopback bind failures are non-fatal. Tailscale can transiently disappear during boot; crashing the server would thrash launchd's KeepAlive. Loopback bind is required — without it, the guardian has nothing to probe and we can't even tell ourselves we're alive.
+
+### 3. ed25519-signed manifest
+
+The SHA-256 manifest from P4 is plain text. An attacker with write access to both the model dir and the manifest can roll both together. P5 closes that: a detached ed25519 signature over the manifest bytes, verified before the hashes are even looked at.
+
+The signing key lives on the MBP at `~/.ssh/sanctum-manifest-signing.key` (mode 0600, NOT in the repo). The verifying key is 32 raw bytes at `services/sanctum-mlx/deploy/manifest-pubkey.ed25519`, committed. The signature is 64 raw bytes at `services/sanctum-mlx/deploy/qwen35-27b-4bit.manifest.sha256.sig`, also committed.
+
+A new `sign_manifest` CLI wraps the workflow: `keygen`, `sign`, `verify`. At runtime, `main` calls `manifest::verify_signature(manifest, sig, pubkey)` before `manifest::verify`. A tamper test — appending one line to the manifest — reproduces the expected `Verification equation was not satisfied` and the process exits non-zero.
+
+This does not stop an attacker with FS-write AND the signing key. What it does stop: anyone editing the manifest without also having the signing key. That's a meaningful delta — the manifest now lives in a two-key trust zone where the hash list is trusted iff the signature is, and the signature requires something the repo does not contain.
+
+### 4. Off-box watchers on the MBP
+
+The on-Mini guardian / canary / drift agents watch each other across process boundaries but share a box. If the Mini is wedged, power-lost, kernel-panicked, or just switched off, every on-Mini alert channel goes silent.
+
+Two new LaunchAgents on the MBP close this:
+
+- `com.sanctum.council-canary-offbox` — chat probe to the Mini via Tailscale with the bearer token, every 10 minutes.
+- `com.sanctum.council-drift-offbox` — runs `deploy-sanctum-mlx.sh verify` hourly from the MBP against the Mini.
+
+The alert channel is `osascript 'display notification'` on the MBP's own screen, with a "Submarine" sound. Force Flow is intentionally not used — the whole premise is the Mini might be dead. Two boxes now have to be compromised to silently lie about the council's health, not one.
+
+### 5. Hardened-runtime codesign
+
+Vanilla `cargo build` produces a Mach-O with `flags=0x20002(adhoc,linker-signed)`. That's the weakest thing macOS accepts. `scripts/codesign-sanctum-mlx.sh` re-signs with `--options runtime` plus a minimal entitlement set — only `com.apple.security.cs.allow-jit` (Metal's shader compiler needs W^X pages). After the re-sign, `codesign -dv` shows `flags=0x10002(adhoc,runtime)`.
+
+We do NOT add `disable-library-validation`. Library validation staying on is the whole point of hardened runtime: any unsigned dylib shoved into the process gets rejected by the loader. DYLD environment overrides are blocked, ptrace is blocked by default, JIT is only allowed because the entitlement explicitly permits it.
+
+Without a paid Apple Developer ID the signature is still adhoc, which means we can't notarize and distribute the binary to other users. Fine — this is an internal service, distribution is `rsync`. What we get with hardened runtime is the runtime-enforcement hardening, orthogonal to notarization.
+
+### Deferred (still, honestly)
+
+After P5: the binary is hardened + auth-gated + bind-restricted + manifest-signed + doubly-watched. The remaining gaps from B+ → A:
+
+| Gap | What it would take |
+|-----|--------------------|
+| Developer-ID signing + notarization | $99/year Apple cert + build-time notarize step |
+| Close the 3/10 bf16 ULP parity gap | fp32 accumulator in the fused Metal kernel, or reduction-order surgery |
+| Proper mTLS on `:1337` | rustls, client cert distribution, a rotation policy |
+| Prometheus metrics + dashboard | `metrics` crate, scrape endpoint, Holocron panel |
+| Zero-downtime blue-green | Caddy front-proxy for `:1337/:1338` hot-swap |
+| Parity smoke battery in CI | Self-hosted arm64 runner with Metal |
+| True HA (multi-node council) | Active-passive or load-balanced across Mini + MBP |
+
+Grade with P5 in: A−. The honest "military-grade" label starts on the other side of that Developer ID cert and the mTLS rollout.
+
 ## File Map
 
 | File | Description |
