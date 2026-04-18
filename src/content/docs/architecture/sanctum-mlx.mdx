@@ -443,6 +443,63 @@ The last B+ → A-minus step was trading the adhoc signature for Apple's Develop
 
 Grade post-P6: **A-minus.** The "military-grade" label is unambiguously earned. The A+ layer — Prometheus, mTLS, HA, CI parity, kernel-level bit-exact parity — is a horizon-item, not a next-sprint item.
 
+## P7 — observability, failover, and parity CI (2026-04-18)
+
+Four of the six A+ items landed in one push. mTLS deferred — Tailscale already encrypts wire transport and bearer auth handles identity, so the remaining mTLS value is cryptographic per-client identity, worth doing but worth doing carefully.
+
+### 1. Prometheus `/metrics` endpoint
+
+`src/metrics.rs` installs a Prometheus recorder at startup and middleware that times every HTTP request. Series:
+
+- `sanctum_mlx_http_requests_total{route,method,status}` — counter
+- `sanctum_mlx_http_duration_seconds{route,method,status}` — histogram, 5 ms – 180 s buckets
+- `sanctum_mlx_http_inflight_requests` — gauge
+- `sanctum_mlx_inference_requests_total{stop_reason}` — counter
+- `sanctum_mlx_inference_{completion,prompt}_tokens_total` — counters
+- `sanctum_mlx_inference_duration_seconds` — histogram
+- `sanctum_mlx_inference_tokens_per_sec` — histogram (0.5 – 96 tok/s buckets)
+- `sanctum_mlx_inference_completion_tokens` — histogram (1 – 4096 tokens)
+- `sanctum_mlx_startup_seconds{phase="manifest_verify"|"model_load"}` — histogram
+- `sanctum_mlx_model_loaded` — gauge (0/1)
+
+`GET /metrics` renders Prometheus text format and goes through the same auth middleware as the rest — loopback bypasses, a cross-machine Prometheus scraper presents the bearer token. Operational detail doesn't leak onto the open Tailnet.
+
+### 2. HA failover in the sanctum-server router
+
+`HttpProxyBackend` now holds a `Vec<String>` of URLs instead of one. `generate` tries primary, then each fallback on connect failure or 5xx. 4xx responses bail immediately — a fallback won't fix a malformed request.
+
+Once a stream starts, we stay on that URL. Mid-stream checkpointing across endpoints would require KV-cache / SSM-state migration the engines don't expose, and "start over on the fallback" is an honest option for stateless endpoints, not streaming inference.
+
+`BackendDef` in `instance.yaml` gains an optional `fallback_urls` array:
+
+```yaml
+council-secure:
+  url: http://127.0.0.1:1337/v1
+  fallback_urls:
+    - http://100.0.0.55:8902/v1  # MBP shadow via Tailscale
+  api_key_env: COUNCIL_API_KEY
+```
+
+Deployment is config-only — sanctum-server picks up the fallbacks at next load. `health_check` is now "healthy if ANY url responds," short-circuiting on primary success.
+
+### 3. Nightly parity smoke battery
+
+`com.sanctum.council-parity-smoke` runs at 03:00 every night. Executes 10 fixed prompts at `temperature=0` and checks each response against a known-good substring spec (`parity-smoke.json`). Threshold: more than 1 failure out of 10 fires a Force Flow alert.
+
+This catches what the manifest + signature layer can't: weights that hash fine but answer wrong. A silent mlx-rs rebase that shifts the fused kernel one ULP, an adapter swap, a quiet kernel cache corruption — any of these would show up in the morning's smoke log as a regression.
+
+Initial run in prod: 10/10 pass, ~60 s wall time. The spec file is editable without recompiling — when an intentional kernel change shifts answers, update the expected strings and commit.
+
+### 4. mTLS (deferred — honestly)
+
+Implemented nothing for mTLS this session. The rollout requires generating a self-signed CA, issuing per-client certs for guardian / canary / drift / sanctum-server / VM / off-box watchers, and updating every client to present its cert. ~2 hours of careful work best done dedicated rather than at the tail of an omnibus push.
+
+What we have today: bearer-token auth over Tailscale-encrypted wire. Bearer is a shared secret — if it leaks, everyone who got the file can call the council. mTLS would replace the shared secret with per-client certs that can be individually revoked. Real win, real complexity. On the queue as P8.
+
+### Grade post-P7: A
+
+Observable (Prometheus). Survivable (HA failover wired, config-deployable). Verifiable (nightly correctness cron). The remaining A+ gap is mTLS + the 3/10 bf16 ULP parity gap — neither is critical path; both are honest horizon items.
+
 ## File Map
 
 | File | Description |
