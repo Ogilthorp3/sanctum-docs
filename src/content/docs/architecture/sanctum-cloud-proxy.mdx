@@ -20,10 +20,10 @@ The `sanctum-proxy` runs on `10.10.10.1:4040`. It intercepts all LLM API request
 ### The 5 Layers of Hardening
 
 <Steps>
-1. **Key Security** — No API keys exist in source code, `.env` files, or Git. The proxy securely requests credentials at runtime directly from the macOS Keychain via a native subprocess call (`security find-generic-password`).
+1. **Key Security** — No API keys exist in source code, `.env` files, or Git. The proxy securely requests credentials at runtime using the native `security-framework` Rust crate to query the macOS Secure Enclave directly. If a key is missing, it dynamically prompts the user via an AppleScript dialog or CLI to securely store it.
 2. **Fallback Chain** — If a cloud provider returns a 429 Rate Limit, a 500 Server Error, or times out, the proxy automatically falls back to local models (first `coder-14b`, then the local `gemma-4` 31B model) without the client ever knowing the cloud failed.
 3. **Cost Control (Daily Caps)** — The proxy tracks real-time USD spend in memory. It applies hardcoded daily budgets per agent (`windu=$2.00`, `mothma=$2.00`, `jocasta=$1.50`, `default=$0.50`). If an agent blows their budget, cloud models are silently dropped from their available routes, forcing them onto local inference.
-4. **Audit Trail** — Every single request is logged into a structured JSONL file (`~/.sanctum/logs/cloud-proxy-audit.jsonl`), detailing the agent name, model, tokens used, latency, and exact cost to the thousandth of a cent.
+4. **Audit Trail & Observability** — Every single request is logged into a structured JSONL file (`~/.sanctum/logs/cloud-proxy-audit.jsonl`). Additionally, the proxy natively exposes a live `/stats` HTTP endpoint on port 4040, allowing for real-time visibility into who spent what today, without ever needing to parse logs manually.
 5. **Rate Limiting** — An internal token bucket tracks provider quotas and implements exponential backoff to gracefully handle high traffic spikes.
 </Steps>
 
@@ -37,11 +37,9 @@ By folding the hardening logic into the `sanctum-proxy` Rust binary:
 - Concurrency improved massively via the `tokio` async runtime.
 - The entire routing architecture (both smart intent routing and security hardening) is now unified in one repository, `sanctum-rs`.
 
-## Configuration
+## Configuration & Dynamic Healing
 
-The proxy loads its settings from the standard Sanctum environment, but the core budget enforcement is compiled directly into the binary to ensure it cannot be bypassed by misconfiguration.
-
-<Aside type="note">
-**Zero Trust Architecture**
-The proxy does not trust the agents. It intercepts requests, verifies the agent's identity via headers or endpoint routing, and calculates the cost independently. If an agent tries to hallucinate a cheaper model name to bypass its budget, the proxy will catch it and bill the actual tokens used.
+The proxy loads its initial settings from `~/.sanctum/sanctum-proxy/config.yaml`, but the architecture incorporates "Apple-like" intelligence:
+- **Zero-Config Hot Reloading:** Changes made to the `config.yaml` file are picked up instantly via the `notify` crate, seamlessly swapping the new configuration into memory (via `arc-swap`) without ever dropping an active Server-Sent Event (SSE) stream.
+- **Zero Trust Architecture:** The proxy does not trust the agents. It intercepts requests, verifies the agent's identity via headers or endpoint routing, and calculates the cost independently. If an agent tries to hallucinate a cheaper model name to bypass its budget, the proxy will catch it and bill the actual tokens used.
 </Aside>
