@@ -1,0 +1,212 @@
+---
+title: TurboQuant KV Compression
+description: How sanctum-mlx compresses the KV cache 4–5× on Apple Silicon — and the scientific protocol we use to tune the knobs without lying to ourselves.
+---
+
+import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+The KV cache is where long conversations go to eat memory. Every token a language model generates leaves behind a pair of tensors — the keys and values from every attention head in every layer. For a 27B model at 256-dim heads, that's hundreds of megabytes per thousand tokens. On a Mac Mini that also runs LM Studio and a dozen other services, the KV cache is the thing that decides whether you get to have a conversation at all.
+
+**TurboQuant** is how we make it smaller. The idea is not ours — it comes from [Google's ICLR 2026 paper (arXiv 2504.19874)](https://arxiv.org/abs/2504.19874), layered on top of [KVQuant](https://arxiv.org/abs/2401.18079) and [QJL](https://arxiv.org/abs/2310.19536). Our job is to implement it cleanly inside `sanctum-mlx`, wire it into Apple's MLX runtime, and — most importantly — prove the quality doesn't collapse when we turn the bits down.
+
+This page is both an architecture reference and a **scientific protocol** for tuning it.
+
+## The pipeline
+
+```
+incoming K,V tensor  [1, H_kv, L, D]
+        ↓
+  extract to CPU f32
+        ↓                             ┌──── keys ────┐
+   per head h, per token t            │              │
+        ↓                             ▼              ▼
+  normalize → Hadamard rotate → Lloyd-Max quantize → QJL 1-bit sign correction → pack
+                                                                                  ↓
+                                                                         CompressedHeadKV
+        ↓
+  per head h, per token t             ┌──── values ──┐
+        ↓                             ▼              ▼
+  group-affine quantize (KVQuant style) → store scale + zero per group
+        ↓
+  on every read: dequant all stored tokens → Array → attention
+```
+
+Keys travel through `rotate → Lloyd-Max → QJL`; values travel through `group-affine quantize`. The two pathways live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand their output to a `CompressedKVCache` that implements the `mlx_lm::cache::KeyValueCache` trait — a **drop-in** for the stock `ConcatKeyValueCache`.
+
+<Aside type="caution" title="Slice 1 is CPU-side dequant">
+  On every decode step, we round-trip all stored tokens through host memory to rebuild the dequantized tensor. That's `O(T²)` work across a full generation. It's acceptable for *measuring whether the algorithm preserves quality* — but it's not how production will run. Slice 4 moves the dequant into a Metal kernel. Until then: validate first, optimize later.
+</Aside>
+
+## Why a tuning protocol
+
+The first end-to-end run on a Qwen3.5-27B-4bit model with default settings (3-bit keys + QJL, 4-bit values, group_size=128) delivered this:
+
+```
+ppl (fp16)        =  9.3055
+ppl (turboquant)  = 28.6451
+Δppl              = +19.34 absolute, +207.83% relative
+```
+
+Catastrophic. The plumbing works end-to-end — no crashes, no SIGKILL, the bit stream roundtrips — but the output is a model that has forgotten what it was looking at. This is exactly the situation where "tune a few knobs and hope" fails. We need a protocol.
+
+## The protocol
+
+The protocol has five principles, in priority order.
+
+### 1. Ablate before you sweep
+
+Do not touch bit widths until each *stage* of the pipeline has been proven correct in isolation. Loss could come from the Array↔f32 bridge, from Hadamard rotation, from Lloyd-Max quantization, from QJL, or from the value group-affine path — and you can't distinguish them by watching perplexity collapse.
+
+The ablation sequence:
+
+| Run | Config | What it isolates | Expected |
+|-----|--------|------------------|----------|
+| **A1** | 8-bit keys + 8-bit values, QJL off | Bridge + minimal-loss quant | ≈ fp16 |
+| **A4** | 8-bit keys + 8-bit values, QJL on | QJL math correctness at high precision | ≈ fp16 |
+| **A5** | 8-bit keys, 4-bit values, QJL off | Value stage only | measures value loss |
+| **A6** | 3-bit keys + QJL, 8-bit values | Key stage only | measures key loss |
+
+If A1 fails, you have a bug in the bridge or the rotation — stop sweeping and bisect. If A5 is clean but A6 is broken, the bug is in the key pipeline (Lloyd-Max, QJL, or rotation). And so on.
+
+### 2. Sweep only after ablations pass
+
+Once each stage is proven, search the Pareto frontier. Don't grid-search 120 cells — use a **staircase**:
+
+1. Fix `value_bits=8`, sweep `key_bits ∈ {3, 4, 5, 6, 8}` → find minimum that meets budget
+2. Fix `key_bits` at step-1 winner, sweep `value_bits ∈ {2, 4, 6, 8}`
+3. Fix both, check `group_size ∈ {32, 64, 128}` sensitivity
+4. At the winning `(key_bits, value_bits)`, compare `use_qjl: on` vs `off` — does QJL actually help?
+
+About 20 runs total. Each run takes ~10 seconds on an M4 Max once the model is cached.
+
+### 3. Reproducibility
+
+Every run appends one line to [`services/sanctum-mlx/bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/turboquant_sweep.jsonl):
+
+```json
+{
+  "ts": "2026-04-18T11:40:00Z",
+  "host": "mbp",
+  "config": {"key_bits": 4, "value_bits": 6, "group_size": 128, "use_qjl": false, "head_dim": 256},
+  "eval": {"text_sha": "3f4a…", "n_tokens": 54},
+  "ppl_fp16": 9.3055,
+  "ppl_tq": 10.12,
+  "abs_delta": 0.8145,
+  "rel_delta": 0.0876,
+  "runtime_sec": {"fp16": 4.2, "tq": 6.8},
+  "verdict": "warn"
+}
+```
+
+The **text SHA** is the comparability key — different text means different rows, not different configurations. The **verdict** classifier is:
+
+| Verdict | Budget |
+|---------|--------|
+| `pass` | `abs_delta ≤ 0.3` AND `rel_delta ≤ 5%` |
+| `warn` | `abs_delta ≤ 1.0` |
+| `fail` | beyond `warn` |
+| `invalid` | non-finite — means a bug |
+
+### 4. One knob at a time
+
+Never change two variables between runs. The harness supports this through environment variables — the test binary reads `SANCTUM_TQ_KEY_BITS`, `SANCTUM_TQ_VALUE_BITS`, `SANCTUM_TQ_GROUP_SIZE`, `SANCTUM_TQ_USE_QJL`, `SANCTUM_TQ_HEAD_DIM` and installs them into a `OnceLock` before the model is loaded. No recompile between runs.
+
+The shell driver [`bench/tune.sh`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/tune.sh) orchestrates the staircase. Individual stages (`ablation`, `key`, `value`, `group`, `qjl`) can be run in isolation.
+
+### 5. Early stop
+
+Don't over-measure. The protocol has two exit conditions:
+
+- **Confirmed bug** (any ablation fails): stop, fix, restart. Sweeping over a bug produces garbage data.
+- **Confirmed winner** (a config meets both budgets): stop. The knee is located. Tighten later if needed.
+
+## Running the sweep
+
+<Tabs>
+<TabItem label="Single run (manual)">
+```bash
+cd ~/Projects/sanctum-rs
+SANCTUM_MLX_TEST_MODEL=/path/to/Qwen3.5-27B-4bit \
+SANCTUM_TQ_KEY_BITS=4 \
+SANCTUM_TQ_VALUE_BITS=6 \
+SANCTUM_TQ_USE_QJL=false \
+SANCTUM_TQ_JSONL=services/sanctum-mlx/bench/turboquant_sweep.jsonl \
+SANCTUM_TQ_SOFT=1 \
+  cargo test -p sanctum-mlx --test turboquant_ppl --release \
+  -- --ignored --nocapture
+```
+
+`SANCTUM_TQ_SOFT=1` disables the assertion failure on regression — during sweeps, *bad numbers are data*, not errors. Omit it when you're gating.
+</TabItem>
+
+<TabItem label="Staircase (driver)">
+```bash
+cd ~/Projects/sanctum-rs
+SANCTUM_MLX_TEST_MODEL=/path/to/Qwen3.5-27B-4bit \
+  ./services/sanctum-mlx/bench/tune.sh all
+```
+
+Runs: 4 ablations, 5 key-bit cells, 4 value-bit cells, 3 group-size cells, 2 QJL cells = **18 runs**. Writes all rows to `bench/turboquant_sweep.jsonl`. Takes about 3 minutes on an M4 Max once the model is cached.
+
+For focused stages: `./tune.sh ablation` or `./tune.sh key` etc.
+</TabItem>
+
+<TabItem label="Analysis">
+```bash
+# Which configs met the pass budget?
+jq -c 'select(.verdict == "pass")' services/sanctum-mlx/bench/turboquant_sweep.jsonl
+
+# Pareto front: lowest abs_delta at each bit budget
+jq -c '[.config.key_bits, .config.value_bits, .abs_delta] | @tsv' \
+  services/sanctum-mlx/bench/turboquant_sweep.jsonl | sort
+```
+
+For each stage boundary, record the decision in `bench/ANALYSIS.md` with the run rows that justified it. Future-you will thank present-you.
+</TabItem>
+</Tabs>
+
+## Knob reference
+
+| Knob | Env | Range | Meaning |
+|------|-----|-------|---------|
+| `key_bits` | `SANCTUM_TQ_KEY_BITS` | 3–8 | Codebook precision per key dim. Rotation runs regardless. |
+| `value_bits` | `SANCTUM_TQ_VALUE_BITS` | 2–8 | Affine quant precision per value dim, per group. |
+| `value_group_size` | `SANCTUM_TQ_GROUP_SIZE` | 32, 64, 128 | Granularity of per-group scale/zero for values. |
+| `use_qjl` | `SANCTUM_TQ_USE_QJL` | true / false | Whether to add the QJL 1-bit sign correction after Lloyd-Max. Only meaningful at `key_bits ≤ 4`. |
+| `head_dim` | `SANCTUM_TQ_HEAD_DIM` | model-specific | Must match the model. Qwen3.5 = 256, Qwen2.5 = 128. |
+
+Metal memory ceilings (orthogonal to TurboQuant, but relevant to the *why*):
+
+| Flag | Env | Effect |
+|------|-----|--------|
+| `--metal-cache-limit-mb` | `SANCTUM_MLX_CACHE_LIMIT_MB` | Cap MLX's reusable buffer cache. Stops sanctum-mlx from fighting LM Studio for the Metal heap. |
+| `--metal-memory-limit-mb` | `SANCTUM_MLX_MEMORY_LIMIT_MB` | Hard cap total MLX device memory. |
+| `--metal-wired-limit-mb` | `SANCTUM_MLX_WIRED_LIMIT_MB` | Cap non-swappable memory — keep hot tensors resident without starving the rest of the system. |
+
+## What "pass" means — and doesn't
+
+The default gate is `abs_delta ≤ 0.3 AND rel_delta ≤ 5%` on a short eval. That's permissive compared to the TurboQuant paper's reported < 0.1 Δppl, and intentionally so — our implementation omits some of the paper's refinements (learned rotations, full TurboQuant value pipeline) in favor of shipping Slice 1.
+
+A config that passes here is **good enough to ship under `--turboquant` behind a flag**. It is *not* yet good enough to be the default. Default-flip requires:
+
+- Clean ablation pass across all stages
+- Wider eval (wikitext-2 chunk, ≥1024 tokens)
+- Sample-quality check: generate 200 tokens continuation from the same prefix with both caches, compare
+- No regression across multiple prompt families (code, prose, reasoning)
+
+Until then, turboquant is **opt-in**. Operators who want the memory savings know they're in an experiment.
+
+## References
+
+- **TurboQuant** — [arXiv 2504.19874](https://arxiv.org/abs/2504.19874) · Google · ICLR 2026
+- **KVQuant** — [arXiv 2401.18079](https://arxiv.org/abs/2401.18079) · per-channel K, per-token V quantization
+- **QJL** — [arXiv 2310.19536](https://arxiv.org/abs/2310.19536) · AAAI 2025 · 1-bit error-corrected JL projections
+- **PolarQuant** — [arXiv 2502.02617](https://arxiv.org/abs/2502.02617) · rotation-based precursor
+- **DuoAttention** — [arXiv 2410.10819](https://arxiv.org/abs/2410.10819) · retrieval vs streaming heads — next slice
+- **EAGLE-3** — [arXiv 2503.01840](https://arxiv.org/abs/2503.01840) · on-device speculative decoding — later slice
+
+## Cross-references
+
+- [sanctum-mlx architecture](/architecture/sanctum-mlx/) — the server this lives inside
+- [eval harness](/architecture/eval-harness/) — the broader evaluation philosophy
+- [engineering discipline](/architecture/engineering-discipline/) — why we measure twice
