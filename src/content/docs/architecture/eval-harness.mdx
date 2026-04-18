@@ -1,0 +1,187 @@
+---
+title: Eval Harness — Apple-Grade
+description: How the Carmack Olympics grew a skeleton, a nervous system, and a conscience — so routing decisions rest on evidence, not vibes.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+# Eval Harness — Apple-Grade
+
+**Date:** 2026-04-18
+**Status:** Active — 17/17 end-to-end checks passing
+
+A benchmark that scores models in a pretty table is a report card. A benchmark that *gates promotion* is infrastructure. This page documents how the Carmack Olympics crossed that line.
+
+The goal isn't to produce nicer dashboards. It's to make every routing decision defensible with a number you can audit six months from now, on a clean machine, with `git checkout` as the only setup step.
+
+## The Twelve Layers
+
+Each layer below is independent. Every one has a rollback. Every one is exercised by `scripts/test_eval_harness.sh`.
+
+| # | Layer | What it removes | Where it lives |
+|---|---|---|---|
+| 1 | **Word-boundary scoring** | False positives like `"windu"` matching inside `"windows"` | `eval_common.score_test` |
+| 2 | **Plumbed seeds** (`--seed`) | "N=5 seeds" that were actually N=5 identical runs | `seed_mlx()` + CLI flag on all three evals |
+| 3 | **Warmup** (`--warmup-n`) | First-task penalty from cold KV cache / Metal pipelines | `eval_common.warmup` |
+| 4 | **Repro bundle** | "I can't reproduce this result" two months later | `git commit`, mlx_lm version, model SHA256, full env snapshot (chip, RAM, macOS, pip hash) |
+| 5 | **Smoke canary** (`--smoke`) | 40 minutes wasted before noticing a broken config | 3 tasks across 3 categories |
+| 6 | **Resumability** (`--resume`) | Starting over when the eval crashes at task 23 of 30 | Atomic per-task writes + `completed_keys()` skip |
+| 7 | **Latency + per-agent view** | "Won accuracy but lost 3× in speed" going unnoticed | `latency_ms` per task, aggregated in `eval_stats.py` |
+| 8 | **Determinism self-test** (`--check-determinism`) | Seed plumbing silently regressing | Two-run byte-identical assertion |
+| 9 | **Budget guardrails** (`--budget-sec`, `--max-tokens-total`) | A runaway generator turning an hour into ten | Abort with exit 3 + partial-save |
+| 10 | **Refusal classifier** | Score 0 meaning four different things | `WRONG / REFUSED / TOO_SHORT / OFF_LANGUAGE / HALLUCINATED / UNKNOWN` per row |
+| 11 | **Regression gate + task diff** | Silent quality regressions landing in prod routing | `eval_stats.py --gate` + `eval_diff.py` (both exit 1 on failure) |
+| 12 | **Atomic writes + SHA256 trailer** | Truncated JSON after a mid-run crash | `tmp + rename` + `<file>.sha256` |
+
+<Aside type="tip">
+Three of these twelve (word-boundary scoring, plumbed seeds, warmup) silently invalidate any previous eval. If you have numbers from before 2026-04-18, either re-run them or caveat the claim — otherwise you're comparing two different measurement systems.
+</Aside>
+
+## Reproducibility bundle
+
+Every output JSON now carries enough metadata to exactly reproduce the run. Example from a recent `carmack_eval.py --output eval/foo.json`:
+
+```json
+{
+  "repro": {
+    "git_commit": "452139ef61",
+    "git_dirty": false,
+    "mlx_lm_version": "0.31.2",
+    "mlx_version": "0.19.3",
+    "model_path": "/Users/neo/.cache/huggingface/.../Qwen3.5-27B-4bit/...",
+    "model_sha256": "45797d2985a12c55",
+    "env": {
+      "python_version": "3.12.13",
+      "macos_version": "26.4.1",
+      "chip": "Apple M4 Max",
+      "memory": "128 GB",
+      "pip_freeze_sha256": "03ecb1d1cbb58d1d"
+    }
+  }
+}
+```
+
+A `.sha256` trailer file sits alongside every output so truncation is detectable:
+```
+$ shasum -a 256 -c eval/coder14b-seed42.json.sha256
+eval/coder14b-seed42.json: OK
+```
+
+## Statistical rigor in `eval_stats.py`
+
+Aggregation over N seed runs now reports bootstrap CI, effect size, and Benjamini-Hochberg FDR correction across categories:
+
+```
+## Paired comparison: gemma4-lora (B) minus coder14b-trained (A)
+
+**N paired tasks:** 34  |  **Mean delta:** -0.4250  (95% CI [-0.5912, -0.2603], p ≈ 0.000)
+**Effect size (Cohen's d):** -1.12 (large)
+**Verdict:** A > B (significant at 95%)
+
+### Per-category delta
+
+| Category | Mean Δ | 95% CI | Cohen's d | p | p (BH-FDR) | Sig | N |
+|---|---|---|---|---|---|---|---|
+| satellite | -1.000 | [-1.000, -1.000] | -3.16 (large) | 0.000 | 0.000 | ✓ | 3 |
+| topology | -0.700 | [-1.000, -0.300] | -1.55 (large) | 0.000 | 0.000 | ✓ | 5 |
+| home_automation | -0.500 | [-0.900, -0.100] | -1.12 (large) | 0.010 | 0.027 | ✓ | 5 |
+| ... | | | | | | | |
+```
+
+The **Cohen's d** column prevents the trap of calling a +0.02 delta "significant" when the effect is tiny. The **BH-FDR-adjusted p** prevents the trap of calling one cherry-picked category significant at 95% when you tested eight.
+
+## Regression gate — the CI/CD bit
+
+`eval_stats.py --gate` turns the harness from a reporting tool into a promotion gate:
+
+```bash
+# Fails with exit 1 if any gated category drops more than 5 points
+.venv/bin/python scripts/eval_stats.py \
+  --inputs eval/coder14b-seed*.json --label candidate \
+  --gate eval/last-week-baseline.json \
+  --gate-max-drop 0.05 \
+  --gate-categories identity,jailbreak,tool_calling \
+  --json-output eval/gate-report.json
+```
+
+A separate `scripts/eval_diff.py` surfaces *which specific tasks* regressed — not just aggregates. Also exits 1 on any regression.
+
+## Anti-contamination
+
+`scripts/check_holdout_contamination.py` runs a 3-gram Jaccard sweep of each holdout task against the training corpus. Windu's bar for trusting a memorization gap > 0.10 starts here:
+
+```bash
+.venv/bin/python scripts/check_holdout_contamination.py \
+  --holdouts configs/holdouts.jsonl \
+  --training configs/train.jsonl \
+  --threshold 0.30 \
+  --output eval/contamination-report.json
+```
+
+Exit 1 if any holdout overlaps training content above threshold. No external deps — just stdlib `re` and set operations.
+
+## Real-traffic replay
+
+`scripts/replay_real_traffic.py` complements synthetic benchmarks by replaying anonymized production turns through a candidate endpoint. PII scrubber (phone/email/IP) runs before anything leaves the local machine.
+
+<Aside type="caution">
+The `extract_turns()` loader ships with a placeholder schema — point `--log-dir` at your actual conversation logs and adapt `extract_turns()` to match. The harness does the heavy lifting; you wire the source.
+</Aside>
+
+## Weekend workflow
+
+```bash
+# 1. Pre-flight: smoke canary + determinism
+.venv/bin/python scripts/carmack_eval.py \
+  --model ... --seed 42 --check-determinism --smoke \
+  --output eval/smoke.json
+
+# 2. Full N=5 with budget and notify
+for s in 42 1138 66 2187 501; do
+  .venv/bin/python scripts/carmack_eval.py \
+    --model ... --adapter-path ... --seed $s \
+    --budget-sec 3600 --max-tokens-total 120000 \
+    --notify 'osascript -e "display notification \"eval done\""' \
+    --output eval/coder14b-seed${s}.json
+done
+
+# 3. Aggregate + gate
+.venv/bin/python scripts/eval_stats.py \
+  --inputs eval/coder14b-seed*.json --label coder14b \
+  --gate eval/last-week-baseline.json --gate-max-drop 0.05 \
+  --output eval/coder14b.md --json-output eval/coder14b.json
+
+# 4. Diff for task-level detail
+.venv/bin/python scripts/eval_diff.py \
+  --baseline eval/last-week-baseline.json \
+  --current  eval/coder14b.json \
+  --min-delta 0.1 --output eval/coder14b-diff.md
+```
+
+## Exit code contract
+
+| Code | Meaning | Who emits it |
+|---|---|---|
+| `0` | All green | Any eval or stats script on success |
+| `1` | **Test/gate failure** | `test_eval_harness.sh` with any failed check; `--gate` with regressions; `eval_diff.py` with any task regression; `--check-determinism` mismatch |
+| `2` | Input/config error | Missing seed for `--check-determinism`; unparseable `--inputs` glob |
+| `3` | Budget exceeded | `--budget-sec` or `--max-tokens-total` breach; partial results flushed before exit |
+
+CI pipelines can distinguish "benchmark broken" (1) from "budget exhausted, try again" (3).
+
+## What isn't in here
+
+Explicitly out of scope, honestly flagged:
+
+- **LLM-as-judge disagreement** — Carmack uses programmatic keyword rubrics, not an LLM judge. This lives in the Standard Olympics track if needed.
+- **Power analysis** — bootstrap CI + Cohen's d cover 95% of what you'd ask a power calculation.
+- **Secret scanning on response logs** — assumed low risk since prompts are authored locally; add scanning if you start committing response logs to git.
+
+## Verification
+
+```bash
+cd ~/Projects/mlx-finetune
+bash scripts/test_eval_harness.sh
+```
+
+Current baseline: **17 pass, 0 fail, 1 skip** (skip is `--check-determinism` via HTTP, which depends on server seed support).
