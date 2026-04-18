@@ -80,6 +80,50 @@ Events are newline-delimited JSON:
 {"ts": 1776475830.1,  "level": "info", "event": "restart_requested", "rc": 0}
 ```
 
+### Auto-fallback to Python — defense against unrecoverable Rust crashes
+
+A plain restart loop is a trap when the thing being restarted will never succeed. That was the shape of a late-night outage on 2026-04-18: after a rebuild of `sanctum-mlx` left `mlx.metallib` un-colocated with the binary, every cold start hit `MLX error: Failed to load the default metallib` and died before binding `:1337`. The guardian dutifully kickstart-ed it. Three times. Then the rate limiter said "enough." The alert fired. Nothing served inference. The guardian was obedient; the architecture was dumb.
+
+The fix: **pattern-aware fallback**. Before hitting the alert-only rate limit, the guardian scans the recent `sanctum-mlx.log` for signatures that mean *this binary cannot serve regardless of how many times you restart it* — `Failed to load the default metallib`, `library not found`, `Segmentation fault`, `manifest verification failed`, `signature invalid`, `Out of memory`, `address already in use`. When any of those appear, the guardian writes a fallback lockfile, boots out the Rust agent, and bootstraps `com.sanctum.server-mlx` (the Python `mlx_lm.server`) in its place — a proven, well-tested backend that doesn't share the Rust binary's failure modes.
+
+```
+~/.sanctum/state/council-fallback.lock    # active while Python is serving
+~/.openclaw/logs/council-guardian.log     # event: fallback_activated
+```
+
+The lockfile does triple duty:
+1. **State persistence** — survives guardian restarts so we don't flip-flop.
+2. **Probe retargeting** — on next tick the guardian probes the Python backend at `:1337` instead.
+3. **Thrash guard** — the guardian refuses to fall back *from* the fallback. One direction only.
+
+### Manual recovery
+
+Once you've rebuilt `sanctum-mlx` or addressed the underlying issue:
+
+```bash
+# Verify the Rust binary works standalone
+/Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx --help >/dev/null && echo OK
+
+# Swap back to Rust
+tools/gui-exec.sh neo@100.0.0.25 \
+  'launchctl bootout gui/$(id -u)/com.sanctum.server-mlx; \
+   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.mlx.plist; \
+   launchctl kickstart -k gui/$(id -u)/com.sanctum.mlx'
+
+# Tell the guardian the fallback is over
+rm ~/.sanctum/state/council-fallback.lock
+```
+
+### Known fatal patterns (the ones that trigger fallback)
+
+| Pattern | Usual cause | Fix |
+|---|---|---|
+| `Failed to load the default metallib` | `mlx.metallib` not colocated with the binary after rebuild | `cp target/release/build/mlx-sys-*/out/build/lib/mlx.metallib target/release/mlx.metallib` |
+| `manifest verification failed` / `signature invalid` | Weights modified or manifest stale | Re-run `tools/sign-manifest.sh` or re-download weights |
+| `address already in use` | Previous `sanctum-mlx` process didn't release port 1337 | `lsof -iTCP:1337 -sTCP:LISTEN` + `kill -9` the squatter |
+| `Out of memory` | Another process ate VRAM/RAM while MLX was starting | Free memory, kickstart |
+| `Segmentation fault` | Usually MLX bug or corrupt weights | Rollback `cargo` build; investigate |
+
 ### Skip-if-busy — making it safe during evals
 
 A real-inference probe that runs every 60 seconds would false-positive during any long-running Carmack Olympics burst on the same endpoint. The guardian reads both backends' access logs and defers when either has emitted a successful response in the last 90 seconds:
