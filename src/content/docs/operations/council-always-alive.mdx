@@ -82,6 +82,11 @@ Events are newline-delimited JSON:
 
 ### Auto-fallback to Python — defense against unrecoverable Rust crashes
 
+<Aside type="note">
+Battle-tested 2026-04-18: full fallback sequence exercised against the live endpoint. Guardian log recorded `fallback_activated` (BATTLETEST) → `probe_fail agent=com.sanctum.server-mlx` (lockfile routing confirmed) → `probe_ok agent=com.sanctum.mlx` after restore. `launchctl bootout` + `bootstrap` + `kickstart` all work from the guardian's `gui/<uid>` domain. Python backend served a real completion during the window; Rust was back in ~52s after the lockfile was removed.
+</Aside>
+
+
 A plain restart loop is a trap when the thing being restarted will never succeed. That was the shape of a late-night outage on 2026-04-18: after a rebuild of `sanctum-mlx` left `mlx.metallib` un-colocated with the binary, every cold start hit `MLX error: Failed to load the default metallib` and died before binding `:1337`. The guardian dutifully kickstart-ed it. Three times. Then the rate limiter said "enough." The alert fired. Nothing served inference. The guardian was obedient; the architecture was dumb.
 
 The fix: **pattern-aware fallback**. Before hitting the alert-only rate limit, the guardian scans the recent `sanctum-mlx.log` for signatures that mean *this binary cannot serve regardless of how many times you restart it* — `Failed to load the default metallib`, `library not found`, `Segmentation fault`, `manifest verification failed`, `signature invalid`, `Out of memory`, `address already in use`. When any of those appear, the guardian writes a fallback lockfile, boots out the Rust agent, and bootstraps `com.sanctum.server-mlx` (the Python `mlx_lm.server`) in its place — a proven, well-tested backend that doesn't share the Rust binary's failure modes.
