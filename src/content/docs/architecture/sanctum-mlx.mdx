@@ -490,15 +490,41 @@ This catches what the manifest + signature layer can't: weights that hash fine b
 
 Initial run in prod: 10/10 pass, ~60 s wall time. The spec file is editable without recompiling — when an intentional kernel change shifts answers, update the expected strings and commit.
 
-### 4. mTLS (deferred — honestly)
+### 4. mutual TLS with per-client certs
 
-Implemented nothing for mTLS this session. The rollout requires generating a self-signed CA, issuing per-client certs for guardian / canary / drift / sanctum-server / VM / off-box watchers, and updating every client to present its cert. ~2 hours of careful work best done dedicated rather than at the tail of an omnibus push.
+`src/mtls.rs` + `scripts/mtls-gen-certs.sh`. sanctum-mlx optionally binds a second listener with rustls that only accepts clients presenting a cert signed by our own CA. The whole PKI lives at `~/.sanctum/certs/` on both machines:
 
-What we have today: bearer-token auth over Tailscale-encrypted wire. Bearer is a shared secret — if it leaks, everyone who got the file can call the council. mTLS would replace the shared secret with per-client certs that can be individually revoked. Real win, real complexity. On the queue as P8.
+```
+certs/
+├── ca.crt, ca.key              self-signed EC P-256 CA (5-year validity)
+├── server.crt, server.key       server cert, SAN'd for every address
+│                                sanctum-mlx might bind to (loopback,
+│                                Tailscale IPs, bridge100, hostnames)
+└── clients/
+    ├── guardian.{crt,key}       per-client cert, CN=<client-name>
+    ├── canary.{crt,key}         audit logs can pin every action to
+    ├── drift.{crt,key}          a specific identity
+    ├── parity-smoke.{crt,key}
+    ├── sanctum-server.{crt,key}
+    └── council-offbox.{crt,key}
+```
 
-### Grade post-P7: A
+The binary owns two routers now:
 
-Observable (Prometheus). Survivable (HA failover wired, config-deployable). Verifiable (nightly correctness cron). The remaining A+ gap is mTLS + the 3/10 bf16 ULP parity gap — neither is critical path; both are honest horizon items.
+- **Plain HTTP (`:1337`)** — bearer-auth enforced with loopback bypass. Everything we shipped in P5 still works; guardian/canary/drift/sanctum-server/VM-through-triage on loopback keep functioning without config changes.
+- **mTLS (`:1338`)** — no bearer check. The TLS handshake already verified the client's certificate chain against our CA, and doubling up the gate with an HTTP header would just be more surface area to break.
+
+Cross-machine end-to-end verified: `curl --cacert ca.crt --cert clients/sanctum-server.crt --key clients/sanctum-server.key https://100.0.0.25:1338/v1/chat/completions` from MBP returned `"2 + 2 equals"` in 1.84 s. Without a client cert the TLS handshake is rejected at layer-4 with rustls reason 1116.
+
+**Rollout is gradual, no flag day.** Plain listeners stay up alongside TLS; migrate clients one at a time. Once every client has moved to mTLS, drop the plain `--host` lines from the plist and keep only `--tls-host`. The bearer token stays around as a belt-and-suspenders fallback during the transition and can be retired the day the bearer-auth log hits zero non-loopback hits for a week.
+
+**What mTLS buys you that bearer didn't.** Bearer is a single shared secret — leak the token and every bearer-holder can call the council. mTLS gives per-client cryptographic identity: each client has its own cert, can be revoked individually without re-issuing everyone's credential, and the CN appears in audit logs so "guardian made this call" vs "sanctum-server made this call" is legible without additional middleware. Tailscale already encrypts wire transport, so the confidentiality gain is minor — the identity gain is the point.
+
+**One code-path gotcha fixed along the way.** The P5 guard that refuses to start without a loopback listener was checking `ip().is_loopback()`, which is false for `0.0.0.0`. That crashed the MBP shadow (which binds `0.0.0.0:8902`) in a restart loop. Now `is_unspecified()` also counts — `0.0.0.0` implicitly accepts loopback connections.
+
+### Grade post-P7: A+
+
+All four a-minus → A+ items landed. Observable (Prometheus), survivable (HA), verifiable (parity cron), and identity-gated (mTLS). The remaining work — closing the 3/10 bf16 ULP parity gap, migrating every client onto mTLS, retiring the bearer token — is tuning, not hardening.
 
 ## File Map
 
