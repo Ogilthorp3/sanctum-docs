@@ -111,6 +111,8 @@ The daily backup lives on the Mini. If the Mini itself is compromised — disk f
 ```bash
 # Manual run from MBP
 ~/Documents/Claude_Code/tools/backup-sanctum.sh
+# ...or the deployed copy that the LaunchAgent invokes:
+~/.local/bin/backup-sanctum.sh
 ```
 
 ### Pipeline
@@ -118,9 +120,13 @@ The daily backup lives on the Mini. If the Mini itself is compromised — disk f
 - `tools/backup-sanctum.sh` tars `~/.sanctum/{scripts,services,state,docs,bin,boot,instance.yaml}` plus critical LaunchAgent plists on manoir via SSH.
 - `~/.sanctum/secrets/` is **excluded** — secrets live in keychain / 1Password / SOPS, not this tarball.
 - `~/.sanctum/logs/` is excluded — too large, not load-bearing.
-- The tarball is pulled to `~/Documents/Claude_Code/backups/sanctum-mini-<timestamp>.tgz`.
+- The tarball is pulled to `~/Backups/sanctum-mini/sanctum-mini-<timestamp>.tgz`.
 - A `.sha256` trailer is written alongside. `shasum -a 256 -c <file>.sha256` verifies integrity.
 - Rotation keeps the newest 8 snapshots (≈2 months of weekly history).
+
+<Aside type="caution">
+The script is installed at **two locations**: the source of truth lives in the repo at `~/Documents/Claude_Code/tools/backup-sanctum.sh`, and a deployed copy lives at `~/.local/bin/backup-sanctum.sh`. The LaunchAgent invokes the `~/.local/bin/` copy because macOS TCC (Transparency, Consent, Control) blocks launchd-spawned bash from reading or writing under `~/Documents/`. After editing the repo copy, run `cp tools/backup-sanctum.sh ~/.local/bin/` to sync. Same reason the backup destination is `~/Backups/sanctum-mini/` and not `~/Documents/...`.
+</Aside>
 
 ### Schedule
 
@@ -144,8 +150,8 @@ launchctl enable gui/$(id -u)/com.sanctum.backup
 ### Verify a snapshot
 
 ```bash
-cd ~/Documents/Claude_Code/backups
-shasum -a 256 -c sanctum-mini-20260417-222652.tgz.sha256   # expect: OK
+cd ~/Backups/sanctum-mini
+shasum -a 256 -c sanctum-mini-20260418-111502.tgz.sha256   # expect: OK
 
 # See what's inside
 tar -tzf sanctum-mini-20260417-222652.tgz | head
