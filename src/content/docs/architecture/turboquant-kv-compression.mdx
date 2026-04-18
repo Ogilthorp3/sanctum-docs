@@ -316,6 +316,46 @@ Even with a validated default config, the flag stays opt-in until:
 
 Evidence dictates defaults. Evidence is narrower than ambition. Keep the knob.
 
+## Slice 1c — cross-architecture de-risk (ecosystem wall + a finding)
+
+We attempted to validate the Bold default on a non-Qwen3.5 architecture before committing to Gemma-4 Rust work. The attempt ran into an **ecosystem wall** and produced a real finding anyway.
+
+### The wall
+
+Python `mlx-lm` 0.29.1 (latest on Python 3.9) supports `qwen2`, `qwen3`, `gemma3`, `llama4`, and more — but **not** `qwen3_5` (our validated model) and **not** `gemma4` (the target for tonight's fine-tune). Our Rust `mlx-lm` fork has the inverse: it supports `qwen3_5` and `qwen3` but not `qwen2` or any `gemma`.
+
+```
+Python  ∩  Rust  = { }
+```
+
+No model type loads in both stacks. Cross-validation requires either (a) porting TurboQuant to Python as a custom `KVCache` subclass (~2–3 hr), or (b) adding an architecture to the Rust fork (~4–6 hr Qwen2, ~8–16 hr Gemma-4). Neither is a "quick de-risk."
+
+### The finding
+
+Ran Python mlx-lm's **built-in** `QuantizedKVCache` (plain affine per-group quant — *not* TurboQuant's rotation path) on **Qwen2.5-Coder-7B** (`head_dim=128`, 7:1 GQA). Same 1238-token eval.
+
+| KV bits | PPL | Δppl abs | Verdict |
+|---|---|---|---|
+| fp16 baseline | 25.99 | — | — |
+| 8 | 25.94 | 0.05 | ✅ |
+| 4 | 339,210 | 339,184 | ❌ catastrophic |
+| 3 | 712,519 | 712,493 | ❌ |
+| 2 | 648,756 | 648,730 | ❌ |
+
+A PPL of 339,210 on a ~152k-vocab model is **worse than uniform random**. That's not a quality gradient — it's a cliff. Stock 4-bit affine quant isn't losing information, it's actively poisoning state.
+
+<Aside type="note" title="This argues FOR TurboQuant, not against it">
+  Hadamard rotation's entire purpose is to flatten non-Gaussian coord distributions before quantization — precisely where stock affine quant falls off a cliff. The Qwen2.5-Coder result is the exact failure mode TurboQuant was designed to prevent. We happened to demonstrate the problem on an architecture our Rust stack can't (yet) run the fix on.
+</Aside>
+
+### Forward plan
+
+- **Slice 1d** — Port TurboQuant to Python `mlx-lm` as a custom `KVCache`. Dedicated ~3-hour session. Validates across qwen2 + qwen3 + gemma3. Should precede Slice G.
+- **Slice G** — Gemma-4 Rust loader. Gated on upstream Python landing `gemma4` support AND Slice 1d passing. Not before.
+- **Slice Q2** — Qwen2 Rust loader. Unlocks Qwen2.5-Coder in sanctum-mlx production. Adjacent practice for Slice G.
+
+Details in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/ANALYSIS.md) and the raw JSON at [`bench/qwen25coder_kvq_validation.json`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/qwen25coder_kvq_validation.json).
+
 ## The knowledge we now carry forward
 
 Two things are load-bearing going into Slice 2+:
