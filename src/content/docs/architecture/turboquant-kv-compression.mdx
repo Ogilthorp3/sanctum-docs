@@ -205,6 +205,96 @@ Until then, turboquant is **opt-in**. Operators who want the memory savings know
 - **DuoAttention** — [arXiv 2410.10819](https://arxiv.org/abs/2410.10819) · retrieval vs streaming heads — next slice
 - **EAGLE-3** — [arXiv 2503.01840](https://arxiv.org/abs/2503.01840) · on-device speculative decoding — later slice
 
+## First real-world run — the protocol paid for itself on day one
+
+The first end-to-end run on Qwen3.5-27B-4bit with scaffold defaults (3-bit keys + QJL, 4-bit values) produced:
+
+```
+ppl (fp16)       = 9.3055
+ppl (turboquant) = 28.6451        Δppl = +19.34 (+208%)
+```
+
+Catastrophic. The instinct would have been to turn knobs — "try 4-bit, try 5-bit, maybe disable QJL." The protocol said no: **ablate first**.
+
+The ablation revealed that **all four bit configurations gave the same +20 PPL collapse** — 3-bit+QJL and 8-bit/8-bit with QJL off both +20. That's physically impossible if the quant math were the issue. The bug had to be upstream.
+
+We added `BypassMode::{IdentityPassthrough, BridgeOnly}` — short-circuits that skip the quantization pipeline. Result:
+
+| Run | Mode | Δppl |
+|---|---|---|
+| A0 | IdentityPassthrough (raw concat) | **0.0000** ✅ |
+| A0.5 | BridgeOnly (f32 round-trip, no quant) | **+20.62** ❌ |
+
+**Bisected in two runs.** The f32 Array↔CPU bridge was the culprit, not quantization. Root cause: MLX Arrays from `transpose_axes([0, 2, 1, 3])` are strided views, and `as_slice::<T>()` reads the raw buffer without respecting logical layout. Without forcing materialization (via `flatten()`), a logical `[B, H, L, D]` view was yielding pre-transpose `[B, L, H, D]` bytes. Heads and tokens were silently permuted before any quantization ran.
+
+Fix: three lines in [`turboquant/cache.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/cache.rs) — `flatten` before `as_slice`.
+
+<Aside type="tip" title="The protocol earned its keep">
+  Without the ablation-first rule, we'd have spent the afternoon chasing bit-budget symptoms. Every config would have failed; we'd have concluded "TurboQuant doesn't work on MLX." Instead: two diagnostic runs, three-line fix, problem gone. Principle 1 (ablate before sweep) is not bureaucracy — it's the fastest path to the real bug.
+</Aside>
+
+## Post-fix sweep — the actual Pareto frontier
+
+Full staircase on the same 27B model, 54-token eval, protocol compliant (one knob at a time, pre-fix rows archived as invalid):
+
+### Ablations — all stages clean
+
+| Run | Config | Δppl |
+|---|---|---|
+| A1 | 8-bit / 8-bit, no QJL | 0.023 |
+| A4 | 8-bit / 8-bit, QJL on | 0.014 |
+| A5 | 8-bit keys / 4-bit values | 0.024 |
+| A6 | 3-bit + QJL / 8-bit values | 0.137 |
+
+### Key-bit sweep (values = 8, no QJL)
+
+```
+3-bit  Δ=0.254      4-bit  Δ=0.069      5-bit  Δ=0.090
+6-bit  Δ=0.031      8-bit  Δ=0.023
+```
+
+Keys quantize gracefully. All pass.
+
+### Value-bit sweep (keys = 4, no QJL)
+
+```
+2-bit  Δ=1.22   ❌ breaks       4-bit  Δ=0.12   ✅
+6-bit  Δ=0.05                   8-bit  Δ=0.07
+```
+
+**Hard floor: 4-bit values.** The value pathway (group-affine, no rotation) is less tolerant than keys.
+
+### QJL is regime-dependent
+
+| `key_bits` | `values` | QJL off | QJL on | |
+|---|---|---|---|---|
+| 4 | 6 | 0.050 | 0.184 | **QJL hurts** |
+| 3 | 8 | 0.254 | 0.137 | **QJL helps** |
+
+QJL costs one bit from the codebook. At 4-bit keys that trade is net-negative; at 3-bit keys the sign-correction wins. **Rule: enable QJL only when `key_bits ≤ 3`.**
+
+### Group size is quality-neutral
+
+At `(k=4, v=6)` the group sizes 32, 64, 128 all land within 0.04 absolute — noise. Use **128** for minimum metadata overhead.
+
+## The two defensible winners
+
+| Config | Δppl | Rel | Est. Compression | Risk |
+|---|---|---|---|---|
+| **Safe**: `k=4, v=4, g=128, QJL=off` | 0.123 | 1.32% | ~3.2× | solid pass |
+| **Bold**: `k=3, v=4, g=128, QJL=on` | 0.338 | 3.63% | ~4.0× | 0.04 over abs budget — noise-level margin |
+
+On a 54-token eval we cannot responsibly discriminate between these at the 0.3-boundary. Protocol Principle 5 applies: **do not flip a default without a confirmed winner**. The `--turboquant` flag remains opt-in; wider eval (wikitext-2, ≥1024 tokens) is the gate for default change.
+
+## The knowledge we now carry forward
+
+Two things are load-bearing going into Slice 2+:
+
+1. **Any MLX Array read via `as_slice` after a transpose must flatten first.** Documented in `cache.rs`; future cache backends must follow suit or justify skipping.
+2. **The value pathway is the quality floor, not the key pathway.** Any compression improvement plan should prioritize better value quantization (rotation? learned group scales?) over squeezing key bits further.
+
+Full run log: [`bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/turboquant_sweep.jsonl). Decisions recorded in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/ANALYSIS.md).
+
 ## Cross-references
 
 - [sanctum-mlx architecture](/architecture/sanctum-mlx/) — the server this lives inside
