@@ -137,7 +137,7 @@ Metal command buffer errors on Apple Silicon are non-deterministic. They correla
 
 A crash that previously cost 120 seconds of dead polling and a cryptic timeout now costs under 5 seconds, produces a clear error log, and self-heals on the next attempt. The e2e suite that previously couldn't catch it now actively reproduces it.
 
-Principle 10 strikes again: 30 passing tests didn't catch this because they tested the world where Metal works. The world where Metal doesn't work is the one that pages you at midnight.
+Principle 9 strikes again: 30 passing tests didn't catch this because they tested the world where Metal works. The world where Metal doesn't work is the one that pages you at midnight.
 
 ## The Phantom Heal Loop
 
@@ -168,7 +168,7 @@ But their manifests declared `type: process` liveness checks pointing at the wra
 **Cooldowns** increased from 60s to 3600s for all three services. If a scheduled task genuinely fails, retrying it every minute is not useful — once per hour is more than sufficient.
 
 <Aside type="caution">
-The root cause was not a bug in the watchdog. The watchdog correctly detected a missing process and correctly attempted remediation. The bug was in the *contract* — the manifest promised a persistent process, and the service delivered a one-shot script. When the contract is wrong, perfect execution of the contract makes things worse. This is Principle 9 in action: honest health means the manifest must describe what the service actually *is*, not what the template assumed it would be.
+The root cause was not a bug in the watchdog. The watchdog correctly detected a missing process and correctly attempted remediation. The bug was in the *contract* — the manifest promised a persistent process, and the service delivered a one-shot script. When the contract is wrong, perfect execution of the contract makes things worse. This is Principle 8 in action: honest health means the manifest must describe what the service actually *is*, not what the template assumed it would be.
 </Aside>
 
 After the fix, the Living Force reported `overall: healthy` with zero root causes. The 28 phantom heals per night dropped to zero.
@@ -250,32 +250,26 @@ Ten rules that emerged from the wreckage. None of them were obvious before March
   A service's manifest lives next to its code. If the truth about a service requires consulting three files in two repositories, the truth is already lost.
 </Aside>
 
-<Aside type="tip" title="6. Dependency-Aware Healing">
-  Never restart a service whose upstream dependency is down. You're not healing — you're generating noise.
+<Aside type="tip" title="6. Restraint in Remediation">
+  Two restraints, one principle. **Never restart a service whose upstream dependency is down** — you're not healing, you're generating noise. Bring the upstream back first. **And never hammer a service in a crash loop** — three failures in five minutes means something is structurally wrong, and the fourth attempt won't fix it. Quarantine, escalate, page a human. Neo4j taught us this at 3 AM. We were not grateful at the time.
 </Aside>
 
-<Aside type="tip" title="7. Quarantine Over Retry Storms">
-  A service in a crash loop gets isolated, not hammered. Three failures in five minutes means something is structurally wrong, and the fourth attempt won't fix it. Neo4j taught us this at 3 AM. We were not grateful at the time.
-</Aside>
-
-<Aside type="tip" title="8. Night Is for Building">
+<Aside type="tip" title="7. Night Is for Building">
   Autonomous deployments happen between midnight and six. The household is asleep. The blast radius is contained. The agents work the night shift so the humans don't have to.
 </Aside>
 
-<Aside type="tip" title="9. Honest Health">
-  The system that lies about its health is more dangerous than the system that fails. A green dashboard during an outage isn't reassurance — it's gaslighting. By a computer. That you built. Congratulations.
+<Aside type="tip" title="8. Honest Health, Honest Commands">
+  A system that lies about its health is more dangerous than one that fails. A green dashboard during an outage isn't reassurance — it's gaslighting. By a computer. That you built. Congratulations.
+
+  The same rule lives at the write side. A command that returns "success" is a claim, not a fact. Every write to an external control plane (Firewalla, launchd, a router, a thermostat) must be followed by a read of the resulting state, and the two must be compared. `if result:` is not verification. `assert new_state == intended_state` is. When dashboards or commands disagree with reality, log DRIFT — loudly, with the observed value — and retry once before escalating. The April 18 Apple TV incident happened because the code trusted a bridge that literally said `success: false` on HTTP 200 while five devices kept streaming. Dashboards can't lie. Commands can't lie either.
 </Aside>
 
-<Aside type="tip" title="10. Test the New Use Case Before Deploying">
+<Aside type="tip" title="9. Test the New Use Case Before Deploying">
   52 passing tests didn't catch 2 bugs because they tested the old use case, not the new one. When a system's scope expands, the test suite must expand first. We learned this when Claude Code hit the proxy and everything exploded instantly. The tests were green. The system was on fire. The tests were wrong.
 </Aside>
 
-<Aside type="tip" title="11. Biological Context Informs Collaboration">
+<Aside type="tip" title="10. Biological Context Informs Collaboration">
   An agent that understands the owner's genetic cognitive profile can provide better support. If the owner has high novelty-seeking markers, the agent should prioritize variety and rapid progress. If phonological processing differences are present, the agent should prioritize visual and structured output over dense text.
-</Aside>
-
-<Aside type="tip" title="12. Closed-Loop Enforcement — Never Trust the Command, Verify the State">
-  A command that returns "success" is a claim, not a fact. Every write to an external control plane (Firewalla, launchd, a router, a thermostat) must be followed by a read of the resulting state, and the two must be compared. `if result:` is not verification. `assert new_state == intended_state` is. When they disagree, log DRIFT — loudly and with the observed value — and retry once before escalating. The April 18 Apple TV incident happened because the code trusted a bridge response that literally said `success: false` on HTTP 200. Five devices kept streaming while the log insisted they were blocked. The system was lying about its own work. Principle 9 says dashboards can't lie; this is its operational twin — commands can't lie either.
 </Aside>
 
 ## Where to Go from Here
