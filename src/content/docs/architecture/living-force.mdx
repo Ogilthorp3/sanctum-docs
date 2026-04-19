@@ -868,3 +868,28 @@ Any two of these passing is not enough if the third fails. Specifically, a faili
 Production restored on `com.sanctum.mlx` (Mini), binary rebuilt + ad-hoc-hardened-signed (Dev ID re-sign pending operator keychain unlock). All three plain HTTP + mTLS listeners back up on `:1337` and `:1338`. Parity-smoke 10/10, guardian green, canary green, drift green. `com.sanctum.server-mlx` (Python fallback) bootout'd as intended by the transition-permanent plan; plist retained on disk, guardian's `activate_fallback()` still capable of bootstrapping it on demand.
 
 Roadmap updated with a new item (binary-file-integrity check as a first-class signal). The living force learns from 16 hours of sleeping: if the probe never touches the work, it never sees the work fail.
+
+## Living Force Entry — 2026-04-20 (rule 1 becomes code)
+
+Yesterday's entry ended with three rules and a roadmap pointer. Today the top one got promoted from doctrine to a running LaunchAgent.
+
+`com.sanctum.council-integrity` fires every 5 minutes on the Mini. Four checks, any one fails the whole thing and alerts Force Flow at error severity on its own channel (not buried in the composite drift report):
+
+1. **Binary exists + executable.** `stat` on `target/release/sanctum-mlx`. The thing that was gone for 16 hours.
+2. **Signature verifies.** `codesign --verify --strict`. Same check Gatekeeper uses on first-run quarantine. Catches revoked cert, modified bytes, truncation.
+3. **Metallib colocated.** Sibling file next to the binary. Without it, Metal model load panics and the new sign-off is dead before it serves a byte.
+4. **Running process inode == on-disk binary inode.** If they differ, the running process is already stale; the next `kickstart -k` flips behaviour. This is the "I rebuilt but haven't restarted yet" case that looked fine to the old monitoring stack.
+
+Smoke-tested on the MBP dev environment first: it correctly flagged a missing metallib and a stale process inode (both legitimate states on a dev machine that had just been resigned). On the Mini with the production binary it returned clean. The probe is live at a 5-min cadence, independent from guardian's 60-s HTTP probe, canary's 10-min chat probe, and drift's hourly SHA compare.
+
+The architectural principle isn't just "add another check." It's **one probe per failure mode, each on its own escalation track.** The 16-hour blind spot happened because `binary_missing` was bundled into a composite `drift_detected` event alongside expected noise (guardian.sh drift because the Mini version had been upgraded ahead of the repo, repo_dirty because the working tree had turboquant work in flight). Bundled alerts get filtered as noise. Dedicated channels don't.
+
+### Rule, now with code behind it
+
+**An alert you bundle with expected noise is an alert you've already silenced.** Every serious failure mode gets its own probe with its own cooldown and its own channel. One probe checking four things and emitting one alert is strictly worse than four probes each emitting their own specific alert.
+
+### Post-Entry State
+
+Mini is Apple-notarized as of this morning (new CD hash submission `00000000-0000-0000-0000-000000000001`, status Accepted). Council-integrity probe live at a 5-min cadence on Mini. Guardian + canary + drift + parity-smoke + integrity + two off-box watchers = seven independent channels now, each with its own cooldown and its own thing to say. Commit `ec5867b`.
+
+Roadmap item #10 closed.
