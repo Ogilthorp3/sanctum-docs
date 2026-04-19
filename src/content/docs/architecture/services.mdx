@@ -46,7 +46,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 
 ```yaml
 services:
-  gateway:
+  openclaw_gateway:
     enabled: true
     port: 1977
   home_assistant:
@@ -71,6 +71,7 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 | XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.sanctum.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
 | Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
 | Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
+| Jina Reranker | `42070` | The Pair Port | `com.sanctum.reranker` | Jina v2 reranking server. Companion to Memory Vault on 42069 — the two travel together by design. Improves RAG precision for long-context memory queries. |
 
 ### Model Routing — 3-Tier Architecture
 
@@ -78,7 +79,7 @@ Agents use a **3-tier model strategy** ranked by the Carmack Olympics benchmark 
 
 | Tier | Model | Port | Agents | Fallback |
 |------|-------|------|--------|----------|
-| `cloud` | Claude Opus 4.6 (Anthropic) | :4040 proxy | Windu, Mothma, Jocasta | Coder-14B → Council MLX → error |
+| `cloud` | Claude Opus 4.7 (Anthropic) | :4040 proxy | Windu, Mothma, Jocasta | Coder-14B → Council MLX → error |
 | `council-ops` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | Yoda, QuiGon, Ahsoka | Council MLX → error |
 | `council-secure` | Gemma4+LoRA (sanctum-mlx) | :1337 | Cilghal, Mundi | error |
 | `coder` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | all coding tasks | Council MLX → error |
@@ -112,7 +113,7 @@ services:
   voice_agent:
     enabled: true
     port: 1138
-  tts:
+  xtts_server:
     enabled: true
     port: 8008
   proxy:
@@ -128,7 +129,7 @@ There are nine of them. Two are SSH tunnels. Two are mDNS broadcasters. One talk
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| SanctumBridge | `1455` | Gutenberg — the first bridge between knowledge and the people | — | Read-only HTTP proxy to FDA-protected SQLite databases (iMessage, WhatsApp, Contacts, Calendar). Jocasta-mcp queries through it so the MCP server itself doesn't need Full Disk Access. |
+| SanctumBridge | `4078` | The FDA Neighbor | `com.sanctum.bridge` | Read-only HTTP proxy to FDA-protected SQLite databases (iMessage, WhatsApp, Contacts, Calendar). Jocasta-mcp queries through it so the MCP server itself doesn't need Full Disk Access. |
 | Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
 | Sonos Bridge | `1969` | — | `com.openclaw.sonos-bridge` | Native Mac SoCo REST API for 10 Sonos speakers. Replaces HA's built-in Sonos integration. Handles TTS via XTTS, volume control, grouping, and announcements. KeepAlive enabled. |
 | Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
@@ -174,7 +175,7 @@ services:
 
 The immune system. The janitors. The 3 AM shift workers nobody thanks until something rots. These services watch the other services, rotate secrets before they expire, file documents nobody asked them to file, and occasionally reorganize your music library while you sleep. The system watches itself with more dedication than most humans watch their own cholesterol.
 
-Seven background agents, zero ports for most of them, and one that requires you to physically plug in a hard drive like it's 2008. We contain multitudes.
+Eight background agents and three supporting services, zero ports for most of them, and one that requires you to physically plug in a hard drive like it's 2008. We contain multitudes.
 
 | Service | Port | LaunchAgent | Description |
 |---------|------|-------------|-------------|
@@ -187,6 +188,9 @@ Seven background agents, zero ports for most of them, and one that requires you 
 | Kiwix | 8888 | `com.sanctum.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
 | Outline | 3100 | Docker container | Self-hosted wiki and documentation service. Provides a collaborative knowledge base for household documentation. |
 | Jocasta MCP | CLI | CLI and Stdio RPC | [The unified offline data proxy](/architecture/jocasta-mcp/). Provides the Jedi Council safe, offline read-access to 16 disparate components: Apple Notes, Calendars, Contacts, Unified Logs, Maps, multiple messaging apps, and local file parsing. |
+| Force Flow | `4077` | `com.sanctum.force-flow` | Notification triage and curfew enforcement engine. Mothma's dispatch layer — decides what deserves attention and what gets filed under "haus is fine, stop asking." M\*A\*S\*H 4077th energy: triages the critical from the cosmetic with gallows humor and a functioning still. |
+| SanctumBridge | `4078` | `com.sanctum.bridge` | FDA-privileged HTTP proxy to iMessage, WhatsApp, Contacts, and Calendar SQLite databases. Jocasta-mcp routes reads through this so jocasta-mcp itself doesn't need Full Disk Access granted. |
+| LiveKit Server | `7880` | `com.sanctum.livekit-server` | Private voice server for Yoda. Bound to Tailscale IP (`100.0.0.25`) only — no LAN or WAN exposure. RTC TCP companion on 7881. |
 
 <Aside type="note">
   Kiwix requires an external T9 drive to be connected. If the drive is absent, the service will start, fail, wait 30 seconds, and try again. Forever. KeepAlive is patient. KeepAlive believes in you plugging that drive back in.
@@ -292,7 +296,7 @@ Every service follows the same lifecycle through the configuration system. Three
 
     ```bash
     # Manual health check
-    sanctum_enabled gateway && curl -sf http://localhost:1977/health
+    sanctum_enabled openclaw_gateway && curl -sf http://localhost:1977/health
     ```
   </TabItem>
 </Tabs>
@@ -300,6 +304,21 @@ Every service follows the same lifecycle through the configuration system. Three
 ## Port Summary
 
 Every port in Sanctum has a number, and most of those numbers mean something — a movie year, a calculator joke, a cry for help. We didn't set out to build a Deadpool-style naming convention into our network topology. It just happened, the way it always does: one engineer picks 1337 for the LLM server, another picks 42069 for the memory store, and suddenly you're maintaining a spreadsheet of cultural references alongside your firewall rules. We leaned in. If the infrastructure is going to be absurd, it should at least be _consistently_ absurd.
+
+### The Deadpool Protocol
+
+**Acceptable forms for a named port:**
+
+- **Palindromes** — 10101 reads the same backwards. The binary-21 joke is the bonus.
+- **Pop-culture references** — a release year (1977 = Star Wars), a number from a movie (2001 = HAL), a band album (5150 = Van Halen), a sitcom unit (4077 = M\*A\*S\*H).
+- **Numeric puns or math constants** — 31416 ≈ π × 10⁴. The knowledge graph circles back on itself. The number earns its keep.
+- **Paired/sequential wit** — 42069/42070: memory-vault and its reranker companion. The gag travels with the pair. One port, one joke, twice the coverage.
+- **Upside-down calculator** — 8008. You know what you did.
+- **The dry acknowledgment** — for defaults (8123) and sequential allocations (18080), the commentary acknowledges exactly what it is. The humor is in the honesty.
+
+**What is not acceptable:** forcing a cultural reference onto a number that is just doing its job. 3030 is 3030. It is not anything else. The commentary for 3030 says "the port offers no additional commentary." That _is_ the commentary.
+
+**The mandate for new ports:** Any PR introducing a new port must include the gag in the PR description AND add a `# port_lore: <one sentence>` comment to the `port:` field in `~/.sanctum/services/<name>.yaml`. The watchdog schema ignores this comment. The next engineer at 2 AM will not. See CONTRIBUTING.md for the full checklist.
 
 | Port | Service | Host | Codename | Commentary |
 |------|---------|------|----------|------------|
@@ -315,9 +334,10 @@ Every port in Sanctum has a number, and most of those numbers mean something —
 | 2001 | Anthropic Proxy | VM | HAL | A Space Odyssey. I'm sorry, Dave, I'm afraid I can't let you use the cloud models without a budget. |
 | 2187 | Living Force (Watchdog) | Mac | Detention Block | Princess Leia's cell number. Where we keep the watchdog that monitors all other prisoners. |
 | 3100 | Outline | Mac (Docker) | Page Turner | 3100 — the kind of number that exists because 3000 was taken and someone started incrementing with quiet desperation. |
-| 4007 | Network Control | VM | Hawkeye | Replaces the old 18092 tunnel. Licensed to ping and manage the local network fabric. |
+| 4007 | Network Control | VM | 007 — Licensed to Ping | Network fabric control. The DNS manager with a license to kill NXDOMAIN. Replaces the old 18092 tunnel. |
 | 4040 | Sanctum Proxy | Mac | Forty Cal | Sits at the intersection of every request that enters the haus. Named after the .40-caliber round — the proxy that guards the gate carries accordingly. |
 | 4077 | Force Flow | Mac | Hawkeye | M\*A\*S\*H 4077th — the field hospital that triaged casualties with gallows humor and a still. Force Flow triages notifications with approximately the same energy. |
+| 4078 | SanctumBridge | Mac | The FDA Neighbor | One door down from Force Flow. The port that reads your messages without reading your messages — FDA-privileged proxy so the MCP server doesn't have to be. |
 | 5150 | Signal Proxy | VM | Van Halen | Eddie's hottest album and California's code for an involuntary psychiatric hold. Running a messaging proxy on it feels appropriate either way. |
 | 8008 | XTTS Voice | Mac | Calculator | Flip it upside down. You know what you did. Now it synthesizes speech, which is somehow less juvenile. |
 | 8123 | Home Assistant | Mac (Docker) | Default | HA's factory port. Sometimes the most radical act is not changing the default. |
@@ -327,7 +347,9 @@ Every port in Sanctum has a number, and most of those numbers mean something —
 | 18085 | Orbi Bridge (API) | Mac | Orbital-A | The API counterpart to 18080. Same Orbi, different verb. REST in peace. |
 | 21063 | HomeKit Bridge | Mac (Docker) | Siri's Doorbell | Five digits of Apple-adjacent infrastructure. HomeKit wanted a port; it got the one nobody else was using. |
 | 31416 | Graphiti Server | VM | Pi | 3.1416 — The knowledge graph circles back on itself. Replaces the old 18093. |
+| 7880 | LiveKit Server | Mac | Tailscale-Only | LiveKit's canonical default. Bound to Tailscale IP only — what happens in the voice channel stays in the voice channel. 7881 is the RTC TCP companion. |
 | 42069 | Memory Vault | Mac | Nice. | The internet's favorite number. We put long-term memory on it because some decisions are permanent. |
+| 42070 | Reranker | Mac | Nice+1. | The sequel nobody asked for but everyone needed. Jina v2 reranking on the port directly after memory-vault. The pair ships together. The gag travels with it. |
 
 <Aside type="tip" title="Why 1977 appears on two hosts">
 The Gateway runs on both the Mac ( origin) and the VM ( reverse-proxied). Same port, same service, two machines — because the Rebel Alliance also operated out of multiple bases and it worked out fine until Hoth.

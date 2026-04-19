@@ -249,7 +249,7 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 **VM Hypervisor:** QEMU headless (not UTM — UTM was removed). The LaunchAgent is still named `com.sanctum.utm-autostart` (identifier preserved for compatibility).
 
 **Model Routing (3-tier):**
-- **Cloud tier** (Opus 4.6 via cloud proxy :4040): Windu, Mothma, Jocasta
+- **Cloud tier** (Opus 4.7 via cloud proxy :4040): Windu, Mothma, Jocasta
 - **Local ops tier** (Coder-14B via LM Studio :1234): Yoda, Qui-Gon, Ahsoka, coding tasks
 - **Local secure tier** (Gemma4+LoRA via mlx_lm :1337): Cilghal, Mundi (privacy: health/fund data stays local)
 
