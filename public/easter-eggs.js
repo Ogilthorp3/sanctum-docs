@@ -6,8 +6,10 @@
 //   1. Konami Code (↑ ↑ ↓ ↓ ← → ← → B A) — Matrix digital rain + a Zelda
 //      "It's dangerous to go alone" flash card.
 //   2. DevTools open — green console greeting with a hint.
-//   3. Type the word "neo" anywhere — short glitch on the nearest heading.
-//   4. /redpill/  — hidden page, Matrix-themed, not in the sidebar.
+//   3. Type "neo" or "zelda" anywhere — short glitch on the nearest heading.
+//   4. Type "kane" anywhere — full-viewport red vignette, "KANE LIVES."
+//      stamped across the centre for 2.4 seconds. Brotherhood of Nod.
+//   5. /redpill/  — hidden page, Matrix-themed, not in the sidebar.
 
 (function () {
   'use strict';
@@ -123,7 +125,7 @@
   const WORD_TRIGGERS = {
     neo:   () => glitchNearestHeading('#39ff14'),
     zelda: () => glitchNearestHeading('#ffd700'),
-    navi:  () => naviScream(),
+    kane:  () => kaneLives(),
   };
   // Expose buffer to the console so you can inspect state at any time:
   //   window.__sanctumBuffer   → last ~8 typed letters
@@ -146,35 +148,46 @@
   };
   document.addEventListener('keydown', onKey, { capture: true, passive: true });
 
-  function naviScream() {
-    const n = document.createElement('div');
-    n.textContent = 'Hey! Listen!';
-    Object.assign(n.style, {
-      position: 'fixed', bottom: '32px', right: '32px',
-      padding: '10px 14px',
-      background: 'linear-gradient(135deg, #fff7a0 0%, #ffd24b 100%)',
-      color: '#3a2a00',
-      fontFamily: 'ui-monospace, Menlo, monospace',
-      fontWeight: '700', fontSize: '14px', letterSpacing: '0.04em',
-      border: '2px solid #ffd24b',
-      borderRadius: '10px',
-      boxShadow: '0 0 18px rgba(255,210,75,0.9), 0 0 36px rgba(255,210,75,0.5)',
-      zIndex: '2147483647', pointerEvents: 'none',
-      opacity: '0', transition: 'opacity 200ms',
-      transform: 'translateY(10px)',
+  function kaneLives() {
+    // Full-viewport red vignette + "KANE LIVES." stamped across the centre.
+    // Brotherhood of Nod energy: stark, calm, not going anywhere until it's
+    // ready to leave.
+    const overlay = document.createElement('div');
+    Object.assign(overlay.style, {
+      position: 'fixed', inset: '0',
+      background:
+        'radial-gradient(ellipse at center, rgba(140,0,0,0.42) 0%, rgba(20,0,0,0.92) 78%)',
+      zIndex: '2147483646', pointerEvents: 'none',
+      opacity: '0', transition: 'opacity 360ms ease',
     });
-    document.body.appendChild(n);
-    requestAnimationFrame(() => { n.style.opacity = '1'; n.style.transform = 'translateY(0)'; });
-    let i = 0;
-    const nag = setInterval(() => {
-      n.style.transform = (i % 2 ? 'rotate(2deg)' : 'rotate(-2deg)');
-      i++;
-    }, 120);
+    const text = document.createElement('div');
+    text.textContent = 'KANE LIVES.';
+    Object.assign(text.style, {
+      position: 'fixed', top: '50%', left: '50%',
+      transform: 'translate(-50%, -50%) scale(0.96)',
+      color: '#f8d4d0',
+      fontFamily: 'Impact, "Arial Black", system-ui, sans-serif',
+      fontSize: 'clamp(44px, 8.5vw, 104px)',
+      letterSpacing: '0.16em',
+      fontWeight: '900',
+      whiteSpace: 'nowrap',
+      textShadow:
+        '0 0 14px #ff2e2e, 0 0 36px #8b0000, 0 0 80px rgba(139,0,0,0.7), 0 2px 2px rgba(0,0,0,0.8)',
+      zIndex: '2147483647', pointerEvents: 'none',
+      opacity: '0', transition: 'opacity 520ms ease, transform 520ms ease',
+    });
+    document.body.appendChild(overlay);
+    document.body.appendChild(text);
+    requestAnimationFrame(() => {
+      overlay.style.opacity = '1';
+      text.style.opacity = '1';
+      text.style.transform = 'translate(-50%, -50%) scale(1)';
+    });
     setTimeout(() => {
-      clearInterval(nag);
-      n.style.opacity = '0';
-      setTimeout(() => n.remove(), 300);
-    }, 2600);
+      overlay.style.opacity = '0';
+      text.style.opacity = '0';
+      setTimeout(() => { overlay.remove(); text.remove(); }, 520);
+    }, 2400);
   }
 
   function glitchNearestHeading(color) {
