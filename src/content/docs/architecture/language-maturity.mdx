@@ -1,0 +1,113 @@
+---
+title: Language Maturity
+description: Python while the shape still moves, Rust once it stops. A doctrine for when services graduate, and the tool that tells us when.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Language Maturity — an evolutionary specimen plate of a service as it transitions from organic Python sapling to fully-armored ferric pillar](./images/language-maturity-evolution.png)
+
+# Language Maturity
+
+**The rule:** organic stuff is Python. Once it hardens, it rusts.
+
+Every service in Sanctum starts its life as a Python script because Python is what you write while you're still discovering what the service *is*. The curfew engine didn't know it needed credits, or homework mode, or guest approvals, or a weekly digest, until the first time somebody's kid found a loophole. Each of those features was a hot-fix-turned-design-decision, and doing that iteration in Rust — where every schema change costs an hour of borrow-checker yoga — would have meant shipping less, slower, and with fewer features your family actually needed.
+
+But once a service has stopped discovering what it *is*, the game changes. Now the cost function flips: the rewards of Python (fast iteration) are irrelevant because nothing is iterating, and the costs of Python (no compile-time guarantees, `requirements.txt` drift, 400 MB of `.venv`, process that silently OOMs at 3 AM) are paid every single day. That's the moment to port it to Rust, where the single-binary deploy, the compile-time catches, and the launchd-friendly lifecycle pay off forever afterward.
+
+This page is the doctrine for that transition, plus the tool that tells us which service is where.
+
+## The Lifecycle
+
+```
+   ┌─── organic ──────────────► hardening ──────────────► ready ─────────┐
+   │   Python                  Python                    Port scheduled  │
+   │   features still          feature velocity          velocity near   │
+   │   evolving weekly         slowing                   zero for months │
+   │                                                                     │
+   └─────────────────────────────────────────────────────────────────────┘
+                                                                         ▼
+                                                                    ┌────────────┐
+                                                                    │ graduated  │
+                                                                    │ sanctum-rs │
+                                                                    └────────────┘
+```
+
+Services move left-to-right over time, usually slowly. A service can regress (a dormant service getting a new feature ticket moves from `hardening` back to `organic`), and that's fine — the point of the doctrine is to *not* rewrite in Rust anything that's still in motion.
+
+## Stage Definitions
+
+Each stage has a precise, testable definition. No vibes.
+
+| Stage       | Criterion                                                              | Verdict |
+|-------------|------------------------------------------------------------------------|---------|
+| `organic`   | ≥ 5 commits touching the main source file in the last 30 days          | Keep iterating in Python |
+| `hardening` | 1–4 commits in the last 30 days, or activity in the last 90 days       | Watch — shape still settling |
+| `ready`     | 0 commits in the last 30 days **and** ≤ 2 commits in the last 90 days  | Port to `sanctum-rs/services/<name>/` |
+| `graduated` | Already in `sanctum-rs` (terminal)                                     | (precedent) |
+| `skip`      | Criticality below `medium`                                              | Stays Python forever — rewrite cost not justified |
+
+The thresholds live in [`tools/rust_readiness.yaml`](#tooling) and can be tuned per policy. They're tuned to be conservative: "hardening" is the default verdict for anything that's not firmly in either corner, which is the correct bias — **do not rewrite what is still changing.**
+
+## Graduation Criteria
+
+Before a service actually gets ported, it must clear all four:
+
+1. **Velocity floor.** The `ready` signal from `rust_readiness` must have held for at least 60 days. One quiet month can be a coincidence; two is a trend.
+2. **Criticality justifies the rewrite.** Low-criticality scripts (a one-off backup utility, a fun demo) stay in Python. Rust buys reliability, and reliability has a price; spend it where it matters.
+3. **Interface surface is documented.** The HTTP routes, CLI flags, env vars, and on-disk state format must be written down (usually in this architecture section) *before* anyone opens a Rust editor. If you can't describe it, you can't port it.
+4. **Behavioural parity tests exist.** At minimum, a black-box HTTP/CLI test suite the Python version passes today — which the Rust version will also have to pass before it takes over the launchd slot.
+
+## Precedent — `sanctum-watchdog`
+
+The first service to make the trip was [sanctum-watchdog](/guides/watchdog/). It spent roughly eight months in Python as the health-monitor script, growing incrementally (latency probes, then bandwidth monitor, then stack-check composition) until the feature set stopped moving for a full quarter. At that point the port took about a week of focused work, replaced the Python launchd unit with a single Rust binary, and has since absorbed the bandwidth monitor and normalised its self-health reporting without anyone touching its test suite.
+
+The crucial observation: the Rust rewrite was *boring*. No surprises, no redesign, no "while we're at it" features. That's what you want. If the Rust port is interesting, the service wasn't ready.
+
+<Aside type="caution">
+**The "while we're at it" trap.** The single biggest failure mode of a Rust port is using the rewrite as cover for a redesign. You end up with a Rust service that isn't behaviour-equivalent to the Python one, and now you own two things: a production Python service you wanted to retire and a new Rust service that doesn't do the same job. Ports must be boring. Redesigns are their own project.
+</Aside>
+
+## The Current Registry
+
+The source of truth is [`tools/rust_readiness.yaml`](https://github.com/Ogilthorp3/Claude_Code/blob/main/tools/rust_readiness.yaml). As of this writing:
+
+| Service             | Language | Criticality | Stage       |
+|---------------------|----------|-------------|-------------|
+| `force-flow`        | Python   | critical    | hardening   |
+| `screen-time`       | Python   | critical    | organic     |
+| `memory-vault-mcp`  | Python   | medium      | hardening   |
+| `sanctum-watchdog`  | Rust     | critical    | graduated   |
+| `sanctum-proxy`     | Rust     | critical    | graduated   |
+| `sanctum-firewalla` | Rust     | high        | graduated   |
+| `sanctum-xtts`      | Rust     | medium      | graduated   |
+
+To get the live view, run the tool:
+
+```bash
+python3 tools/rust_readiness.py          # pretty table
+python3 tools/rust_readiness.py --json   # for the dashboard
+python3 tools/rust_readiness.py --strict # exit 1 if any service is "ready" (CI gate)
+```
+
+<Aside type="note">
+`screen-time` currently lands in `organic` because the autumn-2025 credit-and-homework-mode work is still landing. It will probably cross into `hardening` once the guest-approval flow stabilises. `force-flow` is already `hardening` — not far from a port candidate, but premature until the notification channel surface (Signal, iPhone, Sonos, dashboard, macOS) stops gaining members.
+</Aside>
+
+## Tooling
+
+`tools/rust_readiness.py` is a single-file Python script with no deps beyond PyYAML. It reads the registry, runs `git log` against each service's source path in its declared repo, computes `loc`, and derives a stage per the policy in the YAML. Output is an aligned table when connected to a TTY (with stage colours) and JSON otherwise, so dashboards can ingest it directly.
+
+The intention is for this to be:
+
+- **Cheap to run** — no network calls, only local git and file reads. Takes under a second.
+- **Cheap to trust** — the stage rule is three lines of code in `derive_stage()`; there's no ML, no heuristic stack, no per-service override magic beyond an explicit `stage_override: graduated` field for already-ported services.
+- **Cheap to wire up** — `--strict` returns exit 1 if any service is `ready`, which means a nightly cron can page someone when a service quietly finishes cooking.
+
+Future work: surface the table in the Holocron UI so the current state is visible at a glance, and emit a weekly "language maturity report" into Jocasta's Monday digest summarising which services moved stages this week.
+
+## Why This Doctrine Exists At All
+
+Because the most tempting way to lose a weekend is to rewrite a working service in a language you like more. This doctrine is the speed bump between "I have a weekend" and "I have a production outage." Every service that is still growing limbs is a service that isn't ready. Every service that has stopped growing limbs is a service that will pay you back, for years, if you make it boring and ferric.
+
+Python while the shape still moves. Rust once it stops. Watch the tool.
