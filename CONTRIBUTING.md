@@ -137,7 +137,7 @@ Everything outside the architecture sidebar (guides, operations, reference, agen
 #### Universal Rules
 
 - **Uniqueness:** **Never** reuse a hero image from another page.
-- **ASCII art is banned in final docs.** If you need a diagram, use an SVG (for technical flow diagrams) or a generated illustration (for conceptual diagrams). ASCII art in code blocks is lazy and ugly. The one exception: inline terminal output examples where ASCII is what the user actually sees.
+- **ASCII art is allowed when — and only when — it renders beautifully on every device and every resolution.** Mobile to 4K, small font to large zoom, light theme to dark. In practice that means keeping diagrams under ~50 characters wide (so a phone viewport doesn't force horizontal scroll), using only standard box-drawing glyphs (`├ ┤ ┬ ┴ ─ │ ┌ ┐ └ ┘ ▲ ▼ ◀ ▶`), and previewing on a narrow window before shipping. If your diagram needs more width, relies on non-monospace kerning, or reads awkwardly at any common font size, it has outgrown ASCII — reach for an SVG. The rule is aesthetic integrity, not medium purity. Terminal output samples (where ASCII is what the user actually sees) are always fine.
 
 ### Generation Tool
 
@@ -202,7 +202,7 @@ Before committing a new illustration, verify:
 - **No fully colorized illustrations outside architecture heroes.** The pencil sketch sections use accent halos only.
 - **No Rube/Composio for image generation.** Direct API via keychain only.
 - **No placeholder images.**
-- **No ASCII art diagrams in final docs.** Replace with SVGs or generated illustrations. If a diagram is complex enough to draw, it's complex enough to draw properly.
+- **No ASCII art that breaks on mobile.** ASCII is allowed — see the aesthetic-integrity rule above — but only when it renders beautifully on every device. If it requires horizontal scroll on a phone, it needs to be narrower or it needs to be an SVG.
 - **No stock photos, clip art, or generic AI imagery.** Every image must be specific to Sanctum.
 
 ### Architecture Section — Specific Visual Rules
@@ -224,7 +224,7 @@ Every service needs a port. Most infrastructure assigns them sequentially and mo
 
 **The rule:** Name the ports you chose. Leave the ports that chose you.
 
-Ports you deliberately picked — 1337, 1977, 1984, 4040, 4077, 8008, 42069 — have cultural references. They get codenames and one-liner commentary in the Port Summary table. These are creative decisions that deserve documentation.
+Ports you deliberately picked — 1337, 1977, 1984, 4040, 4077, 4078, 8008, 10101, 31416, 42069, 42070 — have cultural references or deliberate wit. They get codenames and one-liner commentary in the Port Summary table. These are creative decisions that deserve documentation.
 
 Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085) didn't earn a story. They get dry observations about their own existence. The humor in a default port is acknowledging that it's a default. Don't force a cultural reference onto a number that's just doing its job.
 
@@ -235,7 +235,8 @@ Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085)
 3. **Cultural reference preferred.** A year, a movie, a song, a math joke — something a human can latch onto. The port number is infrastructure _and_ documentation. When someone sees 4077 in a log, they should think "that's Force Flow" without checking a spreadsheet.
 4. **No explanation required.** If the reference needs a paragraph to land, pick a different one. 1977 (Star Wars) works. 1895 (year Marconi sent the first wireless signal) does not. The test: would someone in the room get it without Googling?
 5. **Update the Port Summary table.** Every new port gets a row with a Codename and Commentary. The commentary is one sentence — technically accurate, culturally aware, and exactly as amused as the situation warrants.
-6. **Update `expected-ports.json`.** The council-router test suite validates that expected ports are listening. A new service that isn't in the list will trigger a Windu security alert.
+6. **Add a `# port_lore:` comment to the service YAML.** Place it directly under the `port:` field in `~/.sanctum/services/<name>.yaml`. This is the source-of-record for the gag. Format: `# port_lore: <one sentence>`. It is an optional comment — the watchdog schema ignores it, but the next human at 2 AM will not.
+7. **Update `expected-ports.json`.** The council-router test suite validates that expected ports are listening. A new service that isn't in the list will trigger a Windu security alert.
 
 ## Typography
 
@@ -261,6 +262,12 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 **External Service Access:** Direct APIs only. No Rube/Composio. API keys stored in macOS Keychain. Image generation via Gemini API (keychain-stored key). Slack via webhook. Outlook via Microsoft 365 MCP.
 
 **Testing:** 178 tests across 11 components. Nothing ships without tests.
+
+**Service catalogue:** 38 services as of 2026-04-18. Watchdog reports `overall: healthy` at 38/38. Service YAMLs live in `~/.sanctum/services/`. The guardrail script `tools/catalogue-sync-check.sh` cross-references running TCP ports against the watchdog catalogue — run it after any `launchctl load` that isn't accompanied by a YAML commit.
+
+**OBLITERATUS:** Uses `venv/` (non-hidden), Python 3.12, port 7860. Never `.venv/` — Python 3.14 silently breaks editable installs in hidden directories.
+
+**Q2 renames (effective 2026-Q2):** `xtts` → `xtts_server`, `gateway` → `openclaw_gateway` throughout `instance.yaml` service keys, service YAML filenames, and test harnesses.
 
 ## What Not To Do
 
