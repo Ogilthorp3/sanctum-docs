@@ -123,6 +123,7 @@
   const WORD_TRIGGERS = {
     neo:   () => glitchNearestHeading('#39ff14'),
     zelda: () => glitchNearestHeading('#ffd700'),
+    navi:  () => naviScream(),
   };
   window.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -132,6 +133,37 @@
       if (buffer.endsWith(word)) { WORD_TRIGGERS[word](); buffer = ''; return; }
     }
   }, { passive: true });
+
+  function naviScream() {
+    const n = document.createElement('div');
+    n.textContent = 'Hey! Listen!';
+    Object.assign(n.style, {
+      position: 'fixed', bottom: '32px', right: '32px',
+      padding: '10px 14px',
+      background: 'linear-gradient(135deg, #fff7a0 0%, #ffd24b 100%)',
+      color: '#3a2a00',
+      fontFamily: 'ui-monospace, Menlo, monospace',
+      fontWeight: '700', fontSize: '14px', letterSpacing: '0.04em',
+      border: '2px solid #ffd24b',
+      borderRadius: '10px',
+      boxShadow: '0 0 18px rgba(255,210,75,0.9), 0 0 36px rgba(255,210,75,0.5)',
+      zIndex: '2147483647', pointerEvents: 'none',
+      opacity: '0', transition: 'opacity 200ms',
+      transform: 'translateY(10px)',
+    });
+    document.body.appendChild(n);
+    requestAnimationFrame(() => { n.style.opacity = '1'; n.style.transform = 'translateY(0)'; });
+    let i = 0;
+    const nag = setInterval(() => {
+      n.style.transform = (i % 2 ? 'rotate(2deg)' : 'rotate(-2deg)');
+      i++;
+    }, 120);
+    setTimeout(() => {
+      clearInterval(nag);
+      n.style.opacity = '0';
+      setTimeout(() => n.remove(), 300);
+    }, 2600);
+  }
 
   function glitchNearestHeading(color) {
     const h = document.querySelector('h1, h2, h3');
