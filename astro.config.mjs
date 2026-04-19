@@ -103,6 +103,7 @@ export default defineConfig({
 						{ label: 'Sanctum Olympics', slug: 'architecture/sanctum-olympics' },
 						{ label: 'Model Comparison', slug: 'architecture/model-comparison' },
 						{ label: 'Engineering Discipline', slug: 'architecture/engineering-discipline' },
+						{ label: 'Language Maturity', slug: 'architecture/language-maturity' },
 						{ label: 'Model Tournament', slug: 'architecture/model-tournament' },
 						{ label: 'Training Lessons', slug: 'architecture/training-lessons' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
