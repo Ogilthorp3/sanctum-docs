@@ -76,6 +76,13 @@ export default defineConfig({
 						content: '630',
 					},
 				},
+				{
+					tag: 'script',
+					attrs: {
+						src: '/easter-eggs.js',
+						defer: true,
+					},
+				},
 			],
 			sidebar: [
 				{
