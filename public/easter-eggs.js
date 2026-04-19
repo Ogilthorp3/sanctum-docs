@@ -125,14 +125,26 @@
     zelda: () => glitchNearestHeading('#ffd700'),
     navi:  () => naviScream(),
   };
-  document.addEventListener('keydown', (e) => {
+  // Expose buffer to the console so you can inspect state at any time:
+  //   window.__sanctumBuffer   → last ~8 typed letters
+  //   window.__sanctumFire('navi')  → manually fire a trigger for testing
+  Object.defineProperty(window, '__sanctumBuffer', { get: () => buffer });
+  window.__sanctumFire = (name) => (WORD_TRIGGERS[name] || (() => console.warn('no trigger:', name)))();
+
+  const onKey = (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key.length !== 1) { buffer = ''; return; }
     buffer = (buffer + e.key.toLowerCase()).slice(-8);
     for (const word in WORD_TRIGGERS) {
-      if (buffer.endsWith(word)) { WORD_TRIGGERS[word](); buffer = ''; return; }
+      if (buffer.endsWith(word)) {
+        console.log('%c🔔 egg fired:', 'color:#39ff14', word);
+        WORD_TRIGGERS[word]();
+        buffer = '';
+        return;
+      }
     }
-  }, { capture: true, passive: true });
+  };
+  document.addEventListener('keydown', onKey, { capture: true, passive: true });
 
   function naviScream() {
     const n = document.createElement('div');
