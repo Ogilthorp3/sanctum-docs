@@ -732,3 +732,91 @@ The documented mechanism (`tools/backup-sanctum.sh`) pulls a `~/.sanctum/` + Lau
 Watchdog: 38/38 healthy at close (health-center recovered via triage remediation during session). All service flows verified healthy or documented as known exceptions. All Apr 18 changes committed in logical groups. Catalogue fully in sync — no shadow services. Docs and code in alignment.
 
 **Apr 18 sanctum session complete — state of the system at close.**
+
+## Incident Log — 2026-04-19 (Sixth Entry — Late-Night Ops Triage)
+
+Emergency triage of four command-center red indicators (firewalla-bridge, outline-wiki, xtts-server, sonos-bridge) rolled into an SSD-almost-full rescue and a multi-agent coordination daemon build. Five durable learnings surfaced; each is a pattern we'll hit again.
+
+### 1. Orphan-port respawn loops
+
+**Symptom.** A launchd-managed service shows `state = spawn scheduled` with a non-zero `last exit code`, and `lsof -iTCP:<port> -sTCP:LISTEN` finds a process of HIGH elapsed time (hours or days) holding the port.
+
+**Cause.** A prior boot's instance survived and occupies the port; launchd tries to respawn a new instance every backoff interval, new instance `bind()` fails with `EADDRINUSE`, launchd records another failed exit, repeats forever. The service status in the dashboard is "down" even though the old PID is serving requests just fine.
+
+**Fix.** `kill <old_pid>`; launchd respawns clean within one backoff window. If the respawn itself then races with the port release, a single `launchctl kickstart -k gui/$UID/<label>` closes the gap.
+
+**Tonight's instances.** `sonos-bridge` (PID 1491, 27h old, port 1969) and `sanctum-proxy` (PID 1497, 27h, port 4040). Both were "down" in the UI and fully serving in reality.
+
+**Prevent.** No clean prevention other than ensuring our bootstrap scripts don't start services that launchd also owns — a gotcha documented in the fifth entry for the watchdog itself, same root cause.
+
+### 2. Ecosystem "fixes" that reconcile away from thematic ports are suspect
+
+**Pattern.** A prior session saw firewalla-bridge configured at `1984` in docs but bound to `18094` in the wrapper script (`FIREWALLA_BRIDGE_PORT=18094` — a sequential-allocation artifact after `18093` got claimed). That session "fixed" it by updating `~/.sanctum/services/firewalla-bridge.yaml` to 18094 to match reality. Tonight, 19 files under `.sanctum`, `.openclaw`, `sanctum-rs`, and `command-center` had drifted to 18094 tracking that "fix."
+
+**Why it's wrong.** 1984 was thematic and intentional — Orwell, Big Brother watches the network. The fix direction inverted intent: we aligned the ecosystem with the typo instead of removing the typo. The same pattern would apply to any port with a chosen meaning (1337 leet, 2187 Finn's stormtrooper designation, 1138 THX) — if you find yourself "reconciling" docs away from a thematic port to match sequential code, you're accepting a bug as spec.
+
+**Tonight's restoration.** Flipped the wrapper to 1984, updated service manifest, `instance.yaml`, screen-time canonical (`~/Documents/Claude_Code/screen-time-build/screen_time.py`) + deployed copy, force-flow deployed copy, with an Orwell comment on each. Bridge rebinds on :1984; VM (Windu) reaches via `10.10.10.1:1984`. Watchdog binary still references 18094 in `sanctum-rs/services/sanctum-watchdog/src/main.rs` — requires rebuild, queued.
+
+**Rule for future drifts.** Grep the canonical intent source (sanctum-docs) before treating a runtime value as authoritative. Fixes must move in the direction of intent.
+
+### 3. Health-check regex drift when a URL format changes underneath
+
+**Symptom.** Watchdog flags `signal-proxy` as `needs_intervention` with root cause `forceflow_port: cannot parse signal port from force_flow.py`. Every other signal sub-check (`signal_port`, `single_daemon`, `gateway_plugin`, `websocket_health`, `outbound_send`) reports healthy.
+
+**Cause.** `~/.sanctum/scripts/signal-health.sh` grep-extracts the signal port from `force_flow.py` with pattern `http://127.0.0.1:[0-9]+/v[0-9]+/`. `force_flow.py` historically used `/v2/send`; after migration to signal-cli's native REST daemon the path became `/api/v1/rpc` — the `/api/` prefix broke the grep.
+
+**Fix.** Widen the pattern to `http://127.0.0.1:[0-9]+/(api/)?v[0-9]+/`. Watchdog immediately cleared to `overall: healthy, root_causes: []`.
+
+**Rule.** A health check that extracts a value via regex is a permanent coupling to the current format of the checked file. When migrating URL schemes, payload shapes, or config layouts, grep-scan for health checks that pattern-match the old format and update them in the same commit. If the health check can instead be made structure-aware (parse the file as Python/JSON/YAML and read the attribute), do that; regex health checks silently drift.
+
+### 4. One unrotated container log can eat 49 GB
+
+**Symptom.** SSD genuinely near-full. Top consumers look normal at first pass. Investigation finds `~/.colima` at 54 GB; `colima ssh` shows `/mnt/lima-colima/docker/containers/<id>` with a 49 GB file named `<id>-json.log`. That one container is HomeAssistant.
+
+**Cause.** `docker run` without `--log-opt max-size=...` uses the `json-file` driver with unbounded rotation. Any long-running container that writes to stdout forever grows forever. HomeAssistant's warning spam (invalid-auth probes from localhost, plus supervisor chatter) is tens of MB per day — a chatty month reaches the 49 GB we found.
+
+**Fix (tonight).** Two layers:
+
+1. `/etc/docker/daemon.json` inside the colima VM, setting `log-driver: json-file, log-opts: {max-size: 100m, max-file: 3}` — applies to every new container going forward. `sudo systemctl reload docker` to pick up.
+2. Container-level recreation with explicit `--log-opt max-size=100m --log-opt max-file=3` — the daemon config doesn't retroactively apply to existing containers, so HA had to be stopped, removed, and `docker run` again with the flag. Verified post-recreate via `docker inspect homeassistant --format '&#123;&#123;json .HostConfig.LogConfig&#125;&#125;'`.
+
+**Rule.** Any `docker run` committed to a durable location (shell script, compose file, systemd unit) must have `--log-opt max-size=...` explicitly. A `daemon.json` default is a safety net, not the contract.
+
+### 5. Sparse-compacting a raw-format VM disk without shutting everything
+
+**Symptom.** `colima status` reports `macOS Virtualization.Framework`; the datadisk file at `~/.colima/_lima/_disks/colima/datadisk` is `file format: raw`, virtual 100 GB, disk usage 51.6 GB. `colima ssh -- sudo fstrim -av /mnt/lima-colima` reports `0 B trimmed` — VZ's disk model doesn't pass TRIM through to the raw file.
+
+**Fix (no data loss).**
+
+1. Inside VM: `dd if=/dev/zero of=/mnt/lima-colima/.zerofill bs=4M status=none || true; sync; rm /mnt/lima-colima/.zerofill; sync`. Fills free space with zeros until `ENOSPC`, syncs, deletes. Ext4 now has zero-written blocks in all the space it considers free; raw file on host contains mostly zeroes in those regions.
+2. `colima stop`
+3. `qemu-img convert -S 4k -O raw datadisk datadisk.compact` — reads input sequentially, writes output skipping all-zero 4K sectors. `-S 4k` is the sparsity threshold; with HA-style log data the natural granularity is filesystem blocks, and 4k matches.
+4. `mv` the new file into place, `colima start`, verify `docker ps` + `curl :8123`.
+
+**Tonight's delta.** Host-side datadisk 100848 MB → 3826 MB. ~97 GB freed on host, reflected 1:1 in df. Convert ran in 23 s on the Mac Mini; `colima stop`+`start` totalled ~90 s; HA was back on `:8123` HTTP 200 within 15 s of `colima start` returning.
+
+**Rule.** Raw disk images on APFS are sparse by filesystem, not by VM-guest semantics. Discard-from-guest only helps if the hypervisor forwards TRIM to the host file — VZ often doesn't. The zero-fill + `qemu-img convert` dance is the reliable mechanism; qcow2 has built-in support via `qemu-img convert -O qcow2 ...` with equivalent sparsity.
+
+### 6. df percentages are used/(used+avail), not used/total
+
+**Mis-statement tonight.** `df` reported `/dev/disk3s5 95%` with 800 GB used and 43 GB avail on a 926 GB "Size." I briefly claimed this meant 800/926 = 86%, which seemed to contradict df's 95%. It didn't — df's percentage formula is `used / (used + available)`, not `used / total`. 800 / (800 + 43) = 95%. The remaining 83 GB of the 926 GB "Size" is shared with sibling APFS volumes in the same container (VM, Preboot, Update) and not available to this volume without growing into them.
+
+**Rule.** For APFS volumes in a shared container, `Size` in `df` is the container capacity ceiling, not the per-volume allocation. Only `diskutil apfs list` gives the per-volume "Capacity Consumed" vs container capacity. A 95% from `df` isn't lying, it's answering a different question than the one we usually mean when we say "how full is this disk."
+
+### Tangentially: launchd `ProcessType` and Python daemons (confirmed again)
+
+The torch/obliteratus startup-stall pattern from the fifth entry applies to any Python daemon run under launchd without `ProcessType = Interactive`. Built `sanctum-presence` tonight on port 1949; first bootstrap hung in `_io_open_code` because default `ProcessType = Adaptive` demotes to background I/O priority and Python's import chain stalls on dyld. Adding `<key>ProcessType</key><string>Interactive</string>` to the plist resolved it.
+
+**Rule, now carved in repetition.** Every new Python or Node launchd plist gets `ProcessType = Interactive` unless the daemon is genuinely idle and batch-scheduled. Cheaper than waiting 60 seconds per restart to find out.
+
+### Post-Session State
+
+Disk reclaimed on host: **~82 GB** (800 GB used → 718 GB used). Breakdown: `cargo clean` 15.2 GB, `git gc --aggressive` on `.sanctum` (four 5.5 GB `tmp_pack_*` files from aborted Apr 1 git operations) 22.2 GB, HA log truncate + sparse-compact 48.6 GB, miscellaneous ~4 GB. Steam turned out to be a 2 GB red herring — the `common/` folder was already empty and the original `du -sh` read cumulatively with something else.
+
+`sanctum-presence` daemon live as `com.sanctum.presence` on `:1949` (thematic: the year *Nineteen Eighty-Four* was published — meta-Orwell watches the agents watching the network). `sync` CLI installed at `~/.sanctum/bin/sync`. Cross-host reach verified from MBP via Tailscale. Full lifecycle + contention + ordering tests green. Committed in `Claude_Code` repo (`684b332`).
+
+All four command-center red services resolved: two by process-level fixes (sonos-bridge, sanctum-proxy orphan kills), one by config reconciliation (firewalla 18094 → 1984, five files + restart), one by plist filename correction (xtts-server `xtts-server.py` → `tts_server.py`). Remaining visual reds in the UI (Outline Wiki, XTTS Server launchAgent) are probe-logic bugs in command-center (doesn't render `enabled: false` as grey; doesn't accept port-listening as a tiebreaker for agents whose wrapper exits after fork) — flagged for daylight, not service outages.
+
+Signal-proxy watchdog regex fix committed to `sanctum-config` (`702f9d8`). Firewalla restoration committed across `sanctum-config` (`aa00112`) and `Claude_Code` (`ca3cef7`). Docker HA log-rotation daemon config + container recreate not yet captured in a repo (the daemon.json lives inside the Lima VM; worth mirroring under `~/.sanctum/` with a provisioning script at some point).
+
+**Apr 19 late-night sanctum session complete — state of the system at close.**
