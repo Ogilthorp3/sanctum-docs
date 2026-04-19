@@ -893,3 +893,27 @@ The architectural principle isn't just "add another check." It's **one probe per
 Mini is Apple-notarized as of this morning (new CD hash submission `00000000-0000-0000-0000-000000000001`, status Accepted). Council-integrity probe live at a 5-min cadence on Mini. Guardian + canary + drift + parity-smoke + integrity + two off-box watchers = seven independent channels now, each with its own cooldown and its own thing to say. Commit `ec5867b`.
 
 Roadmap item #10 closed.
+
+## Living Force Entry — 2026-04-20 afternoon (four A+ gaps closed)
+
+Morning entry ended at "rule 1 is code" — the integrity probe. This entry closes four more from the roadmap in one afternoon push.
+
+**Streaming-path metrics.** The P7.1 Prometheus instrumentation only covered the non-streaming chat path. Streaming (SSE) ran through `tokio::spawn`'d futures that never called `record_inference`. Gap closed: `stream_started` Instant captured at spawn, `prompt_tokens_count` threaded from the initial tokenizer encode, `finish_reason` threaded from the sampling result, and `record_inference` called at the end of the streaming task. Histograms combine across both paths in Prometheus. Verified with one streaming probe: `sanctum_mlx_inference_completion_tokens_total 0→8` and `requests_total{stop_reason="stop"}=1`.
+
+**First client on mTLS.** council-canary now auto-detects the CA cert + its own client cert at `~/.sanctum/certs/clients/canary.{crt,key}` and switches to `https://127.0.0.1:1338` when they're in place. Log line now includes a `transport` field — `"mtls"` or `"plain-loopback"` — so future Prometheus can see migration progress per-probe. Pattern established for guardian, drift, parity-smoke, off-box, and eventually sanctum-server to copy. Removing the cert files reverts the probe to bearer-loopback with no code change either direction.
+
+**Integrity auto-failover.** The integrity probe from this morning alerted on binary-missing but didn't remediate. Added: on binary-missing or codesign-verify-failed (the two "next respawn WILL fail" classes), the probe now writes `FALLBACK_LOCK`, `launchctl bootout`s the failing Rust agent, `bootstrap`s Python `com.sanctum.server-mlx`, and notifies. Same recipe council-guardian uses; duplicated in integrity so it works even if guardian is hung. Metallib-missing and inode-mismatch alert only — those are recoverable by rebuild/kickstart without promoting to Python.
+
+Net effect: the 16-hour zombie-listener scenario now recovers to the Python backend within 5 min, while alerting, instead of going dark. The rule from yesterday — "the binary file is part of the service" — is now enforced by code that *does something about it*, not just code that reports it.
+
+**HA failover wiring.** `instance.yaml` on the Mini gained `fallback_urls: [http://100.0.0.55:8902/v1]` for the `council-secure` backend. Shadow on the MBP now enforces bearer auth matching the Mini's token, so sanctum-server's `api_key_env: COUNCIL_API_KEY` Just Works against it. Testing the failover live needs sanctum-server rebuilt first — the running one on the Mini is a 44-hour-old orphan with a deleted binary (exact same class as yesterday's incident, different service), now cleaned up. The config is in place for the next proper sanctum-server deploy.
+
+### Rule
+
+**Ship code that remediates, not just code that reports.** An alert is an IOU to a human; an auto-remediation is a service that stays up without one. Every probe that detects a class of failure should, when possible, also know the canonical recovery for that class and execute it — then alert about the recovery, which is a much calmer kind of notification than "we're broken."
+
+### Post-Entry State
+
+Five monitor channels on Mini all green (guardian, canary, drift, parity-smoke, integrity). Canary now on mTLS (`transport:"mtls"`, 501 ms probe latency — down from ~2 s bearer because loopback bypass still went through the HTTP path while mTLS stays at the TLS layer). Streaming metrics ticking. Integrity auto-recovery wired. Orphan sanctum-server cleaned up. Two roadmap items (#2 canary, #5 streaming metrics) newly shipped; #10 (integrity monitor) reinforced with auto-recovery.
+
+Commit `60b2154` on `feat/proxy-hardening`.
