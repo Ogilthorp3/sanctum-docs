@@ -43,7 +43,8 @@ Each stage has a precise, testable definition. No vibes.
 | `organic`   | ≥ 5 commits touching the main source file in the last 30 days          | Keep iterating in Python |
 | `hardening` | 1–4 commits in the last 30 days, or activity in the last 90 days       | Watch — shape still settling |
 | `ready`     | 0 commits in the last 30 days **and** ≤ 2 commits in the last 90 days  | Port to `sanctum-rs/services/<name>/` |
-| `graduated` | Already in `sanctum-rs` (terminal)                                     | (precedent) |
+| `porting`   | Rust source exists in `sanctum-rs/services/`, but the binary is not built or the deployed runtime is still the original (Python/Node) | Finish the build + cutover, *then* graduate |
+| `graduated` | Rust binary built **and** running as the deployed launchd unit on the target host | (terminal — precedent) |
 | `skip`      | Criticality below `medium`                                              | Stays Python forever — rewrite cost not justified |
 
 The thresholds live in [`tools/rust_readiness.yaml`](#tooling) and can be tuned per policy. They're tuned to be conservative: "hardening" is the default verdict for anything that's not firmly in either corner, which is the correct bias — **do not rewrite what is still changing.**
@@ -57,11 +58,17 @@ Before a service actually gets ported, it must clear all four:
 3. **Interface surface is documented.** The HTTP routes, CLI flags, env vars, and on-disk state format must be written down (usually in this architecture section) *before* anyone opens a Rust editor. If you can't describe it, you can't port it.
 4. **Behavioural parity tests exist.** At minimum, a black-box HTTP/CLI test suite the Python version passes today — which the Rust version will also have to pass before it takes over the launchd slot.
 
-## Precedent — `sanctum-watchdog`
+## Precedent — what has actually graduated
 
-The first service to make the trip was [sanctum-watchdog](/guides/watchdog/). It spent roughly eight months in Python as the health-monitor script, growing incrementally (latency probes, then bandwidth monitor, then stack-check composition) until the feature set stopped moving for a full quarter. At that point the port took about a week of focused work, replaced the Python launchd unit with a single Rust binary, and has since absorbed the bandwidth monitor and normalised its self-health reporting without anyone touching its test suite.
+Two services are currently serving production traffic from a Rust binary: [sanctum-watchdog](/guides/watchdog/) and `sanctum-proxy`. Both are recent and both are worth being honest about.
 
-The crucial observation: the Rust rewrite was *boring*. No surprises, no redesign, no "while we're at it" features. That's what you want. If the Rust port is interesting, the service wasn't ready.
+`sanctum-watchdog` — Sanctum itself was first committed on 2026-03-14. A shell-script watchdog (`~/.sanctum/scripts/watchdog.sh`) appeared on 2026-03-20 as part of the Sanctum rebrand. The Rust implementation was imported into the `sanctum-rs` workspace on 2026-04-09 (commit `83a376a`, "Import Mac Mini Sanctum Rust services" — meaning the Rust code already existed in another location before being consolidated). Within four days of the import, the binary absorbed the bandwidth monitor (`84027b4`) and had its self-health reporting normalised in stack checks (`8a0ee66`). The Rust process is the live `sanctum-watchdog` running on the host today.
+
+`sanctum-proxy` — the cloud-tier model router on `:4040`. Live process is the Rust binary; deployed copy at `~/.sanctum/sanctum-proxy/sanctum-proxy` was last replaced on 2026-04-18 during the smart-routing changes (the Brainy category, the `general → council-27b` privacy reroute, the Opus-4.6 → 4.7 rename). Launchd dispatches via `~/.sanctum/scripts/proxy-launcher.sh`.
+
+The crucial observation isn't a timeline — it's that both rewrites were *boring*. No surprises, no redesign, no "while we're at it" features. That's what you want. If the Rust port is interesting, the service wasn't ready.
+
+Forward-looking: with Sanctum only weeks old, the doctrine on this page is mostly aspirational. The 30-day and 60-day windows in the readiness rules below assume a system mature enough to *have* 60 days of quiet for a service to point at. Most services here don't yet. That's a feature, not a bug — the rules will become biting as the codebase ages, which is exactly when you want them to bite.
 
 <Aside type="caution">
 **The "while we're at it" trap.** The single biggest failure mode of a Rust port is using the rewrite as cover for a redesign. You end up with a Rust service that isn't behaviour-equivalent to the Python one, and now you own two things: a production Python service you wanted to retire and a new Rust service that doesn't do the same job. Ports must be boring. Redesigns are their own project.
@@ -71,15 +78,15 @@ The crucial observation: the Rust rewrite was *boring*. No surprises, no redesig
 
 The source of truth is [`tools/rust_readiness.yaml`](https://github.com/Ogilthorp3/Claude_Code/blob/main/tools/rust_readiness.yaml). As of this writing:
 
-| Service             | Language | Criticality | Stage       |
-|---------------------|----------|-------------|-------------|
-| `force-flow`        | Python   | critical    | hardening   |
-| `screen-time`       | Python   | critical    | organic     |
-| `memory-vault-mcp`  | Python   | medium      | hardening   |
-| `sanctum-watchdog`  | Rust     | critical    | graduated   |
-| `sanctum-proxy`     | Rust     | critical    | graduated   |
-| `sanctum-firewalla` | Rust     | high        | graduated   |
-| `sanctum-xtts`      | Rust     | medium      | graduated   |
+| Service             | Language       | Criticality | Stage       |
+|---------------------|----------------|-------------|-------------|
+| `force-flow`        | Python         | critical    | hardening   |
+| `screen-time`       | Python         | critical    | organic     |
+| `memory-vault-mcp`  | Python         | medium      | hardening   |
+| `sanctum-watchdog`  | Rust           | critical    | graduated   |
+| `sanctum-proxy`     | Rust           | critical    | graduated   |
+| `sanctum-firewalla` | Rust source / Node runtime   | high   | porting     |
+| `sanctum-xtts`      | Rust source / Python runtime | medium | porting     |
 
 To get the live view, run the tool:
 
@@ -93,7 +100,9 @@ python3 tools/rust_readiness.py --find living-force  # resolve an alias to its s
 Services can carry `aliases` in the registry to reconcile doctrine names with runtime names. The Living Force, for example, is documented on its own architecture page but executes as the Rust binary `sanctum-watchdog` — the alias means `--find living-force` lands exactly where it should, and the table shows the alias dimly under the service name so the connection is visible at a glance.
 
 <Aside type="note">
-`screen-time` currently lands in `organic` because the autumn-2025 credit-and-homework-mode work is still landing. It will probably cross into `hardening` once the guest-approval flow stabilises. `force-flow` is already `hardening` — not far from a port candidate, but premature until the notification channel surface (Signal, iPhone, Sonos, dashboard, macOS) stops gaining members.
+As of writing, `screen-time` is `organic` because the credit, homework-mode, and guest-approval flows are still actively iterating week-over-week. `force-flow` is `hardening` — closer to a port candidate, but premature until the notification channel surface (Signal, iPhone, Sonos, dashboard, macOS) stops gaining members.
+
+`sanctum-firewalla` and `sanctum-xtts` appear in the registry with Rust source in the `sanctum-rs` workspace, but neither binary is built or deployed; the live `:1984` listener is the Node bridge from `sanctum-screen-time/deployed/firewalla-bridge.js`, and `:8008` is still served by Python. The registry now reflects this with a `porting` stage rather than the false `graduated` claim it carried previously.
 </Aside>
 
 ## Tooling
