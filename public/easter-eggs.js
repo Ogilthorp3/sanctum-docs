@@ -39,7 +39,7 @@
   let cursor = 0;
   let running = false;
 
-  window.addEventListener('keydown', (e) => {
+  document.addEventListener('keydown', (e) => {
     const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
     if (key === KONAMI[cursor]) {
       cursor++;
@@ -50,7 +50,7 @@
     } else {
       cursor = key === KONAMI[0] ? 1 : 0;
     }
-  }, { passive: true });
+  }, { capture: true, passive: true });
 
   // ───────────────────────────── matrix rain + zelda flash ──────────────
   function matrixRain() {
@@ -125,14 +125,14 @@
     zelda: () => glitchNearestHeading('#ffd700'),
     navi:  () => naviScream(),
   };
-  window.addEventListener('keydown', (e) => {
+  document.addEventListener('keydown', (e) => {
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     if (e.key.length !== 1) { buffer = ''; return; }
     buffer = (buffer + e.key.toLowerCase()).slice(-8);
     for (const word in WORD_TRIGGERS) {
       if (buffer.endsWith(word)) { WORD_TRIGGERS[word](); buffer = ''; return; }
     }
-  }, { passive: true });
+  }, { capture: true, passive: true });
 
   function naviScream() {
     const n = document.createElement('div');
