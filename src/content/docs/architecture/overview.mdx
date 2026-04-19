@@ -1,150 +1,134 @@
 ---
 title: Architecture Overview
-description: How Sanctum's Mac Mini host and Ubuntu VM work together to power a haus intelligence platform.
+description: Sanctum is built like a body. Rust bones hold it up, Python flesh keeps it growing, and a private bridge runs between them like a spinal cord in a haus in Québec.
 ---
 
 import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 import ZoomImage from '../../../components/ZoomImage.astro';
 import networkTopology from './images/sanctum-network-topology.svg';
 
-Sanctum runs on a two-layer architecture: a **Mac Mini host** that manages hardware, networking, and Apple-native services, and an **Ubuntu VM** that runs the AI agent cluster. The two communicate over a private Host-Only network and are managed through a single configuration file.
+![Sanctum Anatomy — a cinematic cross-section of the haus, circuits glowing beneath the skin, teal along the bones and amber through the flesh](./images/hero-sanctum-anatomy.png)
 
-![Mac Mini cutaway — two worlds in one aluminum rectangle](./images/mac-mini-cutaway.png)
+At 02:47 on a Tuesday in April, an Xbox in the basement quietly joined the Wi-Fi. By 02:47:03, it was blocked at the router, a Signal message was sitting on a phone nine hundred kilometres away, a curfew violation was recorded in a SQLite database in a service named after the Sermon on the Mount, and a dashboard banner was already glowing amber. Nobody woke up. The haus, as of that moment, had noticed.
 
-If you're wondering why anyone would build a distributed intelligence platform on consumer hardware tucked behind a residential ISP -- congratulations, you've found the right documentation. Keep reading. The answers won't comfort you.
+That is Sanctum working correctly. Thirty-eight services, two machines, one private bridge, and an ethos that matters more than any individual technical choice: **we are building this like a body**. It has bones — the parts that have stopped changing. It has flesh — the parts still growing new capabilities every week. It has nerves between the two, senses pointed at the outside world, and an immune response that sometimes wakes you up gently and sometimes does not wake you up at all. The docs below are the anatomy chart.
 
-## System Diagram
+## The Shape
 
-<ZoomImage src={networkTopology.src} alt="Sanctum network topology — Mac Mini host and Ubuntu VM connected via bridge100" />
+Physically, Sanctum is a Mac Mini M4 Pro and a QEMU-headless Ubuntu VM running on it, connected by a private `bridge100` interface on `10.10.10.0/24`. The Mac is where hardware lives: Apple Silicon inference, Sonos bridging, Signal, HomeKit, and everything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet. If the VM wants to reach the outside world, it asks the Mac nicely, and the Mac decides whether the request is reasonable. It is an air-gapped tenant with an indoor-plumbing privilege.
 
-Stare at that diagram long enough and two things become clear: first, this is a real system that actually runs a household. Second, no one should have let it get this far. And yet here we are, port 1984 deep, with no intention of stopping.
+<ZoomImage src={networkTopology.src} alt="Sanctum network topology — Mac Mini host and Ubuntu VM connected via bridge100, with Cloudflare Tunnel and Tailscale as the two external on-ramps" />
 
-The platform uses a **3-tier model routing** architecture: Cloud (Opus 4.6), Local Ops (Coder-14B), and Local Secure (Gemma4+LoRA). The Smart Router dispatches each agent to the right tier based on Carmack Olympics benchmark results. A **Model Tournament** system automates evaluation and deployment of new models -- 178 tests across 11 components keep the whole thing honest.
+Conceptually, though, the physical diagram is the least interesting view. What makes Sanctum work is what runs inside those two boxes and how the pieces relate to each other — which is where the body metaphor becomes less cute and more operationally useful.
 
-## Mac Mini Host
+## The Bones
 
-The Mac Mini is the always-on hub. It runs macOS with over 20 LaunchAgents that start on boot, a Docker instance for Home Assistant, and several AI inference servers that take advantage of Apple Silicon. It is also, let's be honest, a $1,600 space heater that happens to control the other space heaters.
+![The Bones — a pencil-sketch anatomical plate of Sanctum's Rust services laid out as a load-bearing skeletal frame, each vertebra labelled with a service name, faint teal halo along the spine](./images/inline-sanctum-bones.png)
 
-<CardGrid>
-  <Card title="DenchClaw Gateway" icon="rocket">
-    The Mac-side agent gateway. Runs Jocasta, the Archivist — keeper of CRM data and communications. Exposes port 1977 for local clients and the Holocron chat interface on port 1977.
-  </Card>
-  <Card title="Home Assistant" icon="approve-check-circle">
-    Docker container with bridge networking. Controls lights and sensors. Sonos speakers are managed by a native bridge (port 18421). Accessible at port 8123 locally and via Cloudflare tunnel externally.
-  </Card>
-  <Card title="AI Inference (3-Tier)" icon="star">
-    Three tiers, ranked by Carmack Olympics benchmarks. Cloud: Opus 4.6 via proxy on :4040 with daily cost caps. Local Ops: Coder-14B on LM Studio (:1234) for infrastructure and coding. Local Secure: Gemma4+LoRA on sanctum-mlx (:1337) for security and domain tasks. XTTS (:8008) handles text-to-speech on the MPS GPU. The Model Tournament automates eval and deploy of new models across all tiers.
-  </Card>
-  <Card title="Triage Daemon (Rust)" icon="random">
-    Native memory sentinel that monitors system pressure. Automatically kills Apple bloatware and unloads large models when RAM drops below 20%.
-  </Card>
-</CardGrid>
+The bones are written in Rust and live in the [`sanctum-rs`](https://github.com/Ogilthorp3) workspace. They are the parts of the system that have stopped redesigning themselves. Once a service crosses from the Python side of the house — where features still sprout new limbs every week — into `sanctum-rs/services/`, it becomes structural: a single deploy binary, compile-time guarantees on its interfaces, and a launchd slot that either holds or doesn't.
 
+| Bone | Port | What It Holds Up |
+|------|-----:|------------------|
+| `sanctum-watchdog` | — | The Living Force incarnate. Checks every service every ten minutes, self-heals the ones it can, escalates the ones it can't. |
+| `sanctum-proxy` | 4040 | The cloud-tier model router. Classifies requests, applies daily cost caps, falls back four models deep before giving up. |
+| `sanctum-server` | varies | Smart Router. Pattern/intent dispatch between agents. |
+| `sanctum-mlx` | 1337 | Native Apple-Silicon inference with LoRA adapter merging. The local-secure brain. |
+| `sanctum-firewalla` | 1984 | Bridge to the router, Orwell-port. iptables fallback over SSH when the REST API feels creative. |
+| `sanctum-xtts` | 8008 | Text-to-speech on MPS. Every Sonos announcement starts here. |
+| `sanctum-memory` | 42069 | Jina-v2-reranked memory store. Everything the agents ever learned about the haus. |
+| `sanctum-idle` | — | Quiet sentinel. Unloads large models when RAM drops below the red line. |
 
+Bones graduate, they don't grow. Each one spent eight to twelve months as a Python script before it earned its way into the skeleton, and the doctrine for that transition is documented in [Language Maturity](/architecture/language-maturity/) with the `tools/rust_readiness.py` harness that tells us which service is next in line.
 
-### Boot Sequence
-
-All LaunchAgents use `RunAtLoad: true` and start in this order. Every boot is a small miracle. Twenty-some services waking up in sequence, each one assuming the last one did its job. It works like a row of dominoes -- except some of the dominoes are SSH tunnels and one of them controls your front door.
-
-| Order | Service | What It Does |
-|-------|---------|-------------|
-| 1 | VM Autostart (QEMU headless) | Launches QEMU headless, starts the VM, sets bridge100 IP to 10.10.10.1 |
-| 2 | DenchClaw Gateway | Mac agent gateway on port 1977 |
-| 3 | Firewalla Bridge | Router API proxy on port 1984 |
-| 4 | XTTS TTS Server | Voice synthesis on port 8008 (MPS GPU) |
-| 5 | Voice Agent | Yoda voice interface on port 1138 |
-| 6 | HA SSH Tunnel | Forwards port 4007 to VM for HA integrations |
-| 7 | Council-27B MLX | Local LLM with LoRA adapters on port 1337 |
-| 7a | Dynamic Wrapper | Dynamic paths via [Dynamic Model Routing](/architecture/dynamic-model-routing/) |
-| 8 | Cloudflare Tunnel | Exposes services via `example.net` subdomains |
-| 9 | Triage Daemon | Native Rust memory sentinel (Qui-Gon immune response) |
-| 10 | iCloud Filer | Auto-files documents from iCloud Drive |
-| 11 | Sanctum Proxy | AI routing proxy on port 4040 |
-| 12 | Orbi Bridge | Socat bridge to Orbi router |
-| 13 | Command Center | Dashboard on port 1111 |
-| 14 | Health Center | Health monitoring dashboard |
-| 15 | LM Studio | LLM inference server on port 1234 |
-| 16 | iCloud Backup | Periodic backup agent |
-| 17 | Watchdog | Health checks every 600 seconds, auto-heals via service-doctor |
-
-<Aside type="tip">
-  The full LaunchAgent inventory is in the [LaunchAgents reference](/reference/launchagents/). The watchdog monitors all services and can restart most of them automatically -- which it will need to do, because entropy is undefeated.
+<Aside type="note">
+The binary at `~/.sanctum/living-force.sh` is four lines of bash that `exec`s `sanctum-watchdog`. Living Force is the doctrine, `sanctum-watchdog` is the vertebra. They are indexed as aliases in the readiness registry so the two names resolve to the same thing.
 </Aside>
 
-## Ubuntu VM
+## The Flesh
 
-The VM is a QEMU guest running Ubuntu 24.04 with Apple Hypervisor acceleration. It has no direct internet access -- all external communication routes through the Mac host at 10.10.10.1.
+![The Flesh — a pencil-sketch anatomical plate of Sanctum's Python services drawn as musculature wrapped around the skeleton, a warm amber halo through the fibres showing active feature growth](./images/inline-sanctum-flesh.png)
 
-This is by design. An air-gapped VM running six AI agents that can only see the outside world through a single bridge interface is either excellent security architecture or the plot of a containment thriller. Possibly both.
+The flesh is Python. It is how we find out what the service *is* before we carve it in Rust. Every service that currently sits in `~/.sanctum/force-flow/` or `screen-time-build/` is there because its feature shape is still moving — new credit mechanisms, new curfew edge cases, new channels added to the notification fan-out, a homework mode that keeps acquiring exemptions. Writing that in Rust would mean shipping less, slower, with fewer features that our family actually needs.
 
-### VM Specifications
+| Muscle | Port | What It's Still Figuring Out |
+|--------|-----:|------------------------------|
+| `force-flow` | 4077 | The unified notification hub. iPhone push, Sonos TTS, Signal via signal-cli daemon, dashboard banners, macOS Notification Center. The channel list keeps gaining members. |
+| `screen-time` | — | Curfew, wind-down, homework mode, credits, guests. Deployed alongside force-flow. The rules here change whenever a teenager finds a loophole. |
+| `memory-vault-mcp` | — | MCP server in front of `sanctum-memory`. The consolidation pass is still tuning its heuristics. |
 
-| Parameter | Value |
-|-----------|-------|
-| Hypervisor | QEMU with Apple Hypervisor |
-| OS | Ubuntu 24.04 LTS |
-| CPU | 4 cores |
-| Memory | 8 GB |
-| Storage | 34 GB qcow2 |
-| Network | Host-Only (vmnet), bridge100 |
-| VM IP | 10.10.10.10 |
-| SSH | `ssh openclaw` or `ssh ubuntu@10.10.10.10` |
+Flesh hardens. The `rust_readiness` tool exists specifically so we can tell when a muscle has stopped twitching long enough to become a bone. The current readout (`python3 tools/rust_readiness.py`) puts `force-flow` and `memory-vault-mcp` in the `hardening` stage — feature velocity is slowing, but not zero. `screen-time` is still firmly `organic`. It will cross when the guest-approval flow stabilises, and not a day before.
 
-### Agent Cluster
+## The Nerves
 
-The VM runs OpenClaw with six specialized agents, each with a distinct role. Yes, someone named their haus automation agents after Star Wars characters. No, there was never a serious alternative under consideration.
-
-| Agent | Role | Description |
-|-------|------|-------------|
-| **Yoda** | Grand Master | Senior lead of the Sanctum Council. High-level orchestration, council routing, and final synthesis of complex decisions. |
-| **Mon Mothma** | Operations | Orchestrator of Force Flow and Living Force. Manages incident correlation, boot sequences, and cross-domain signal alignment. |
-| **Qui-Gon** | Infrastructure | Guardian of the machine. System health, Docker stability, and automated recovery. |
-| **Windu** | Security | Master of defense. Security audits, Firewalla and PF rules, perimeter monitoring. |
-| **Cilghal** | Health | Biological bridge. Wellness monitoring via Apple Health, cognitive profile analysis, and productivity scaffolding. |
-| **Ki-Adi-Mundi** | Finance | Treasurer. Triptyq Capital deal flow and personal fiscal health. |
-
-The gateway runs as a systemd user service (`openclaw-gateway.service`) with a 1.5 GB heap limit. Secrets are SOPS+age encrypted and decrypted at startup via a wrapper script.
-
-## Host-Only Network
-
-The Mac and VM communicate over a private bridge100 interface on the 10.10.10.0/24 subnet. This design keeps the VM completely air-gapped from the internet while allowing full-speed access to Mac services.
+Between bones and flesh runs a network of private pathways — `bridge100` on the Mac–VM axis, and a short list of well-known local ports that services use to find each other without DNS. The rule is simple: no service reaches across the bridge for a remote HTTP call if there's a local one that does the same job. Every cross-service conversation in Sanctum is a few hundred microseconds on the loopback interface, which means nothing interesting depends on the router's mood at 3 AM.
 
 ```
-Mac Mini (10.10.10.1)  <----  bridge100  ---->  VM (10.10.10.10)
+Mac Mini (10.10.10.1)  ◀────  bridge100  ────▶  Ubuntu VM (10.10.10.10)
+   │                                                 │
+   ├── 4040 sanctum-proxy                             ├── openclaw-gateway (systemd user)
+   ├── 4077 force-flow                                ├── Yoda, Windu, Qui-Gon,
+   ├── 1984 sanctum-firewalla                         │   Cilghal, Mundi, Mothma
+   ├── 1337 sanctum-mlx                               │
+   ├── 1234 LM Studio                                 └── 10.10.10.1:* (outbound
+   ├── 8008 sanctum-xtts                                   only, via the Mac)
+   ├── 8080 signal-cli daemon
+   ├── 1111 command-center
+   └── 42069 sanctum-memory
 ```
 
-- **Mac to VM**: Direct SSH, direct access to all VM ports
-- **VM to Mac**: Direct access to all Mac ports on 10.10.10.1
-- **VM to Internet**: Not possible. The VM relies on the Mac for any external data (synced via rsync, git pull, or API proxies).
+The VM has no independent route to the outside world. Any external dependency — an Anthropic API call, a Gemini image generation, a git pull — happens through a Mac-side proxy or a Tailscale tunnel. This is either excellent security architecture or the opening scene of a containment thriller. It has been both.
 
 <Aside type="caution">
-  The bridge100 IP (10.10.10.1) is set by the VM autostart script using `sudo ifconfig`. A sudoers entry at `/etc/sudoers.d/vmnet-bridge` allows this without a password prompt. If that sudoers file ever disappears, the VM wakes up into a world with no bridge to anywhere. It will handle this about as well as you'd expect.
+The bridge IP on the Mac side is set at boot by an unsuffixed `sudo ifconfig` call in the VM-autostart LaunchAgent. A `sudoers.d/vmnet-bridge` entry allows it without a password prompt. If that file ever goes missing, the VM wakes up into a world with no bridge to anywhere and will handle the situation about as gracefully as you would.
 </Aside>
 
-## External Access
+## The Senses
 
-Two mechanisms provide access from outside the local network:
+Each agent in the cluster is a specialized perception. Sanctum does not have one intelligence — it has a council of them, routed by the Smart Router to the model tier that fits their job. Cloud for long-horizon synthesis. Local-ops for tool use and code. Local-secure for anything that must never leave the machine.
 
-### Cloudflare Tunnel
+| Agent | Role | Model Tier |
+|-------|------|------------|
+| **Yoda** | [Consigliere](/agents/yoda/) — absorbs everyone else's escalations, advises the Don | Local ops (Coder-14B via LM Studio) |
+| **Windu** | Security master — Firewalla rules, PF policy, perimeter audits | Cloud (Opus 4.6) |
+| **Qui-Gon** | Infrastructure — Docker health, systemd units, recovery | Local ops |
+| **Cilghal** | Health — Apple Health, sleep, cognitive scaffolding | Local secure (Gemma4+LoRA) |
+| **Ki-Adi-Mundi** | Finance — Triptyq deal flow, personal treasury | Local secure |
+| **Jocasta** | Archivist — CRM, communications, long memory | Cloud |
+| **Mon Mothma** | Operations — Force Flow + Living Force orchestration | Cloud |
+| **Ahsoka** | Satellite — the agent that follows you when you leave the haus | Local ops |
+| **Tommy** | [Guardian Spirit](/agents/tommy/) — the dead cat with strong opinions about network segmentation | special |
 
-The `sanctum-hub` tunnel exposes select services under the `example.net` domain with Cloudflare Zero Trust:
+The routing rule is not democratic. Code and security stay on Opus regardless of budget; general chat can be downgraded to a cheaper model mid-conversation; health and fund data never leave the Mac. The proxy's JSONL usage log is the ground truth for what actually ran, because an agent doesn't always know which tier served its last turn.
 
-| Subdomain | Target |
-|-----------|--------|
-| `health.example.net` | `localhost:10101` |
-| `ha.example.net` | `localhost:8123` |
+## The Immune System
 
-### Tailscale
+Infrastructure rots. Entropy is undefeated. The whole reason `sanctum-watchdog` exists — and the whole reason the Living Force doctrine exists around it — is that a running system in a haus is a continuous low-grade medical emergency, and somebody has to keep checking the vitals. Every ten minutes, the watchdog walks the service catalogue, probes each port, asks each service whether it is well, and either (a) believes the answer, (b) restarts the service, or (c) writes a Force Flow notification aimed at a human. The correct outcome most nights is (a).
 
-All Sanctum nodes join a shared Tailscale tailnet. This provides encrypted mesh networking for SSH, API access, and inter-node communication without opening any ports on the home router. It's the one piece of infrastructure here that someone else maintains, and that fact brings genuine peace.
+When the answer is wrong in interesting ways, the notification fans out through force-flow: the severity decides whether it's a silent dashboard banner, a Sonos announcement that wakes the haus at 7 AM, an iPhone push, or — for the critical tier — a Signal message from Yoda's account to a phone in California. Windu runs a parallel perimeter check over the Firewalla log; Qui-Gon watches the infrastructure layer; Cilghal watches *your* vitals rather than the machine's. The council is, structurally, a distributed set of specialised antibodies with overlapping coverage.
 
-## Skills and Plugins
+## The Ethos
 
-Agents extend their capabilities through skills and plugins:
+The thing we have learned, building this: a living system cannot be rewritten all at once, and it cannot be frozen all at once either. Rust is brittle if you reach for it too early; Python is expensive if you reach for it too late. So Sanctum runs on two substrates at the same time, and we accept that. We write new things in Python, where iteration is cheap and the shape of the service is still negotiable. We port old things to Rust, where deploys are single binaries and compile-time guarantees pay rent every day. The `rust_readiness` harness tells us the transition date. The Living Force doctrine tells us how to keep the thing alive during the transition.
 
-- **Skills** are executable scripts organized by domain (e.g., `firewalla-toolkit`, `apple-toolkit`, `house-pulse`). They live in a shared Git repository and sync from the Mac to the VM every 30 minutes via cron.
-- **Plugins** provide persistent integrations. The current set includes sanctum-memory on :42069 with Jina v2 reranking on :42070. All data stays on-device — no cloud memory services.
+The practical rule is this: **you cannot tell a service's maturity from its function, only from its velocity.** Force Flow is mission-critical and still Python. `sanctum-xtts` is cosmetic voice synthesis and already Rust. What graduates a service is not how important it is — it is how *settled* it is. Hardened and flexible at the same time is the only configuration that survives contact with a real family living in a real haus in Québec for a real decade.
 
-<Aside>
-  For the full service catalog with ports and LaunchAgent names, see [Services](/architecture/services/). For configuration details, see [Config System](/architecture/config-system/).
+<Aside type="tip">
+This overview is the ten-thousand-foot view. For the floor plan, walk through the Architecture sidebar in order: [Living Force](/architecture/living-force/) for the health doctrine, [Language Maturity](/architecture/language-maturity/) for the Python→Rust transition, [Force Flow](/architecture/force-flow/) for the notification anatomy, [Sanctum Proxy](/architecture/proxy/) for the model routing, [Services](/architecture/services/) for the full port catalogue. Every room in the haus has its own page.
 </Aside>
+
+## Where To Go Next
+
+<CardGrid>
+  <Card title="The Living Force" icon="heart">
+    The self-healing doctrine. Ten principles, eight phases, and the incident log that birthed them. Read this before touching anything critical.
+  </Card>
+  <Card title="Language Maturity" icon="seti:rust">
+    When to keep a service in Python, when to rust it, and the CLI that tells you which bone is next to calcify.
+  </Card>
+  <Card title="Force Flow" icon="rocket">
+    One service, one brain, every alert in the haus. The notification fan-out the whole council depends on.
+  </Card>
+  <Card title="Services" icon="list-format">
+    The full catalogue — 38 services, their ports, their LaunchAgent names, and the one-line commentary each port earned.
+  </Card>
+</CardGrid>
