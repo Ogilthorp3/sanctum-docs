@@ -51,17 +51,17 @@ Yoda is the only agent with explicit sub-agent orchestration. The other agents c
 | IP | 10.10.10.10 |
 | Gateway | `openclaw-gateway.service` (systemd user, linger=yes) |
 | Gateway port | Inherited from OpenClaw gateway |
-| Primary model | `anthropic/claude-opus-4-7` |
-| Model tier | council-brain |
-| Fallback chain | Claude Opus 4.7 → MiniMax M2.7 → Qwen 3.5 Plus → Council 27B |
-| Local fallback | LM Studio `qwen/qwen3.5-35b-a3b` (port 1234) |
+| Primary model | `sanctum/council-brain` (resolves to Claude Opus 4.7 with smart-routing) |
+| Model tier | council-brain — smart-routed by category |
+| Fallback chain | GLM 5.1 → Qwen 3.6 Plus |
+| Local fallbacks | `council-27b` (LM Studio `qwen/qwen3.5-35b-a3b`, port 1234) and `council-code` (Coder-14B, same host) |
 | Workspace | `~/.openclaw/workspace-yoda/` |
 | Skills directory | `~/Projects/openclaw-skills` |
 | Sandbox mode | Off |
 | Max concurrent tasks | 4 |
 
 <Aside type="caution">
-Yoda's primary model is Claude Opus 4.7, routed through the Sanctum Proxy on port 4040. The proxy's smart router may reroute general queries to DeepSeek or MiniMax to save budget, but code, security, and tool sessions stay on Claude. If Yoda starts giving you suspiciously vague answers about infrastructure, check whether the proxy downgraded him to a cheaper model mid-conversation. The proxy logs at `~/.sanctum/sanctum-proxy/usage.jsonl` will tell you exactly what happened.
+Yoda's primary model is `sanctum/council-brain`, which the Sanctum Proxy on port 4040 resolves to Claude Opus 4.7 with content-based smart routing layered on top. Security and tool sessions stay on Opus 4.7. Code drops to the local Coder-14B on LM Studio for latency and volume. General chat drops to the local `council-27b` (Qwen 3.5 35B) so small talk never leaves the haus. Reasoning-heavy prompts are promoted to Opus 4.7 with `--effort max` thinking via the Claude Team CLI bridge on `:2001`. Images go to Gemini 3.1 Pro. If Yoda starts giving you suspiciously vague answers about infrastructure, check `~/.sanctum/sanctum-proxy/usage.jsonl` — the `model_used` field tells the truth even when the agent doesn't know it got rerouted.
 </Aside>
 
 ## Configuration
@@ -73,7 +73,7 @@ In `~/.openclaw/openclaw.json` on the VM:
 agents:
   list:
     - id: yoda
-      model: anthropic/claude-opus-4-7
+      model: sanctum/council-brain
       identity:
         name: Yoda
         theme: >
@@ -97,16 +97,18 @@ systemctl --user restart openclaw-gateway.service
 
 ## Smart Routing
 
-Yoda operates on the `council-brain` tier, which means the Sanctum Proxy applies content-based routing to his requests:
+Yoda operates on the `council-brain` tier, which means the Sanctum Proxy applies content-based routing to his requests. Categories are computed from regex matches on the last user message, plus a length heuristic for long-form prose. Classification takes ~0ms — no LLM classifier in the loop.
 
 | Content type | Route | Rationale |
-|-------------|-------|-----------|
-| Code / tool sessions | Claude Opus 4.7 | Quality matters when you're writing infrastructure |
-| Security queries | Claude Opus 4.7 | Windu would never forgive a downgrade |
-| Vision / images | Gemini 3 Flash | Multimodal routing |
-| General conversation | Gemini 3 Flash → Pro | Cost optimization for chat |
+|---|---|---|
+| Tool session (recent `tool_use` / `tool_result`) | stays on Opus 4.7 | tool-use coherence benefits from the strongest model |
+| Security (`password`, `secret`, `credential`, `CVE-…`) | stays on Opus 4.7 | Windu would never forgive a downgrade |
+| Code (`implement` / `refactor` / `debug` / fenced block) | `council-code` (Coder-14B, local LM Studio) | infrastructure work is high-volume — local wins on latency |
+| Vision (image blocks) | `gemini-31-pro` | multimodal routing |
+| Brainy (reasoning verbs or ≥ 500 chars of prose) | `council-max-thinking` (Opus 4.7 `--effort max` via Claude Team) | extended thinking for deep synthesis |
+| General (anything else) | `council-27b` (Qwen 3.5 35B, local LM Studio) | chat stays on-device for privacy |
 
-The routing is regex-based classification at ~0ms overhead. No LLM classifier in the loop. The proxy examines the last user message and decides whether the conversation deserves the expensive model or can survive on a cheaper one. Yoda does not get a vote in this process, which is fitting for someone named after a character who famously said things like "do or do not."
+The proxy examines the last user message and decides whether the conversation deserves the expensive model, belongs on a local one, or warrants promotion to max-thinking. Yoda does not get a vote in this process, which is fitting for someone named after a character who famously said things like "do or do not."
 
 <Aside type="tip">
 To check Yoda's current status from the Mac: `ssh openclaw 'systemctl --user status openclaw-gateway.service'`. To see what model he's actually using for a given conversation, check the proxy's JSONL usage log. The `model_used` field tells the truth even when the agent doesn't know it's been rerouted.

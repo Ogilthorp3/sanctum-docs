@@ -248,10 +248,11 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 
 **VM Hypervisor:** QEMU headless (not UTM — UTM was removed). The LaunchAgent is still named `com.sanctum.utm-autostart` (identifier preserved for compatibility).
 
-**Model Routing (3-tier):**
+**Model Routing:**
 - **Cloud tier** (Opus 4.7 via cloud proxy :4040): Windu, Mothma, Jocasta
-- **Local ops tier** (Coder-14B via LM Studio :1234): Yoda, Qui-Gon, Ahsoka, coding tasks
+- **Local ops tier** (Coder-14B via LM Studio :1234): Qui-Gon, Ahsoka, coding sub-tasks from any agent
 - **Local secure tier** (Gemma4+LoRA via mlx_lm :1337): Cilghal, Mundi (privacy: health/fund data stays local)
+- **Smart-routed brain** (`council-brain` on :4040): Yoda — Opus 4.7 by default, local `council-27b` for general chat (privacy), `council-max-thinking` (Opus 4.7 + `--effort max` via Claude Team on the :2001 CLI proxy) for deep reasoning. Classification is regex-based; category rules and thresholds live in `sanctum-rs/services/sanctum-proxy/src/route.rs`.
 
 **Key Services:**
 - sanctum-server (Rust): Smart Router with pattern/intent dispatch
