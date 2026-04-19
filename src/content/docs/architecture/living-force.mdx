@@ -814,3 +814,57 @@ All four command-center red services resolved: two by process-level fixes (sonos
 Signal-proxy watchdog regex fix committed to `sanctum-config` (`702f9d8`). Firewalla restoration committed across `sanctum-config` (`aa00112`) and `Claude_Code` (`ca3cef7`). Docker HA log-rotation daemon config + container recreate not yet captured in a repo (the daemon.json lives inside the Lima VM; worth mirroring under `~/.sanctum/` with a provisioning script at some point).
 
 **Apr 19 late-night sanctum session complete — state of the system at close.**
+
+## Living Force Entry — 2026-04-19 (council-mlx 24h post-cutover watch)
+
+The sanctum-mlx Rust binary had been serving production for 25 hours. Guardian probes: all green. Canary probes: all green. Drift-check: all green. Off-box watchers on the MBP: quiet. Task #31 — the post-cutover watch — was ready to close as a clean hold.
+
+Then we asked the service a real question, and it said nothing.
+
+### What Was Wrong
+
+At some point in the prior 16 hours, a parallel `cargo clean` on the Mini — triggered by the turboquant branch's build flow — had deleted `target/release/sanctum-mlx`. launchd tried to respawn the process on KeepAlive, exited immediately with `EX_CONFIG (78)` because the binary file was gone, and gave up per ThrottleInterval.
+
+But the *old* process had been SIGTERM'd right before that (twice, actually, in a race) and was stuck in axum's graceful-shutdown drain, waiting forever for an in-flight request that had quietly hung. The process was still alive in `ps` but only as a 4 MB memory shell — the model was gone, the inference thread was gone, the shutdown barrier was still blocking the listener close. And the listener, still open on the kernel side, kept accepting TCP connections and *very quickly* answering `GET /v1/models` with a cached response because the `/v1/models` route doesn't touch the model graph — it just reads a static list.
+
+`POST /v1/chat/completions`, which *does* touch the model graph, got queued behind the permanently-stuck drain mutex and timed out or hit empty-reply.
+
+So for sixteen hours:
+- Guardian's 60-second `GET /v1/models` probe: 200 OK, 25 ms, `probe_ok`.
+- Canary's 10-minute chat probe: timed out every run, logged `canary_fail`, but threshold was "2 consecutive" and cold-cache flaps happen — nothing escalated.
+- Drift-check's hourly `stat` on the binary *did* emit `binary_missing` events — but at warn level inside a composite log line, not as its own alertable signal.
+- The service looked fine to everyone watching.
+
+The outage surfaced only when the morning's verification ran a real chat probe, got `Couldn't connect to server`, and asked the obvious question: who is actually listening?
+
+### What Changed
+
+The fix was five minutes: SIGKILL the zombie, rebuild the binary on the Mini, colocate the metallib next to it (per the earlier metallib-colocation lesson), ad-hoc sign with hardened runtime, kickstart the agent. Back to green end-to-end in under six minutes total, including a fresh 10/10 pass on the parity-smoke battery.
+
+What needs to change in the *architecture*, not just this incident's state, is the liveness-probe discipline. The guardian was designed in an earlier entry explicitly to **not** exercise inference because chat probes queued behind long generations and caused the monitor to become the outage. That lesson — from the Olympics-day kickstart storm — is correct and stays. But it was over-learned: the guardian went so far out of the critical path that it became blind to the critical path.
+
+The fix is parallel probes at different cadences:
+
+1. **Fast, cheap, non-inference — 60 s.** `GET /v1/models`. Proves HTTP is alive. (Current guardian — keeps.)
+2. **Slow, real, inference — 10 min.** `POST /v1/chat/completions` with a small prompt. Proves the model graph is alive. (Current canary — keeps.)
+3. **File-level integrity — 5 min.** `stat(binary) && codesign --verify --strict <binary>`. Proves the next restart will actually boot. (New — added to guardian/drift with error-level escalation on failure.)
+
+Any two of these passing is not enough if the third fails. Specifically, a failing (3) with passing (1) and (2) means *you are one kickstart away from an outage with no binary to boot* — which is exactly the state we'd slept through for 16 hours.
+
+### Rule
+
+**A service that returns 200 is not necessarily a service that works.** Liveness probes must exercise the critical path at some cadence, not only the cheapest path that happens to succeed. Independent probe channels catch different failure modes: one probe checking three things is worse than three probes each checking one thing on its own escalation track.
+
+### Secondary Rule
+
+**The binary file is part of the service.** Monitors that check process state without checking "will the next respawn succeed" can sleep through 16-hour windows where the running process is doomed but hasn't noticed yet. `stat` and `codesign --verify` are cheap; run them.
+
+### Third Rule, Reluctantly
+
+**A parallel `cargo clean` on a shared build directory is a production incident.** Not every branch's build steps are safe for a machine that's also a serving host. A `cargo clean` on the feature branch that clobbers the signed release binary is a self-inflicted DoS that no monitoring stack was designed to catch. The long-term fix is out-of-tree builds or per-branch `--target-dir`; the short-term fix is a commit-hook or `make` recipe that refuses to `cargo clean` the production target while the launch agent holds it open.
+
+### Post-Session State
+
+Production restored on `com.sanctum.mlx` (Mini), binary rebuilt + ad-hoc-hardened-signed (Dev ID re-sign pending operator keychain unlock). All three plain HTTP + mTLS listeners back up on `:1337` and `:1338`. Parity-smoke 10/10, guardian green, canary green, drift green. `com.sanctum.server-mlx` (Python fallback) bootout'd as intended by the transition-permanent plan; plist retained on disk, guardian's `activate_fallback()` still capable of bootstrapping it on demand.
+
+Roadmap updated with a new item (binary-file-integrity check as a first-class signal). The living force learns from 16 hours of sleeping: if the probe never touches the work, it never sees the work fail.
