@@ -970,3 +970,50 @@ Something rebuilt the Rust binary at 23:54 yesterday. Cargo-clean or a parallel 
 Mini post-reboot: Rust `sanctum-mlx` serving on `:1337` plain + `:1338` mTLS, Dev-ID signed, Apple-notarized (submission `00000000-0000-0000-0000-000000000003`, Accepted). Two of six clients on mTLS (canary, guardian). Python fallback `Disabled=true`, will stay dormant across reboots until guardian or integrity explicitly promotes it.
 
 Five monitor channels green. Two commits: sanctum-rs `6d27666`, sanctum-docs this entry.
+
+## Living Force Entry — 2026-04-20 noon (last two doors closed)
+
+Two items sat on the roadmap since last night — the ASC API key was still Admin-scoped (we had asked for Developer on creation, the UI gave us Admin, and we didn't notice until the day after); and sanctum-server — the Rust router that fronts every council request and holds the HA `fallback_urls` wiring — was a 44-hour-old orphan process running a binary that had been `cargo clean`'d out of existence. Both closed in the same session.
+
+### ASC API key, now Developer scope
+
+The previous key (`PLACEHLDR0`, Admin) was revoked from appstoreconnect.apple.com/access/integrations/api and a new one generated with **Developer** role (`PLACEHLDR1`, same issuer `00000000-0000-0000-0000-000000000002`). The `.p8` was downloaded once — Apple's one-shot download rule is non-negotiable — moved to `~/.appstoreconnect/AuthKey_PLACEHLDR1.p8` on the MBP (mode 0600) and `~/.keys/holocron-notary/AuthKey_PLACEHLDR1.p8` on the Mini. `xcrun notarytool store-credentials sanctum` was re-run on both machines, overwriting the keychain profile in place. A smoke submission of the current Mini binary came back `status: Accepted` in about 90 seconds, which is the confirmation that matters.
+
+The archived `.p8` files for the revoked key sit next to the new ones with a `.revoked-2026-04-20` suffix. That's deliberate — Apple's revocation is authoritative (the key cannot be used), but the file on disk is a historical record of what was submitted under what identity, and the cost of keeping it is 257 bytes per machine.
+
+Blast radius if the new `.p8` leaks: Developer role can submit to notary and read team names, nothing else. Previously it was Admin, which could alter team membership and agreements. A meaningful reduction for a 90-second operator action.
+
+### sanctum-server, actually live
+
+The `sanctum-server` Rust binary (the smart router, not to be confused with the Python `sanctum-server-mlx` it replaced a lifetime ago) had been running on the Mini as a manually-spawned process since April 17, against a model path that no longer existed on disk. Nobody was talking to it. It was keeping a socket open out of habit.
+
+What shipped:
+
+1. **Fresh build** on the Mini with `PATH=/opt/homebrew/bin:... cargo build --release -p sanctum-server`. 6.8 s; the dependency graph was cached from the sanctum-mlx build earlier.
+2. **Developer-ID codesign** with hardened runtime and secure timestamp, under the same `Bertrand Nepveu (GJ994MN2YF)` identity used for sanctum-mlx.
+3. **`com.sanctum.server.plist`** installed at `~/Library/LaunchAgents/`. `--router-config /Users/neo/.sanctum/instance.yaml` engages the smart router; `--host 127.0.0.1 --port 8900` binds loopback only. Any client on the Mini can reach it at `http://127.0.0.1:8900/v1/chat/completions`; cross-machine access still goes through sanctum-mlx directly (or through Tailscale to the MBP shadow).
+4. **`sanctum-server-launch` wrapper** reads `~/.sanctum/secrets/council-mlx.token` (0600) and exports `COUNCIL_API_KEY` into the process environment before exec'ing the binary. The plist's `ProgramArguments` point at the wrapper, not the binary, so the token never appears in plaintext in a mode-644 plist. The router's `HttpProxyBackend` picks up `api_key_env: COUNCIL_API_KEY` from `instance.yaml` and forwards `Authorization: Bearer <token>` on upstream requests — including the Tailscale fallback to the MBP shadow, which is the whole point of wiring the env in the first place.
+
+```
+[Client] → 127.0.0.1:8900 (sanctum-server, smart router)
+           │
+           ├─ council-secure ──► 127.0.0.1:1337 (sanctum-mlx, primary)
+           │                     └─ fallback ──► 100.0.0.55:8902 (MBP shadow, bearer'd)
+           ├─ council-ops   ──► 127.0.0.1:1234 (LM Studio)
+           ├─ coder         ──► 127.0.0.1:1234 (LM Studio)
+           └─ cloud         ──► https://openrouter.ai
+```
+
+Verified live: startup log shows `Registered backend backend=council-secure url=http://127.0.0.1:1337/v1 fallback_urls=["http://100.0.0.55:8902/v1"]`. A chat through the router with `model: "council-secure"` returned `"2 + 2 equals"` in 8.7 s — routing from sanctum-server to sanctum-mlx via the primary, through the loopback-bypass, with the env-loaded token traveling along for the ride but being ignored on the localhost side.
+
+The HA failover path is now genuinely in place: code shipped (P7.2), config wired (instance.yaml), upstream auth threaded (launch wrapper), router live (sanctum-server). Exercising the actual failover — killing sanctum-mlx and watching the next request land on the MBP shadow — is a one-liner away, not a multi-day project. We did not execute it in this entry because the goal was wiring, not stress testing, and because exercising HA failover while council-integrity auto-recovery is also armed risks a promotion cascade we'd rather test with a clear head.
+
+### Rule
+
+**Secrets move in environment variables loaded from 0600 files, not in plists.** A LaunchAgent plist is world-readable by default (`ls -la` shows `-rw-r--r--`). Putting a bearer token in a `<key>EnvironmentVariables</key>` block there is security theater — the token is plaintext at rest in a publicly-readable file. Wrapping with a launcher script that reads the mode-0600 secret file on startup keeps the surface area down to one file and one process, which is where the ACL matters.
+
+### Post-Entry State
+
+MBP + Mini both notarizing against the Developer-scoped `PLACEHLDR1`. Admin key revoked, `.p8` archived. sanctum-server live at `127.0.0.1:8900` on the Mini, router loaded, HA failover wired end-to-end with upstream auth plumbed through. Six monitor channels green (five sidecars plus sanctum-server health). Two clients on mTLS (canary, guardian); four to go before bearer retirement is honest.
+
+Commits: sanctum-rs `205c5cb`, sanctum-docs this entry.
