@@ -25,20 +25,16 @@ Conceptually, though, the physical diagram is the least interesting view. What m
 
 ![The Bones — a pencil-sketch anatomical plate of Sanctum's Rust services laid out as a load-bearing skeletal frame, each vertebra labelled with a service name, faint teal halo along the spine](./images/inline-sanctum-bones.png)
 
-The bones are written in Rust and live in the [`sanctum-rs`](https://github.com/Ogilthorp3) workspace. They are the parts of the system that have stopped redesigning themselves. Once a service crosses from the Python side of the house — where features still sprout new limbs every week — into `sanctum-rs/services/`, it becomes structural: a single deploy binary, compile-time guarantees on its interfaces, and a launchd slot that either holds or doesn't.
+The bones are written in Rust and live in the [`sanctum-rs`](https://github.com/Ogilthorp3) workspace. They are the parts of the system that have stopped redesigning themselves. Once a service crosses from the Python side of the house — where features still sprout new limbs every week — into `sanctum-rs/services/` *and* is built and deployed as the running launchd unit, it becomes structural: a single deploy binary, compile-time guarantees on its interfaces, and a slot that either holds or doesn't.
+
+As of this writing, two services actually meet that bar:
 
 | Bone | Port | What It Holds Up |
 |------|-----:|------------------|
 | `sanctum-watchdog` | — | The Living Force incarnate. Checks every service every ten minutes, self-heals the ones it can, escalates the ones it can't. |
-| `sanctum-proxy` | 4040 | The cloud-tier model router. Classifies requests, applies daily cost caps, falls back four models deep before giving up. |
-| `sanctum-server` | varies | Smart Router. Pattern/intent dispatch between agents. |
-| `sanctum-mlx` | 1337 | Native Apple-Silicon inference with LoRA adapter merging. The local-secure brain. |
-| `sanctum-firewalla` | 1984 | Bridge to the router, Orwell-port. iptables fallback over SSH when the REST API feels creative. |
-| `sanctum-xtts` | 8008 | Text-to-speech on MPS. Every Sonos announcement starts here. |
-| `sanctum-memory` | 42069 | Jina-v2-reranked memory store. Everything the agents ever learned about the haus. |
-| `sanctum-idle` | — | Quiet sentinel. Unloads large models when RAM drops below the red line. |
+| `sanctum-proxy` | 4040 | The cloud-tier model router. Classifies requests, applies daily cost caps, falls back through a configured chain before giving up. |
 
-Bones graduate, they don't grow. Each one spent eight to twelve months as a Python script before it earned its way into the skeleton, and the doctrine for that transition is documented in [Language Maturity](/architecture/language-maturity/) with the `tools/rust_readiness.py` harness that tells us which service is next in line.
+Several more services have Rust source scaffolded in `sanctum-rs/services/` — `sanctum-firewalla`, `sanctum-xtts`, `sanctum-mlx`, `sanctum-memory`, `sanctum-server`, `sanctum-idle` — but their runtimes are still the original Node or Python implementations on the ports you'd expect (`:1984`, `:8008`, `:1337`, `:42069`). The [`tools/rust_readiness.py`](/architecture/language-maturity/#tooling) harness tracks them honestly under the `porting` stage — it will not honour a `graduated` claim unless the binary actually exists at `sanctum-rs/target/release/<name>` on disk. Bones must be earned.
 
 <Aside type="note">
 The binary at `~/.sanctum/living-force.sh` is four lines of bash that `exec`s `sanctum-watchdog`. Living Force is the doctrine, `sanctum-watchdog` is the vertebra. They are indexed as aliases in the readiness registry so the two names resolve to the same thing.
@@ -48,7 +44,7 @@ The binary at `~/.sanctum/living-force.sh` is four lines of bash that `exec`s `s
 
 ![The Flesh — a pencil-sketch anatomical plate of Sanctum's Python services drawn as musculature wrapped around the skeleton, a warm amber halo through the fibres showing active feature growth](./images/inline-sanctum-flesh.png)
 
-The flesh is Python. It is how we find out what the service *is* before we carve it in Rust. Every service that currently sits in `~/.sanctum/force-flow/` or `screen-time-build/` is there because its feature shape is still moving — new credit mechanisms, new curfew edge cases, new channels added to the notification fan-out, a homework mode that keeps acquiring exemptions. Writing that in Rust would mean shipping less, slower, with fewer features that our family actually needs.
+The flesh is Python. It is how we find out what the service *is* before we carve it in Rust. Every service that currently sits in `~/.sanctum/force-flow/` or in the `sanctum-screen-time` repo is there because its feature shape is still moving — new credit mechanisms, new curfew edge cases, new channels added to the notification fan-out, a homework mode that keeps acquiring exemptions. Writing that in Rust would mean shipping less, slower, with fewer features that our family actually needs.
 
 | Muscle | Port | What It's Still Figuring Out |
 |--------|-----:|------------------------------|
