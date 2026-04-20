@@ -917,3 +917,56 @@ Net effect: the 16-hour zombie-listener scenario now recovers to the Python back
 Five monitor channels on Mini all green (guardian, canary, drift, parity-smoke, integrity). Canary now on mTLS (`transport:"mtls"`, 501 ms probe latency — down from ~2 s bearer because loopback bypass still went through the HTTP path while mTLS stays at the TLS layer). Streaming metrics ticking. Integrity auto-recovery wired. Orphan sanctum-server cleaned up. Two roadmap items (#2 canary, #5 streaming metrics) newly shipped; #10 (integrity monitor) reinforced with auto-recovery.
 
 Commit `60b2154` on `feat/proxy-hardening`.
+
+## Living Force Entry — 2026-04-20 late night (the reboot that almost wasn't)
+
+The Mac Mini rebooted itself sometime around midnight. We don't know exactly why — macOS applied a pending update, or the kernel panicked, or gravity hiccuped. It came back up in two minutes with a load average of 95, every LaunchAgent in `~/Library/LaunchAgents/` firing simultaneously, and the Rust sanctum-mlx agent loading a 27-billion-parameter model into Metal while thirty-seven other services also tried to be the first to grab the GPU.
+
+All five monitor channels — guardian, canary, drift, parity-smoke, integrity — rebootstrapped on their own. Rust came up on `:1337` and `:1338` without a human touching anything. The off-box canary on the MBP kept probing across Tailscale and logged `canary_ok` through the whole ordeal; the off-box drift logged one `ssh timeout` entry while the Mini was physically unreachable, then recovered on the next tick. That is the Living Force behaving exactly as advertised.
+
+The part that wasn't advertised: Python won the `:1337` race.
+
+### What Was Wrong
+
+`com.sanctum.server-mlx.plist` — the Python `mlx_lm.server` fallback — still lived in `~/Library/LaunchAgents/`. LaunchAgents in that directory are bootstrapped automatically when the user session logs in. The plist had `KeepAlive=true` and no explicit `RunAtLoad` key. Per launchd semantics, `KeepAlive=true` on its own is sufficient to start the process immediately on bootstrap. Python started instantly, bound `*:1337`, and was answering requests long before the Rust binary finished verifying its ed25519-signed manifest (10 s), SHA-checking 16 GB of weights (10 s), and loading into Metal (60 s).
+
+That made the whole "transition permanent, Python is fallback only" story a polite fiction. On every reboot, Python would have won.
+
+### What Also Went Sideways
+
+Something rebuilt the Rust binary at 23:54 yesterday. Cargo-clean or a parallel feature-branch build; we didn't pin down the cause. The rebuilt binary was `(adhoc,linker-signed)` — no hardened runtime, no Developer ID. The council-integrity probe caught it (`codesign --verify --strict` failing), though on this reboot the adhoc binary started fine enough that Rust eventually came up on `:1338` too and the fallback-lockfile path never triggered. The probe was right to be worried; the worry just wasn't needed this time.
+
+### What Changed
+
+**`com.sanctum.server-mlx.plist` now ships `RunAtLoad=false` + `Disabled=true`.** A reboot bootstraps it into launchd but launchd refuses to start the process unless someone explicitly enables the agent. `activate_fallback()` in both `council-guardian.sh` and `council-integrity-check.sh` now runs `launchctl enable gui/<uid>/com.sanctum.server-mlx` before `bootstrap + kickstart`. The one-shot activation still works; the boot-race cannot happen.
+
+```diff
+- <key>KeepAlive</key>
+- <true/>
++ <key>RunAtLoad</key>
++ <false/>
++ <key>KeepAlive</key>
++ <true/>
++ <key>Disabled</key>
++ <true/>
+```
+
+`KeepAlive=true` stays so that once guardian does kick Python on, it stays up across crashes — we want that when Rust is genuinely broken. The two keys working together mean "do not start unless told to, but once told, persist."
+
+**council-guardian migrated to mTLS.** Second client after canary. The probe now goes to `https://127.0.0.1:1338/v1/models` with a client cert pinned to `CN=guardian`, not the loopback-bypass bearer path. Remove `~/.sanctum/certs/clients/guardian.{crt,key}` and the next tick reverts to bearer. No code change either direction. The `transport` field is logged on every probe so future Prometheus panels can see the migration ratio.
+
+**council-drift-check stopped alerting on repo-dirty.** A dirty working tree on the Mini usually means a parallel session is editing code but hasn't committed yet. The SHA-comparison logic above it still catches real "installed differs from committed" drift. Separating the two prevents the alert-fatigue pattern where the hourly repo-dirty noise made operators filter drift alerts in general, which is how the 2026-04-19 zombie-listener went 16 hours without a human looking at a warning that was already in the log.
+
+### Rule
+
+**A plist in `~/Library/LaunchAgents/` is a startup race participant whether you intended it to be or not.** The fallback-only pattern requires explicit opt-out (`RunAtLoad=false`, `Disabled=true`, `launchctl disable`) or the plist has to live somewhere launchd doesn't scan. Intent ≠ configuration; launchd reads the configuration.
+
+### Corollary
+
+**An alert that fires every hour is not an alert. It is wallpaper.** The repo-dirty case was a real signal (uncommitted work creates a risk of drift if someone edits the canonical copy) but firing it at error-severity on an active development branch drowned out the actual drift events it was paired with. Split, downgrade, or suppress; never let a legitimate-but-chronic condition sit next to an urgent one on the same escalation track.
+
+### Post-Entry State
+
+Mini post-reboot: Rust `sanctum-mlx` serving on `:1337` plain + `:1338` mTLS, Dev-ID signed, Apple-notarized (submission `00000000-0000-0000-0000-000000000003`, Accepted). Two of six clients on mTLS (canary, guardian). Python fallback `Disabled=true`, will stay dormant across reboots until guardian or integrity explicitly promotes it.
+
+Five monitor channels green. Two commits: sanctum-rs `6d27666`, sanctum-docs this entry.
