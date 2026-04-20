@@ -1017,3 +1017,56 @@ The HA failover path is now genuinely in place: code shipped (P7.2), config wire
 MBP + Mini both notarizing against the Developer-scoped `PLACEHLDR1`. Admin key revoked, `.p8` archived. sanctum-server live at `127.0.0.1:8900` on the Mini, router loaded, HA failover wired end-to-end with upstream auth plumbed through. Six monitor channels green (five sidecars plus sanctum-server health). Two clients on mTLS (canary, guardian); four to go before bearer retirement is honest.
 
 Commits: sanctum-rs `205c5cb`, sanctum-docs this entry.
+
+## Living Force Entry — 2026-04-20 mid-day (the reboot WAS a panic — `sanctum-pressure-valve` ships)
+
+The midnight reboot noted earlier today ("we don't know exactly why — macOS applied a pending update, or the kernel panicked, or gravity hiccuped") turns out to have been option B. `/Library/Logs/DiagnosticReports/Retired/panic-full-2026-04-19-235812.0002.panic` is an 3.4 MB receipt for an `AppleARMWatchdogTimer` kernel panic: `watchdog timeout: no checkins from watchdogd in 90 seconds`. The panic fired at 23:58:12 EDT on the Mini. It was not gravity.
+
+### What Was Wrong
+
+The JetsamEvent thirteen minutes after reboot tells the story better than the panic log does. At kill time, `sanctum-mlx` (pid 9221) had an RSS footprint of **65,813 MB** on a 64 GB machine. Concurrent contributors: a forgotten `cargo build` leaking four `metal` shader-compiler processes at 100 % CPU and ~770 MB each (collateral damage from the `council-integrity` build earlier that evening), a QEMU Ubuntu VM at 4.5 GB, `com.apple.Virtualization.VirtualMachine` at 1.9 GB, and `talagentd` — the Apple Intelligence system agent on macOS 26 — idling at over 7 GB with what is, technically, zero user-facing responsibilities.
+
+The compressor hit 100 % of its segment limit. 69 swapfiles deep. `watchdogd` could not get scheduled for 90 seconds because every thread was blocked on a page fault. The kernel watchdog fired, the Mini panicked, the boot was a recovery — not a maintenance window.
+
+The 148,181-error forensic analysis that produced the living-force manifests in April listed memory-pressure cascade as Pattern 011, with `memory_pressure_tier2` and `memory_pressure_tier3` shed lists carefully enumerated in `sanctum-cascade-prevention.yaml`. Line 985 of that manifest declares the pattern `dependent_on: ["service-graph.py", "watchdog", "system-memory-monitor"]`. Of those three, exactly two existed. The `system-memory-monitor` was YAML. Nothing enforced.
+
+And because that self-healer was offline for 16 of the 17 hours following the panic — the same zombie-listener failure mode [documented yesterday](#), only this time the port was 2187 and the corpse holding it was a pre-panic `sanctum-watchdog` still breathing because the plist-spawned replacement couldn't bind — the Mini was unprotected while the swap was still at 97 %.
+
+### What Changed
+
+**`sanctum-pressure-valve` — a 2.2 MB Rust binary, 14 unit tests + 3 integration tests, one LaunchAgent.** Lives at `services/sanctum-pressure-valve/` in the sanctum-rs workspace. Polls `vm_stat` and `sysctl -n vm.swapusage` on a 5-second tick. Classifies pressure as `green` / `yellow` / `orange` / `red` against thresholds calibrated to the M4 Pro's behavior — 8 GB / 4 GB / 2 GB available memory or 70 % / 85 % / 95 % swap utilization, whichever is worse. Promotion requires two consecutive confirming samples; recovery is immediate.
+
+On `yellow`, one tier-3 LaunchAgent (`kiwix-serve`, `reranker`, `xtts-server`) is shed. On `orange`, tier-2 (`memory-vault`, `qwen3-tts`, `mdns-docs`); any allowlisted hog over 10 GB RSS is SIGSTOP'd. On `red`, the largest allowlisted RSS consumer is SIGKILL'd. The allowlist is tight and explicit — `sanctum-mlx`, `qemu-system-aarch64`, `com.apple.Virtualization.VirtualMachine`, `LM Studio Helper`, `metal` (only when matched with `-x metal`, the build-tool signature), Docker's VZ shim, and `ollama-runner`. The denylist — `launchd`, `WindowServer`, `watchdogd`, `kernel_task`, `sshd`, `tailscaled`, and the valve itself — is hard-coded and not overridable by environment.
+
+Heartbeat at `~/.openclaw/state/sanctum-pressure-valve.json` is atomic-renamed every tick, with the current `Snapshot`, `machine_level`, `last_action`, process pid, and binary version. A sanctum-watchdog integration can mtime this file to detect a wedged valve the same way it catches zombie listeners.
+
+### Installation Receipt
+
+```
+plist:    ~/Library/LaunchAgents/com.sanctum.pressure-valve.plist
+binary:   /Users/neo/Projects/sanctum-rs/target/release/sanctum-pressure-valve (2,276,192 bytes)
+logs:     ~/.openclaw/logs/sanctum-pressure-valve.{log,err}
+state:    ~/.openclaw/state/sanctum-pressure-valve.json
+alerts:   ~/.sanctum/alerts.json (appended, source="sanctum-pressure-valve")
+```
+
+Online at 2026-04-20 15:03:23 UTC. First state classified as `orange` at 15:03:28 (5 s to promote, debounce working as designed). First action at 15:03:28 — `launchctl bootout gui/501/com.sanctum.memory-vault`. Swap utilization had already dropped from 90 % to 88 % by the next tick, which is the valve doing what the manifest always said it should.
+
+### The Rule
+
+**The kernel has its own watchdog, and it will not wait for yours.** `AppleARMWatchdogTimer` is a hardware-backed 90-second deadman. If user-space does not relieve pressure before that deadman fires, you get a `panic-full-*.panic` file, 90-ish seconds of downtime, and no say in which page of work was in flight at the moment. A living-force manifest that names a `system-memory-monitor` but does not deploy one is not a monitor. It is an intention. The kernel does not read intentions.
+
+### Corollary
+
+**`launchctl list` is not a running service.** The second column is a last-exit-status. A service whose first column is `-` (no pid) and whose second column is `1` is a service that tried to start and failed, 3,671 times since midnight, while the dashboard would gladly tell you it was "configured" because the plist is in `~/Library/LaunchAgents/`. The health surface of a service is the heartbeat it writes, not the plist that claims it should be writing one.
+
+### Post-Entry State
+
+Four LaunchAgents now constitute the memory-safety stack: `com.sanctum.watchdog` (service-level remediation, 10-minute cadence), the Python `memory-sentinel.py` (per-sanctum-service RSS caps, invoked by watchdog), the new `com.sanctum.pressure-valve` (system-wide pre-panic relief, 5-second cadence), and `com.sanctum.drift-sentinel` (correctness, not capacity). Each monitors a different failure surface. Each writes its own heartbeat. Each escalates on its own track — see the corollary on wallpaper alerts from the previous entry; that rule applies here too.
+
+Open follow-ups, explicitly not in this commit:
+- **Auto-rehydration.** The valve sheds; it does not re-bootstrap. `sanctum-watchdog`'s next 10-minute pass will notice the shed service is unhealthy and attempt a restart; if pressure has eased, it succeeds. This works by accident today and should work by design tomorrow — a tracked list of shed-this-episode labels that the valve re-bootstraps on the transition back to `green`.
+- **RSS caps on `sanctum-mlx` itself.** macOS launchd has `CPU` and `NumberOfFiles` limits but not RSS. The valve is the belt; a patch to `sanctum-mlx` to detect its own runaway growth would be the braces.
+- **Re-test with the actual panic load.** A balloon process that mallocs 1 GB/s is on the test roadmap. The unit tests exercise the classifier; the integration tests exercise sampling; what neither does yet is prove the valve beats the 90-second deadman under adversarial load. `just test-panic-load` — to be written.
+
+Commits: sanctum-rs `fix/pressure-valve`, sanctum-docs this entry.
