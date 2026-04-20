@@ -77,6 +77,8 @@ Sanctum uses **haus** instead of "house" or "home" when referring to the dwellin
 - "home intelligence" → "haus intelligence"
 - "someone is home" → "someone is haus"
 - "vacation house" → "vacation haus"
+- "household" → "haushold" (the dwelling + the people in it — the whole unit)
+- "households" → "hausholds" (plural of the same)
 
 **Keep as-is:**
 - **Home Assistant** — product name, always capitalized, never touched
