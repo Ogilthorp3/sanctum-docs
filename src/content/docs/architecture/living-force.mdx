@@ -1070,3 +1070,56 @@ Open follow-ups, explicitly not in this commit:
 - **Re-test with the actual panic load.** A balloon process that mallocs 1 GB/s is on the test roadmap. The unit tests exercise the classifier; the integration tests exercise sampling; what neither does yet is prove the valve beats the 90-second deadman under adversarial load. `just test-panic-load` — to be written.
 
 Commits: sanctum-rs `fix/pressure-valve`, sanctum-docs this entry.
+
+## Living Force Entry — 2026-04-20 afternoon (HA failover under real failure)
+
+The last unchecked box on the A+ roadmap was exercising the high-availability failover path under actual primary-down conditions — not mocking a URL as dead, not reading the code, but running `launchctl bootout` on the Rust sanctum-mlx agent, sending a real chat request, and watching where it lands.
+
+### The test
+
+Guardian and canary paused first so their restart logic wouldn't interfere mid-exercise. A baseline chat through sanctum-server (`model: "council-secure"`, seven words of prompt) returned `"Understood"` in 12 s — router matched `council-secure` → primary `http://127.0.0.1:1337/v1` → Rust mlx → response. Normal path proven.
+
+Then `launchctl bootout gui/$(id -u)/com.sanctum.mlx`. Listeners on `:1337` and `:1338` gone, confirmed with `lsof`. Same chat request re-sent. sanctum-server logged:
+
+```
+INFO  Direct backend match model=council-secure backend=council-secure
+WARN  backend connect failed, trying next
+      backend=council-secure
+      url=http://127.0.0.1:1337/v1
+      error=error sending request for url (http://127.0.0.1:1337/v1/chat/completions)
+INFO  failed over from primary
+      backend=council-secure
+      winning_url=http://100.0.0.55:8902/v1
+```
+
+`"Understood"` came back in **0.34 s**. The whole chain — Mini sanctum-server, Tailscale hop to MBP, `Authorization: Bearer` carried from the 0600 token file through the `sanctum-server-launch` wrapper's process env, MBP shadow accepting the bearer, MBP's Rust mlx already warm from the morning's probes — worked on the first try, exactly as P7.2 was supposed to.
+
+Bootstrap the Mini agent back, wait ~45 s for the Metal context to reload, send the same request. No "failed over" line. Router goes back to the primary. Nothing stale, nothing sticky.
+
+### What Was Wrong (that had to be fixed during the test)
+
+The Python fallback plist — the one we'd disabled two entries ago — kept winning the `:1337` race every time the Rust agent was booted out. Boot out Rust, Python shows up; force-kill Python, something respawns it; bootout Python, exit code `-15` logged but a new process appears seconds later.
+
+`Disabled=true` in the plist file is a flag *read at bootstrap time*. An agent that was already bootstrapped into launchd before the plist was edited keeps its old settings until it's rebootstrapped. The fix is `launchctl disable gui/<uid>/com.sanctum.server-mlx` — a launchd-state-level disable, not a plist edit — plus a `launchctl bootout` to clear any lingering bootstrap, plus `pkill -9 -f mlx_lm.server` to kill the currently-running process that KeepAlive was resurrecting from.
+
+After all three, `launchctl print-disabled` shows `"com.sanctum.server-mlx" => disabled` and the process stays dead. Boot out Rust now and `:1337` genuinely goes to nothing, which is what the sanctum-server failover logic needed to see to try the fallback URL.
+
+### What Also Went Wrong (that was self-inflicted)
+
+`launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.sanctum.mlx.plist` returned `Bootstrap failed: 5: Input/output error` twice during the test. `launchctl` is famously terse about this class of failure — it means "already bootstrapped," "the label is registered but the path differs," or "launchd is confused." The reliable recovery pattern turned out to be `bootout` the label first (clear any half-state), then `bootstrap` fresh, then `kickstart -k` to force execution.
+
+### Rule
+
+**`Disabled=true` in a plist is a hint. `launchctl disable` is enforcement.** Changes to a plist on disk don't affect an already-bootstrapped agent. Either reboot the Mac, fully `bootout` the label, or issue `launchctl disable` against the running launchd state — whichever matches your tolerance for state drift.
+
+### Corollary
+
+**`launchctl bootstrap` failing with "Input/output error" means the label still exists in launchd's state from a previous lifetime.** `bootout` it first; don't keep retrying bootstrap.
+
+### Post-Entry State
+
+HA failover exercised under live failure, timing captured, failover path measured at 0.34 s from "primary down" to "fallback responding." Both Mini and MBP serving on their canonical ports, all five Mini sidecars + two MBP off-box watchers green, Python fallback both disabled-in-launchd-state and disabled-in-plist, nothing respawning uninvited. sanctum-server on the Mini serving its Dev-ID-signed binary with the Developer-scoped ASC notary key (`PLACEHLDR1`).
+
+Every item from the A+ roadmap that could be shipped this week has been shipped.
+
+Commits: sanctum-docs this entry.
