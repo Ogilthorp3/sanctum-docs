@@ -109,6 +109,42 @@ family:
 
 `evaluate_thresholds()` takes the limits dict and the current minute counts, and returns a list of `ThresholdDecision` objects. The caller — Force Flow — decides what to do with each decision. A `NUDGE` becomes a Sonos announcement; a `HARD_STOP` becomes a Force Flow override; a `DIVIDED_ATTENTION` past the warn threshold pings the parents. Nudge marks don't re-fire: once the system tells Albert "you've done an hour of YouTube," it doesn't repeat that line every 30 seconds, which would make both of us hate the Sonos.
 
+### The dispatcher
+
+Force Flow's activity tick runs two phases, 60 seconds apart: collect then evaluate.
+
+```
+every 60s:
+  _poll_activity_once()                  # connector → category_activity
+  _evaluate_and_dispatch_activity()      # category_activity → decisions → actions
+```
+
+The dispatcher itself is a ten-line function (`activity/dispatcher.py`) that routes each `ThresholdDecision` to an injected async callable. Force Flow provides three handlers:
+
+| Action | Handler | Effect |
+|---|---|---|
+| `NUDGE` | `_activity_on_nudge` | Sonos TTS in the configured warning rooms |
+| `HARD_STOP` | `_activity_on_hard_stop` | `_block_services` across every MAC the kid owns, plus a `/notify` to parents |
+| `DIVIDED_ATTENTION` | `_activity_on_divided_attention` | `/notify` to parents once the daily event threshold is crossed |
+
+Per-day state (which nudge marks have fired, how many divided-attention events today, which groups have already hit hard-stop) lives in three in-memory dicts that are pruned whenever the date rolls over. If Force Flow restarts mid-day the state resets, which means Albert could theoretically get nudged at the same minute mark twice — acceptable for a Sonos reminder, and the hard-stop side is idempotent thanks to the block-services contract.
+
+### The evaluate endpoint
+
+```http
+GET /screen/activity/evaluate?dry_run=1
+```
+
+Returns a per-member dict of decisions that _would_ be dispatched given the current DB state. `dry_run=1` skips Sonos / block / notify entirely. Without `dry_run`, the endpoint fires the real handlers and returns the same dispatch summary. The test harness uses `dry_run=1`; the parent dashboard can use either.
+
+<Aside type="note">
+Both the library dispatcher (10 unit tests) and the Force-Flow-wired path
+(10 E2E harness cases in `tests/test-activity-tracking.sh`) are green.
+When the Gold Pro starts feeding real per-category data, the dispatcher
+begins firing without any code change — the connector is still the only
+piece that sees the hardware.
+</Aside>
+
 <Aside type="tip">
 The threshold evaluator is a pure function. It gets unit-tested without
 a single mock. Everything that touches real infrastructure lives in the
