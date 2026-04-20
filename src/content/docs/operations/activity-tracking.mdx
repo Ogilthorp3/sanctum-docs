@@ -145,6 +145,53 @@ begins firing without any code change — the connector is still the only
 piece that sees the hardware.
 </Aside>
 
+## The two panels
+
+Two different readers, two different views, one API.
+
+### Parent — Holocron
+
+`ActivityCard` inside `ScreenTimePanel.tsx` renders below the Écrans row. Polls `/screen/activity` + `/screen/activity/evaluate?dry_run=1` every 30 seconds. Five groups, each with a minute total, a cap denominator, and a progress bar that shifts colour as the kid climbs the thresholds:
+
+| State | Threshold | Colour |
+|---|---|---|
+| OK | under the first nudge mark | green `#34c759` |
+| Nudge | past the first mark, still climbing | amber `#f59e0b` |
+| Capped | hit `hard_stop_at` | red `#ff3b30` with `PLAFOND` chip |
+| Divided attention | 2+ entertainment groups live in last 5 min | purple `#af52de` banner above the rows |
+
+The card is one component. It doesn't know about Firewalla models, connectors, or SQL. It knows about the API, because the API is the product contract.
+
+### Kid — `/pwa/activity.html`
+
+Fridge-mounted tablet, phone bookmark, whatever. Vanilla HTML + 200 lines of CSS + 40 lines of JS, served by Force Flow's existing `/pwa/<filename>` route. Big emoji per group, gentle French framing, a footer link back to the parent view.
+
+```
+┌──────────────────────────────────────┐
+│  AUJOURD'HUI                         │
+│                                      │
+│  Albert                              │
+│  80 minutes                          │
+│                                      │
+│  · Vidéo + Jeux en même temps        │
+│                                      │
+│  📺  Vidéo        65 / 180 min  ▓▓░░ │
+│  🎮  Jeux         15 / 120 min  ▓░░░ │
+│  💬  Social        0 /  60 min  ░░░░ │
+│                                      │
+│              ← vue parent            │
+└──────────────────────────────────────┘
+```
+
+Visibility is the intervention. A counter you can see is a counter you can reason with.
+
+<Aside type="tip">
+The kid-view intentionally has no controls. No override button, no credit
+spend, no schedule edit. If Albert wants to negotiate more minutes, the
+negotiation happens with the human, not with the dashboard. The dashboard
+is a mirror.
+</Aside>
+
 <Aside type="tip">
 The threshold evaluator is a pure function. It gets unit-tested without
 a single mock. Everything that touches real infrastructure lives in the
