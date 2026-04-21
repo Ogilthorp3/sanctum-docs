@@ -1242,3 +1242,55 @@ Flipping `council-secure.url` to `https://127.0.0.1:1338` against that topology 
 Step 1 shipped, pushed to `feat/proxy-hardening` as commit `c95eaa5`. sanctum-server on the Mini restored to the bearer-primary config, production chat round-trip measured at 8 s (first-call cold cache). The mTLS config flip (steps 2–4) is a ten-minute job the next time the canonical `com.sanctum.mlx` LaunchAgent is the listener on `:1337/:1338` — code, certs, and wrapper are all staged.
 
 Roadmap updated: step 1 done, steps 2–4 deferred until the mlx topology reconciles.
+
+## Living Force Entry — 2026-04-21 overnight (mTLS router proven on MBP)
+
+With the Mini running someone else's turboquant work, steps 2–4 of the sanctum-server mTLS rollout didn't have a `:1338` listener to aim at. So we moved the rollout to the MBP — which already has the shadow on `:8902` (plain+bearer) and `:8903` (mTLS) from the earlier P7.4 work — and exercised the full primary/fallback matrix against a disposable sanctum-server instance on `:19900`.
+
+### What the test exercised
+
+A minimal `router.yaml` with one backend, two URLs, three cert paths:
+
+```yaml
+router:
+  backends:
+    council-secure:
+      url: https://127.0.0.1:8903/v1          # mTLS primary
+      fallback_urls:
+        - http://127.0.0.1:8902/v1             # bearer fallback (transition state)
+      ca_cert_path: /Users/neo/.sanctum/certs/ca.crt
+      client_cert_path: /Users/neo/.sanctum/certs/clients/sanctum-server.crt
+      client_key_path: /Users/neo/.sanctum/certs/clients/sanctum-server.key
+  default: council-secure
+```
+
+The server started cleanly, logged `mTLS client configured` + `Registered backend ... mtls=true`. A chat request through `:19900` round-tripped in **379 ms** to the mTLS shadow. Three warm runs averaged **~280 ms**, which is the inter-process baseline for `:19900 → :8903 (TLS handshake reused) → Metal`.
+
+### The bug that surfaced (and got fixed)
+
+Pointing the primary URL at a dead `:18903` to force a failover returned the zero-byte `"builder error for url (http://...)"` response. The mTLS client — shared across all URLs in a backend's list — had `https_only(true)` set, which rejected the `http://` fallback at request-build time. Not at TLS-handshake time, not at connect time, *at build time*, before the request ever hit the wire.
+
+The fix is one line: drop `https_only(true)`. reqwest is already scheme-driven — `https://` URLs use the configured rustls context, `http://` URLs run plain. The `https_only` flag layered an additional build-time reject that was useful only if the code followed HTTP redirects, which it does not. The scheme of a URL is the operator's contract; the client should honor it.
+
+After the fix, all three failover modes work end-to-end:
+
+| Topology | Latency | Winning URL |
+|---|---|---|
+| mTLS primary healthy | 300 ms | `https://127.0.0.1:8903/v1` |
+| mTLS primary dead, **bearer** fallback | 311 ms | `http://127.0.0.1:8902/v1` |
+| mTLS primary dead, **mTLS** fallback | 300 ms | `https://127.0.0.1:8903/v1` |
+
+The gradual-migration story now actually holds: a backend can legitimately run with an mTLS primary and a bearer fallback during the transition, flip the fallback to mTLS when ready, and eventually drop the bearer endpoint entirely.
+
+### Rule
+
+**`https_only(true)` on an HTTP client is not a security feature, it is a URL-scheme contract.** If the client is given a `http://` URL it was supposed to reject, that's an operator bug in the config, not an attacker bug on the wire. Reject it with a clear error at config-parse time if you must, but do not bury the rejection inside the request-build path — the failure mode there produces zero-byte responses and empty-looking logs, which silently breaks gradual rollouts the configuration has no way to anticipate.
+
+### Post-entry state
+
+Step 2 + 3 + 4 of the sanctum-server mTLS rollout are proven against the MBP shadow. Mini deployment remains deferred — not for technical reasons (the code works end-to-end), but because the Mini's `:1337/:1338` currently belongs to a different `sanctum-mlx` process than the signed `com.sanctum.mlx` LaunchAgent. Whenever that reconciles, the instance.yaml flip is a 10-second edit and the result is already verified on this box.
+
+Commits:
+- `c95eaa5` — step 1, mTLS-capable backend (earlier today).
+- `3b6bef2` — fix, drop `https_only` to allow mixed-transport fallback lists.
+- This entry in sanctum-docs.
