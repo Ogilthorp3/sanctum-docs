@@ -1208,3 +1208,37 @@ The off-box drift check — which runs `deploy-sanctum-mlx.sh verify` from the M
 Five of six probe clients on mTLS (all four Mini-side probes + off-box canary). Deploy-script cross-machine probe also on mTLS, which means `council-drift-offbox` inherits mTLS without its own migration. sanctum-server on the roadmap as the last client. Bearer retirement is honest-close, gated on the sanctum-server migration.
 
 Commit `054f6cf` in sanctum-rs. No service interruption.
+
+## Living Force Entry — 2026-04-21 late night (shipping code vs flipping config)
+
+Today's exercise: close the sanctum-server mTLS gap the council asked for. Four steps planned — step 1 wrote the code (commit `c95eaa5`); steps 2–4 were supposed to flip configuration and soak. Code landed cleanly. Configuration did not.
+
+### What shipped
+
+`HttpProxyBackend` learned mTLS. A new `BackendTls` struct on `BackendDef` lets any router entry in `instance.yaml` opt in with three paths — `ca_cert_path`, `client_cert_path`, `client_key_path`. When all three resolve to readable files, the backend's `reqwest::Client` is built with rustls, trusting only the internal Sanctum CA, presenting the client cert on every upstream request. When any are missing, the backend builds the same plain-HTTP client it has always built. The transition is strictly additive.
+
+Four new unit tests exercise the configuration matrix: default (no TLS), all-missing-paths (graceful fallback), bad paths (warn-log + fallback), and a live end-to-end certificate generation via the system `openssl` followed by a successful client construction. 22/22 tests pass.
+
+One small reqwest landmine along the way: the `use_preconfigured_tls` API takes a bare `rustls::ClientConfig`, not an `Arc<ClientConfig>`. Wrapping in `Arc` causes a runtime downcast failure with the unhelpful message `"Unknown TLS backend passed to use_preconfigured_tls"`. The fix is one line; the time cost was in reading reqwest's source to confirm.
+
+A second landmine: reqwest's `__rustls` feature requires a crypto provider to be globally installed even when the backend is plain HTTP. `Client::new()` panics with `"No provider set"` if you forgot. A `Once` wrapper installs `rustls::crypto::ring::default_provider()` at every `HttpProxyBackend` construction, which is enough.
+
+### Why the config flip didn't happen
+
+Steps 2–4 needed a live `:1338` mTLS listener on the Mini for the router's primary URL to succeed. The `com.sanctum.mlx` LaunchAgent has that listener in its plist. But the actual `sanctum-mlx` process running at the moment is a different invocation — pointed at `Qwen3.6-35B-A3B-4bit-text` with `--turboquant` and no TLS arguments, presumably launched by a parallel session's work. That process owns `:1337` with bearer auth but has no `:1338` listener at all.
+
+Flipping `council-secure.url` to `https://127.0.0.1:1338` against that topology would have failed every primary call, silently routing everything to the MBP shadow — the exact failure mode the council flagged as the biggest risk. I confirmed the failure with an actual request (`error sending request for url (https://127.0.0.1:1338/v1/chat/completions)`), then rolled the config back to the bearer primary, kickstarted sanctum-server, and smoke-tested: `"Understood"` in 8 s, no failover lines in the log.
+
+### Rule
+
+**Ship the code before the config.** A code deploy that doesn't change behavior for any existing caller is boring and safe. A config flip that depends on the deployed topology is a live rollout, and live rollouts need the assumed topology to actually exist. Today's topology diverged from yesterday's — someone's in-flight work is serving the council from a different binary — and that's a legitimate state of affairs, not a failure. But mTLS rollout needs a `:1338` listener to aim at, and the aim had moved.
+
+### Corollary
+
+**`launchctl list` is the ground truth, not the plist on disk.** Checking `~/Library/LaunchAgents/com.sanctum.mlx.plist` and seeing it contains `--tls-host 127.0.0.1 --tls-port 1338` tells you what *should* run when the agent is loaded. It tells you nothing about whether the agent is loaded, or whether a different process has bound the same ports. Always confirm with `lsof` + `launchctl list`.
+
+### Post-entry state
+
+Step 1 shipped, pushed to `feat/proxy-hardening` as commit `c95eaa5`. sanctum-server on the Mini restored to the bearer-primary config, production chat round-trip measured at 8 s (first-call cold cache). The mTLS config flip (steps 2–4) is a ten-minute job the next time the canonical `com.sanctum.mlx` LaunchAgent is the listener on `:1337/:1338` — code, certs, and wrapper are all staged.
+
+Roadmap updated: step 1 done, steps 2–4 deferred until the mlx topology reconciles.
