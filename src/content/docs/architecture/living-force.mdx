@@ -1123,3 +1123,36 @@ HA failover exercised under live failure, timing captured, failover path measure
 Every item from the A+ roadmap that could be shipped this week has been shipped.
 
 Commits: sanctum-docs this entry.
+
+## Living Force Entry — 2026-04-21 (three more clients on mTLS)
+
+Morning after: three more probe clients migrated from bearer to mutual TLS using the same auto-detect-cert recipe canary and guardian established. `parity-smoke` (nightly correctness battery on the Mini), `council-canary-offbox` (cross-machine correctness probe on the MBP), and the cross-machine probe inside `deploy-sanctum-mlx.sh verify` that `council-drift-offbox` drives. All three now look for their client cert first and only fall back to bearer when the cert files are absent.
+
+The pattern is boring, which is the point:
+
+```bash
+CA_CERT="/Users/neo/.sanctum/certs/ca.crt"
+CLIENT_CERT="/Users/neo/.sanctum/certs/clients/<probe>.crt"
+CLIENT_KEY="/Users/neo/.sanctum/certs/clients/<probe>.key"
+if [ -z "${COUNCIL_URL:-}" ] && [ -r "$CA_CERT" ] && [ -r "$CLIENT_CERT" ] && [ -r "$CLIENT_KEY" ]; then
+  URL="https://127.0.0.1:1338"
+  MTLS_ARGS=(--cacert "$CA_CERT" --cert "$CLIENT_CERT" --key "$CLIENT_KEY")
+  TRANSPORT="mtls"
+else
+  URL="${COUNCIL_URL:-http://127.0.0.1:1337}"
+  MTLS_ARGS=()
+  TRANSPORT="bearer"
+fi
+```
+
+Each probe logs its chosen `transport` on every call, so when we eventually graph monitor traffic in Prometheus we'll see the bearer curve decay and the mtls curve climb as clients flip. Five of six probe clients are on mTLS now. The holdout is sanctum-server's `HttpProxyBackend` — the Rust router — which is a real refactor (reqwest client with rustls config, per-backend cert paths read from `instance.yaml`), not a bash one-liner. Moved to its own roadmap slot for a dedicated session; no reason to rush it.
+
+### One small sharp edge caught along the way
+
+The off-box drift check — which runs `deploy-sanctum-mlx.sh verify` from the MBP — briefly reported `/v1/models FAILED` even though a manual verify succeeded. The culprit wasn't a config drift or a TLS issue; it was that I'd just bootout/bootstrap'd the Rust agent during the HA failover test, and its 60-second model reload was still in progress when the off-box drift tick ran. A stop-the-world probe run against a service that takes a minute to start is always going to race the first tick. No action required: the next tick was green, the alert-suppression cooldown was already in place, nothing escalated. But worth logging as a known mode: **cross-machine probes will see transient failures whenever the service is in its cold-start window**. If the alert threshold ever gets tighter than "2 consecutive failures across 10 minutes," this will fire. Today it didn't.
+
+### Post-entry state
+
+Five of six probe clients on mTLS (all four Mini-side probes + off-box canary). Deploy-script cross-machine probe also on mTLS, which means `council-drift-offbox` inherits mTLS without its own migration. sanctum-server on the roadmap as the last client. Bearer retirement is honest-close, gated on the sanctum-server migration.
+
+Commit `054f6cf` in sanctum-rs. No service interruption.
