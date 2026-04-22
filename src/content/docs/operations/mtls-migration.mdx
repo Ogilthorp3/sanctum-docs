@@ -1,0 +1,136 @@
+---
+title: mTLS Migration
+description: 2026-04-22 — sanctum-mlx retired the bearer token and the plain-HTTP listener. Every client is now authenticated by a CA-signed client certificate.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+For a month the council ran dual-port: plain HTTP on `:1337` with a bearer token (loopback-bypassed for sidecars), mTLS on `:1338` for anyone who'd bothered to move. On 2026-04-22 the bearer was retired, the plain listener was taken off the air, and `:1337` was promoted to mTLS. One port, one protocol, one authentication story — every client presents a certificate that chains to the internal Sanctum CA, and nothing else talks to the model.
+
+This page is the record of what changed, why, and how to back out.
+
+## Before → after
+
+| | Before 2026-04-22 | After 2026-04-22 |
+|---|---|---|
+| `:1337` | plain HTTP + bearer (loopback bypass) | **mTLS** (cert-auth, no bearer) |
+| `:1338` | mTLS (cert-auth) | retired — port unbound |
+| Auth methods | bearer token OR mTLS cert | **mTLS cert only** |
+| Sidecar fallback | mTLS if certs present, else bearer | mTLS required, hard-fail on missing certs |
+| `--auth-token-file` in plist | yes | dropped |
+| Bearer token on disk | `~/.sanctum/secrets/council-mlx.token` | `…token.retired-20260422` (7-day rollback window) |
+
+## Why now
+
+Five of six clients were already on mTLS after 2026-04-18. The sixth was sanctum-server, which had the mTLS code shipped but never flipped in config. Meanwhile bearer-via-loopback was doing real work: it covered guardian, canary, drift, parity-smoke, and any ad-hoc `curl` from the Mini itself. The thing keeping bearer alive on `:1337` wasn't a missing feature — it was the `mlx_lm.server` Python fallback that kept respawning on the same port, holding it hostage. Rebuilding from the Rust sanctum-mlx in the Mini's existing plist never took, because Python won the port race.
+
+On 2026-04-22 three changes landed in the same session:
+1. `com.sanctum.server-mlx.plist` got renamed to `.disabled-20260422`, freeing `:1337` permanently.
+2. sanctum-mlx gained a `--no-plain` CLI flag (`feat/proxy-hardening` commit [`831c40f`](https://github.com/Ogilthorp3/sanctum-rs/commit/831c40f)) so the plain listener can be opted out of entirely. The `loopback_bound` invariant moved to AFTER TLS setup so a TLS loopback bind is sufficient for the guardian to probe.
+3. The four cert-aware sidecar scripts dropped their bearer fallback paths. Missing `ca.crt` / client `*.crt` / client `*.key` is now a hard fail with exit 2. Silent downgrades are gone.
+
+## What starts automatically
+
+| Agent | Binds | Auth |
+|---|---|---|
+| `com.sanctum.mlx` | `:1337` on 127.0.0.1 + 100.0.0.25 (mTLS) | per-client cert signed by `~/.sanctum/certs/ca.crt` |
+| `com.sanctum.council-guardian` | — (probe only) | guardian.crt to `:1337` every tick |
+| `com.sanctum.council-canary` | — (probe only) | canary.crt to `:1337` every 10 min |
+| `com.sanctum.council-parity-smoke` | — (probe only) | parity-smoke.crt to `:1337` nightly 03:00 |
+| `com.sanctum.council-canary-offbox` (MBP) | — (probe only) | council-offbox.crt to `100.0.0.25:1337` every 10 min |
+
+All cert files live under `~/.sanctum/certs/clients/`. Same CA on Mini and MBP.
+
+## Five-minute sanity check
+
+<Steps>
+
+1. **mTLS serves on :1337.**
+
+   ```bash
+   curl -sf --max-time 5 \
+        --cacert ~/.sanctum/certs/ca.crt \
+        --cert ~/.sanctum/certs/clients/sanctum-server.crt \
+        --key  ~/.sanctum/certs/clients/sanctum-server.key \
+        https://127.0.0.1:1337/v1/models | head -c 120
+   ```
+
+   Returns a JSON `{"data":[{"id":"Qwen3.6-35B-A3B-4bit-text",...}]}`.
+
+2. **Plain HTTP refuses.**
+
+   ```bash
+   curl -v --max-time 3 http://127.0.0.1:1337/v1/models
+   ```
+
+   Connection resets or TLS handshake error. A 200 here is a bug.
+
+3. **Old mTLS port :1338 is gone.**
+
+   ```bash
+   lsof -nP -iTCP:1338 -sTCP:LISTEN
+   ```
+
+   No rows. Anything listening there is a stale process; kill it.
+
+4. **Sidecars are on mTLS.**
+
+   ```bash
+   tail -1 ~/.openclaw/logs/council-guardian.log
+   tail -1 ~/.openclaw/logs/council-canary.log
+   ```
+
+   Both log `"transport": "mtls"` on every tick. If you see `"plain-loopback"`, the script is an old copy — re-pull from the repo's `services/sanctum-mlx/deploy/`.
+
+5. **Bearer token is retired.**
+
+   ```bash
+   ls ~/.sanctum/secrets/council-mlx.token*
+   ```
+
+   Expect `council-mlx.token.retired-20260422`. The bare `council-mlx.token` path MUST NOT exist — if it does, something re-created it and bearer auth is live again.
+
+</Steps>
+
+## Rollback
+
+<Aside type="caution">
+Rollback reverts the migration. Do it only if mTLS is demonstrably broken (cert chain issue, rustls panic, etc.), not for "just to be safe".
+</Aside>
+
+```bash
+# On the Mini — bring back plain + bearer on :1337.
+mv ~/.sanctum/secrets/council-mlx.token.retired-20260422 \
+   ~/.sanctum/secrets/council-mlx.token
+
+# Check out the old plist (pre-831c40f).
+cd ~/Projects/sanctum-rs
+git checkout c939513 -- services/sanctum-mlx/deploy/com.sanctum.mlx.plist
+cp services/sanctum-mlx/deploy/com.sanctum.mlx.plist \
+   ~/Library/LaunchAgents/com.sanctum.mlx.plist
+
+# Reload the agent.
+launchctl unload ~/Library/LaunchAgents/com.sanctum.mlx.plist
+launchctl load   ~/Library/LaunchAgents/com.sanctum.mlx.plist
+```
+
+The sidecar scripts will still be the new mTLS-only versions, but that's fine — they'll keep working against the rolled-back server because the server now binds both plain (with bearer) AND mTLS (the old dual-port state).
+
+## What's NOT in the migration
+
+A few things that got asked about during execution and deliberately got left alone:
+
+- **`com.sanctum.triage`** binds `10.10.10.1:1337` on the bridge100 VM interface. It's a separate Rust proxy that forwards VM requests to LM Studio at `127.0.0.1:1234`. It has nothing to do with sanctum-mlx and didn't need a touch. VMs reaching `10.10.10.1:1337` still hit triage and still reach LM Studio.
+- **`com.sanctum.drift-sentinel`** uses a Firewalla bearer for different auth. Unrelated.
+- **`com.sanctum.council-drift-offbox`** keeps flagging `com.sanctum.mlx.plist` drift until the repo's committed plist catches up with prod — the 2026-04-22 commit fixed that by updating `services/sanctum-mlx/deploy/com.sanctum.mlx.plist` to match.
+
+## The retirement calendar
+
+| Date | Event |
+|---|---|
+| 2026-04-17 | mTLS landed alongside plain+bearer (dual-port) |
+| 2026-04-18 → 04-21 | 5 of 6 clients migrated to mTLS (canary, guardian, parity-smoke, off-box canary, off-box drift) |
+| **2026-04-22** | **plain listener retired, bearer token rotated to `.retired-20260422`** |
+| 2026-04-29 | Rollback window closes — delete the retired token file |
+
+Reminder: the Sanctum CA certs are valid through **2031**. That's the hard deadline for the next rotation.
