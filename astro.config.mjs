@@ -166,6 +166,7 @@ export default defineConfig({
 					label: 'Operations',
 					items: [
 						{ label: 'Backup & Restore', slug: 'operations/backup-restore' },
+						{ label: 'Pressure Valve', slug: 'operations/pressure-valve' },
 						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
 						{ label: 'Tooling', slug: 'operations/tooling' },
