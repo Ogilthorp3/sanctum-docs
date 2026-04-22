@@ -18,6 +18,18 @@ The last sentence of a section often lands a quiet punchline. Don't force it. If
 
 **Warmth matters.** There is genuine love for this project under every quip. The humor punches at the absurdity of the situation, never at the reader.
 
+## The Five-Minute Rule
+
+A doc page should be readable in five minutes. Not skimmed — read. That's the budget.
+
+Five minutes is roughly 1,000 words, or about 150 lines of prose once you account for headings, code blocks, and the asides that make the page worth reading in the first place. If your page runs longer, it isn't a page anymore — it's a filing cabinet pretending to be one.
+
+**What this means in practice.** Architecture pages explain the idea and stop. Operational material — dated incidents, forensic walkthroughs, the thing that took four hours on a Tuesday — goes in its own annex under `operations/` and gets linked from the parent page. The doctrine page keeps the doctrine. The annex keeps the receipts.
+
+**Why this rule exists.** A reader who bounces off a 3,000-word page learns nothing. A reader who finishes a 900-word page and follows one link into the archive learns twice. The shorter page respects the reader's time, which is the only currency documentation actually trades in.
+
+**Exceptions.** A few chapters earn a longer read because they are structurally load-bearing — the Living Force is the standing example, and it runs long because the Ten Principles have to stay whole or the architecture doesn't make sense. Exceptions are earned by the chapter's role in the overall map, not by the author's affection for their own prose. If you think your page is the exception, get a second opinion before you skip the budget. Most pages that feel load-bearing to their author are filing cabinets in denial.
+
 ## Page Structure
 
 Every page is MDX with this skeleton:

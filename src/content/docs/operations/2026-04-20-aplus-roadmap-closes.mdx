@@ -1,0 +1,232 @@
+---
+title: "2026-04-20: The A+ Roadmap Closes"
+description: Five sittings in one day — the first six Living Force principles all finished becoming code, HA failover was finally exercised under real failure, and a plist quietly won a boot race nobody knew was running.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "Five small roadmap gates along a single winding path; each gate is shown closing in sequence, the last one still swinging shut. Above them, six principles glow in soft teal, each one ticking from parchment to etched steel. Technical pencil sketch, dark background, teal localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+
+One day in five sittings, and at the end of it the first six Living Force principles had all finished becoming code. The morning shipped the integrity probe. Noon shipped the Rust router. An afternoon push closed four more A+ gaps. A second afternoon exercised HA failover against an actually-dead primary. Late at night, a routine reboot revealed that the Python fallback had been quietly winning a race nobody had noticed.
+
+This annex is every sitting in chronological order. None of them would have been remarkable on their own. Together, they're the day the doctrine stopped being doctrine.
+
+## Morning — Rule 1 Becomes Code
+
+Yesterday's entry ended with three rules and a roadmap pointer. Today the top one got promoted from doctrine to a running LaunchAgent.
+
+### What Shipped
+
+`com.sanctum.council-integrity` fires every five minutes on the Mini. Four checks, any one fails the whole thing and alerts Force Flow at error severity on its own channel — not buried in the composite drift report:
+
+1. **Binary exists + executable.** `stat` on `target/release/sanctum-mlx`. The thing that was gone for sixteen hours.
+2. **Signature verifies.** `codesign --verify --strict`. Same check Gatekeeper uses on first-run quarantine. Catches revoked cert, modified bytes, truncation.
+3. **Metallib colocated.** Sibling file next to the binary. Without it, Metal model load panics and the new sign-off is dead before it serves a byte.
+4. **Running process inode == on-disk binary inode.** If they differ, the running process is already stale; the next `kickstart -k` flips behaviour. This is the "I rebuilt but haven't restarted yet" case that looked fine to the old monitoring stack.
+
+Smoke-tested on the MBP dev environment first. It correctly flagged a missing metallib and a stale process inode — both legitimate states on a dev machine that had just been resigned. On the Mini with the production binary it returned clean. The probe is live at a 5-minute cadence, independent from guardian's 60-second HTTP probe, canary's 10-minute chat probe, and drift's hourly SHA compare.
+
+The architectural principle isn't just "add another check." It's **one probe per failure mode, each on its own escalation track.** The 16-hour blind spot happened because `binary_missing` was bundled into a composite `drift_detected` event alongside expected noise (guardian.sh drift because the Mini version had been upgraded ahead of the repo, repo_dirty because the working tree had turboquant work in flight). Bundled alerts get filtered as noise. Dedicated channels don't.
+
+### Rule
+
+**An alert you bundle with expected noise is an alert you've already silenced.** Every serious failure mode gets its own probe with its own cooldown and its own channel. One probe checking four things and emitting one alert is strictly worse than four probes each emitting their own specific alert.
+
+### Post-Entry State
+
+Mini is Apple-notarized as of this morning (CD hash submission `00000000-0000-0000-0000-000000000001`, status Accepted). Council-integrity probe live at 5-minute cadence. Guardian + canary + drift + parity-smoke + integrity + two off-box watchers = seven independent channels now, each with its own cooldown and its own thing to say. Commit `ec5867b`. Roadmap item #10 closed.
+
+## Noon — Last Two Doors Closed
+
+Two items had sat on the roadmap since the night before. The ASC API key was still Admin-scoped (we had asked for Developer on creation, the UI gave us Admin, and we didn't notice until the day after). And `sanctum-server` — the Rust router that fronts every council request and holds the HA `fallback_urls` wiring — was a 44-hour-old orphan process running a binary that had been `cargo clean`'d out of existence. Both closed in the same session.
+
+### ASC API Key — Developer Scope
+
+The previous key (`PLACEHLDR0`, Admin) was revoked from `appstoreconnect.apple.com/access/integrations/api` and a new one generated with **Developer** role (`PLACEHLDR1`, same issuer `00000000-0000-0000-0000-000000000002`). The `.p8` was downloaded once — Apple's one-shot download rule is non-negotiable — and moved to `~/.appstoreconnect/AuthKey_PLACEHLDR1.p8` on the MBP (mode 0600) and `~/.keys/holocron-notary/AuthKey_PLACEHLDR1.p8` on the Mini. `xcrun notarytool store-credentials sanctum` was re-run on both machines, overwriting the keychain profile in place. A smoke submission of the current Mini binary came back `status: Accepted` in about 90 seconds, which is the confirmation that matters.
+
+The archived `.p8` files for the revoked key sit next to the new ones with a `.revoked-2026-04-20` suffix. That's deliberate — Apple's revocation is authoritative (the key cannot be used), but the file on disk is a historical record of what was submitted under what identity, and the cost of keeping it is 257 bytes per machine.
+
+Blast radius if the new `.p8` leaks: Developer role can submit to notary and read team names, nothing else. Previously it was Admin, which could alter team membership and agreements. A meaningful reduction for a 90-second operator action.
+
+### sanctum-server, Actually Live
+
+The `sanctum-server` Rust binary (the smart router, not to be confused with the Python `sanctum-server-mlx` it replaced a lifetime ago) had been running on the Mini as a manually-spawned process since April 17, against a model path that no longer existed on disk. Nobody was talking to it. It was keeping a socket open out of habit.
+
+What shipped:
+
+1. **Fresh build** on the Mini with `PATH=/opt/homebrew/bin:... cargo build --release -p sanctum-server`. 6.8 s — the dependency graph was cached from the sanctum-mlx build earlier.
+2. **Developer-ID codesign** with hardened runtime and secure timestamp, under the same `Bertrand Nepveu (GJ994MN2YF)` identity used for sanctum-mlx.
+3. **`com.sanctum.server.plist`** installed at `~/Library/LaunchAgents/`. `--router-config /Users/neo/.sanctum/instance.yaml` engages the smart router; `--host 127.0.0.1 --port 8900` binds loopback only. Any client on the Mini can reach it at `http://127.0.0.1:8900/v1/chat/completions`; cross-machine access still goes through sanctum-mlx directly (or through Tailscale to the MBP shadow).
+4. **`sanctum-server-launch` wrapper** reads `~/.sanctum/secrets/council-mlx.token` (0600) and exports `COUNCIL_API_KEY` into the process environment before exec'ing the binary. The plist's `ProgramArguments` point at the wrapper, not the binary, so the token never appears in plaintext in a mode-644 plist. The router's `HttpProxyBackend` picks up `api_key_env: COUNCIL_API_KEY` from `instance.yaml` and forwards `Authorization: Bearer <token>` on upstream requests — including the Tailscale fallback to the MBP shadow, which is the whole point of wiring the env in the first place.
+
+```
+[Client] → 127.0.0.1:8900 (sanctum-server, smart router)
+           │
+           ├─ council-secure ──► 127.0.0.1:1337 (sanctum-mlx, primary)
+           │                     └─ fallback ──► 100.0.0.55:8902 (MBP shadow, bearer'd)
+           ├─ council-ops   ──► 127.0.0.1:1234 (LM Studio)
+           ├─ coder         ──► 127.0.0.1:1234 (LM Studio)
+           └─ cloud         ──► https://openrouter.ai
+```
+
+Verified live: startup log shows `Registered backend backend=council-secure url=http://127.0.0.1:1337/v1 fallback_urls=["http://100.0.0.55:8902/v1"]`. A chat through the router with `model: "council-secure"` returned `"2 + 2 equals"` in 8.7 s — routing from sanctum-server to sanctum-mlx via the primary, through the loopback-bypass, with the env-loaded token traveling along for the ride but being ignored on the localhost side.
+
+The HA failover path is now genuinely in place: code shipped (P7.2), config wired (`instance.yaml`), upstream auth threaded (launch wrapper), router live (sanctum-server). Exercising the actual failover — killing sanctum-mlx and watching the next request land on the MBP shadow — is a one-liner away, not a multi-day project. We did not execute it in this entry because the goal was wiring, not stress testing, and because exercising HA failover while council-integrity auto-recovery is also armed risks a promotion cascade we'd rather test with a clear head.
+
+### Rule
+
+**Secrets move in environment variables loaded from 0600 files, not in plists.** A LaunchAgent plist is world-readable by default. Putting a bearer token in a `<key>EnvironmentVariables</key>` block there is security theater — the token is plaintext at rest in a publicly-readable file. Wrapping with a launcher script that reads the mode-0600 secret file on startup keeps the surface area down to one file and one process, which is where the ACL matters.
+
+### Post-Entry State
+
+MBP + Mini both notarizing against the Developer-scoped `PLACEHLDR1`. Admin key revoked, `.p8` archived. sanctum-server live at `127.0.0.1:8900` on the Mini, router loaded, HA failover wired end-to-end with upstream auth plumbed through. Six monitor channels green (five sidecars plus sanctum-server health). Two clients on mTLS (canary, guardian); four to go before bearer retirement is honest.
+
+Commits: sanctum-rs `205c5cb`, sanctum-docs this entry.
+
+## Afternoon — Four A+ Gaps Closed
+
+Morning entry ended at "rule 1 is code" — the integrity probe. This entry closes four more from the roadmap in one push.
+
+### Streaming-Path Metrics
+
+The P7.1 Prometheus instrumentation only covered the non-streaming chat path. Streaming (SSE) ran through `tokio::spawn`'d futures that never called `record_inference`. Gap closed: `stream_started` Instant captured at spawn, `prompt_tokens_count` threaded from the initial tokenizer encode, `finish_reason` threaded from the sampling result, and `record_inference` called at the end of the streaming task. Histograms combine across both paths in Prometheus. Verified with one streaming probe: `sanctum_mlx_inference_completion_tokens_total 0→8` and `requests_total{stop_reason="stop"}=1`.
+
+### First Client on mTLS
+
+`council-canary` now auto-detects the CA cert and its own client cert at `~/.sanctum/certs/clients/canary.{crt,key}` and switches to `https://127.0.0.1:1338` when they're in place. The log line includes a `transport` field — `"mtls"` or `"plain-loopback"` — so future Prometheus can see migration progress per-probe. Pattern established for guardian, drift, parity-smoke, off-box, and eventually sanctum-server to copy. Removing the cert files reverts the probe to bearer-loopback with no code change either direction.
+
+### Integrity Auto-Failover
+
+The integrity probe from this morning alerted on binary-missing but didn't remediate. Added: on binary-missing or codesign-verify-failed (the two "next respawn WILL fail" classes), the probe now writes `FALLBACK_LOCK`, `launchctl bootout`s the failing Rust agent, `bootstrap`s Python `com.sanctum.server-mlx`, and notifies. Same recipe council-guardian uses; duplicated in integrity so it works even if guardian is hung. Metallib-missing and inode-mismatch alert only — those are recoverable by rebuild/kickstart without promoting to Python.
+
+Net effect: the 16-hour zombie-listener scenario now recovers to the Python backend within 5 minutes, while alerting, instead of going dark. The rule from yesterday — "the binary file is part of the service" — is now enforced by code that *does something about it*, not just code that reports it.
+
+### HA Failover Wiring
+
+`instance.yaml` on the Mini gained `fallback_urls: [http://100.0.0.55:8902/v1]` for the `council-secure` backend. Shadow on the MBP now enforces bearer auth matching the Mini's token, so sanctum-server's `api_key_env: COUNCIL_API_KEY` Just Works against it. Testing the failover live needs sanctum-server rebuilt first — the running one on the Mini is a 44-hour-old orphan with a deleted binary (exact same class as yesterday's incident, different service), which was cleaned up in the noon entry. The config is in place for the next proper sanctum-server deploy.
+
+### Rule
+
+**Ship code that remediates, not just code that reports.** An alert is an IOU to a human; an auto-remediation is a service that stays up without one. Every probe that detects a class of failure should, when possible, also know the canonical recovery for that class and execute it — then alert about the recovery, which is a much calmer kind of notification than "we're broken."
+
+### Post-Entry State
+
+Five monitor channels on Mini all green (guardian, canary, drift, parity-smoke, integrity). Canary now on mTLS (`transport:"mtls"`, 501 ms probe latency — down from ~2 s bearer because loopback bypass still went through the HTTP path while mTLS stays at the TLS layer). Streaming metrics ticking. Integrity auto-recovery wired. Orphan sanctum-server cleaned up. Two roadmap items (#2 canary, #5 streaming metrics) newly shipped; #10 (integrity monitor) reinforced with auto-recovery.
+
+Commit `60b2154` on `feat/proxy-hardening`.
+
+## Afternoon — HA Failover Under Real Failure
+
+The last unchecked box on the A+ roadmap was exercising the high-availability failover path under actual primary-down conditions — not mocking a URL as dead, not reading the code, but running `launchctl bootout` on the Rust sanctum-mlx agent, sending a real chat request, and watching where it lands.
+
+### The Test
+
+Guardian and canary paused first so their restart logic wouldn't interfere mid-exercise. A baseline chat through sanctum-server (`model: "council-secure"`, seven words of prompt) returned `"Understood"` in 12 s — router matched `council-secure` → primary `http://127.0.0.1:1337/v1` → Rust mlx → response. Normal path proven.
+
+Then `launchctl bootout gui/$(id -u)/com.sanctum.mlx`. Listeners on `:1337` and `:1338` gone, confirmed with `lsof`. Same chat request re-sent. sanctum-server logged:
+
+```
+INFO  Direct backend match model=council-secure backend=council-secure
+WARN  backend connect failed, trying next
+      backend=council-secure
+      url=http://127.0.0.1:1337/v1
+      error=error sending request for url (http://127.0.0.1:1337/v1/chat/completions)
+INFO  failed over from primary
+      backend=council-secure
+      winning_url=http://100.0.0.55:8902/v1
+```
+
+`"Understood"` came back in **0.34 s**. The whole chain — Mini sanctum-server, Tailscale hop to MBP, `Authorization: Bearer` carried from the 0600 token file through the `sanctum-server-launch` wrapper's process env, MBP shadow accepting the bearer, MBP's Rust mlx already warm from the morning's probes — worked on the first try, exactly as P7.2 was supposed to.
+
+Bootstrap the Mini agent back, wait ~45 s for the Metal context to reload, send the same request. No "failed over" line. Router goes back to the primary. Nothing stale, nothing sticky.
+
+### What Was Wrong (That Had to Be Fixed During the Test)
+
+The Python fallback plist — the one we'd disabled two entries ago — kept winning the `:1337` race every time the Rust agent was booted out. Boot out Rust, Python shows up. Force-kill Python, something respawns it. Bootout Python, exit code `-15` logged, but a new process appears seconds later.
+
+`Disabled=true` in the plist file is a flag *read at bootstrap time*. An agent that was already bootstrapped into launchd before the plist was edited keeps its old settings until it's re-bootstrapped. The fix is `launchctl disable gui/<uid>/com.sanctum.server-mlx` — a launchd-state-level disable, not a plist edit — plus a `launchctl bootout` to clear any lingering bootstrap, plus `pkill -9 -f mlx_lm.server` to kill the currently-running process that `KeepAlive` was resurrecting from.
+
+After all three, `launchctl print-disabled` shows `"com.sanctum.server-mlx" => disabled` and the process stays dead. Boot out Rust now and `:1337` genuinely goes to nothing, which is what the sanctum-server failover logic needed to see to try the fallback URL.
+
+### What Also Went Wrong (That Was Self-Inflicted)
+
+`launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.sanctum.mlx.plist` returned `Bootstrap failed: 5: Input/output error` twice during the test. `launchctl` is famously terse about this class of failure — it means "already bootstrapped," "the label is registered but the path differs," or "launchd is confused." The reliable recovery pattern turned out to be `bootout` the label first (clear any half-state), then `bootstrap` fresh, then `kickstart -k` to force execution.
+
+### Rule
+
+**`Disabled=true` in a plist is a hint. `launchctl disable` is enforcement.** Changes to a plist on disk don't affect an already-bootstrapped agent. Either reboot the Mac, fully `bootout` the label, or issue `launchctl disable` against the running launchd state — whichever matches your tolerance for state drift.
+
+### Corollary
+
+**`launchctl bootstrap` failing with "Input/output error" means the label still exists in launchd's state from a previous lifetime.** `bootout` it first; don't keep retrying bootstrap.
+
+### Post-Entry State
+
+HA failover exercised under live failure, timing captured, failover path measured at 0.34 s from "primary down" to "fallback responding." Both Mini and MBP serving on their canonical ports, all five Mini sidecars plus two MBP off-box watchers green, Python fallback both disabled-in-launchd-state and disabled-in-plist, nothing respawning uninvited. sanctum-server on the Mini serving its Dev-ID-signed binary with the Developer-scoped ASC notary key (`PLACEHLDR1`).
+
+Every item from the A+ roadmap that could be shipped this week has been shipped.
+
+Commits: sanctum-docs this entry.
+
+## Late Night — The Reboot That Almost Wasn't
+
+The Mac Mini rebooted itself sometime around midnight. We don't know exactly why — macOS applied a pending update, or the kernel panicked, or gravity hiccuped. It came back up in two minutes with a load average of 95, every LaunchAgent in `~/Library/LaunchAgents/` firing simultaneously, and the Rust sanctum-mlx agent loading a 27-billion-parameter model into Metal while thirty-seven other services also tried to be the first to grab the GPU.
+
+All five monitor channels — guardian, canary, drift, parity-smoke, integrity — re-bootstrapped on their own. Rust came up on `:1337` and `:1338` without a human touching anything. The off-box canary on the MBP kept probing across Tailscale and logged `canary_ok` through the whole ordeal; the off-box drift logged one `ssh timeout` entry while the Mini was physically unreachable, then recovered on the next tick. That is the Living Force behaving exactly as advertised.
+
+The part that wasn't advertised: Python won the `:1337` race.
+
+<Aside type="caution" title="A disabled plist is still a bootstrap race participant">
+`Disabled=true` in a file on disk does nothing if the process was already bootstrapped. Reboot semantics don't preserve your intent — they preserve the plist directory and the `launchctl` state database. The two can drift. The plist always wins the startup, then the state database figures out whether to keep it running.
+</Aside>
+
+### What Was Wrong
+
+`com.sanctum.server-mlx.plist` — the Python `mlx_lm.server` fallback — still lived in `~/Library/LaunchAgents/`. LaunchAgents in that directory are bootstrapped automatically when the user session logs in. The plist had `KeepAlive=true` and no explicit `RunAtLoad` key. Per launchd semantics, `KeepAlive=true` on its own is sufficient to start the process immediately on bootstrap. Python started instantly, bound `*:1337`, and was answering requests long before the Rust binary finished verifying its ed25519-signed manifest (10 s), SHA-checking 16 GB of weights (10 s), and loading into Metal (60 s).
+
+That made the whole "transition permanent, Python is fallback only" story a polite fiction. On every reboot, Python would have won.
+
+### What Also Went Sideways
+
+Something rebuilt the Rust binary at 23:54 yesterday. Cargo-clean or a parallel feature-branch build — we didn't pin down the cause. The rebuilt binary was `(adhoc,linker-signed)` — no hardened runtime, no Developer ID. The council-integrity probe caught it (`codesign --verify --strict` failing), though on this reboot the adhoc binary started fine enough that Rust eventually came up on `:1338` too and the fallback-lockfile path never triggered. The probe was right to be worried; the worry just wasn't needed this time.
+
+### What Changed
+
+**`com.sanctum.server-mlx.plist` now ships `RunAtLoad=false` + `Disabled=true`.** A reboot bootstraps it into launchd but launchd refuses to start the process unless someone explicitly enables the agent. `activate_fallback()` in both `council-guardian.sh` and `council-integrity-check.sh` now runs `launchctl enable gui/<uid>/com.sanctum.server-mlx` before `bootstrap + kickstart`. The one-shot activation still works; the boot-race cannot happen.
+
+```diff
+- <key>KeepAlive</key>
+- <true/>
++ <key>RunAtLoad</key>
++ <false/>
++ <key>KeepAlive</key>
++ <true/>
++ <key>Disabled</key>
++ <true/>
+```
+
+`KeepAlive=true` stays, so that once guardian does kick Python on, it stays up across crashes — we want that when Rust is genuinely broken. The two keys working together mean "do not start unless told to, but once told, persist."
+
+**council-guardian migrated to mTLS.** Second client after canary. The probe now goes to `https://127.0.0.1:1338/v1/models` with a client cert pinned to `CN=guardian`, not the loopback-bypass bearer path. Remove `~/.sanctum/certs/clients/guardian.{crt,key}` and the next tick reverts to bearer. No code change either direction. The `transport` field is logged on every probe so future Prometheus panels can see the migration ratio.
+
+**council-drift-check stopped alerting on repo-dirty.** A dirty working tree on the Mini usually means a parallel session is editing code but hasn't committed yet. The SHA-comparison logic above it still catches real "installed differs from committed" drift. Separating the two prevents the alert-fatigue pattern where the hourly repo-dirty noise made operators filter drift alerts in general — which is how the 2026-04-19 zombie-listener went sixteen hours without a human looking at a warning that was already in the log.
+
+### Rule
+
+**A plist in `~/Library/LaunchAgents/` is a startup race participant whether you intended it to be or not.** The fallback-only pattern requires explicit opt-out (`RunAtLoad=false`, `Disabled=true`, `launchctl disable`) or the plist has to live somewhere launchd doesn't scan. Intent ≠ configuration; launchd reads the configuration.
+
+### Corollary
+
+**An alert that fires every hour is not an alert. It is wallpaper.** The repo-dirty case was a real signal (uncommitted work creates a risk of drift if someone edits the canonical copy) but firing it at error-severity on an active development branch drowned out the actual drift events it was paired with. Split, downgrade, or suppress; never let a legitimate-but-chronic condition sit next to an urgent one on the same escalation track.
+
+### Post-Entry State
+
+Mini post-reboot: Rust `sanctum-mlx` serving on `:1337` plain + `:1338` mTLS, Dev-ID signed, Apple-notarized (submission `00000000-0000-0000-0000-000000000003`, Accepted). Two of six clients on mTLS (canary, guardian). Python fallback `Disabled=true`, will stay dormant across reboots until guardian or integrity explicitly promotes it.
+
+Five monitor channels green. Two commits: sanctum-rs `6d27666`, sanctum-docs this entry.
+
+## Day Close
+
+Six principles finished becoming code today. The integrity probe, the auto-remediation wiring, the mTLS migration, the HA failover exercise, the fallback-race fix, and the alert-fatigue split each close a gap that used to require human attention. None of them is a new idea. All of them have been doctrine for at least a week. What changed today was that the doctrine shipped.
+
+If the A+ roadmap had any honest way to close itself, this was it: exercise the failover under real failure, then go to sleep, then wake up to a reboot that proves the plist discipline was never tight enough — and ship the fix before the next sitting.
