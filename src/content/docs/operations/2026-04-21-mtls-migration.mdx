@@ -1,0 +1,52 @@
+---
+title: "2026-04-21: Three More Clients on mTLS"
+description: Five of six probe clients now present client certs; the auto-detect-cert pattern keeps spreading, and the router stays behind as the honest holdout.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "Six small sentries lined up at a gatehouse, each holding up a different badge; five badges glow teal, one is still blank. The gatehouse door is mid-handshake with the fifth sentry. Technical pencil sketch, dark background, teal localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+
+The morning after the A+ roadmap push, the obvious next move was to copy the cert-detection pattern from the two clients that already had it out to the three that didn't. Nothing heroic. Boring is the right shape for security work — boring means the pattern is composing rather than surprising.
+
+## What Moved
+
+Three probe clients migrated from bearer auth to mutual TLS using the same auto-detect-cert recipe canary and guardian established earlier in the week: `parity-smoke` (the nightly correctness battery that runs on the Mini), `council-canary-offbox` (the cross-machine correctness probe that runs on the MBP), and the cross-machine probe inside `deploy-sanctum-mlx.sh verify` that `council-drift-offbox` drives. All three now look for their client cert first and only fall back to bearer when the cert files are absent.
+
+The pattern is boring, which is the point:
+
+```bash
+CA_CERT="/Users/neo/.sanctum/certs/ca.crt"
+CLIENT_CERT="/Users/neo/.sanctum/certs/clients/<probe>.crt"
+CLIENT_KEY="/Users/neo/.sanctum/certs/clients/<probe>.key"
+if [ -z "${COUNCIL_URL:-}" ] && [ -r "$CA_CERT" ] \
+   && [ -r "$CLIENT_CERT" ] && [ -r "$CLIENT_KEY" ]; then
+  URL="https://127.0.0.1:1338"
+  MTLS_ARGS=(--cacert "$CA_CERT" --cert "$CLIENT_CERT" --key "$CLIENT_KEY")
+  TRANSPORT="mtls"
+else
+  URL="${COUNCIL_URL:-http://127.0.0.1:1337}"
+  MTLS_ARGS=()
+  TRANSPORT="bearer"
+fi
+```
+
+Each probe logs its chosen `transport` on every call. When Prometheus panels get built for monitor traffic, the bearer curve will decay and the mTLS curve will climb as clients flip — the migration graph is already in the data, just waiting for someone to plot it.
+
+Five of six probe clients are on mTLS now. The holdout is `sanctum-server`'s `HttpProxyBackend` — the Rust router — which is a real refactor (reqwest client with rustls config, per-backend cert paths read from `instance.yaml`), not a bash one-liner. Moved to its own roadmap slot for a dedicated session. No reason to rush it.
+
+## One Small Sharp Edge Caught Along the Way
+
+The off-box drift check — which runs `deploy-sanctum-mlx.sh verify` from the MBP — briefly reported `/v1/models FAILED` even though a manual verify from the same shell succeeded seconds later. The culprit wasn't a config drift or a TLS issue. It was that the Rust agent had just been bootout/bootstrap'd during the HA failover test, and its 60-second model reload was still in progress when the off-box drift tick landed. A stop-the-world probe run against a service that takes a minute to start is always going to race the first tick.
+
+No action required: the next tick was green, the alert-suppression cooldown was already in place, nothing escalated. But it's worth logging as a known mode — cross-machine probes will see transient failures whenever the service is in its cold-start window. If the alert threshold ever gets tighter than "2 consecutive failures across 10 minutes," this will fire. Today it didn't.
+
+<Aside type="note" title="The cold-start window is a real mode, not a bug">
+A probe that times out against a service still loading 16 GB of weights isn't a monitor failure — it's accurate telemetry. The right response is to widen the hysteresis, not to narrow the probe. Alerts that never tolerate a 60-second restart will page someone every deploy.
+</Aside>
+
+## Post-Entry State
+
+Five of six probe clients on mTLS (all four Mini-side probes plus the off-box canary). The deploy-script cross-machine probe is also on mTLS, which means `council-drift-offbox` inherits mTLS without its own migration — the verify path was the probe path the whole time, we just hadn't noticed. `sanctum-server` on the roadmap as the last client. Bearer retirement is honest-close, gated on the router migration.
+
+Commit `054f6cf` in sanctum-rs. No service interruption.

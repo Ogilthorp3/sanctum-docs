@@ -1,0 +1,185 @@
+---
+title: "2026-04-18: The Off-Catalogue Audit"
+description: Five services found running that no manifest knew about, five registered, a guardrail script born — and a long docs-and-code alignment pass to close the day.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A clipboard catalogue being held up to a wall of softly-glowing server portraits; five of the portraits have no name-tags, and a small hand is writing them in. Technical pencil sketch, dark background, amber localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+
+Three sittings, one question across all of them: what services are running that the watchdog doesn't know about? No broken services. No crashes. No 4 AM underwear. Just an uncomfortable audit.
+
+The answer, it turned out, was five.
+
+## Third Entry — Off-Catalogue Audit: Five Found, Five Registered
+
+**Watchdog before:** 33/33 healthy. **Watchdog after:** 38/38 healthy.
+
+A cross-reference of `lsof -iTCP -sTCP:LISTEN` against the watchdog catalogue revealed five sanctum-ecosystem services running without service YAMLs. All five were genuinely healthy. None appeared in the watchdog's service list. The watchdog was blind to roughly fifteen percent of the running surface.
+
+### The Five
+
+| Service | Port | Root cause |
+|---|---|---|
+| OBLITERATUS ML Engine | 7860 | Registered in `holocron-config.yaml` and `catalog.yaml`, never got a `~/.sanctum/services/` YAML. Previous session fixed the Python 3.12 venv; nobody wrote the manifest. |
+| Force Flow | 4077 | Has a LaunchAgent (`com.sanctum.force-flow`), documented in `services.mdx`, owned by Mothma. Started running before the watchdog YAML schema was standardized. |
+| SanctumBridge | 4078 | FDA-privileged SQLite proxy for Jocasta-mcp. LaunchAgent exists, documented in `jocasta-mcp.mdx`. `services.mdx` still listed it at port 1455 — an older allocation. Runtime was on 4078. |
+| LiveKit Server | 7880 | Yoda's private voice server, bound to Tailscale IP only. LaunchAgent exists. YAML was never filed. |
+| Jina Reranker | 42070 | Companion to memory-vault on 42069. Documented in `cilghal.mdx` as "Jina v2 reranking on :42070". The port pair was always intended to travel together. Only one made it into the manifest. |
+
+### Root Cause Pattern
+
+Every off-catalogue service shared the same failure mode: **LaunchAgent registration happened; watchdog YAML registration did not.** The two-step was only completed halfway.
+
+The pattern appears in three flavors:
+
+1. **Service predates YAML schema.** Force Flow and SanctumBridge got LaunchAgents before the manifest format was standardized. Nobody backfilled.
+2. **Service was fixed but not registered.** OBLITERATUS got its venv repaired last session. The fix closed the ticket but left the watchdog blind, because the session's focus was the Python interpreter, not the catalogue.
+3. **Companion service forgotten.** Memory-vault has a YAML. Its paired reranker doesn't. When you think of them as one unit, you write one manifest.
+
+The common thread: **the LaunchAgent is the developer artifact; the watchdog YAML is the operations artifact.** They live in different directories, get created by different people (sometimes different agents), and there is no gate between them. You can have a perfectly healthy, fully supervised, LaunchAgent-managed service that the watchdog has never heard of.
+
+### Deadpool Protocol Port Audit
+
+All five ports were clean — no reassignment needed.
+
+| Port | Service | Note |
+|---|---|---|
+| 7860 | OBLITERATUS | Gradio default. Registered in `holocron-config.yaml` under `sectors.obliteratus`. |
+| 4077 | Force Flow | M\*A\*S\*H 4077th — field hospital that triaged casualties with gallows humor. |
+| 4078 | SanctumBridge | Adjacent to Force Flow. FDA-proxy port. Collision-free. |
+| 7880 | LiveKit | LiveKit canonical default. Bound to Tailscale IP (`100.0.0.25`) only — no LAN or WAN exposure. RTC TCP companion on 7881. |
+| 42070 | Reranker | Pair port to memory-vault's 42069. Deliberate adjacency. |
+
+### The `catalogue-sync-check.sh` Guardrail
+
+Created `/Users/neo/Documents/Claude_Code/tools/catalogue-sync-check.sh` to keep this class of drift from returning quietly.
+
+The script does three things:
+
+1. Queries the watchdog API (`/health`) and extracts all ports it tracks.
+2. Runs `lsof -iTCP -sTCP:LISTEN` and collects all listening TCP ports.
+3. Cross-references the two lists. Prints any port listening but not in the watchdog catalogue, filtered against a maintained ignore list of system ports (22, 80, 443, 631), macOS services (Raycast and ControlCenter on 5000, 7000, 7265), Cloudflare's internal listener (20241), and documented companion or internal ports.
+
+After this session, the script outputs: `(none — catalogue is fully in sync)`.
+
+**When to run it:**
+
+- After any manual `nohup ... &` or `launchctl load` that isn't accompanied by a service YAML commit.
+- Before writing a living-force entry — it's the audit step that tells you what to write about.
+- After a boot or LaunchAgent batch-load, to catch anything that came up without a manifest.
+
+The `INTERNAL_PORTS` array is self-documenting: every excluded port has an inline comment explaining the exclusion. If a port ever moves off that list, it will immediately start appearing in output.
+
+<Aside type="tip" title="The two-step registration will always try to drift">
+LaunchAgents are a developer instinct. Watchdog manifests are an operational discipline. The guardrail script exists because the gap between the two is the exact shape most often missed at 11 PM.
+</Aside>
+
+### Post-Session Watchdog State
+
+`overall: healthy`, **38/38 services healthy** (up from 33/33 at session start — five new services registered, all confirmed healthy before registration).
+
+Newly tracked: `obliteratus`, `force-flow`, `sanctum-bridge`, `livekit-server`, `reranker`.
+
+## Fourth Entry — Stale Claims, Corrected
+
+Watchdog healthy. Which meant the next question was also uncomfortable: which docs still believed the pre-audit world?
+
+### What Was Wrong
+
+A lot, actually. The Q2 catalog rename (`xtts → xtts_server`, `gateway → openclaw_gateway`, `mlx_server → council_mlx`) had landed in the runtime but the docs had been backfilling it piecemeal. The 33 → 38 service count update from the morning's audit hadn't propagated anywhere. Port 1455 was still in `services.mdx` as SanctumBridge's home, three days after the runtime moved to 4078. A duplicate Hawkeye codename at 4007 was sitting next to the real Hawkeye at 4077 like nobody would notice.
+
+### What Changed
+
+A single docs-audit sweep fixed eighteen stale claims across `architecture/services.mdx`, `architecture/jocasta-mcp.mdx`, `reference/instance-yaml.mdx`, `reference/launchagents.mdx`, `operations/operational-state.mdx`, `operations/runtime-drift-audit.mdx`, and `operations/feature-status-matrix.mdx`. The Q2 renames were propagated everywhere they were missing. Port 4078 replaced 1455 for SanctumBridge. The 4007 duplicate was retired in favor of `007 — Licensed to Ping`. The "32 rendered manifests" and "33 manifests as current" claims were updated to 38 with timestamps anchoring what "current" meant.
+
+Two code files were also nudged to match the docs rather than the other way around:
+
+- `run_sanctum.sh` had `./.venv/bin/obliteratus` left over from before the Python 3.12 venv migration. Changed to `./venv/bin/obliteratus` (non-hidden venv).
+- `sanctum/instance.yaml.example` was updated to match the Q2 rename keys that the live `instance.yaml` already used (`xtts_server`, `council_mlx`, `openclaw_gateway`).
+
+### Deadpool Protocol Expansion
+
+Added a `### The Deadpool Protocol` subsection to the Port Summary section in `services.mdx`, codifying the five acceptable port-naming forms (palindromes, pop-culture, math constants, paired wit, upside-down calculator), the dry-acknowledgment exception for default or sequential ports, and the new-port PR mandate (`port_lore:` in YAML plus gag in PR description).
+
+Added `# port_lore: <one sentence>` comments to 27 service YAMLs in `~/.sanctum/services/` that were missing them. The services with no port (cloudflare, dench, model-scout, post-boot, orbi-bridge, tailscale, tommy, triage, vm, watchdog, icloud-filer) were skipped — no port, no port joke, no problem.
+
+### `CONTRIBUTING.md`, Also Stale
+
+- Named-port list updated from `1337, 1977, 1984, 4040, 4077, 8008, 42069` to include `4078, 10101, 31416, 42070`.
+- Added step 6 of port selection: the `# port_lore:` comment mandate — placed directly under `port:`, optional for the watchdog, required for human dignity.
+- Added Technical Accuracy entries for the 38-service catalogue count, the `catalogue-sync-check.sh` guardrail, the OBLITERATUS `venv/` + Python 3.12 requirement, and the Q2 renames.
+
+### Aspirational vs. Actual
+
+No new `:::caution[Roadmap]` callouts were needed. Every doc claim reviewed this session maps to implemented behavior. The `run_sanctum.sh` venv path was the only actual divergence — fixed inline, because the fix was a one-line correction to match already-documented behavior, not an aspirational promise.
+
+### Post-Session State
+
+Watchdog unchanged at 38/38 (this was a docs and code audit, not a service fix). All corrected doc claims now match the live system. The "SanctumBridge port discrepancy" gotcha from the third entry is resolved.
+
+## Fifth Entry — Session Close
+
+End-of-day close-out: E2E test sweep, logical commits, backup, and the final living-force entry for the day.
+
+### E2E Results
+
+Watchdog bulk check ran after a manual `POST /check`. The most recent snapshot (20:53 UTC) showed 37/38 healthy with `health-center` as the sole degraded root cause. By close-out time, health-center (port 2222, node PID 54163) had recovered on its own — the triage remediation already succeeded. Catalogue sync check came back clean: 38 services catalogued, zero uncatalogued listeners.
+
+| Flow | Description | Result |
+|---|---|---|
+| Flow 1 | Watchdog → `/check/council-mlx` round-trip | Pass |
+| Flow 2 | council-mlx `/health` | Pass — `{"status":"ok"}` |
+| Flow 3 | voice-agent liveness (`:1138/health`) | Pass |
+| Flow 3b | xtts-server liveness (`:8008/health`) | Pass |
+| Flow 4 | memory-vault (`:42069/health`) | Pass — version 0.1.0 |
+| Flow 4b | reranker (`:42070/health`) | Pass — jina-reranker-v2-base-multilingual, loaded |
+| Flow 5 | force-flow `/screen/status` | Pass — curfew logic active |
+| Flow 6a | graphiti tunnel (`:31416/health`) | Pass — neo4j connected |
+| Flow 6b | network-control tunnel (`:4007/health`) | Pass — DNS connected, Orbi configured |
+| Flow 7 | OBLITERATUS (`:7860/`) | Pass — Gradio UI live |
+| Catalogue sync | `tools/catalogue-sync-check.sh` | Pass — 38 services, 0 uncatalogued |
+
+### Known Exceptions — Not Fake Green
+
+Four flows were skipped for documented infra reasons, not swept under the rug:
+
+- **voice-agent `/tts-check`** — endpoint doesn't exist on port 1138. Voice-agent liveness confirmed separately via `/health`. TTS round-trip was not tested end-to-end.
+- **obliteratus `/api/queue/status`** — returns 404 because the Gradio queue endpoint isn't exposed in this build. Root UI returns 200; the ML engine is live.
+- **Watchdog `/status/all`** — returns empty body after the initial stale snapshot. `/status` (uptime, checks_run) works normally; the detail endpoint appears to require an in-progress check cycle to populate. All service health confirmed via individual probes instead.
+- **manoir SSH backup** — the SSH agent had no identities loaded (key requires Keychain passphrase, not available in headless session). The remote tarball pull from manoir was not possible. Git bundle fallback used.
+
+### Commits
+
+Five commits in the main workspace plus one in the sanctum-docs submodule:
+
+| SHA | Scope | Description |
+|---|---|---|
+| `03f5849` | sanctum-docs | docs(services): Q2 rename corrections + new service entries |
+| `d44e110` | main | test(sanctum): Q2 rename fixes in test harness |
+| `b14184a` | main | fix(obliteratus): venv path correction in run_sanctum.sh |
+| `a4b1df8` | main | chore(sanctum): Q2 service key renames in config + calibration |
+| `3b446ae` | main | feat(tools): catalogue-sync-check guardrail script |
+| `5e5cb51` | main | chore(sanctum-docs): bump submodule pointer for Apr 18 docs rewrite |
+
+### Backup
+
+**Mechanism:** `git bundle create` (fallback — manoir SSH unavailable, SSH agent empty).
+**Artifact:** `/Users/neo/Backups/sanctum-20260418.bundle` (68.4 MB).
+**Contents:** full workspace git history — all branches, all refs, all Apr 18 commits.
+**Integrity:** verifiable via `git bundle verify`.
+
+The documented mechanism — `tools/backup-sanctum.sh` — pulls a `~/.sanctum/` plus LaunchAgents tarball from manoir via SSH, which requires an unlocked SSH key in the agent. The bundle fallback is documented in the backup script's instructions and captures the workspace git history completely. The manoir-side config layer will be covered by the next scheduled weekly backup (Saturday 04:30, `com.sanctum.backup`).
+
+### Post-Session State
+
+Watchdog: 38/38 healthy at close (health-center recovered via triage remediation during the session). All service flows verified healthy or documented as known exceptions. All Apr 18 changes committed in logical groups. Catalogue fully in sync — no shadow services. Docs and code in alignment.
+
+Apr 18 sanctum session complete.
+
+## Gotchas for Next Time
+
+- **Two-step registration is a trap.** Creating a LaunchAgent and starting a service is step one. Filing `~/.sanctum/services/<name>.yaml` is step two. The watchdog only sees step two. They are not linked. They will drift unless both are done in the same session.
+- **HTTP-monitored services don't appear in the port sync check.** The watchdog health message says "HTTP 200" rather than "port X open" for services checked via HTTP (obliteratus, tommy, navigator-bridge). The sync-check extracts ports from the message text, so these don't show up as covered. They're tracked in the `INTERNAL_PORTS` ignore list with inline comments.
+- **Companion ports need companion YAMLs.** If a service has a paired secondary port (reranker + memory-vault, livekit-server + token-minter), check whether the companion also needs a YAML. The fact that one half exists doesn't mean the other half was filed.
+- **Bootstrap health-tunnel process.** On each boot, `sanctum-bootstrap.sh` may start its own health-tunnel with different port-forwarding args than the current on-disk plist. After running `sync_runtime_calibration.py`, always `launchctl unload` then `load` to replace the running tunnel with the new config. The bootstrap process will keep running with stale args until explicitly killed.

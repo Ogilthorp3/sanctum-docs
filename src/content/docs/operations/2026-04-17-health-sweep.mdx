@@ -1,0 +1,186 @@
+---
+title: "2026-04-17: The Full-Stack Health Sweep"
+description: A narrow CLI fix in the morning turned into a four-hour diagnostic across nine components, then two more sessions the next day to finish the job — the Q2-rename fallout told in three sittings.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A stethoscope resting on a circuit-board patient with nine small monitor screens fanning out from it, three of them glowing amber with a gentle warning flicker. Technical pencil sketch, dark background, amber localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+
+A parallel session had fixed a narrow Claude CLI proxy routing issue and closed the ticket. The health sweep started as a quick confirmation that the rest of the stack was fine. It was not. What was supposed to be a ten-minute spot-check turned into nine components degraded or missing across three sessions and two calendar days. The Q2 catalog rename had landed three weeks earlier. It had also quietly broken things nobody had looked at since.
+
+## Apr 17 — The Sweep Itself
+
+### Components Checked
+
+Twenty-eight components walked end to end. Twelve of them had something meaningfully wrong.
+
+| Component | Status | Notes |
+|---|---|---|
+| Navigator Sidecar (:3344) | FAIL | Process not started; no monitor-status.json for any project |
+| Holocron UI (:3333) | DOWN | Not running |
+| Command Center (:1111) | PASS | Serving HTML |
+| Health Center (:2222) | PASS process / WARN data | `/health` returns 502 because health-tunnel is down |
+| OBLITERATUS (:7860) | DOWN | `remedy_venv.sh` does not exist in OBLITERATUS directory |
+| sanctum-watchdog (:2187) | PASS | Reporting `overall: degraded` with 9 root causes |
+| sanctum-proxy (:4040) | PASS | Health endpoint responds correctly |
+| council-mlx (:1337) | PASS | Running |
+| tommy (:3355) | PASS | Dawn + dusk briefings sent successfully |
+| xtts-server (:8008) | PASS process | Running via homebrew python3.12; LaunchAgent symlink was broken |
+| health-tunnel (:18095) | DOWN | SSH tunnel to VM not established |
+| ha-tunnel (:18092) | DOWN | SSH tunnel to VM not established |
+| graphiti-server (:31416) | DOWN | VM-hosted service, VM SSH unreachable |
+| network-control (:4007) | DOWN | VM-hosted service, VM SSH unreachable |
+| signal-proxy | DOWN | VM unreachable via SSH |
+| anthropic-proxy | DOWN | VM unreachable via SSH |
+| VM (openclaw SSH) | UNREACHABLE | `ssh openclaw` times out; local `qemu-system-aarch64` is running |
+
+The rest (tommy, sonos-bridge, voice-agent, lmstudio, memory-vault, home-assistant, kiwix, rewind-dashboard, health-ingester, sanctumctl.py, the sanctum-rs binary, living-force.mdx) were green.
+
+### Root Causes Found and Fixed
+
+Eight independent bugs, each with its own small story. Most were downstream of a single architectural event: the Q2 catalog rename (`285e817`) had updated `instance.yaml` service keys (`xtts → xtts_server`, `gateway → openclaw_gateway`, `mlx_server → council_mlx`), but nothing around those keys had been re-synced since.
+
+**1. Runtime manifests stale.** `render_runtime_services.py` had not been re-run after the Q2 rename. Three manifests were showing DIFF against their source: `council-mlx.yaml`, `xtts-server.yaml`, `openclaw-gateway.yaml`. Running the renderer produced 33 manifests and cleared all diffs.
+
+**2. `sync_runtime_calibration.py` SERVICE_MAP drift.** `com.sanctum.xtts-server.plist` was still mapped to service key `"xtts"` in the `SERVICE_MAP` constant, but `instance.yaml` now used `xtts_server`. The `enabled()` check returned False, so the plist was never rendered. Changed `"com.sanctum.xtts-server.plist": "xtts"` to `"xtts_server"` in `tools/sync_runtime_calibration.py`. Re-running the tool created the plist and cleared the launchagent audit.
+
+**3. `sanctum-xtts-server` symlink broken.** `~/.sanctum/bin/sanctum-xtts-server` pointed to a venv that no longer existed (`~/Projects/yoda-voice-agent/.xtts-venv/bin/python`). The `audit_runtime_launchagents.py` tool flagged MISSING. The xtts server was actually running via `python3.12` from the LaunchAgent's PATH — the symlink is the entry point, not the runtime. Repointed to `/opt/homebrew/bin/python3.11` (the interpreter the `pin_deps` transformers constraint expects).
+
+**4. Legacy living-force plist marker missing.** `test-sanctum-runtime-audit.sh` expects `com.sanctum.living-force.plist.disabled` as confirmation that the legacy watchdog is retired. Neither the active plist nor the disabled marker existed. Created the empty `.disabled` marker.
+
+**5. `mlx-finetune/configs/agents.yaml` missing.** `sync_agent_markdown.py` defaults to this path. The file didn't exist — only the `patches/` directory was in the repo. The script crashed with `FileNotFoundError`. Created the file with all six canonical agents (`windu`, `quigon`, `cilghal`, `jocasta`, `mundi`, `yoda`), each referencing a `workspace` subdirectory with `workspace_optional: true` so missing workspaces are skipped gracefully.
+
+**6. Test harnesses not updated after the Q2 rename.** Three test files still referenced old service slugs and counts. `test-sanctum-system-e2e.sh`: `Services: 30` → `Services: 33`; `xtts --> voice-agent` → `xtts-server --> voice-agent`; proxy `mode/server` fields retired in favor of `routing/providers` (the proxy health response never included `mode` or `server` — that assertion was aspirational the whole time). `test-sanctum-runtime-audit.sh`: `SUPPLEMENTAL_COUNT:6` → `9`; `VOICE_AGENT_DEPS:xtts` → `xtts_server`. `test-sanctum-evolution-loop.sh`: `incident-learn.sh gateway` → `openclaw-gateway`.
+
+**7. Agent capabilities stale.** `~/.sanctum/config/agent-capabilities.yaml` had drifted. `sync_agent_capabilities.py` brought it back in sync.
+
+**8. Four LaunchAgent plists stale.** Running `sync_runtime_calibration.py` synced `gateway.docker`, `gateway`, `ha-tunnel`, and `health-tunnel`.
+
+### Still Degraded — Infrastructure, Not Code
+
+Six components remained unhealthy at end of day, and every one of them was a tunnel or a VM reachability issue, not a code defect:
+
+- health-center `/health` → 502 (health-tunnel down)
+- health export canary → 502 (same tunnel)
+- VM → mac MLX bridge → SSH unreachable
+- VM → mac LM Studio bridge → SSH unreachable
+- Navigator sidecar → not running (no `monitor-status.json` files, so it starts degraded anyway)
+- OBLITERATUS UI → not running (venv setup not done, `remedy_venv.sh` missing)
+
+The watchdog correctly reflected all of this with `overall: degraded`.
+
+<Aside type="caution" title="A catalog rename has a fanout">
+`instance.yaml` service keys touch the runtime manifest renderer, the calibration sync map, the audit test harness, the evolution-loop assertions, and whatever bespoke script remembers the old name. Every rename looks small. Every rename is actually a sweep.
+</Aside>
+
+## Apr 18 — Infrastructure Recovery
+
+The previous session closed nine code issues. Three infrastructure problems were left: openclaw VM SSH unreachable, navigator-sidecar not running, OBLITERATUS not running. This session was meant to finish them.
+
+### Pre-Session Watchdog State
+
+`overall: degraded`, 22/33 healthy. Root causes listed by the watchdog: `anthropic-proxy`, `firewalla-bridge`, `graphiti-server`, `ha-tunnel`, `health-center`, `health-tunnel`, `network-control`, `signal-proxy`, `triage`.
+
+The watchdog API was responding on `:2187`, but the `last_check_at` timestamp was stale (14:00 UTC). The launchd-managed watchdog kept failing to start with `failed to bind port 2187: Address already in use`. An orphan watchdog process (PID 1494), started by `sanctum-bootstrap.sh` on Apr 17, was squatting the port and serving stale check results.
+
+### What Was Wrong
+
+**1. Stale watchdog serving cached "VM unreachable" state.** PID 1494 had run its last check at 14:00 UTC yesterday, when VM SSH was unreachable. By session start today, `ssh openclaw echo ok` returned immediately — the SSH path had self-recovered overnight. But the *watchdog* had stale state, and the launchd instance couldn't start because 1494 held the port.
+
+Killed PID 1494. Launchd immediately started a fresh watchdog instance. After the 15-second settle delay, the new watchdog ran fresh checks. `anthropic-proxy`, `triage`, and `signal-proxy` (partially) all resolved from this single fix. The stale "VM unreachable" messages for `anthropic-proxy` and `signal-proxy` were phantom failures — the services were running on the VM the entire time.
+
+Root cause of VM SSH being unreachable yesterday: not fully determined. The `qemu-system-aarch64` process was running throughout. The bridge interface was up. SSH connectivity had self-recovered by session start. Likely a transient network hiccup or a brief bridge flap.
+
+**2. `ha-tunnel` plist stale — loaded config used `70707:127.0.0.1:70707`.** The running launchd ha-tunnel had a different port spec than the on-disk plist. The plist on disk said `18092:127.0.0.1:18092` (valid SSH `-L` format); the loaded launchd config still had the old `70707:127.0.0.1:70707` from before the last `sync_runtime_calibration.py` run. SSH was rejecting every connection attempt with `Bad local forwarding specification '70707:127.0.0.1:70707'`.
+
+`launchctl unload` + `launchctl load` on `/Users/neo/Library/LaunchAgents/com.sanctum.ha-tunnel.plist`. Port 18092 opened immediately.
+
+**3. `health-center` (:2222) in restart loop.** `com.sanctum.health-center` showed exit code 143 (SIGTERM) with 979 runs logged. The server was starting successfully but dying because a stale test process from a previous session (PID 92849, started by `run_sanctum.sh`) was holding port 2222. After the test process was killed, the launchd-managed health-center took over and the port stabilized.
+
+**4. `firewalla-bridge` port mismatch.** The service manifest at `~/.sanctum/services/firewalla-bridge.yaml` declared `port: 1984` for the liveness check, but the actual `firewalla-bridge.sh` binds to port 18094 (hardcoded via `FIREWALLA_BRIDGE_PORT="18094"`). The watchdog was checking a port that was never open. Updated the YAML to use `port: 18094` in `provides`, `liveness.port`, and `port` fields.
+
+**5. `navigator-sidecar` — already running.** Was actually running (PID 43966) when the session started. The previous session's "not running" finding had self-resolved overnight (launchd or a bootstrap mechanism restarted it). Confirmed via `curl http://127.0.0.1:3344/status`.
+
+**6. OBLITERATUS — Python 3.14 + torch startup deadlock.** `obliteratus ui` failed with `ModuleNotFoundError: no module named 'obliteratus'`. Root cause: Python 3.14 silently skips `.pth` files located in directories whose name starts with a dot. `.venv/lib/python3.14/site-packages/` had `__editable__.obliteratus-0.1.2.pth` and `_virtualenv.pth`, and Python 3.14 logged `Skipping hidden .pth file` for all of them. The package was installed but unreachable.
+
+A partial fix worked interactively but not in the background: `PYTHONPATH=/path/to/OBLITERATUS ./.venv/bin/obliteratus ui` imports correctly, but when the same command runs as a detached background process, `torch 2.11.0` stalls on loading `libtorch_cpu.dylib` (216 MB) at low I/O priority (`SN` state). Interactive: 0.7 seconds. Background: over ten minutes.
+
+OBLITERATUS remained down at end of session. The proper fix — recreate the venv with Python 3.12 at a non-hidden path — carried over to the next session.
+
+### Post-Session State
+
+`overall: degraded`, 29/33 healthy (up from 22/33 at session start). Newly green: `anthropic-proxy`, `ha-tunnel`, `health-center`, `triage`, `firewalla-bridge`. Four services still unhealthy, all pre-existing infrastructure gaps.
+
+## Apr 18 — Second Session, The Last Four
+
+The previous session ended at 29/33. This session targeted the remaining four: `graphiti-server`, `health-tunnel`, `network-control`, `signal-proxy`.
+
+### What Was Wrong
+
+**1. `health-tunnel` port mismatch between plist and VM service.** The LaunchAgent plist forwarded `18095→VM:18095`, but the health-ingester service on the VM was actually bound to `10.10.10.10:10101`. The running instance had been launched with a different port than the source code declared. The service YAML checked `port: 18095`, which was never open on the mac side.
+
+Updated the LaunchAgent plist to forward `127.0.0.1:10101:10.10.10.10:10101`. Updated the service YAML to check `port: 10101`. Killed the stale bootstrap-era tunnel (PID 72802) that was using the old 10101 forward, then reloaded the LaunchAgent. Port 10101 opened immediately; `/health` returned `{"status":"ok"}`.
+
+Port 10101 is `101` doubled — binary for 5, a mathematician's joke. Port 18095 was vestigial from an earlier health-ingester config that bound to loopback:18095. No new port assignments were made.
+
+**2. `graphiti-server` and `network-control` — missing SSH tunnel plists.** Both services run inside the VM on `127.0.0.1` (VM loopback). Confirmed via `lsof -i :31416 -n -P` and `lsof -i :4007 -n -P` on the VM. No mac-side LaunchAgent forwarded these ports, so the watchdog's port checks always found them closed.
+
+Created two new SSH tunnel LaunchAgents and matching `sanctum-*-tunnel` symlinks:
+
+- `~/.sanctum/bin/sanctum-graphiti-tunnel` → `/usr/bin/ssh`
+  `~/Library/LaunchAgents/com.sanctum.graphiti-tunnel.plist` — forwards `127.0.0.1:31416:127.0.0.1:31416` via `openclaw`.
+- `~/.sanctum/bin/sanctum-network-control-tunnel` → `/usr/bin/ssh`
+  `~/Library/LaunchAgents/com.sanctum.network-control-tunnel.plist` — forwards `127.0.0.1:4007:127.0.0.1:4007` via `openclaw`.
+
+Both loaded immediately. Verified: graphiti `/health` returns `{"status":"ok","neo4j":"connected"}`; network-control `/health` returns `{"status":"ok","dns_connected":true}`. Updated both service YAMLs to reference their `launchagent` fields (previously `null`).
+
+Port 31416 is approximately π × 10000 — nerd canon. Port 4007 is the canonical network-control port from the original service design. Neither required reassignment.
+
+**3. `signal-proxy` — broken grep pattern.** `signal-health.sh` CHECK 4 (`check_forceflow_port`) used:
+
+```
+grep -E '127\.0\.0\.1:[0-9]+/api/v1/rpc' "$FORCE_FLOW_PY"
+```
+
+But `force_flow.py`'s `send_signal()` uses `http://127.0.0.1:8080/v2/send` — REST format, not JSON-RPC path. The pattern never matched, `configured_port` was always empty, and the check always reported `cannot parse signal port from force_flow.py`. The watchdog read that as `overall: 2 (needs_intervention)` even though signal was fully healthy. Updated the pattern:
+
+```
+grep -E 'http://127\.0\.0\.1:[0-9]+/v[0-9]+/' "$FORCE_FLOW_PY"
+```
+
+This correctly extracts port 8080. Since `configured_port == CANONICAL_PORT` (both 8080), CHECK 4 now reports healthy. Full script run: exit 0, all 6 components healthy. Watchdog picks it up as healthy on the next check cycle.
+
+**4. OBLITERATUS — Python 3.12 venv migration at a non-hidden path.** The actual fix for the problem the previous session had only worked around.
+
+```bash
+python3.12 -m venv /Users/neo/Documents/Claude_Code/OBLITERATUS/venv
+venv/bin/pip install -e ".[spaces]"
+venv/bin/python -c "import obliteratus; print('ok')"  # → ok
+venv/bin/obliteratus ui --port 7860 --host 127.0.0.1 --no-browser
+```
+
+Torch loaded in under 60 seconds with Python 3.12, which is within its officially supported range (3.9–3.12). Port 7860 opened; `curl http://127.0.0.1:7860/` returned HTTP 200. Created `OBLITERATUS/remedy_venv.sh` to document the recreation procedure with the correct flags.
+
+Why 3.12 fixes the torch stall: the 3.14 interpreter introduces new dispatch paths and uses different dynamic linker hints that interact poorly with torch's low-level Metal and OpenMP initialization. Python 3.12 uses established import paths that the macOS page cache handles efficiently even at `SN` priority.
+
+### Post-Session Watchdog State
+
+`overall: healthy`, **33/33 services healthy** (up from 29/33 at session start).
+
+Newly green: `graphiti-server`, `health-tunnel`, `network-control`, `signal-proxy`.
+
+<Aside type="tip" title="The ten-minute spot-check that takes a day">
+A health sweep triggered by "a narrow CLI fix" almost always takes longer than the narrow fix. Every instance key, port number, and symlink depends on at least three things that nobody updated when the key, port, or symlink moved. If the sweep finishes quickly, it's because you didn't look hard enough.
+</Aside>
+
+## Gotchas for Next Time
+
+- **Q2 catalog renames have long tails.** After any `instance.yaml` service key rename, run `render_runtime_services.py` *and* re-check the `SERVICE_MAP` in `sync_runtime_calibration.py` for stale key names. The two files drift independently.
+- **Symlink audit catches broken venvs.** If a venv is deleted, the `.sanctum/bin/` shim symlinks will break. `audit_runtime_launchagents.py` will catch this — the fix is to recreate the venv or repoint the symlink to the system interpreter.
+- **Test harness service counts are exact.** `test-sanctum-system-e2e.sh` asserts `Services: N`. Any `instance.yaml` addition increments this. Update the test immediately when adding services.
+- **Bootstrap watchdog squats launchd.** On boot, `sanctum-bootstrap.sh` starts a watchdog directly. The launchd `com.sanctum.watchdog` plist also tries to start one. They race for port 2187. Bootstrap wins. The launchd instance logs `failed to bind port 2187` every ten seconds indefinitely. If the bootstrap-started watchdog runs long enough, its check cache goes stale. Kill the bootstrap PID; launchd restarts fresh. Long-term: remove the watchdog from `sanctum-bootstrap.sh` — launchd manages it now.
+- **`launchctl` loaded config can diverge from on-disk plist.** `launchctl print gui/UID/com.sanctum.ha-tunnel` may show different args than the plist file if the plist was regenerated via `sync_runtime_calibration.py` but never reloaded. `launchctl unload` + `load` is the fix. Check with `launchctl print` before assuming disk is what's running.
+- **Python 3.14 skips `.pth` files in hidden dirs.** Any editable install in `.venv/` (or any dot-prefixed path) breaks silently. Use `PYTHONPATH` explicitly or recreate the venv at a non-hidden path (`venv/`). The rule is `venv/` not `.venv/` until torch officially supports Python 3.13+.
+- **SSH `-L` spec depends on where the service binds.** VM-loopback services need `127.0.0.1:PORT:127.0.0.1:PORT`. Bridge-IP services need `PORT:10.10.10.10:PORT`. When a service changes its bind address without updating the tunnel spec, the tunnel forwards to a port that nothing listens on. Verify with `lsof -i :PORT -n -P` on the VM after any bind-config change.
+- **`signal-health.sh` grep must track `force_flow.py`.** If `send_signal()` changes URL path (`/v2/send` vs `/api/v1/rpc`), update CHECK 4's grep pattern. The pattern is documented in the script header. Any change to the signal URL in `force_flow.py` requires a parallel update here.

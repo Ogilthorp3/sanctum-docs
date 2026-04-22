@@ -62,7 +62,29 @@ The `compose.yaml` at `~/.openclaw/homeassistant/` defines the container with th
 - **Extra hosts**: `host.docker.internal:host-gateway` for reaching Mac services from inside the container
 - **SSH agent socket**: `/run/host-services/ssh-auth.sock` mounted for agent forwarding to the VM
 
-Docker Desktop is configured with auto-start enabled, ensuring HA comes up after a reboot without manual intervention.
+### Runtime: Colima, not Docker Desktop
+
+Docker Desktop on macOS is a virtualization layer pretending to be native. It runs a Linux VM, routes containers through it, and tells you that `--network=host` means host networking. It does not. It means the VM's network — a thing that cannot see mDNS broadcasts, cannot discover HomeKit devices, and cannot be convinced otherwise no matter how many Stack Overflow answers suggest it should.
+
+This matters because HA's HomeKit Controller discovers Ecobee thermostats and similar devices via Bonjour/mDNS, which broadcasts to the local subnet — a subnet Docker Desktop's VM is not on.
+
+On March 28, 2026, Docker Desktop was replaced with Colima — a lightweight alternative that is, at its core, just a Lima VM running a Docker daemon. No GUI. No update nags. No Kubernetes toggle that nobody asked for. It starts in 12 seconds via launchd and exposes its Unix socket at:
+
+```
+DOCKER_HOST=unix:///Users/neo/.colima/default/docker.sock
+```
+
+The startup chain is intentionally sequential:
+
+1. `com.sanctum.colima` LaunchAgent starts Colima at boot
+2. `launch-after-docker.sh` waits for the Docker socket to appear
+3. Once the socket is live, it brings up the Home Assistant and signal-cli containers
+
+The migration itself was uneventful, which is the highest compliment infrastructure work can receive. Stop Desktop, start Colima, point `DOCKER_HOST` at the new socket, bring up the containers. The Ecobee sensors appeared in HA's discovery panel within seconds. They had been broadcasting the entire time. Docker Desktop just couldn't hear them.
+
+<Aside type="caution">
+  If you're running Docker Desktop and wondering why your HomeKit integrations can't discover devices: it's not your config. It's not your firewall. It's the VM boundary. mDNS packets don't cross it. They never will. Switch to Colima or run HA on bare metal and the devices appear like they were there all along — because they were.
+</Aside>
 
 ## Sonos Integration
 

@@ -1,0 +1,109 @@
+---
+title: "2026-04-20: The Pressure Valve Trilogy"
+description: A kernel panic, a Rust daemon shipped before lunch, and the same daemon killing the thing it was meant to protect by dinner.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A pressure gauge with three faces — green, orange, red — etched onto a dark workshop wall. Behind it, a Rust crab holds a wrench in one claw and a SIGKILL tag in the other, looking apologetic. Technical pencil sketch, dark background, amber localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+
+This annex covers one day told in two sittings. The first sitting was a forensic walkthrough of the kernel panic that shipped Sanctum into an unplanned reboot at midnight, and the Rust daemon written to make sure it didn't happen again. The second sitting was a confession: the daemon worked exactly as specified and, within five minutes of going live, killed the service it existed to protect. The five corrections that followed are the actual lesson.
+
+Read it in order. The mistake matters more than the fix, and the fix matters more than the original design.
+
+## Mid-Day — The Reboot Was a Panic
+
+The midnight reboot noted earlier in the day ("we don't know exactly why — macOS applied a pending update, or the kernel panicked, or gravity hiccuped") turned out to have been option B. `/Library/Logs/DiagnosticReports/Retired/panic-full-2026-04-19-235812.0002.panic` is a 3.4 MB receipt for an `AppleARMWatchdogTimer` kernel panic: `watchdog timeout: no checkins from watchdogd in 90 seconds`. The panic fired at 23:58:12 EDT on the Mini. It was not gravity.
+
+### What Was Wrong
+
+The JetsamEvent thirteen minutes after reboot tells the story better than the panic log does. At kill time, `sanctum-mlx` (pid 9221) had an RSS footprint of **65,813 MB** on a 64 GB machine. Concurrent contributors: a forgotten `cargo build` leaking four `metal` shader-compiler processes at 100% CPU and ~770 MB each (collateral damage from the `council-integrity` build earlier that evening), a QEMU Ubuntu VM at 4.5 GB, `com.apple.Virtualization.VirtualMachine` at 1.9 GB, and `talagentd` — the Apple Intelligence system agent on macOS 26 — idling at over 7 GB with what is, technically, zero user-facing responsibilities.
+
+The compressor hit 100% of its segment limit. Sixty-nine swapfiles deep. `watchdogd` could not get scheduled for 90 seconds because every thread was blocked on a page fault. The kernel watchdog fired, the Mini panicked, the boot was a recovery — not a maintenance window.
+
+The 148,181-error forensic analysis that produced the living-force manifests in April listed memory-pressure cascade as Pattern 011, with `memory_pressure_tier2` and `memory_pressure_tier3` shed lists carefully enumerated in `sanctum-cascade-prevention.yaml`. Line 985 of that manifest declared the pattern `dependent_on: ["service-graph.py", "watchdog", "system-memory-monitor"]`. Of those three, exactly two existed. The `system-memory-monitor` was YAML. Nothing enforced.
+
+### What Changed
+
+**`sanctum-pressure-valve` — a 2.2 MB Rust binary, 14 unit tests + 3 integration tests, one LaunchAgent.** Lives at `services/sanctum-pressure-valve/` in the sanctum-rs workspace. Polls `vm_stat` and `sysctl -n vm.swapusage` on a 5-second tick. Classifies pressure as `green` / `yellow` / `orange` / `red` against thresholds calibrated to the M4 Pro's behavior — 8 GB / 4 GB / 2 GB available memory or 70% / 85% / 95% swap utilization, whichever is worse. Promotion requires two consecutive confirming samples; recovery is immediate.
+
+On `yellow`, one tier-3 LaunchAgent (`kiwix-serve`, `reranker`, `xtts-server`) is shed. On `orange`, tier-2 (`memory-vault`, `qwen3-tts`, `mdns-docs`); any allowlisted hog over 10 GB RSS is SIGSTOP'd. On `red`, the largest allowlisted RSS consumer is SIGKILL'd. The allowlist is tight and explicit — `sanctum-mlx`, `qemu-system-aarch64`, `com.apple.Virtualization.VirtualMachine`, `LM Studio Helper`, `metal` (only when matched with `-x metal`, the build-tool signature), Docker's VZ shim, and `ollama-runner`. The denylist — `launchd`, `WindowServer`, `watchdogd`, `kernel_task`, `sshd`, `tailscaled`, and the valve itself — is hard-coded and not overridable by environment.
+
+Heartbeat at `~/.openclaw/state/sanctum-pressure-valve.json` is atomic-renamed every tick, with the current `Snapshot`, `machine_level`, `last_action`, process pid, and binary version. A `sanctum-watchdog` integration can mtime this file to detect a wedged valve the same way it catches zombie listeners.
+
+### Installation Receipt
+
+```
+plist:    ~/Library/LaunchAgents/com.sanctum.pressure-valve.plist
+binary:   /Users/neo/Projects/sanctum-rs/target/release/sanctum-pressure-valve (2,276,192 bytes)
+logs:     ~/.openclaw/logs/sanctum-pressure-valve.{log,err}
+state:    ~/.openclaw/state/sanctum-pressure-valve.json
+alerts:   ~/.sanctum/alerts.json (appended, source="sanctum-pressure-valve")
+```
+
+Online at 2026-04-20 15:03:23 UTC. First state classified as `orange` at 15:03:28 (5 s to promote, debounce working as designed). First action at 15:03:28 — `launchctl bootout gui/501/com.sanctum.memory-vault`. Swap utilization had already dropped from 90% to 88% by the next tick, which is the valve doing what the manifest always said it should.
+
+<Aside type="caution" title="The kernel has its own watchdog, and it will not wait for yours">
+`AppleARMWatchdogTimer` is a hardware-backed 90-second deadman. If user-space does not relieve pressure before that deadman fires, you get a `panic-full-*.panic` file, 90-ish seconds of downtime, and no say in which page of work was in flight at the moment. A living-force manifest that names a `system-memory-monitor` but does not deploy one is not a monitor. It is an intention. The kernel does not read intentions.
+</Aside>
+
+### Corollary
+
+**`launchctl list` is not a running service.** The second column is a last-exit-status. A service whose first column is `-` (no pid) and whose second column is `1` is a service that tried to start and failed, 3,671 times since midnight, while the dashboard would gladly tell you it was "configured" because the plist is in `~/Library/LaunchAgents/`. The health surface of a service is the heartbeat it writes, not the plist that claims it should be writing one.
+
+## Evening — The Valve That Killed the Thing It Was Meant to Protect
+
+The `sanctum-pressure-valve` shipped at 15:03 UTC. We watched it for five minutes. In those five minutes it SIGKILL'd `sanctum-mlx` twice — pid 788 at 10.9 GB, pid 2861 at 9.0 GB — during the process's legitimate 27B-4bit model-load burst, which transiently needs about 14 GB of RSS before settling at 18 GB steady-state. Launchd respawned `sanctum-mlx` both times. The valve killed it again. Meanwhile the actual top-RSS hog — an LM Studio node shim at `/Users/neo/.lmstudio/.internal/utils/node`, 8.6 GB — was not touched, because the v0.1.0 allowlist searched for the substring `LM Studio` and the shim's path doesn't contain that substring.
+
+A safety daemon that kills the service it exists to protect, while ignoring the actual offender, is a daemon that has read the wrong page of the manual.
+
+### The Council Consultation That Couldn't Happen
+
+The right move at this point was not to iterate alone. The sanctum council was the correct reviewer — its members are explicitly selected for this kind of systems question. But the council gateway on the VM was unreachable (the VM had been a casualty of the valve's earlier `qemu-system-aarch64` kill), and the local `openclaw agent --agent main` calls against Opus returned either abandoned sessions or blank responses. The reasoning infrastructure had been starved by the exact pressure we were trying to solve.
+
+That is, on reflection, the best data point in the entry: a pressure-relief system whose first action is to kill the oracle that can diagnose pressure is a pressure-relief system that has re-invented deadlock.
+
+Review proceeded via an external-context subagent as stand-in. It returned five concrete corrections within 30 seconds of prompting. All five shipped in `sanctum-rs 920c0eb`.
+
+### The Five Corrections
+
+1. **The kernel is the authoritative signal.** `kern.memorystatus_vm_pressure_level` is the same enum Jetsam consults — NORMAL (1), WARN (2), URGENT (3), CRITICAL (4). The valve now reads this sysctl on every tick and takes `max(kernel_level, threshold_level)` as the final classification. A kernel that says CRITICAL overrides any threshold that looks permissive, and vice versa. Lesson from systemd-oomd: the kernel already knows; don't reimplement it out of `vm_stat`.
+
+2. **Compressor growth rate is the leak signature.** Load-bursts — large-but-legitimate allocations like loading a 16 GB model into memory-mapped weights — show near-zero compressor growth, because those pages are clean and pre-faulted. True leaks push the compressor hard. The valve now maintains a 30-second rolling window over `Pages occupied by compressor` and, at ORANGE level, escalates to RED when growth exceeds 100 MB/s. Necessary-but-not-sufficient: the growth signal is paired with per-process RSS floors, not trusted alone.
+
+3. **Per-entry policy, not a flat allowlist.** `sanctum-mlx` and the LM Studio processes are now `SigstopOnly`, not `KillAllowed`. Under true famine the valve can freeze them with `SIGSTOP` — a fully reversible action — but never `SIGKILL`s them. `SIGKILL` on a service holding an active listener orphans sockets, child procs, and any in-flight client requests; for `sanctum-mlx` it means council integrity goes red and the off-box canary across Tailscale starts logging `502`s. If eviction is genuinely needed, the correct verb is `launchctl bootout`, which lets launchd clean up properly, and that's an action a human authorizes — not a machine decision. QEMU and Apple Virtualization VMs remain `KillAllowed` with an 8 GB kill floor; they allocate their memory at boot and stay flat, so runaway growth there is always a leak.
+
+4. **Regex matching, not substring.** The earlyoom project learned this lesson in 2018: substring matches on process names are a bug factory. The valve now uses the `regex` crate (already compiled as a workspace dependency via `tracing-subscriber`'s env-filter feature, so zero marginal build cost) with patterns like `r"\.lmstudio/"` for the LM Studio node shim and `r"/metal(?: |$).*?-x metal"` for the Apple shader compiler. The metal pattern specifically excludes the MTLCompilerService GPU runtime, which happens to contain the word `metal` but isn't the thing we're trying to catch.
+
+5. **Cooldown 60 → 120 s.** The valve had a 60-second cooldown between remediations. Against launchd's respawn timing, that was still fast enough to stack three actions in a 15-second window if the pressure didn't clear. 120 s gives the system a full breath between moves.
+
+### Dry-Run as the Default for the First Hour
+
+The phase-2 valve deploys with `PRESSURE_VALVE_DRY_RUN=1` set in the plist. Every planned action logs to `~/.openclaw/logs/sanctum-pressure-valve.log` with `dry_run=true` and does not execute. The first tick after redeploy — 02:37 UTC, with the machine in severe pressure (swap 100%, kernel=CRITICAL, compressor growing at 850 MB/s) — the valve planned to `SIGSTOP` pid 45013 at 8.6 GB in `/Users/neo/.lmstudio/`. Exactly the process the v0.1.0 valve couldn't see. The SIGSTOP is a dry-run; the log is real.
+
+After six hours of dry-run observation with zero false-positive kill decisions, the plist's `DRY_RUN` line is removed and the valve goes live. If any dry-run planned action looks wrong, the patch cycle runs again before the switch is flipped.
+
+<Aside type="tip" title="Ship the safety net, then watch it for an hour before you trust it">
+Unit tests prove the classifier is correct. Integration tests prove the sampling works. Neither proves the remediation does the right thing on your actual machine with your actual workload. The cost of a dry-run window is measured in log size. The cost of a wrong live action was, today, a `sanctum-mlx` outage loop and a kernel-pressure spiral that nearly panicked us again.
+</Aside>
+
+### Rules
+
+**The kernel, not your derived metric, is the authority.** `kern.memorystatus_vm_pressure_level` is one sysctl away. Reading it is cheaper than computing your own approximation. The only reason to ignore the kernel's pressure enum is if you've measured it lying — and it doesn't lie.
+
+**SIGKILL is for leaks. SIGSTOP is for load-bursts. `launchctl bootout` is for evictions.** These three verbs are not interchangeable. SIGKILL a service on a live listener and you orphan every socket, child proc, and in-flight client request. SIGSTOP is reversible; SIGKILL is not. `launchctl bootout` is the clean unwind. The classifier should never pick one when another is correct, and the per-entry `Policy` field now encodes that choice at the config layer, not at the action layer.
+
+**If your oracle lives on the resource you're conserving, you have built a deadlock.** The council gateway needs working memory to reason about memory problems. When we were hunting a memory issue, the council couldn't answer. The fix is not "make the oracle smaller." The fix is a cached off-machine advisor that can be consulted when the local reasoner is itself a victim of the thing you're debugging. Belt-and-braces architecture means the braces live outside the belt.
+
+## Post-Entry State
+
+`sanctum-pressure-valve` v0.1.0 (phase 2), commits `sanctum-rs 011252d` (phase 1) + `920c0eb` (phase 2), both pushed to origin and mbp. Running on manoir, pid 46053, `PRESSURE_VALVE_DRY_RUN=1` until ~08:37 UTC on 2026-04-21 (six hours from redeploy), cooldown 120 s, debounce 2 ticks. Heartbeat at `~/.openclaw/state/sanctum-pressure-valve.json` is refreshed every 5 s with the kernel pressure enum and the compressor growth rate alongside the prior fields. 27 lib tests + 2 main tests + 3 integration tests passing, up from 19 in phase 1.
+
+Open follow-ups:
+
+- Flip `PRESSURE_VALVE_DRY_RUN=0` after the observation window, assuming the log shows only sensible would-have-done decisions.
+- Decide whether to promote the `launchctl bootout sanctum-mlx` action from manual-authorize to auto-escalate-at-RED-with-pressure-sustained-60s. Opinion leans no — the cost of a one-human-second latency on eviction is lower than the cost of an auto-evict firing during a false-positive.
+- Add a cached council-advisor path that doesn't require the VM to be reachable, so the next memory crisis has a reviewer available without requiring the thing being reviewed to also be healthy.
+- `sanctum-watchdog` should mtime-check the valve's heartbeat file and treat staleness > 30 s as a wedge, kickstarting the valve. Today a wedged valve would go unnoticed.
+
+Commits: `sanctum-rs 011252d` (phase 1), `sanctum-rs 920c0eb` (phase 2 corrections), sanctum-docs this entry.
