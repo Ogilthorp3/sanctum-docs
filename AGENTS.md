@@ -17,9 +17,12 @@ in CI. None of them are suggestions.
    the parent Claude_Code repo. The image goes in `<category>/images/` next
    to the page. No SVGs for heroes. No stock photos. No clip art.
 
-2. **No emojis in prose.** The Holocron portal page is the sole exception.
-   Tables, headings, and prose are all emoji-free. If you reach for a status
-   emoji, use a word: `RUN / SCHED / FAIL / OFF`.
+2. **No emojis in prose.** The only allowed files are the Holocron portal
+   pages — `index.mdx`, `index-qc.mdx`, and `qc.mdx` — which use `⚜` and
+   `🐻` as semantic brand glyphs (Québec fleur-de-lis, black bear). On
+   every other page: tables, headings, and prose are emoji-free. Status
+   markers go in as words: `RUN / SCHED / FAIL / OFF`. No `✅ ❌ 🔴` in
+   content pages.
 
 3. **Five-Minute Rule.** ≤ 1200 prose words per page. Tables and code blocks
    don't count against it. If the page is longer, split the long material
