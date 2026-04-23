@@ -37,26 +37,50 @@ Tier 1 and 2 are pure string matching — zero overhead. Tier 3 scans the prompt
 
 ## Configuration
 
-Router config lives in `~/.sanctum/instance.yaml` under the `router:` key:
+Router config lives in `~/.sanctum/instance.yaml` under the `router:` key. Current (2026-04-23) topology after the Olympics-informed rework:
 
 ```yaml
 router:
   backends:
-    council:
-      url: http://127.0.0.1:1337/v1
-      models: ["council-*", "qwopus", "heartbeat"]
+    council-secure:
+      url: https://127.0.0.1:1337/v1         # mTLS-only
+      models: [yoda, mothma, windu, cilghal, mundi, jocasta, council-*]
+      description: "Qwen3.6-35B-A3B - house default (0.957 on Olympics)"
+      fallback_urls: [https://100.0.0.55:8903/v1]
+      ca_cert_path:  ~/.sanctum/certs/ca.crt
+      client_cert_path: ~/.sanctum/certs/clients/sanctum-server.crt
+      client_key_path:  ~/.sanctum/certs/clients/sanctum-server.key
     coder:
-      url: http://127.0.0.1:1234/v1
-      models: ["coder", "code-*", "*coder*"]
-    claude:
-      url: http://127.0.0.1:2001/v1
-      models: ["claude-*", "opus"]
-  default: council
-  intent_keywords:
-    coder: ["function", "debug", "refactor", "rust", "python"]
-    council: ["yoda", "windu", "lights", "alarm"]
-    claude: ["explain why", "analyze", "summarize"]
+      url: http://127.0.0.1:1234/v1          # LM Studio
+      models: [coder, code-*, "*coder*", quigon, ahsoka]
+      description: "Qwen2.5-Coder-14B - pure code + Qui-Gon + Ahsoka (chalet 16 GB)"
+    cloud:
+      url: https://openrouter.ai/api/v1
+      models: [opus, opus-4.7, claude-*, escalation]
+      description: "Claude Opus 4.7 - Yoda/Mundi escalation (0.887)"
+      api_key_env: OPENROUTER_API_KEY
+    spatial:
+      url: https://generativelanguage.googleapis.com/v1beta/openai/v1
+      models: [gemini, gemini-3.1-pro, windu-spatial, spatial]
+      description: "Gemini 3.1 Pro via Google AI Studio Ultra - Windu spatial/topology"
+      api_key_env: GOOGLE_AI_API_KEY
+  default: council-secure
 ```
+
+### Jedi → backend assignments
+
+| Jedi | Primary | Escalation | Rationale |
+|---|---|---|---|
+| **Yoda** | council-secure | cloud (Opus 4.7) | Synthesis; local by default, cloud for multi-agent novel reasoning |
+| **Mothma** | council-secure | — | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — her daily bread |
+| **Windu** | council-secure | **spatial (Gemini 3.1 Pro)** | Gemini wins at spatial reasoning — network topology, zone maps, physical layout |
+| **Cilghal** | council-secure | — | Health data is privacy-critical; stays local, always |
+| **Mundi** | council-secure | cloud (Opus 4.7) | Finance / tax / FBAR edge cases warrant careful cloud reasoning |
+| **Jocasta** | council-secure | — | Email/CRM; privacy-first |
+| **Qui-Gon** | coder (Coder-14B) | — | Tight code gen; 22 tok/s on Mini via LM Studio |
+| **Ahsoka** | coder (Coder-14B) | — | Runs on a Mac Mini M1 16 GB at the chalet — 35B won't fit |
+
+The Olympics (2026-04-23) drove most of this: Qwen3.6-35B-A3B at 0.957 beats everything locally and beats Opus 4.7 at 0.887, so it became the house default. Coder-14B (0.929) stays on the bench for coding-specific work and the chalet where RAM is the constraint. Opus 4.7 and Gemini 3.1 Pro are escalation-only — they exist to be summoned, not to handle daily traffic. See [Model Comparison](./model-comparison) for the full per-task score breakdown.
 
 The `models` arrays are glob patterns. The `intent_keywords` are plain strings matched against the last user message. If you're wondering whether regex would be more powerful here — yes, and also no. Keyword matching is predictable, debuggable, and has never once woken anyone up at 3 AM with a catastrophic backtrack.
 
