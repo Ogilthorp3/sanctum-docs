@@ -262,11 +262,13 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 
 **VM Hypervisor:** QEMU headless (not UTM — UTM was removed). The LaunchAgent is still named `com.sanctum.utm-autostart` (identifier preserved for compatibility).
 
-**Model Routing:**
-- **Cloud tier** (Opus 4.7 via cloud proxy :4040): Windu, Mothma, Jocasta
-- **Local ops tier** (Coder-14B via LM Studio :1234): Qui-Gon, Ahsoka, coding sub-tasks from any agent
-- **Local secure tier** (Gemma4+LoRA via mlx_lm :1337): Cilghal, Mundi (privacy: health/fund data stays local)
-- **Smart-routed brain** (`council-brain` on :4040): Yoda — Opus 4.7 by default, local `council-27b` for general chat (privacy), `council-max-thinking` (Opus 4.7 + `--effort max` via Claude Team on the :2001 CLI proxy) for deep reasoning. Classification is regex-based; category rules and thresholds live in `sanctum-rs/services/sanctum-proxy/src/route.rs`.
+**Model Routing** (updated 2026-04-23 after Olympics rework):
+- **Local default — `council-secure`** (Qwen3.6-35B-A3B on `:1337` mTLS): Yoda, Mothma, Windu, Cilghal, Mundi, Jocasta. The 35B-A3B is Olympics rank #2 (0.957) and wins on uniformity; house default.
+- **Coder tier — `coder`** (Qwen2.5-Coder-14B via LM Studio `:1234`): Qui-Gon, Ahsoka. Ahsoka runs on a 16 GB M1 at the chalet and can't fit the 35B; Qui-Gon wants tight code gen at 22 tok/s.
+- **Cloud escalation — `cloud`** (Claude Opus 4.7 via `claude-max-api-proxy` on `:3456`, OpenRouter fallback): Yoda and Mundi only, for novel reasoning and complex finance edge cases. Uses the Max subscription OAuth — zero API credits consumed for routine calls.
+- **Spatial escalation — `spatial`** (Gemini 3.1 Pro via Google AI Studio Ultra): Windu only, for network topology / zone map / physical layout reasoning.
+
+Config lives in `~/.sanctum/instance.yaml` under `router:`. Full per-Jedi rationale and Olympics-informed justification: see [The Smart Router](./src/content/docs/architecture/dynamic-model-routing.mdx).
 
 **Key Services:**
 - sanctum-server (Rust): Smart Router with pattern/intent dispatch
