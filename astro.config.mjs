@@ -101,6 +101,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'architecture/overview' },
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
+						{ label: 'Council Router', slug: 'architecture/council-router' },
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Smart Router', slug: 'architecture/dynamic-model-routing' },
