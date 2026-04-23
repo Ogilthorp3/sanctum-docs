@@ -45,8 +45,14 @@ PLACEHOLDER_TOKENS = [
 ]
 
 # Pages allowed to use emojis (the "Holocron portal" exemption).
+# Only the landing pages are exempt — these carry the semantic brand
+# glyphs (fleur-de-lis, black bear) that mark the QC identity of the
+# haus. Regular content pages stay emoji-free; use words instead
+# (RUN / FAIL / FLAP) for status, not checkmarks.
 EMOJI_ALLOW = {
     "index.mdx",
+    "index-qc.mdx",
+    "qc.mdx",
 }
 
 
