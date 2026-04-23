@@ -159,6 +159,7 @@ export default defineConfig({
 						{ label: 'Shell API', slug: 'reference/shell-api' },
 						{ label: 'TypeScript API', slug: 'reference/typescript-api' },
 						{ label: 'LaunchAgents', slug: 'reference/launchagents' },
+						{ label: 'LaunchAgents Audit (2026-04-23)', slug: 'reference/launchagents-audit' },
 						{ label: 'CLI', slug: 'reference/cli' },
 					],
 				},

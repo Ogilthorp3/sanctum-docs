@@ -1,0 +1,169 @@
+---
+title: LaunchAgents Audit (2026-04-23)
+description: Every com.sanctum.* agent across the Mini and MBP — category, current state, exit status, and retirement recommendations. Dated snapshot, refreshed periodically.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+58 `com.sanctum.*` agents run across the two machines. That's a lot of plists for two boxes. This page is the dated inventory — who runs what, what's healthy, what's flapping, and what should probably be retired.
+
+<Aside type="note">
+Snapshot date: **2026-04-23**. Refresh this page after any service rework. The canonical source is `launchctl list | grep com.sanctum` on each machine — this doc is the human-readable version.
+</Aside>
+
+## Mini inventory (51 agents)
+
+Legend: `✅` running clean · `⏲` scheduled (no PID, last exit 0) · `⚠️` error state · `🔌` disabled.
+
+### Inference
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.mlx` | ✅ | sanctum-mlx serving Qwen3.6-35B-A3B on :1337 mTLS. **The brain.** |
+| `com.sanctum.lmstudio-bridge` | ✅ | Keeps LM Studio's :1234 alive; Qui-Gon and Ahsoka route through it for Coder-14B. |
+
+### Probes (always-alive defense stack)
+
+| Agent | State | Interval | Purpose |
+|---|---|---|---|
+| `com.sanctum.pressure-valve` | ✅ | 5 s | Memory-pressure watchdog; armed 2026-04-22, now SIGSTOPs on RED |
+| `com.sanctum.council-guardian` | ⏲ | 30 s | Fast /v1/models probe; restart sanctum-mlx if dead |
+| `com.sanctum.council-canary` | ⏲ | 10 min | Slow chat probe ("2+2") for correctness regression |
+| `com.sanctum.council-drift` | ⚠️ exit 1 | 1 h | SHA-check deployed artifacts vs repo. Last error: known — depends on parallel session's uncommitted work |
+| `com.sanctum.council-parity-smoke` | ⏲ | nightly 03:00 | 10-prompt token-level parity test vs Python mlx_lm |
+| `com.sanctum.council-integrity` | ⏲ | hourly | Weight manifest re-verify |
+| `com.sanctum.drift-sentinel` | ⚠️ exit 1 | 5 min | Windu's Firewalla-vs-ARP drift detector. Exit 1 likely stale threshold — investigate |
+
+### Bridges & tunnels
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.tunnel` | ✅ | Primary ssh tunnel for chalet |
+| `com.sanctum.ha-tunnel` | ✅ | Home Assistant tunnel |
+| `com.sanctum.health-tunnel` | ✅⚠️ exit 255 | Health Center tunnel; respawned after SSH timeout |
+| `com.sanctum.graphiti-tunnel` | ✅⚠️ exit 255 | Graphiti service tunnel; same SSH-timeout pattern |
+| `com.sanctum.network-control-tunnel` | ✅ | Firewalla network-control API tunnel |
+| `com.sanctum.bridge` | ✅ | Bridge100 sanctum-triage proxy |
+| `com.sanctum.firewalla` | ✅ | Firewalla Purple API bridge |
+| `com.sanctum.orbi-bridge` | ✅ | Orbi router API bridge |
+| `com.sanctum.presence` | ✅ | Presence detector (who's home) |
+| `com.sanctum.ha-gateway` | ✅ | HA REST gateway |
+
+### Voice / TTS / audio
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.livekit-server` | ✅ | LiveKit voice call server |
+| `com.sanctum.voice-agent` | ⚠️ exit 1 | yoda-voice-agent.py; exit 1 recurring — **investigate** |
+
+### Agents / personas / shims
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.tommy` | ✅ | Tommy briefing agent (VM-side) |
+| `com.sanctum.yoda-token-minter` | ✅ | Yoda auth token rotation |
+| `com.sanctum.claude-cli-proxy` | ✅ | Local Claude CLI proxy |
+| `com.sanctum.signal-cli` | ✅ | Signal CLI message daemon |
+| `com.sanctum.icloud-filer` | ✅ | iCloud file organizer |
+
+### Scheduled jobs (cron-style)
+
+| Agent | State | Schedule | Purpose |
+|---|---|---|---|
+| `com.sanctum.morning-briefing` | ⏲ | daily | Morning briefing generation |
+| `com.sanctum.perf-review` | ⏲ | weekly | Performance review snapshot |
+| `com.sanctum.tech-lookout` | ⏲ | daily | Tech news scan |
+| `com.sanctum.model-scout` | ⏲ | weekly | New model release scan |
+| `com.sanctum.fire-drill` | ⏲ | monthly | Recovery drill |
+| `com.sanctum.rotate-secrets` | ⏲ | weekly | Secret rotation |
+| `com.sanctum.secrets-audit` | ⚠️ exit 1 | daily | Secret hygiene audit — **investigate exit 1** |
+| `com.sanctum.token-refresh` | ⏲ | 1 h | OAuth token refresh |
+| `com.sanctum.version-check` | ⏲ | daily | SW version drift check |
+| `com.sanctum.signal-health` | ⏲ | hourly | Signal CLI health check |
+| `com.sanctum.agent-markdown-sync` | ⏲ | 5 min | Sync agent prompts ↔ repo |
+
+### Infra / watchdogs
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.watchdog` | ✅⚠️ exit 1 | Top-level process supervisor — **recurring exit 1, investigate** |
+| `com.sanctum.ha-self-healer` | ⏲ | Auto-remediate HA flaps |
+| `com.sanctum.openclaw.colima` | ⏲ | Colima (Docker VM) management |
+| `com.sanctum.openclaw.ha-healer` | ⏲ | OpenClaw HA healer |
+| `com.sanctum.openclaw.docker-startup` | ⚠️ exit 1 | Post-Docker-ready startup hook — **exit 1 recurring** |
+| `com.sanctum.vm-autostart` | ⏲ | VM auto-start on boot |
+| `com.sanctum.vm-push` | ⏲ | Push artifacts to VM |
+| `com.sanctum.post-boot` | ⚠️ exit 4 | Post-boot verification script — **exit 4 recurring** |
+| `com.sanctum.rust-readiness-check` | ⚠️ exit 2 | Pre-flight Rust toolchain check — **exit 2 recurring** |
+| `com.sanctum.memory-consolidate` | ⚠️ exit 1 | Memory-vault consolidation — **exit 1 recurring** |
+| `com.sanctum.force-flow` | ✅ | Security alert router (bell, notify, escalate) |
+
+### UIs / apps
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.dashboard` | ✅⚠️ exit -15 | Holocron dashboard server; respawned after recent SIGTERM |
+| `com.sanctum.rewind-dashboard` | ✅ | Rewind dashboard (activity timeline) |
+| `com.sanctum.health-center` | ✅⚠️ exit 143 | Health Center API; respawned after SIGTERM |
+| `com.sanctum.proxy` | ⚠️ exit 101 | Sanctum proxy launcher — **exit 101 recurring, investigate** |
+
+### Disabled (on disk, not loaded)
+
+| Agent | Disabled | Reason |
+|---|---|---|
+| `com.sanctum.server-mlx.plist.disabled-20260422` | 2026-04-22 | Python mlx_lm fallback retired post-mTLS migration. **Delete on 2026-05-05.** |
+| `com.sanctum.server.plist.disabled` | earlier | Rust sanctum-server router not yet promoted. Deliberately deferred. |
+| `com.sanctum.living-force.plist.disabled` | unknown | Orphan — **investigate; likely safe to delete** |
+
+## MBP inventory (7 agents)
+
+| Agent | State | Purpose |
+|---|---|---|
+| `com.sanctum.shadow-mlx` | ✅ | sanctum-mlx shadow for HA failover (:8902 plain, :8903 mTLS) |
+| `com.sanctum.council-canary-offbox` | ⏲ (10 min) | Off-box chat probe to Mini via Tailscale (catches Mini panic before Mini can log it) |
+| `com.sanctum.council-drift-offbox` | ⚠️ exit 1 | Off-box drift check via deploy-sanctum-mlx.sh verify. Known-issue: parallel session's uncommitted work drifts repo |
+| `com.sanctum.autoresearch` | ⏲ | Overnight LLM research runner |
+| `com.sanctum.backup` | ⏲ | MBP-side backup |
+| `com.sanctum.secret-rotation-scan` | ⏲ | MBP-side secret rotation monitor |
+| `com.sanctum.agent-markdown-sync` | ⏲ | Same as Mini; cross-machine sync |
+
+## Retirement candidates
+
+| Candidate | Status | Action |
+|---|---|---|
+| `com.sanctum.server-mlx.plist.disabled-20260422` (Mini) | Disabled since 2026-04-22 | **Delete 2026-05-05** (rollback window closes) — already on [calendar](./../operations/mtls-migration#the-retirement-calendar) |
+| `com.sanctum.living-force.plist.disabled` (Mini) | Orphan, unknown last-useful date | Investigate + likely delete |
+| `com.sanctum.server-mlx.plist.bak-20260420` (Mini) | Old `.bak` file | Safe to delete — precedes `.disabled-20260422` |
+| `sanctum-mlx.old-pre-mtls` binary (Mini) | Rollback binary from mTLS migration | Delete 2026-05-05 — already on calendar |
+
+## Flapping — to investigate
+
+Ordered by noise level (recurring non-zero exits deserve attention first):
+
+| Agent | Exit | Priority | Likely cause |
+|---|---|---|---|
+| `com.sanctum.proxy` | 101 | High — serves all proxy requests | Script error in proxy-launcher.sh; check `~/.openclaw/logs/sanctum-proxy.err` |
+| `com.sanctum.post-boot` | 4 | Medium — runs once at boot | Hook script expecting something that isn't there |
+| `com.sanctum.rust-readiness-check` | 2 | Medium — pre-flight gate | Likely cargo/toolchain drift or missing binary |
+| `com.sanctum.memory-consolidate` | 1 | Medium — memory-vault integrity | Check log; possibly schema drift |
+| `com.sanctum.voice-agent` | 1 | Medium — yoda-voice | TTS dependency or model missing |
+| `com.sanctum.secrets-audit` | 1 | Medium — security hygiene | Possibly a moved file or revoked scope |
+| `com.sanctum.openclaw.docker-startup` | 1 | Low — race with Docker readiness | Probably benign if Docker eventually loads |
+| `com.sanctum.drift-sentinel` | 1 | Low — Windu's drift detector | Possibly same kind of stale-threshold issue as council-drift |
+| `com.sanctum.watchdog` | 1 | Low — supervisor; running anyway | Investigate, but non-blocking |
+| `com.sanctum.council-drift` (Mini) + `council-drift-offbox` (MBP) | 1 | Known | Parallel session's uncommitted work shows up as drift — resolves when they commit |
+
+## The sprawl — is 58 too many?
+
+Probably yes. Not because any individual agent is wrong, but because:
+
+- **No single-pane dashboard** for their health — you find out an agent is flapping by tailing logs.
+- **No standard naming convention** for probes vs bridges vs scheduled jobs vs apps — everything is `com.sanctum.<noun>`.
+- **Retirement is manual.** Agents linger long past their usefulness unless someone notices.
+
+A future consolidation pass could:
+1. **Fold probes into sanctum-server as child tasks** once it's promoted (guardian, canary, drift, integrity, parity-smoke — all probes of the same thing, doesn't need 6 separate plists).
+2. **Adopt naming prefixes**: `com.sanctum.probe.*`, `com.sanctum.bridge.*`, `com.sanctum.app.*`, `com.sanctum.sched.*`. Makes `launchctl list | grep probe` trivially grep-able.
+3. **Wire an SLO dashboard** (Holocron panel, Prometheus-style `/metrics` endpoint) that shows each agent's last N exit codes and flapping-rate.
+
+None of that is urgent. The system works. This inventory exists so the next reorg has a ground-truth starting point.
