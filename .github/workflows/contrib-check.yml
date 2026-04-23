@@ -1,0 +1,60 @@
+name: CONTRIBUTING compliance
+
+on:
+  pull_request:
+    paths:
+      - "src/content/docs/**/*.mdx"
+      - "scripts/contrib-check.py"
+      - "CONTRIBUTING.md"
+      - "AGENTS.md"
+  push:
+    branches: [main]
+    paths:
+      - "src/content/docs/**/*.mdx"
+      - "scripts/contrib-check.py"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need the parent commit to diff against
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Determine changed MDX files
+        id: changed
+        run: |
+          set -eu
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+            head="${{ github.event.pull_request.head.sha }}"
+          else
+            # push to main — check only what the push added/modified.
+            base="${{ github.event.before }}"
+            head="${{ github.sha }}"
+          fi
+          echo "base=$base head=$head"
+
+          # Enumerate changed or added MDX files under src/content/docs.
+          files=$(git diff --name-only --diff-filter=ACMR "$base" "$head" \
+            | grep -E '^src/content/docs/.*\.mdx$' || true)
+
+          if [ -z "$files" ]; then
+            echo "no MDX files changed — nothing to check"
+            echo "files=" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed MDX files:"
+            echo "$files" | sed 's/^/  /'
+            # Collapse to space-separated for the next step.
+            joined=$(echo "$files" | tr '\n' ' ')
+            echo "files=$joined" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run CONTRIBUTING checker
+        if: steps.changed.outputs.files != ''
+        run: |
+          python3 scripts/contrib-check.py ${{ steps.changed.outputs.files }}
