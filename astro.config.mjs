@@ -104,6 +104,7 @@ export default defineConfig({
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Smart Router', slug: 'architecture/dynamic-model-routing' },
+						{ label: 'Smart Router Cathedral', slug: 'architecture/smart-router-cathedral' },
 						{ label: 'Sanctum MLX', slug: 'architecture/sanctum-mlx' },
 						{ label: 'LoRA in Rust', slug: 'architecture/lora-rust' },
 						{ label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
