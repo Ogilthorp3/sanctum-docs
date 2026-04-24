@@ -15,7 +15,11 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 Both traditions converge on the same insight: in a living system under load, the coordinating layer is not a controller. It is a medium. One that modulates (slow, learned). The other that regulates (fast, reflexive). Immune system optimization happens when regulation reads the modulation and vice versa.
 
-**In sanctum terms**, that layer doesn't exist yet. There are fragments — but no membrane.
+**In sanctum terms**, that layer started shipping on 2026-04-24. Pressure axis and presence axis are live on `127.0.0.1:2188`; event and attention axes follow. There are still fragments — but the membrane is being woven.
+
+<Aside type="tip" title="MVP shipped — 2026-04-24">
+`sanctum-chitti` is running as a LaunchAgent (`com.sanctum.chitti`). `GET /fluid` returns current pressure (memory available, memory free, swap used, page size) + active presence entries. `POST /presence` writes a TTL-bounded entry; `DELETE /presence/{id}` removes it early. `sanctum-watchdog` is the first subsystem to adopt it — `ensure_coder14b_loaded` reads pressure from chitti and writes presence during the `lms load` window. Event and attention axes land in follow-up sessions.
+</Aside>
 
 ## What Sanctum Has Now
 
@@ -44,50 +48,24 @@ Each fragment is a correct instinct. None of them talk to each other. A watchdog
 
 ## The Gap, Precisely
 
-A chitti layer is **a continuous ambient state field** that every agent and every automated remediation reads before acting, and writes to after acting. Not a daemon that makes decisions. A fluid that carries them.
+A chitti layer is a continuous ambient state field every agent and every remediation reads before acting, and writes to after. Not a daemon that decides. A fluid that carries decisions.
 
-Four axes the field aggregates:
+Four axes:
 
-1. **Pressure** — memory (free, inactive, compressor, swap), thermal, disk, network, GPU. Not one scalar; a vector the reader interprets for their own context.
-2. **Mid-flight work** — which processes are actively using which shared resource (GPU, disk I/O, the 1234 port queue, the Mail database). Not locks — *presence signals* that decay after inactivity.
-3. **Attention** — which agent has the floor right now, which service is in an experimental or quiesced state, whether the human is actively using the machine.
-4. **Recent history** — a short-horizon log of what fired, succeeded, failed, was throttled. So we don't re-hit the same pattern twice in one hour.
+1. **Pressure** — memory, thermal, disk, network, GPU. A vector, not a scalar.
+2. **Mid-flight work** — which processes are actively using which shared resource. Presence signals, not locks; they decay.
+3. **Attention** — which agent has the floor, which service is experimental, whether the human is actively using the machine.
+4. **Recent history** — a short-horizon log of what fired, succeeded, failed, was throttled.
 
-The field is not authoritative. It is a *read of the ground* at a point in time, with known staleness bounds. Subsystems decide what to do with what they read. The field's job is to make the reading cheap and universal.
-
-<Aside type="note" title="Why not make the watchdog consult it directly?">
-It already does, implicitly, through the five ad-hoc gates. The refactor is to replace those gates with a single read against the fluid. The watchdog becomes *smaller* — not smarter. Intelligence moves into the field and into the readers.
-</Aside>
+The field is not authoritative. It is a *read of the ground* with known staleness. Subsystems decide what to do with what they read. The field's job is to make reading cheap and universal.
 
 ## Shape of an MVP
 
-The minimum viable membrane is smaller than it sounds. Three pieces:
+Three pieces:
 
-### 1. The collector
-
-A lightweight Rust daemon (`sanctum-fluid`? `chittid`?) that:
-
-- Polls kernel metrics on a fast cadence (1–5 s): `vm_stat`, `sysctl`, `iostat`, GPU telemetry.
-- Receives presence signals via a local socket — any process can write "I'm using X until Y."
-- Maintains a short ring buffer of recent action events (service restarts, remediations, notifications).
-- Exposes a read API over HTTP on a Tailscale-reachable port, with JSON shaped so every axis is optional — callers consume what they care about.
-
-Not a big daemon. A few hundred lines of Rust, probably less memory than the watchdog itself. The whole point is the fluid is cheap to read from every subsystem.
-
-### 2. The presence protocol
-
-A one-line write interface every subsystem already uses through a shared helper:
-
-```text
-POST /presence
-{"actor": "sanctum-mlx", "resource": "gpu", "until": "2026-04-24T15:30:00Z", "note": "loading qwen3.6-35b"}
-```
-
-Presence entries auto-expire. The collector never evicts on its own — it trusts `until` and accepts a `DELETE /presence/<id>` for early release. No locks, no owners. Just signals.
-
-### 3. The read helper
-
-A tiny library every Rust service and every Python skill imports:
+1. **Collector** — a lightweight Rust daemon polling kernel metrics (1–5 s) and exposing a JSON read API. Receives presence signals via local socket. Maintains a short ring buffer of recent events. Few hundred lines, less memory than the watchdog.
+2. **Presence protocol** — `POST /presence {actor, resource, until, note}`; entries auto-expire, `DELETE /presence/<id>` for early release.
+3. **Read helper** — a tiny library:
 
 ```rust
 let fluid = chitti::read().await?;
@@ -97,7 +75,7 @@ if fluid.history.recent(|e| e.action == "mlx.reload").count() > 2 { return Defer
 act()
 ```
 
-Every gate currently hardcoded in the watchdog becomes one of those reads. New subsystems get the same behavior for free — they don't need to re-derive "am I in a bad moment to act?"
+Every gate currently hardcoded in the watchdog becomes a read against the fluid. New subsystems get the same behavior for free.
 
 ## What It Replaces, What It Enables
 
@@ -112,7 +90,24 @@ Enables:
 
 ## What It Is Not
 
-Not a new agent (no reasoning — only aggregation). Not a replacement for service-graph.py or the watchdog (those stay, they get *smaller*). Not mandatory (adoption is gradient). Not authoritative (readers choose how much to trust). Not yet shipped — this page is a direction marker; when the membrane exists, this page becomes its reference.
+Not a new agent (no reasoning — only aggregation). Not a replacement for service-graph.py or the watchdog (those stay, they get *smaller*). Not mandatory (adoption is gradient; subsystems that don't read the fluid keep working). Not authoritative (readers choose how much to trust).
+
+## What Shipped 2026-04-24 (MVP)
+
+`sanctum-chitti` crate in the Rust workspace. Three endpoints on port 2188:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /fluid` | Current pressure vector + active presence entries + observation timestamp |
+| `POST /presence` | Register a TTL-bounded presence signal (actor + resource + until + note); returns `{"id": "..."}` |
+| `DELETE /presence/{id}` | Early release of a presence entry |
+| `GET /health` | Liveness check |
+
+Pressure axis polls `vm_stat` + `sysctl vm.swapusage` every 5 s and caches the result. Presence entries have a 1-hour maximum TTL and are evicted lazily on read. No event ring buffer yet. No attention axis yet.
+
+First reader: `sanctum-watchdog::chitti_client`. The `ensure_coder14b_loaded` path reads pressure from chitti and writes presence `actor=sanctum-watchdog, resource=lmstudio` around `lms load` so anyone else reading the fluid sees the model load is in flight. When chittid is unreachable, the client falls back to direct `vm_stat` parsing — adoption is gradient, the fluid must not be a hard dependency.
+
+Deferred to follow-ups: the event history axis, the attention axis, broader subsystem adoption (Jocasta, sanctum-mlx, xtts-server, home-assistant), a shared read helper library so new subsystems don't reimplement the client each time.
 
 ## Related
 
