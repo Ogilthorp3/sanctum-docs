@@ -1,0 +1,119 @@
+---
+title: "2026-04-24: Sunday Sync — airgapped tarball push and the Monday morning canary"
+description: The haus gets a weekly heartbeat — openclaw stays in lockstep across the Mini and the airgapped VM, with tripwires, a tarball-push, and a canary that checks the doctor.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The haus has two copies of openclaw: one on the Mac Mini where the orchestrator lives and where all the CLI tools run, and one on the OpenClaw VM where the gateway, agents, and the actual council live. Tonight those two copies were running different versions, with a third copy — the npm-global CLI shim on the VM — sitting a version behind both of them. Two minor versions of drift between a caller and its callee is the kind of thing that silently eats agent config fields and then reports `Unknown agent id "yoda"` at 2 AM.
+
+By the end of the night they all report `OpenClaw 2026.4.22 (00bd2cf)`, a LaunchAgent fires every Sunday morning to keep them that way, and a second LaunchAgent fires every Monday morning to make sure the Sunday one actually worked. The whole thing respects the VM airgap, which is intentional and was briefly mistaken for a NAT bug.
+
+## The Starting Drift
+
+Before the work: three openclaw installs across two machines, three different versions.
+
+| Surface | Install path | Version |
+|---------|--------------|---------|
+| Mini CLI | `/opt/homebrew/lib/node_modules/openclaw` (npm-global) | `2026.4.14` |
+| VM CLI | `/home/ubuntu/.npm-global/bin/openclaw` (npm-global) | `2026.4.11` |
+| VM gateway | `/home/ubuntu/.openclaw/node_modules/openclaw` (pnpm-local) | `2026.4.14` |
+
+The VM CLI was writing config with fields the 2026.4.11 CLI couldn't parse. Stale config warnings flooded the logs. `council-session.sh` invocations that went through the npm-global CLI would see a config that referenced agents the binary didn't understand, drop those fields as stale, then fail with `Unknown agent id "yoda"` — a bug that presented as "the council is broken" for most of the night before the version split was diagnosed.
+
+The goal: get all three surfaces on the same version. Pick pnpm. Keep them that way.
+
+## What Broke My Mental Model
+
+Three moments tonight where my first instinct was wrong:
+
+### 1. The VM isn't broken, the VM is sealed
+
+First try at upgrading the VM CLI: `pnpm add -g openclaw@2026.4.22` over SSH. It errored with `EAI_AGAIN: getaddrinfo registry.npmjs.org`. My next move was to diagnose the NAT — ping Mini-bridge (works), ping 1.1.1.1 (100% packet loss), curl external (timeout). I was about to escalate "VM has lost internet."
+
+Bert's correction: **"The VM has no internet on purpose, that's why we use vm-push."**
+
+The VM is airgapped by design. `vm-push.sh` is the established pattern for pushing data out (VM git state → GitHub via Mac bundle proxy). No symmetric pattern existed for pulling npm packages in — that was tonight's work.
+
+<Aside type="note" title="For future-me and any LLM reading this">
+If the VM ever "loses internet," check whether it's supposed to have it. Memory: `reference_vm_airgap_push.md`. Do not try to fix the NAT. Build a tarball push instead.
+</Aside>
+
+### 2. The council can't advise on how to build itself
+
+The second instinct was to convene the council on the delivery architecture — three options on the table, a real A/B/C worth domain input. Yoda, Quigon, and Windu convened. Every agent returned `[No response]`. Synthesis failed. Session file showed only `[plugins] neo4j-kg: initialized` and nothing else.
+
+Two issues compounded:
+
+1. **LLM backend was down post-reboot.** `sanctum-mlx` on `:1337` was listening but not serving. `council-local/Qwen3.6-35B-A3B-4bit-text` timed out; the LM Studio fallback referenced `qwen/qwen3.5-35b-a3b`, a model retired on 2026-04-22. Both paths dead = silent failure.
+2. **`council-session.sh` hung on the first participant when Yoda was included.** The script invoked `send.sh yoda yoda session high <prompt>` — yoda processing a message addressed to itself asking itself to contribute. Twenty-seven minutes of the first agent "thinking" before I killed it.
+
+Both have been fixed. The second was a real router bug ([openclaw-skills `a764146`](https://github.com/Ogilthorp3/openclaw-skills/commit/a764146)): Yoda is always the orchestrator and synthesizer, never a participant — the script now filters `yoda` out of the participants list with a `NOTE` if callers include it out of habit.
+
+### 3. The VM can't receive apt either
+
+After wiring openclaw tarball-push, the Sunday script also had an apt-upgrade branch. I suggested `apt install unattended-upgrades`. It hung for minutes trying to resolve `ports.ubuntu.com`. Same airgap.
+
+The Sunday script now reports `VM: apt is intentionally airgapped — skipping upgrade` and reports the stale upgradable count for humans to look at. A future apt-mirror on the Mini would change this, but that's a permanent new service and not work for tonight.
+
+## The Tarball Push
+
+The delivery pattern that does work — and mirrors the shape of the existing `vm-push` for git state — is:
+
+<Steps>
+1. **Stage on Mini.** A throwaway `/tmp/oc-stage-<target>/` with a one-line `package.json` pinning openclaw to the target version, then `pnpm install --config.node-linker=hoisted --config.ignore-scripts=true`. Hoisted linker produces a flat `node_modules/` with no symlinks into the pnpm store — self-contained and portable.
+
+2. **Tar + gzip.** 404 MB flat → ~101 MB compressed. Transferred to VM in ~1.1s over the bridge.
+
+3. **Atomic swap on VM.** Stop the gateway. `mv node_modules node_modules.bak-$(date +%Y%m%d-%H%M%S)`. Extract the new `node_modules` into `~/.openclaw/`. Update `package.json`'s openclaw pin. Update `OPENCLAW_SERVICE_VERSION=` in both systemd unit files. Repoint the `/home/ubuntu/.npm-global/bin/openclaw` symlink at the new pnpm-local binary so tools hard-coding the npm-global path (council-router among them) transparently upgrade. Daemon-reload, restart, verify `is-active`.
+
+4. **Prune.** Keep the last 2 `node_modules.bak-*` directories; delete older ones. Clean up the staging dir and the tarball on both ends.
+</Steps>
+
+<Aside type="caution" title="Why hoisted">
+Default pnpm installs symlink into `~/.pnpm-store` for disk efficiency. Tarring a symlink farm and untarring it on another machine gives you broken links pointing at paths that don't exist on the target. `--config.node-linker=hoisted` produces a flat npm-style layout that tars and untars cleanly.
+</Aside>
+
+The script that does all of this lives at `~/.sanctum/bin/sanctum-sunday-upgrade.sh` on the Mini and is tracked in [`Ogilthorp3/sanctum-config`](https://github.com/Ogilthorp3/sanctum-config). It handles the Mini CLI upgrade via `pnpm add -g openclaw@$target`, then fires the tarball push for the VM, then runs `brew update && brew upgrade` on the Mini, then reports apt status on the VM without trying to upgrade.
+
+## The Tripwires
+
+Openclaw publishes roughly every 24–48 hours. "Stable" here means the `latest` dist-tag (no separate `stable` channel exists). Auto-upgrading to something published hours ago is a recipe for shipping regressions into production on a Tuesday morning.
+
+Three gates must all clear before the openclaw step runs. If any fire, the openclaw upgrade skips; brew still runs.
+
+| Tripwire | What it checks | Why |
+|----------|---------------|-----|
+| **Age ≥ 48 h** | `npm view openclaw time --json` | Community shake-out window. If it's been less than two days, defer. |
+| **No blocking issues** | `gh issue list openclaw/openclaw --search "$version"` filtered for `crash\|regression\|broken\|revert\|cannot start\|boot loop\|unusable` | Someone might have filed a show-stopper against this exact version. |
+| **Not deprecated** | `npm view openclaw@$version deprecated` | npm marks versions deprecated when they're actively being pulled. |
+
+First real Sunday fires 2026-04-26 at 09:30 local. `2026.4.22` will be ~75 hours old by then (published 2026-04-23T14:21Z). Clears the age tripwire.
+
+## The Monday Canary
+
+`com.sanctum.sunday-upgrade-check` fires every Monday at 10:00. It reads yesterday's upgrade log (`~/.sanctum/upgrade-logs/<yesterday>.log`), filters the known-good WARN lines (the airgap-skip, the three tripwire skips for age/deprecation/open-issues), parses the `Final state` block, and verifies that Mini CLI, VM CLI, and VM gateway all report the same version. If anything is off, it fires a Signal alert via `send.sh jocasta yoda alert high` — fire-and-forget, detached with `nohup + disown` so the check itself never blocks on an LLM call.
+
+<Aside type="note" title="Pattern alignment">
+The Monday check is structurally identical to drift-sentinel, tommy, and council-integrity: local launchd, writes its own log, escalates via `send.sh`. No cloud dependency, no new secrets, matches the surrounding family.
+</Aside>
+
+Silent on success. Loud on any drift between the three surfaces or on any WARN line the filter doesn't recognize. Check script itself runs in 0.15 s — the alert's LLM inference happens downstream on its own timeline.
+
+## Commit Trail
+
+| Repo | Commit | What |
+|------|--------|------|
+| [`sanctum-config`](https://github.com/Ogilthorp3/sanctum-config) | `d066342` | Sunday orchestrator + launchd template |
+| [`haus`](https://github.com/Ogilthorp3/haus) | `a53e1ec` | VM gateway bumped to 2026.4.22 via tarball push |
+| [`sanctum-config`](https://github.com/Ogilthorp3/sanctum-config) | `7261787` | Narrow the apt sudo probe to match the NOPASSWD grant |
+| [`sanctum-config`](https://github.com/Ogilthorp3/sanctum-config) | `59a7587` | Drop the apt-upgrade attempt — honor the airgap |
+| [`sanctum-config`](https://github.com/Ogilthorp3/sanctum-config) | `fc0db9b` | Monday canary — `sunday-upgrade-check.sh` + plist |
+| [`openclaw-skills`](https://github.com/Ogilthorp3/openclaw-skills) | `a764146` | council-router: skip Yoda as participant, fix self-addressed hang |
+
+## What This Changes Going Forward
+
+- **Weekly cadence.** Openclaw stays within one upgrade window of `latest` without manual `pnpm add -g`. If upstream ships a regression, tripwires catch it; if tripwires let a bad one through, the Monday canary catches drift between the three surfaces.
+- **The airgap is honored by default now.** No script in the haus tries to reach public package mirrors from the VM. If a future workload needs that, it adds an explicit push channel, it doesn't open NAT.
+- **The council can be convened again.** The self-addressed-hang is fixed, so future sessions on architectural A/B/C questions won't silently die on the first participant when Yoda appears in the participants list out of habit.
+- **One new LaunchAgent pair joins the family.** `com.sanctum.sunday-upgrade` and `com.sanctum.sunday-upgrade-check`. Both bootstrapped persistently via `launchctl bootstrap gui/$(id -u)`, both logging into `~/.sanctum/upgrade-logs/`, both silent on success and loud only on anomaly. Not a new pattern — just another entry in the same book.
