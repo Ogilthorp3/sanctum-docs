@@ -5,9 +5,11 @@ description: The haus gets a weekly heartbeat — openclaw stays in lockstep acr
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-The haus has two copies of openclaw: one on the Mac Mini where the orchestrator lives and where all the CLI tools run, and one on the OpenClaw VM where the gateway, agents, and the actual council live. Tonight those two copies were running different versions, with a third copy — the npm-global CLI shim on the VM — sitting a version behind both of them. Two minor versions of drift between a caller and its callee is the kind of thing that silently eats agent config fields and then reports `Unknown agent id "yoda"` at 2 AM.
+![Sunday Sync — a sealed-vault VM receiving a weekly tarball from the Mini through a narrow airgap pipeline, with a Monday canary waiting with a checklist.](./images/hero-openclaw-sunday-sync.png)
 
-By the end of the night they all report `OpenClaw 2026.4.22 (00bd2cf)`, a LaunchAgent fires every Sunday morning to keep them that way, and a second LaunchAgent fires every Monday morning to make sure the Sunday one actually worked. The whole thing respects the VM airgap, which is intentional and was briefly mistaken for a NAT bug.
+The haus has two copies of openclaw: Mac Mini runs the orchestrator and CLI, the OpenClaw VM runs the gateway and council agents. Tonight the two were on different versions, with a third copy — the npm-global CLI shim on the VM — a version behind both. Two minor versions of drift between caller and callee silently eats agent config fields and throws `Unknown agent id "yoda"` at 2 AM.
+
+By morning all three report `OpenClaw 2026.4.22`, a Sunday LaunchAgent keeps them that way, and a Monday LaunchAgent checks that the Sunday one worked. The whole thing respects the VM airgap — intentional, briefly mistaken for a NAT bug.
 
 ## The Starting Drift
 
@@ -29,11 +31,9 @@ Three moments tonight where my first instinct was wrong:
 
 ### 1. The VM isn't broken, the VM is sealed
 
-First try at upgrading the VM CLI: `pnpm add -g openclaw@2026.4.22` over SSH. It errored with `EAI_AGAIN: getaddrinfo registry.npmjs.org`. My next move was to diagnose the NAT — ping Mini-bridge (works), ping 1.1.1.1 (100% packet loss), curl external (timeout). I was about to escalate "VM has lost internet."
+First try at upgrading the VM CLI: `pnpm add -g openclaw@2026.4.22` errored `EAI_AGAIN: getaddrinfo registry.npmjs.org`. Diagnosed the NAT — ping Mini-bridge works, ping 1.1.1.1 100% loss. Was about to escalate "VM has lost internet."
 
-Bert's correction: **"The VM has no internet on purpose, that's why we use vm-push."**
-
-The VM is airgapped by design. `vm-push.sh` is the established pattern for pushing data out (VM git state → GitHub via Mac bundle proxy). No symmetric pattern existed for pulling npm packages in — that was tonight's work.
+Correction from Bert: **"The VM has no internet on purpose, that's why we use vm-push."** The VM is airgapped by design. `vm-push.sh` is the established pattern for pushing data out (VM git state → GitHub via Mac bundle). No symmetric pattern for pulling npm packages in — that was tonight's work.
 
 <Aside type="note" title="For future-me and any LLM reading this">
 If the VM ever "loses internet," check whether it's supposed to have it. Memory: `reference_vm_airgap_push.md`. Do not try to fix the NAT. Build a tarball push instead.
@@ -41,20 +41,16 @@ If the VM ever "loses internet," check whether it's supposed to have it. Memory:
 
 ### 2. The council can't advise on how to build itself
 
-The second instinct was to convene the council on the delivery architecture — three options on the table, a real A/B/C worth domain input. Yoda, Quigon, and Windu convened. Every agent returned `[No response]`. Synthesis failed. Session file showed only `[plugins] neo4j-kg: initialized` and nothing else.
+Second instinct: convene the council on the delivery architecture — three options, a real A/B/C. Yoda, Quigon, Windu returned `[No response]`. Synthesis failed. Two issues compounded:
 
-Two issues compounded:
+1. **LLM backend was down post-reboot.** `sanctum-mlx` on `:1337` listening but not serving; the LM Studio fallback referenced `qwen/qwen3.5-35b-a3b`, retired 2026-04-22. Both paths dead.
+2. **`council-session.sh` hung on Yoda.** Script invoked `send.sh yoda yoda session high <prompt>` — Yoda processing a message addressed to itself. 27 minutes of thinking before I killed it.
 
-1. **LLM backend was down post-reboot.** `sanctum-mlx` on `:1337` was listening but not serving. `council-local/Qwen3.6-35B-A3B-4bit-text` timed out; the LM Studio fallback referenced `qwen/qwen3.5-35b-a3b`, a model retired on 2026-04-22. Both paths dead = silent failure.
-2. **`council-session.sh` hung on the first participant when Yoda was included.** The script invoked `send.sh yoda yoda session high <prompt>` — yoda processing a message addressed to itself asking itself to contribute. Twenty-seven minutes of the first agent "thinking" before I killed it.
-
-Both have been fixed. The second was a real router bug ([openclaw-skills `a764146`](https://github.com/Ogilthorp3/openclaw-skills/commit/a764146)): Yoda is always the orchestrator and synthesizer, never a participant — the script now filters `yoda` out of the participants list with a `NOTE` if callers include it out of habit.
+Fixed in [`openclaw-skills a764146`](https://github.com/Ogilthorp3/openclaw-skills/commit/a764146): Yoda is always orchestrator and synthesizer, never a participant — the script now filters `yoda` out with a `NOTE` when callers include it out of habit.
 
 ### 3. The VM can't receive apt either
 
-After wiring openclaw tarball-push, the Sunday script also had an apt-upgrade branch. I suggested `apt install unattended-upgrades`. It hung for minutes trying to resolve `ports.ubuntu.com`. Same airgap.
-
-The Sunday script now reports `VM: apt is intentionally airgapped — skipping upgrade` and reports the stale upgradable count for humans to look at. A future apt-mirror on the Mini would change this, but that's a permanent new service and not work for tonight.
+The Sunday script originally had an apt-upgrade branch. `apt install unattended-upgrades` hung resolving `ports.ubuntu.com`. Same airgap. The script now reports `VM: apt is intentionally airgapped — skipping upgrade`. A future apt-mirror on the Mini would change this, but it's not tonight's work.
 
 ## The Tarball Push
 
