@@ -26,7 +26,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 | DenchClaw Gateway | 1977 | `com.sanctum.gateway` | Mac-side agent gateway. Runs Jocasta (the Archivist — CRM data and communications) and exposes the agent API. |
 | Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
 | Command Center | 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. |
-| Health Center | -- | `com.sanctum.health-center` | Health monitoring dashboard for family wellness data. |
+| Health Center | 2222 | `com.sanctum.health-center` | Digital twin portal — health, wellness, and household telemetry. Twin twos for the twin. |
 | Holocron (Dench) | 1977 | `com.sanctum.dench` | Family chat interface. Bound to LAN, token-authenticated. Accessible at `http://holocron/`. |
 | Dench Proxy | 80 | `com.sanctum.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 1977. |
 
@@ -66,11 +66,12 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| LM Studio | 1234 | — | `com.sanctum.lmstudio-server` | Local LLM inference. Serves Qwen 3.5 35B (MoE). API key: `lm-studio`. |
-| Council MLX MLX | `1337` | leet — the local workhorse | `com.sanctum.server-mlx` | `sanctum-server` front-end with a built-in idle manager. It serves the fine-tuned Qwen 3.5 27B distilled model through a local wrapper on `1337` and wakes the MLX backend on `8900` only when someone actually asks it to think. |
-| XTTS Voice | `8008` | BOOB — Yoda’s mouth | `com.sanctum.xtts-server` | XTTS-v2 text-to-speech server. Runs on the MPS GPU for real-time voice synthesis. |
+| LM Studio | 1234 | — | `com.sanctum.lmstudio-bridge` | Local LLM inference for VM agents. Currently serving `qwen2.5-coder-14b-instruct` via socat bridge from `10.10.10.1:1234` to `127.0.0.1:1234`. API key: `lm-studio`. |
+| Council MLX | `1337` | leet — the local workhorse | `com.sanctum.mlx` | Pure-Rust `sanctum-mlx` server. Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. mTLS-only. The 27B-distilled era ended 2026-04-22 when the council moved to the 35B MoE. |
+| TTS Voice | `8008` | BOOB — Yoda's mouth | `com.sanctum.yoda-tts-worker` | Qwen3-TTS via mlx-audio (`workers.tts_server`). XTTS retired 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. |
 | Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
-| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxy` | LLM routing proxy on port 4040. A single 4.6 MB Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
+| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.server` | LLM routing proxy on port 4040 (binary: `proxyd`). Single Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
+| Memory Vault | `42069` | Nice. | `com.sanctum.memory-vault` | Long-term memory store for agent context. SQLite vault at `~/.sanctum/memory/.vault.db`, consolidates every 6h. SSE transport for MCP clients. |
 | Jina Reranker | `42070` | The Pair Port | `com.sanctum.reranker` | Jina v2 reranking server. Companion to Memory Vault on 42069 — the two travel together by design. Improves RAG precision for long-context memory queries. |
 
 ### Model Routing — 3-Tier Architecture
@@ -136,8 +137,7 @@ There are nine of them. Two are SSH tunnels. Two are mDNS broadcasters. One talk
 | Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `sanctum-hub`. Exposes `health.example.net` and `ha.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
 | Network Control | `4007` | 007 — licensed to ping | `com.sanctum.ha-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
 | Health Ingester | `10101` | binary heartbeat | `com.sanctum.health-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
-| mDNS Alias (hub) | -- | `com.sanctum.mdns-alias` | Broadcasts `sanctum-hub.local` via mDNS for LAN discovery. KeepAlive enabled. |
-| mDNS Alias (holocron) | -- | `com.sanctum.mdns-dench` | Broadcasts `holocron.local` via mDNS for the chat interface. KeepAlive enabled. |
+| mDNS Alias | -- | `com.sanctum.mdns-docs` | Broadcasts haus aliases (`sanctum-hub.local`, `holocron.local`, etc.) via mDNS for LAN discovery. KeepAlive enabled. Consolidated from the old `mdns-alias` / `mdns-dench` split. |
 
 ### Tunnel Routes
 
@@ -325,9 +325,10 @@ Every port in Sanctum has a number, and most of those numbers mean something —
 | 22 | SSH | VM | — | The one port that doesn't need a personality. |
 | 80 | Dench Proxy (disabled) | Mac | Vanity Mirror | Exists solely so someone can type  and feel important. Currently unplugged, like a decorative fireplace. |
 | 1111 | Command Center | Mac | Make-A-Wish | 11:11 — you're supposed to close your eyes, not open a socket. |
+| 2222 | Health Center | Mac | Twin Twos | The digital twin gets its own pair. Two for the body, two for the system that watches it. |
 | 1138 | Voice Agent | Mac | Cell Block 1138 | Reclaimed from the deprecated Neural Link, now keeping Yoda securely imprisoned in a Star Wars sandbox. |
 | 1234 | LM Studio | Mac | Password1 | The port equivalent of leaving your key under the mat, except the mat is a 27-billion-parameter model. |
-| 1337 | Council MLX MLX | Mac | LEET | Because nothing says elite hacker like a Metal-accelerated language model running inference in a home office. |
+| 1337 | Council MLX | Mac | LEET | Because nothing says elite hacker like a Metal-accelerated language model running inference in a home office. |
 | 1969 | Sonos Bridge | Mac | Woodstock | The summer of love, Hendrix, and music in every field. The Sonos bridge puts music in every room — same energy, fewer mud-covered hippies. |
 | 1977 | Gateway | Mac + VM | A New Hope | Star Wars release year. The gateway between Mac and VM, which is approximately as fraught as the trench run. |
 | 1984 | Firewalla Bridge | Mac | Big Brother | George Orwell wrote a warning. We turned it into a port number for our firewall bridge. He would have had notes. |
@@ -339,7 +340,7 @@ Every port in Sanctum has a number, and most of those numbers mean something —
 | 4077 | Force Flow | Mac | Hawkeye | M\*A\*S\*H 4077th — the field hospital that triaged casualties with gallows humor and a still. Force Flow triages notifications with approximately the same energy. |
 | 4078 | SanctumBridge | Mac | The FDA Neighbor | One door down from Force Flow. The port that reads your messages without reading your messages — FDA-privileged proxy so the MCP server doesn't have to be. |
 | 5150 | Signal Proxy | VM | Van Halen | Eddie's hottest album and California's code for an involuntary psychiatric hold. Running a messaging proxy on it feels appropriate either way. |
-| 8008 | XTTS Voice | Mac | Calculator | Flip it upside down. You know what you did. Now it synthesizes speech, which is somehow less juvenile. |
+| 8008 | TTS Voice | Mac | Calculator | Flip it upside down. You know what you did. Now it synthesizes speech (Qwen3-TTS via mlx-audio), which is somehow less juvenile. |
 | 8123 | Home Assistant | Mac (Docker) | Default | HA's factory port. Sometimes the most radical act is not changing the default. |
 | 8888 | Kiwix | Mac | Lucky Eights | Four eights. Auspicious in Chinese numerology, overkill everywhere else. Houses the offline encyclopedia for when civilization gets patchy. |
 | 10101 | Health Ingester | VM | Binary 21 | 10101 in binary is 21 — blackjack. The health ingester always hits, never stands. |
