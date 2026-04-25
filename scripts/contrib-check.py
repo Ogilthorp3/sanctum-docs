@@ -81,8 +81,10 @@ ALLOWED_PHONE_PREFIX = "+1555555"
 
 # Real hostnames. Allow the `.local` placeholders and nothing else.
 LEAK_HOSTNAME_RES = [
+    # Device naming pattern that exposes the owner's first name.
     re.compile(r"\bBerts?-[A-Za-z0-9-]+\.local\b"),
-    re.compile(r"\bhaus\b"),
+    # Surname in an instance slug (e.g. "firstname-surname").
+    re.compile(r"\b[A-Za-z]+-nepveu\b", re.IGNORECASE),
 ]
 ALLOWED_LOCAL_HOSTS = {"haus.local", "satellite.local", "yoda.local"}
 
@@ -250,7 +252,7 @@ def check_no_leak(path, rel, body, body_line_offset, report):
             for m in rx.finditer(line):
                 report.err(
                     rel, i, "no-leak",
-                    f"real hostname '{m.group(0)}' — use <MINI>/<MBP>/manoir.local placeholders",
+                    f"real hostname '{m.group(0)}' — use <MINI>/<MBP>/haus.local placeholders",
                 )
 
 
