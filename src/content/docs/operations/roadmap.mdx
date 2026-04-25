@@ -124,6 +124,20 @@ Replace all cloud dependencies in the voice agent: Deepgram STT → local Whispe
 **Why later:** each component needs to be fast enough individually first. Qwen3-TTS speed is the current bottleneck.
 </Card>
 
+<Card title="Restore (or formally retire) the council fallback" icon="warning">
+The 2026-04-25 failover drill found that `council-guardian.sh::activate_fallback()` is wired to bootstrap a Python `mlx_lm.server` (`com.sanctum.server-mlx`) that has been non-viable since the 2026-04-21 mTLS migration: plist renamed to `.disabled-20260422`, wrapper config points at the retired Qwen3.5-27B path, and Python `mlx_lm.server` only serves plain HTTP while every council client is mTLS-only. A defensive guard now refuses to "activate" a fallback whose plist isn't on disk, so the worst-case (silent council dismantle on a metallib panic) is contained — but the system has no working failover layer.
+
+**Three options, in order of effort:**
+
+- **Restore** — put a TLS-terminating Caddy or tiny Rust shim at `:1337` mTLS that forwards plain HTTP to a Python `mlx_lm.server` on `:1338`. Update `instance.yaml::services.council_mlx.model_path` to the current MoE snapshot. Re-enable the plist. ~1-2 hours including cert + plist wiring. Most faithful restoration.
+- **Consolidate** — fold the failover decision into sanctum-server (it already terminates mTLS for inbound traffic). Backend health → route to either sanctum-mlx loopback-plain or Python loopback-plain. Bigger change but it puts the failover in the Smart Router cathedral where it arguably belongs.
+- **Retire** — delete `activate_fallback()` and `detect_fatal_pattern` from the guardian. KeepAlive + ThrottleInterval already handle "process crashed"; the auto-fallback was for "process is online but inference is broken," which has not been the failure mode in 2026.
+
+**Why later:** the defensive guard makes the current state safe (loud refusal vs silent dismantle). The actual restoration is a real engineering project, and which option is right depends on whether you trust sanctum-mlx's stability after the 2026-04-24 memory + kernel fixes (overnight 04-24/25 ran 17h59m / 440 requests / 0 errors — encouraging but not 30 days of evidence yet).
+
+Receipts: `project_failover_drill_2026_04_25.md` in agent memory.
+</Card>
+
 <Card title="Gemma 4 (and other archs) in sanctum-mlx" icon="puzzle">
 Today `sanctum-mlx::LoadedModel` dispatches `qwen3_5` and `qwen3_5_moe` only — anything else fails at config parse and falls back to Python `mlx_lm.server`. A `gemma3.rs` loader (Gemma 3/4 share the same Rust shape) plus a third `LoadedModel::Gemma3` variant would land Gemma on the same fast path Qwen rides. Estimated 1–2 days of focused work. The fused TurboQuant attention kernel would need a small adapter — `FullAttention::forward` integration currently lives in `qwen3_5.rs`.
 
