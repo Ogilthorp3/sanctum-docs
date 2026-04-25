@@ -58,9 +58,9 @@ The linear attention layers are what make this model fast at long sequences — 
 | linear_value_head_dim | 128 |
 | Quantization | 4-bit, group_size=64 |
 
-## Performance Optimizations (v0.2.0)
+## Performance Optimizations (v0.2.0 → v0.3.0)
 
-Four optimizations took decode throughput from ~9 tok/s to ~13 tok/s — a 45% improvement. John Carmack would probably find another 45%, but he's busy with other things.
+Six optimizations took decode throughput from ~9 tok/s to ~75 tok/s on the same hardware. The first four are GatedDeltaNet-shaped wins from the v0.2.0 cutover; the last two are the late-April push that closed the TurboQuant tax and bounded MLX's buffer cache. John Carmack would probably find another 21%, but he's busy with other things.
 
 ### 1. Fused Metal Kernel for GatedDeltaNet SSM
 
@@ -94,6 +94,35 @@ MLX uses lazy evaluation — operations build a computation graph that only exec
 ### 4. Pre-computed Normalization Constants
 
 Q/K RMS normalization uses a `ones_weight` vector and scale factors (`inv_scale²` for Q, `inv_scale` for K). Previously allocated fresh each forward call — 48 layers × 2 arrays × every token = a lot of unnecessary allocation. Now computed once at model construction and cached in the struct.
+
+### 5. Fused Attention with Inline V Dequantization (2026-04-24)
+
+The Slice 1 TurboQuant cache rebuilt the entire dequantized V tensor every decode step on the CPU — `O(T²)` work and a forced GPU sync per layer. The replacement is a custom Metal kernel `sdpa_dequant_v` (in [`turboquant/attention_kernel.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/attention_kernel.rs)) that takes Q + materialized K + the compressed V state (indices, scales, zeros) and runs scaled-dot-product attention with V dequantized inline in registers. No full V tensor ever materializes.
+
+```
+Grid: (32, 1, B*H_q*L_q)   Threadgroup: (32, 1, 1)
+```
+
+One threadgroup per (batch, query head, query position); 32 threads cooperate on the D dimension via `simd_sum`. Online (FlashAttention) softmax in fp32. Causal mask via additive `-INF` bias, template-specialized so the decode path compiles the branch away. Routed through a new `KeyValueCache::fused_attention` trait method — when the cache opts in, `FullAttention::forward` skips the full-V re-materialization for both decode AND prefill.
+
+Bench (MBP M4 Max, 3 × 8 × 100 tokens, vanilla MoE):
+
+| Config | Mean tok/s | vs Slice 1 |
+|---|---|---|
+| no TurboQuant | 79.42 | — |
+| Slice 1 (CPU K+V) | 62.38 | baseline |
+| **Slice 4a-final (plain K + fused V)** | **75.64** | **+21.2%** |
+
+The keys-plain choice is empirical: at our context lengths, dropping key compression saves us the CPU round-trip without surrendering meaningful memory (~4 MB/layer of bf16 K is nothing on 64 GB). See [TurboQuant KV Compression](/architecture/turboquant-kv-compression/) for the full pivot story.
+
+### 6. Metal Memory Caps + Inter-Request Cache Drain (2026-04-24)
+
+The Mini was running at 31.7 GB of 32 GB swap with 85 MB free pages — not because anything leaked, but because MLX's buffer cache had no upper bound and ratcheted up across thousands of requests. Two changes:
+
+- The launchd plist now passes `--metal-cache-limit-mb 1024 --metal-memory-limit-mb 40960 --metal-wired-limit-mb 24576`. Without these, MLX's previous cache limit was effectively 65 GB (the entire machine).
+- `mlx_clear_cache` was wrapped into `mlx_rs::memory::clear_cache()` and called at the end of both chat handler paths (sync and SSE) so the buffer cache is drained between requests instead of growing forever.
+
+Result: post-restart steady state holds at ~13 GB wired (the actual weights + warm experts), with 1.3 GB free pages. macOS dynamically shrunk the swap file from 32 GB to 9.2 GB once the pressure eased — the clearest signal the fix worked.
 
 ## The April 2026 Cutover
 

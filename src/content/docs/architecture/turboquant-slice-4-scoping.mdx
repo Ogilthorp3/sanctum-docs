@@ -3,11 +3,13 @@ title: TurboQuant Slice 4 — GPU Dequantization Scoping
 description: How we kill the O(T²) CPU dequant cost in the current TurboQuant implementation and unlock `--turboquant` as a production default. Three tiers from "MLX ops only" to "custom Metal kernel", with LOC estimates and risk bands.
 ---
 
-<Aside type="tip" title="4a landed — 2026-04-19">
-Slice 4a shipped across two commits (`21f230f` + `b469c52` on `feat/turboquant-kv-slice-1`). Measured 9.4× speedup for Lloyd-Max d=256 at T=2048 — from 8.0 ms CPU to 0.85 ms GPU per fetch. See `services/sanctum-mlx/bench/ANALYSIS.md` §"Slice 4a-v2" for the full table. This scoping page is preserved below as the planning-time record.
-</Aside>
-
 import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![Carmack would profile the optimization, then optimize the profiler.](./images/hero-carmack.png)
+
+<Aside type="tip" title="4a landed — 2026-04-19 (and was rebuilt 2026-04-24)">
+The original Slice 4a (Lloyd-Max key dequant ported to MLX ops) shipped across `21f230f` + `b469c52` on `feat/turboquant-kv-slice-1` and measured 9.4× per-fetch versus the CPU reference. **End-to-end on the production Qwen3.6-A3B MoE on Mini, that win didn't translate** — the per-step kernel-launch overhead and concat-grow costs canceled it. A **second iteration on 2026-04-24** rewrote the cache around a different premise: drop key compression entirely (4 MB/layer of bf16 K is nothing on a 64 GB Mini) and write a custom fused Metal kernel that dequantizes V inline during attention. That ships as `sdpa_dequant_v` in `services/sanctum-mlx/src/turboquant/attention_kernel.rs` and is currently default-on under `--turboquant`. End-to-end MBP throughput went from 62.4 to 75.6 tok/s (+21%, within 5% of the no-TurboQuant baseline). This scoping page is preserved as the planning-time record; see [TurboQuant KV Compression](/architecture/turboquant-kv-compression/) for the shipped architecture.
+</Aside>
 
 Slices 1 through 1f got us from "TurboQuant doesn't compile" to "ships 21× better quality at 4× compression as an opt-in flag." The missing piece for `--turboquant` to be the **default** is performance. Right now our dequant lives on the CPU, and that's fine for correctness validation but unshippable for production.
 
