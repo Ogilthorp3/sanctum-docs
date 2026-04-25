@@ -17,31 +17,40 @@ The KV cache is where long conversations go to eat memory. Every token a languag
 
 This page is both an architecture reference and a **scientific protocol** for tuning it.
 
-## The pipeline
+## What ships today (Slice 4a-final)
 
 ```
 incoming K,V tensor  [1, H_kv, L, D]
-        ↓
-  extract to CPU f32
         ↓                             ┌──── keys ────┐
-   per head h, per token t            │              │
         ↓                             ▼              ▼
-  normalize → Hadamard rotate → Lloyd-Max quantize → QJL 1-bit sign correction → pack
-                                                                                  ↓
-                                                                         CompressedHeadKV
+  concat-grow plain on-device Array (bf16, bit-exact, no compression)
+        ↓                                              │
+        ↓                             ┌── values ─────┘
+        ↓                             ▼
+  group-affine quantize on device → store (indices u8, scale f16, zero f16)
         ↓
-  per head h, per token t             ┌──── values ──┐
-        ↓                             ▼              ▼
-  group-affine quantize (KVQuant style) → store scale + zero per group
-        ↓
-  on every read: dequant all stored tokens → Array → attention
+  attention: sdpa_dequant_v fused Metal kernel reads compressed V state
+             and dequantizes it inline in registers, no full V tensor
+             ever materializes
 ```
 
-Keys travel through `rotate → Lloyd-Max → QJL`; values travel through `group-affine quantize`. The two pathways live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand their output to a `CompressedKVCache` that implements the `mlx_lm::cache::KeyValueCache` trait — a **drop-in** for the stock `ConcatKeyValueCache`.
+Both halves live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand off to a `CompressedKVCache` that implements `mlx_lm::cache::KeyValueCache` — a drop-in for stock `ConcatKeyValueCache`. Routed via the new `KeyValueCache::fused_attention` trait method.
 
-<Aside type="caution" title="Slice 1 is CPU-side dequant">
-  On every decode step, we round-trip all stored tokens through host memory to rebuild the dequantized tensor. That's `O(T²)` work across a full generation. It's acceptable for *measuring whether the algorithm preserves quality* — but it's not how production will run. Slice 4 moves the dequant into a Metal kernel. Until then: validate first, optimize later.
+<Aside type="note" title="Why keys stopped being compressed">
+  The paper's full recipe (Hadamard rotate → Lloyd-Max → QJL) shipped in Slice 1 and was deleted in commit `37853d8` (2026-04-25). Two findings: at our context lengths the key compression saved ~80 MB across 40 attention layers — nothing on a 64 GB Mini — and the CPU dequant round-trip every decode step was the dominant throughput tax. Plain bf16 keys on device + group-affine V + the fused kernel land us within ~5% of the no-TurboQuant baseline while keeping the V memory savings. Receipts and earlier-attempt lessons live in `project_turboquant.md` in agent memory.
 </Aside>
+
+## The paper's recipe — historical context
+
+The original Slice 1 implementation followed the [TurboQuant paper](https://arxiv.org/abs/2504.19874) literally:
+
+```
+keys:    normalize → Hadamard rotate → Lloyd-Max quantize → QJL 1-bit sign correction → pack
+values:  group-affine quantize (KVQuant style) → store scale + zero per group
+on every read: dequant all stored tokens → Array → attention
+```
+
+This is the algorithm the protocol below validated, and the bit-budget math behind the "~3.5 bits/channel quality-neutral" claim is real. We just measured at our specific workload that the CPU round-trip cost more than the algorithm's memory savings earned us, and pivoted accordingly. The receipts (Slice 1 PPL sweep, Slice 1.5 negative result, Slice 4a kernel correctness, Slice 4a-final pivot) are preserved in agent memory.
 
 ## Why a tuning protocol
 
