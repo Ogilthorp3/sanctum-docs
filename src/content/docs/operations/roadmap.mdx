@@ -123,6 +123,14 @@ Replace all cloud dependencies in the voice agent: Deepgram STT → local Whispe
 
 **Why later:** each component needs to be fast enough individually first. Qwen3-TTS speed is the current bottleneck.
 </Card>
+
+<Card title="Gemma 4 (and other archs) in sanctum-mlx" icon="puzzle">
+Today `sanctum-mlx::LoadedModel` dispatches `qwen3_5` and `qwen3_5_moe` only — anything else fails at config parse and falls back to Python `mlx_lm.server`. A `gemma3.rs` loader (Gemma 3/4 share the same Rust shape) plus a third `LoadedModel::Gemma3` variant would land Gemma on the same fast path Qwen rides. Estimated 1–2 days of focused work. The fused TurboQuant attention kernel would need a small adapter — `FullAttention::forward` integration currently lives in `qwen3_5.rs`.
+
+**The honest reason it's *later*, not *next*:** this is vendor diversification and abstraction maturity, not the resilience win it sounds like. The shared substrate (MLX runtime, Metal driver, custom kernels, launchd, mTLS) is what actually fails — a second loader doesn't help when the kernel takes both models down. The Python fallback already covers "the Rust path is broken" for any model upstream `mlx-lm` supports, including Gemma. Build it when there's a concrete workload reason (Gemma 4 LoRAs that want fast serving, or a council member that needs Gemma's tokenizer), not for generic resilience.
+
+**The actually-resilience-improving moves come first:** exercise the Python fallback regularly (a drill is worth more than a duplicate loader), document the failover decision points, harden the shared kernel layer.
+</Card>
 </CardGrid>
 
 
