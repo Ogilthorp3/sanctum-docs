@@ -35,29 +35,18 @@ The philosophy: if a service doesn't need to talk to the LAN, it doesn't get to.
 
 ## Secret Rotation
 
-Monthly via `com.sanctum.rotate-secrets` LaunchAgent (1st of month, 3:30am).
+Three layers, one doctrine: **scan and notify daily, auto-rotate only where the provider has a real management API, paste-and-propagate everywhere else.** Full mechanism in [Secret Rotation](/operations/secret-rotation/).
 
-Rotates 8 secrets:
-1. Home Assistant main + Windu tokens
-2. Firewalla bridge token
-3. Gateway token
-4. Network control token
-5. Backup encryption key
-6. OpenRouter API key
-7. Deepgram API key
+| Schedule | Agent | Behavior |
+|---|---|---|
+| 06:00 ET daily | `com.sanctum.secret-rotation-scan` | Greps git remotes + file content for exposed token patterns. Detect-only, never rotates. |
+| 06:15 ET daily | `com.sanctum.secret-age-check` | Reads `~/.sanctum/state/secret-rotation.jsonl`, alerts via Force Flow when any tracked secret is past its `rotation_max_age_days`. |
+| 06:30 ET daily | `com.sanctum.openrouter-auto-rotate` | Self-throttles via `--if-older-than 85`. Mints + propagates + revokes via OpenRouter's management API only when the key is past 85 days. No human. |
 
-Plus verifies the Cloudflare tunnel token.
-
-```bash
-# Manual rotation
-bash ~/Backups/rotate-secrets.sh
-
-# Dry run
-bash ~/Backups/rotate-secrets.sh --dry-run
-```
+Manual one-off rotations use the same tool: `python3 tools/secret-rotator/rotate.py rotate <name>`. Every consumer write is atomic with a `.bak-<ts>` and JSONL receipt.
 
 <Aside type="note">
-The secrets rotate while you sleep. By the time you wake up, every token from last month is dead. This is the kind of thing that sounds paranoid until you read about the breach that happened because someone's API key was six months old and had been quietly exfiltrated in February.
+The age-check is the human-in-the-loop signal. The auto-rotate is the exception, not the rule — only OpenRouter has a clean enough management API to trust silent rotation. GitHub uses per-repo SSH deploy keys (no rotation surface). voip.ms hides behind Cloudflare, so it stays manual with calendar reminders.
 </Aside>
 
 ## SSH Hardening

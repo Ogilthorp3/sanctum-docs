@@ -184,6 +184,7 @@ export default defineConfig({
 						{ label: 'mTLS Migration', slug: 'operations/mtls-migration' },
 						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
+						{ label: 'Secret Rotation', slug: 'operations/secret-rotation' },
 						{ label: 'Tooling', slug: 'operations/tooling' },
 						{ label: 'Verify', slug: 'operations/verify' },
 						{ label: 'Upgrade Path', slug: 'operations/upgrade-path' },
