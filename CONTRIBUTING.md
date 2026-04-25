@@ -74,9 +74,44 @@ Every Aside should have personality. "Don't do this" is a warning. "This will si
 
 ## Code Examples
 
-Real values. Real ports. Real paths. If you write `example.com` or `YOUR_TOKEN_HERE`, you have failed. Use the actual defaults or a realistic value from the Sanctum config.
+Real **ports**. Real **paths** (with the canonical username — see below). Real **service names**. Everything else — IPs, MAC addresses, hostnames, phone numbers, tokens, UUIDs, email addresses, personal identifiers — uses the canonical placeholders. If a reader can use your code example to find the haus on a network, you have failed the reader and the haus.
+
+If you write `example.com` or `YOUR_TOKEN_HERE` you have also failed, just differently. Use the canonical Sanctum placeholders below — they're realistic enough to teach the pattern and useless for reconnaissance.
 
 YAML blocks for configuration. Shell blocks for commands. Annotate with comments when the config isn't self-evident, but don't narrate the obvious.
+
+## The No-Leak Rule
+
+Docs ship to a public repo. Assume a hostile reader. The following never appear in a docs page, in any commit, in any git branch:
+
+- **Real IP addresses** — no tailnet (`100.x.x.x`), no LAN (`192.168.x.x`), no VM bridge (`10.10.10.x`), no public IPs. Use the documentation ranges below.
+- **Real MAC addresses** — every one enables device fingerprinting. Use the `AA:BB:CC:DD:EE:xx` block, which is IANA-reserved for documentation.
+- **Real hostnames** — no `Firstname-Mac-Model.local` patterns, no instance slugs tied to the owner (`<firstname>-nepveu` etc.), no `*.local` that actually resolves on the owner's tailnet. Use the host placeholders.
+- **Real usernames** — the canonical owner handle is **`neo`**. Paths use `/Users/neo/` or `~/`, never the operator's actual login name.
+- **Phone numbers** — use `+15555550100` style (the `555-0100`–`555-0199` block is reserved for fiction).
+- **Tokens, API keys, bearer secrets** — the file *path* to a secret is fine; the *value* is never. Not even revoked values — they correlate with other logs.
+- **UUIDs tied to real accounts** — Apple notarization IDs, App Store Connect IDs, hardware UUIDs, anything that could be cross-referenced with a leak elsewhere.
+- **Email addresses** — use `<owner@haus>`.
+
+Canonical placeholder registry:
+
+| Concept | Placeholder | Notes |
+|---|---|---|
+| Owner username | `neo` | Matches the public GitHub org. Use in paths, `ssh` targets, prompts. |
+| Owner home | `/Users/neo/` or `~/` | Prefer `~/` in prose; full path only when the file path itself matters. |
+| Owner email | `<owner@haus>` | |
+| The Mini (server) | `<MINI>` or `manoir.local` | "manoir" is the slug; `.local` is an mDNS placeholder, not a real resolvable host. |
+| The MacBook (road warrior) | `<MBP>` or `satellite.local` | |
+| The VM (OpenClaw / Yoda) | `<VM>` or `yoda` (as the `ssh` alias) | |
+| Mac ↔ VM bridge | `10.0.0.1` / `10.0.0.10` | RFC 5737 documentation range — never resolves, never routes. |
+| Tailnet address | `100.0.0.X` | Visually obvious placeholder; Tailscale's real range is 100.0.0.0/10. |
+| Home LAN address | `192.0.2.X` | RFC 5737 TEST-NET-1. |
+| MAC address | `AA:BB:CC:DD:EE:XX` | Use `:01`, `:02`, `:03` for distinct devices. IANA documentation prefix. |
+| Phone number | `+15555550100` | 555-0100 through 555-0199 is the fictional-use block. |
+| Signal account | `+15555550100` | Same block. |
+| API token | `sk-placeholder-do-not-use` | Token *paths* are fine (`~/.sanctum/secrets/X.token`); token *values* never. |
+
+**Before you commit**, grep your diff. If you wrote an IP that isn't in the 10.0.0.0/24, 192.0.2.0/24, or 100.0.0.0/24 blocks, you wrote a real one. Fix it. The CI check runs `scripts/contrib-check.py` which flags these patterns; treat a failure as a security incident, not a style nit.
 
 ## The Haus Rule
 

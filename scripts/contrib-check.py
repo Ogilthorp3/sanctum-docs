@@ -44,6 +44,48 @@ PLACEHOLDER_TOKENS = [
     "lorem ipsum",
 ]
 
+# --- No-Leak rule (CONTRIBUTING §"The No-Leak Rule") --------------------
+#
+# Match patterns that indicate real operational data leaking into public docs.
+# Canonical placeholder ranges are whitelisted so the check doesn't fight the
+# fix.
+
+# Real-IP detectors. Scope: only tailnet and public addresses are flagged.
+# Private RFC1918 ranges (10.x, 172.16-31.x, 192.168.x) are fine to keep real —
+# unroutable from the internet, they teach topology without exposing a target.
+LEAK_IP_PATTERNS = [
+    # Tailscale range: 100.0.0.0/10. The placeholder `100.0.0.X` sits outside
+    # that range (100.0.0.0/24 is public BGP space) so it reads as
+    # "tailnet-shaped" without being a real tailnet addr.
+    (re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b"), "tailnet-IP"),
+]
+
+# MAC addresses not in the FA:CE:DE:CA:CA:XX documentation block.
+# Locally-administered, unicast; spells "face de caca" per the Haus joke.
+LEAK_MAC_RE = re.compile(r"\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
+ALLOWED_MAC_PREFIX = "FA:CE:DE:CA:CA:"
+
+# Real-username + home-path detector. Any /Users/<name>/ that isn't neo is a leak.
+LEAK_USER_PATH_RE = re.compile(r"/Users/(?!neo\b)[A-Za-z][A-Za-z0-9._-]{0,31}/")
+
+# Personal handles — real first names or surnames tied to the operator.
+# Service accounts (ubuntu@, operator@, root@) are allowed — generic.
+PERSONAL_HANDLE_AT_HOST_RE = re.compile(
+    r"\b(bert|bertrand|nepveu)@[A-Za-z0-9.:_-]+",
+    re.IGNORECASE,
+)
+
+# Phone numbers: allow only the 555-0100..555-0199 fictional block.
+LEAK_PHONE_RE = re.compile(r"\+1\s*\d{3}\s*\d{3}\s*\d{4}|\+1\d{10}")
+ALLOWED_PHONE_PREFIX = "+1555555"
+
+# Real hostnames. Allow the `.local` placeholders and nothing else.
+LEAK_HOSTNAME_RES = [
+    re.compile(r"\bBerts?-[A-Za-z0-9-]+\.local\b"),
+    re.compile(r"\bhaus\b"),
+]
+ALLOWED_LOCAL_HOSTS = {"haus.local", "satellite.local", "yoda.local"}
+
 # Pages allowed to use emojis (the "Holocron portal" exemption).
 # Only the landing pages are exempt — these carry the semantic brand
 # glyphs (fleur-de-lis, black bear) that mark the QC identity of the
@@ -151,6 +193,67 @@ def check_placeholders(path, rel, body, body_line_offset, report):
                 )
 
 
+def check_no_leak(path, rel, body, body_line_offset, report):
+    """Enforce the No-Leak rule from CONTRIBUTING.md."""
+    for i, line in enumerate(body.splitlines(), start=body_line_offset):
+        # Skip lines that are clearly teaching the rule itself (they quote the
+        # sensitive pattern inside backticks for illustration). A backtick-wrapped
+        # occurrence is fine; a bare prose occurrence isn't.
+        stripped = line.strip()
+        if stripped.startswith(("| ", "|")) and "IANA" in line:
+            continue  # canonical-placeholder table row
+
+        for rx, kind in LEAK_IP_PATTERNS:
+            for m in rx.finditer(line):
+                hit = m.group(0)
+                # Allow inside inline code.
+                before = line[: m.start()]
+                after = line[m.end():]
+                if before.count("`") % 2 == 1 and after.count("`") >= 1:
+                    continue
+                report.err(
+                    rel, i, "no-leak",
+                    f"real {kind} '{hit}' — use 100.0.0.X placeholder",
+                )
+
+        for m in LEAK_MAC_RE.finditer(line):
+            mac = m.group(0)
+            if mac.upper().startswith(ALLOWED_MAC_PREFIX):
+                continue
+            report.err(
+                rel, i, "no-leak",
+                f"real MAC '{mac}' — use FA:CE:DE:CA:CA:XX block",
+            )
+
+        for m in LEAK_USER_PATH_RE.finditer(line):
+            report.err(
+                rel, i, "no-leak",
+                f"real username in path '{m.group(0)}' — use /Users/neo/ or ~/",
+            )
+
+        for m in PERSONAL_HANDLE_AT_HOST_RE.finditer(line):
+            report.err(
+                rel, i, "no-leak",
+                f"personal handle in '{m.group(0)}' — use neo@<HOST>",
+            )
+
+        for m in LEAK_PHONE_RE.finditer(line):
+            raw = re.sub(r"\s+", "", m.group(0))
+            if raw.startswith(ALLOWED_PHONE_PREFIX):
+                continue
+            report.err(
+                rel, i, "no-leak",
+                f"real phone number '{m.group(0)}' — use +15555550100 (555-01xx fictional block)",
+            )
+
+        for rx in LEAK_HOSTNAME_RES:
+            for m in rx.finditer(line):
+                report.err(
+                    rel, i, "no-leak",
+                    f"real hostname '{m.group(0)}' — use <MINI>/<MBP>/manoir.local placeholders",
+                )
+
+
 def check_length(path, rel, body, body_line_offset, report):
     clean = CODE_BLOCK_RE.sub("", body)
     clean = IMAGE_REF_RE.sub("", clean)
@@ -185,6 +288,7 @@ def check_page(path, report):
     check_hero(path, rel, body, body_line_offset, report)
     check_emojis(path, rel, body, body_line_offset, report)
     check_placeholders(path, rel, body, body_line_offset, report)
+    check_no_leak(path, rel, body, body_line_offset, report)
     check_length(path, rel, body, body_line_offset, report)
 
 
