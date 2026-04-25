@@ -17,7 +17,7 @@ Sanctum uses seven layers of security, because if action movies have taught us a
 2. **Firewall** — pf rules on LAN interface block unauthorized port access
 3. **SSH hardening** — Key-only auth, no root login, AllowUsers restriction
 4. **Encrypted secrets** — SOPS+age on VM, macOS Keychain on Mac (FileVault disabled — see below)
-5. **Automatic rotation** — 8 secrets rotated monthly
+5. **Automatic rotation** — Daily age-check, auto-rotate where the API allows
 6. **Service binding** — Services bound to specific interfaces (not 0.0.0.0)
 7. **PII anonymization** — Personal data scrubbed from all external LLM requests
 
@@ -35,19 +35,13 @@ The philosophy: if a service doesn't need to talk to the LAN, it doesn't get to.
 
 ## Secret Rotation
 
-Three layers, one doctrine: **scan and notify daily, auto-rotate only where the provider has a real management API, paste-and-propagate everywhere else.** Full mechanism in [Secret Rotation](/operations/secret-rotation/).
+Three LaunchAgents, one doctrine: **scan and notify daily, auto-rotate only where the provider has a real management API, paste-and-propagate everywhere else.** Mechanism, audit log shape, and per-secret schedules live in [Secret Rotation](/operations/secret-rotation/).
 
 | Schedule | Agent | Behavior |
 |---|---|---|
-| 06:00 ET daily | `com.sanctum.secret-rotation-scan` | Greps git remotes + file content for exposed token patterns. Detect-only, never rotates. |
-| 06:15 ET daily | `com.sanctum.secret-age-check` | Reads `~/.sanctum/state/secret-rotation.jsonl`, alerts via Force Flow when any tracked secret is past its `rotation_max_age_days`. |
-| 06:30 ET daily | `com.sanctum.openrouter-auto-rotate` | Self-throttles via `--if-older-than 85`. Mints + propagates + revokes via OpenRouter's management API only when the key is past 85 days. No human. |
-
-Manual one-off rotations use the same tool: `python3 tools/secret-rotator/rotate.py rotate <name>`. Every consumer write is atomic with a `.bak-<ts>` and JSONL receipt.
-
-<Aside type="note">
-The age-check is the human-in-the-loop signal. The auto-rotate is the exception, not the rule — only OpenRouter has a clean enough management API to trust silent rotation. GitHub uses per-repo SSH deploy keys (no rotation surface). voip.ms hides behind Cloudflare, so it stays manual with calendar reminders.
-</Aside>
+| 06:00 ET daily | `com.sanctum.secret-rotation-scan` | Greps git remotes + files for exposed token patterns. Detect-only. |
+| 06:15 ET daily | `com.sanctum.secret-age-check` | Alerts via Force Flow when any tracked secret is past its `rotation_max_age_days`. |
+| 06:30 ET daily | `com.sanctum.openrouter-auto-rotate` | Mints + propagates + revokes via OpenRouter's management API once past 85 days. No human. |
 
 ## SSH Hardening
 
@@ -87,37 +81,37 @@ The Jedi Council convened on 2026-03-29 to evaluate whether full-disk encryption
 
 ### Why It Is Off
 
-FileVault protects against one threat: someone physically stealing the Mac Mini or removing its SSD. It creates a different problem: every power outage, every kernel panic, every winter power event turns the Mac Mini into a $600 paperweight until someone walks over and types a password. There is no remote unlock. There is no VPN trick. The FileVault pre-boot screen runs before the network stack exists. The Mac sits there, encrypted and useless, while the entire haus automation infrastructure — security cameras, alarm system, climate control, voice agents — goes dark.
+FileVault protects against one threat: someone physically stealing the Mini or pulling its SSD. It creates a different problem: every power outage turns the Mini into a $600 paperweight until someone walks over and types a password. The pre-boot screen runs before the network stack exists — no remote unlock, no VPN trick. The whole haus automation stack goes dark while the disk sits encrypted and useless.
 
 The council reasoning:
 
-- **Windu (Security):** A deaf security agent is worse than an unencrypted disk. When the Mac is down, Signal alerts stop, security automations stop, Alarmo goes blind. The attack surface of a powered-off security system is larger than the attack surface of an unencrypted SSD in a locked haus behind Firewalla.
-- **Qui-Gon (Infrastructure):** The Mac Mini is the backbone of 30+ services across two nodes. Every minute of unattended downtime cascades. FileVault turned a recoverable event (power restored) into a manual intervention (drive to the haus, type a password).
+- **Windu (Security):** A deaf security agent is worse than an unencrypted disk. Mac down means Signal alerts stop and Alarmo goes blind — a powered-off security system has more attack surface than an unencrypted SSD behind Firewalla.
+- **Qui-Gon (Infrastructure):** The Mini is the backbone of 30+ services across two nodes. FileVault turned a recoverable event (power restored) into a manual one (drive to the haus, type a password).
 - **Yoda (Grand Master):** The Force flows through availability, not through encryption of a stationary box.
 
 ### Compensating Controls
 
 FileVault is one layer of seven. Removing it shifts weight to the others:
 
-1. **Physical security** — The Mac Mini is in a locked haus, behind Firewalla, on a private LAN segment.
-2. **Secret rotation** — All 8 secrets rotate monthly. If the device is ever physically compromised, rotation limits the blast radius.
-3. **1Password backup** — All secrets have copies in 1Password, not just on the Mac disk.
-4. **UPS recommended** — A basic UPS handles the 90% case (short power blips). FileVault removal handles the 10% case (extended outage, unattended recovery).
-5. **Bootstrap LaunchDaemons** — Two LaunchDaemons (`com.sanctum.vmnet` + `com.sanctum.bootstrap`) start all services at boot without GUI login. The VM runs via `socket_vmnet` + bare QEMU. No auto-login needed, Touch ID preserved.
+1. **Physical security** — Locked haus, behind Firewalla, on a private LAN segment.
+2. **Secret rotation** — Daily age-check + auto-rotation where the API allows ([details](/operations/secret-rotation/)). Physical compromise has a bounded blast radius.
+3. **1Password backup** — All secrets have copies off-disk.
+4. **UPS** — Handles short blips. FileVault removal handles the extended-outage case where nobody is home to type a password.
+5. **Bootstrap LaunchDaemons** — `com.sanctum.vmnet` + `com.sanctum.bootstrap` start every service at boot, no GUI login. The VM runs via `socket_vmnet` + bare QEMU. Touch ID preserved.
 
 <Aside type="note">
-If you are a security auditor reading this and feeling your eye twitch: the Mac Mini sits behind a Firewalla Purple, on a VLAN with no port forwarding, in a haus with physical locks, in a city where the most common threat model is a squirrel chewing through a power line. We made the call. The squirrel won.
+If you are a security auditor and your eye is twitching: the Mini sits behind a Firewalla Purple on a VLAN with no port forwarding, in a locked haus, in a city where the leading threat model is a squirrel on a power line. The squirrel won.
 </Aside>
 
 ### Re-enabling FileVault
 
-If the threat model changes (the Mac Mini moves to a co-lo, Bert becomes a person of interest, etc.):
+If the threat model changes (Mini moves to a co-lo, the operator becomes a person of interest):
 
 ```bash
 sudo fdesetup enable
 ```
 
-The disk will encrypt in the background over several hours. Remember that this re-introduces the remote-reboot problem — keep `fdesetup authrestart` in your muscle memory.
+Background encryption takes hours. This re-introduces the remote-reboot problem — keep `fdesetup authrestart` handy.
 
 ### Remote Reboot Protocol
 
@@ -131,7 +125,7 @@ sudo reboot
 sudo shutdown -r +1 "Sanctum maintenance reboot"
 ```
 
-The Mac boots, LaunchDaemons fire, all services start (including the VM via socket_vmnet), and the council reconvenes. No GUI login required. No drive to the haus. No calling your neighbor. Touch ID stays.
+The Mac boots, LaunchDaemons fire, services start (including the VM via socket_vmnet), and the council reconvenes. No GUI login. No drive to the haus. Touch ID stays.
 
 ## PII Anonymization
 
@@ -143,18 +137,17 @@ Your AI agents know your name. The cloud doesn't need to.
 
 The Sanctum Proxy (port 4040) handles all LLM request routing. When a request targets an OpenRouter model — either directly or via fallback routing — the proxy:
 
-1. Extracts text from user and assistant messages (system prompts are left untouched)
-2. Sends the text to a local Presidio analyzer container to detect PII entities
-3. Sends detected entities to a local Presidio anonymizer container to replace them with placeholders
-4. Forwards the scrubbed request to the external provider
-5. De-anonymizes the response before returning it to the caller
+1. Extracts text from user and assistant messages (system prompts left untouched)
+2. Routes through the local Presidio analyzer + anonymizer containers, which detect PII and replace each entity with a typed placeholder
+3. Forwards the scrubbed request to the external provider
+4. De-anonymizes the response on the way back
 
 ### What Gets Scrubbed
 
 | Entity | Example | Replacement |
 |--------|---------|-------------|
 | Person names | `John Smith` | `<PERSON>` |
-| Email addresses | `john@example.com` | `<EMAIL_ADDRESS>` |
+| Email addresses | `support@sanctum.run` | `<EMAIL_ADDRESS>` |
 | Phone numbers | `514-555-1234` | `<PHONE_NUMBER>` |
 | Credit cards | `4111-1111-1111-1111` | `<CREDIT_CARD>` |
 | SSN / bank numbers | `123-45-6789` | `<US_SSN>` |
