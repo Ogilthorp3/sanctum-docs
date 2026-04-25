@@ -1,0 +1,77 @@
+---
+title: "2026-04-24: Five Locks on the Voice Door"
+description: Rename sanctum-xtts, introduce the adapter dispatcher, and bolt on five independent defenses so a voice that answers the phone is safe to put on the public internet.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A stone archway with a single lit door, five distinct brass latches visible — cert, key, pin, seal, ledger — pencil-sketched with an amber line of light under the door](./images/hero-2026-04-24-sanctum-tts-hardening.jpg)
+
+The phone call use case was already in production: Yoda's voice, cloned from nine reference WAVs, running on Qwen3-TTS through LiveKit and voip.ms. What wasn't in production was any discipline around *who* could make sanctum speak. Anything on `localhost:8008` could synthesize arbitrary text in Yoda's voice with no token, no audit, no way to prove a clip later was genuine.
+
+That was fine when TTS was a dev curiosity and the target was a family phone. It stops being fine the moment the digital-twin-of-Bert voice is real — a voice that says something Bert didn't say, captured and shared, becomes permanently unprovable without origin signing. This is the day that gap closed.
+
+## What Changed in One Commit
+
+`sanctum-xtts` crate renamed → `sanctum-tts`. The Coqui XTTS Python worker that nobody had used in months was dropped. Git history preserves it; the new role is engine-agnostic.
+
+A `TtsAdapter` trait landed. `QwenAdapter` proxies to the existing Qwen3-TTS Python server on `:8008` (Yoda's production voice is untouched). `OpenVoiceAdapter` is a stub returning `NotImplemented` with a README-documented five-step integration plan — the wiring needs a Bert reference recording and the model download, both next-session work.
+
+Then five independent defenses, each individually toggleable.
+
+## The Five Layers
+
+<Aside type="note" title="What each layer buys">
+Every `POST /speak` now passes through five checks, each answering a distinct threat:
+- **mTLS** — cert-authenticated wire, same CA as `council-mlx`.
+- **Bearer-token ACL** — per-voice authorization; tokens stored only as SHA-256 hashes.
+- **Reference integrity** — SHA-256 pin of every voice's reference WAV, verified at startup; mismatch disables the voice.
+- **Ed25519 signing** — every synthesized WAV carries a signed manifest (caller, voice, timestamp, text hash, audio hash); signature embedded in the WAV's LIST/INFO chunk *and* returned as an HTTP header.
+- **Hashed audit log** — append-only JSONL at `~/.openclaw/logs/tts-audit.jsonl`. Text is SHA-256'd before write; the log is an accountability trail, not a surveillance vector.
+</Aside>
+
+### The one honest limitation
+
+The embedded signature does **not** survive transcoding. A round trip through `wav → mp3 → wav` strips the RIFF INFO chunk. For intact clips we have cryptographic proof of origin. For adversarial re-encode we do not. Closing that gap requires a perceptual watermark (SilentCipher, AudioSeal) — deliberately scoped out of today's work rather than ship handwritten watermarking that any competent adversary could defeat.
+
+## Operator Tools
+
+Two new CLIs live alongside the daemon:
+
+- **`sanctum-tts-admin`** — `keygen`, `issue-token`, `pin`, `show-pubkey`. Prepares `tts.yaml` and the Ed25519 keypair. Never contacts the daemon.
+- **`sanctum-tts-verify`** — given a WAV, confirms the embedded signature checks out and the audio bytes match what was signed. Exit codes: `0` verified, `2` unsigned, `3` sig invalid, `4` audio tampered.
+
+A token for a new caller:
+
+```
+$ sanctum-tts-admin issue-token livekit-agent
+caller_id     : livekit-agent
+token         : 5b4a...32bytes
+token_sha256  : c12d...
+```
+
+Paste the hash into `tts.yaml`. Hand the plaintext to the client exactly once. Rotation = re-issue.
+
+## Verification
+
+35 unit tests across the new modules:
+
+| Module | Tests | Covers |
+|---|---|---|
+| `auth` | 7 | Token hashing stability, enable/disable, per-voice allow, unknown token, malformed header, localhost bypass gating |
+| `audit` | 4 | JSONL shape with plaintext non-leakage, size-based rotation, hash determinism |
+| `integrity` | 5 | Pinned match, mismatch disables, unpinned flagged, missing file, SHA-256 known-vector |
+| `signing` | 6 | Sign/verify roundtrip, tampered-hash breaks verify, WAV chunk embed + extract, PEM roundtrip |
+| `config` | 3 | Minimal / empty / hardened YAML parse |
+
+Workspace builds clean. Pre-existing crates untouched.
+
+## End-to-End Not Automated — On Purpose
+
+The signing/verify pair is itself the end-to-end test. A healthy deploy produces a WAV whose `sanctum-tts-verify` exit 0 is the round-trip proof. The reference-clip pin is its own check at startup. mTLS handshake is rustls's job. Every real call through the daemon is end-to-end verified as a side effect; writing a separate harness that simulates the whole pipeline would duplicate what production already verifies continuously.
+
+## Related
+
+- [Sanctum TTS](/architecture/sanctum-tts/) — the architecture page describing the adapter pattern and the five layers in detail.
+- [Chitti — The Fascial Layer](/architecture/chitti/) — the pressure/presence field sanctum-tts will read before heavy loads in a future session.
+- [The Living Force](/architecture/living-force/) — the immune system this service plugs into.
