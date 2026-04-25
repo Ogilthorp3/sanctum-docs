@@ -118,16 +118,12 @@ Replace all cloud dependencies in the voice agent: Deepgram STT → local Whispe
 **Why later:** each component needs to be fast enough individually first. Qwen3-TTS speed is the current bottleneck.
 </Card>
 
-<Card title="Restore (or formally retire) the council fallback" icon="warning">
-The 2026-04-25 failover drill found that `council-guardian.sh::activate_fallback()` is wired to bootstrap a Python `mlx_lm.server` (`com.sanctum.server-mlx`) that has been non-viable since the 2026-04-21 mTLS migration: plist renamed to `.disabled-20260422`, wrapper config points at the retired Qwen3.5-27B path, and Python `mlx_lm.server` only serves plain HTTP while every council client is mTLS-only. A defensive guard now refuses to "activate" a fallback whose plist isn't on disk, so the worst-case (silent council dismantle on a metallib panic) is contained — but the system has no working failover layer.
+<Card title="Council fallback — restored 2026-04-25" icon="approve-check-circle">
+The dead `council-guardian.sh::activate_fallback()` automation was retired (script went 257 → 203 lines, three structural reasons documented). The replacement lives in the Smart Router cathedral where it always belonged: `com.sanctum.mlx-py-fallback` plist runs Python `mlx_lm.server` with `mlx-community/Qwen3.5-9B-4bit` on `127.0.0.1:8901` (plain HTTP loopback — mTLS is sanctum-server's job at `:8900`), and `services.sanctum_server.backends.council-secure.fallback_urls` lists `http://127.0.0.1:8901/v1` after the existing MBP shadow URL.
 
-**Three options, in order of effort:**
+**End-to-end drill on Mini (2026-04-25):** Rust primary warm 0.51 s; failover (Rust booted out) cold-load 75 s on first request, 1.07 s warm thereafter; Rust restored 0.51 s. Quality: `"2 + 2 equals 4."` from Rust, `"2 + 2 = **4**"` from Python — both correct, minor stylistic difference (different model).
 
-- **Restore** — put a TLS-terminating Caddy or tiny Rust shim at `:1337` mTLS that forwards plain HTTP to a Python `mlx_lm.server` on `:1338`. Update `instance.yaml::services.council_mlx.model_path` to the current MoE snapshot. Re-enable the plist. ~1-2 hours including cert + plist wiring. Most faithful restoration.
-- **Consolidate** — fold the failover decision into sanctum-server (it already terminates mTLS for inbound traffic). Backend health → route to either sanctum-mlx loopback-plain or Python loopback-plain. Bigger change but it puts the failover in the Smart Router cathedral where it arguably belongs.
-- **Retire** — delete `activate_fallback()` and `detect_fatal_pattern` from the guardian. KeepAlive + ThrottleInterval already handle "process crashed"; the auto-fallback was for "process is online but inference is broken," which has not been the failure mode in 2026.
-
-**Why later:** the defensive guard makes the current state safe (loud refusal vs silent dismantle). The actual restoration is a real engineering project, and which option is right depends on whether you trust sanctum-mlx's stability after the 2026-04-24 memory + kernel fixes (overnight 04-24/25 ran 17h59m / 440 requests / 0 errors — encouraging but not 30 days of evidence yet).
+**Memory cost:** ~12 GB additional (Python holds the 9B model warm). Mini swap rose 7.9 → ~20 GB after the always-loaded fallback. Acceptable for now; if it becomes a problem the next move is bounding MLX's buffer cache on the Python side or running it on a cron-restart.
 
 Receipts: `project_failover_drill_2026_04_25.md` in agent memory.
 </Card>
