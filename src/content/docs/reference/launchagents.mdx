@@ -99,19 +99,20 @@ A bridge to a bridge. Networking is turtles all the way down.
 
 ### AI & Voice
 
-The agents that give the haus its opinions. One serves a 27-billion-parameter model. One synthesizes speech. One listens for a wake word and responds as a fictional Jedi. Totally standard residential infrastructure.
+The agents that give the haus its opinions. One serves a 35-billion-parameter MoE model. One synthesizes speech. One listens for a wake word and responds as a fictional Jedi. Totally standard residential infrastructure.
 
-#### com.sanctum.xtts-server
+#### com.sanctum.yoda-tts-worker
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.xtts-server` |
-| **Purpose** | XTTS-v2 text-to-speech server using Mac GPU (MPS) |
-| **Required Service** | `xtts` |
-| **KeepAlive** | No |
+| **Label** | `com.sanctum.yoda-tts-worker` |
+| **Purpose** | Qwen3-TTS text-to-speech via mlx-audio (`workers.tts_server`) |
+| **Required Service** | `tts` |
+| **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
+| **Port** | `8008` |
 
-Provides TTS capability for the voice agent. Runs on the Mac to leverage Metal Performance Shaders — because asking a CPU to synthesize speech in real time is like asking a poet to take dictation. It can do it. It won't enjoy it.
+Provides TTS for the voice agent. Replaced `com.sanctum.xtts-server` on 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. Old XTTS plist retained as `.retired` for archaeology, not load.
 
 ---
 
@@ -129,33 +130,64 @@ Manages voice capture, wake-word detection, and Yoda personality interactions. A
 
 ---
 
-#### com.sanctum.idle-mlx
+#### com.sanctum.mlx
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.idle-mlx` |
-| **Purpose** | Council MLX MLX model server for local agent inference |
+| **Label** | `com.sanctum.mlx` |
+| **Purpose** | Council MLX — pure-Rust `sanctum-mlx` inference server |
 | **Required Service** | `mlx_server` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `1337` |
+| **Port** | `1337` (mTLS-only) |
 
-Serves the Qwen3.5-27B-4bit model with a LoRA adapter supporting 6 agent personalities. KeepAlive ensures the model stays loaded in memory. Twenty-seven billion parameters, sitting in RAM, waiting to be useful. The idle power draw of a small space heater, but for thinking.
+Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. The 27B-distilled era ended 2026-04-22 when the council moved to the 35B MoE; the old `com.sanctum.idle-mlx` label retired with it. Thirty-five billion parameters, sitting in RAM, waiting to be useful — and only routable over mutual TLS, because not every consumer is a friend.
 
 ---
 
-#### com.sanctum.proxy
+#### com.sanctum.server
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.proxy` |
+| **Label** | `com.sanctum.server` |
+| **Binary** | `proxyd` |
 | **Purpose** | Sanctum Proxy — single-binary LLM routing layer |
 | **Required Service** | `proxy` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 | **Port** | `4040` (all interfaces) |
 
-A single Rust binary that handles the full LLM request pipeline: request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping, model resolution, tiered fallback chains, and analytics. All agent traffic enters through port 4040. The bouncer and the bartender in one efficient package.
+A single Rust binary (`proxyd`) that handles the full LLM request pipeline: request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping, model resolution, tiered fallback chains, and analytics. All agent traffic enters through port 4040. Renamed from `com.sanctum.proxy` to align with the binary name. The bouncer and the bartender in one efficient package.
+
+---
+
+#### com.sanctum.memory-vault
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.memory-vault` |
+| **Purpose** | Long-term agent memory store with periodic consolidation |
+| **Required Service** | `memory_vault` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `42069` (loopback only) |
+
+SQLite-backed vault at `~/.sanctum/memory/.vault.db`. Consolidates every six hours, exposes an SSE transport for MCP clients, and is the long-term memory the council reads from when a conversation runs longer than a context window. Read instance.yaml for the active port — the plist env var is decorative; the binary takes its truth from `instance.yaml`.
+
+---
+
+#### com.sanctum.reranker
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.reranker` |
+| **Purpose** | Jina v2 reranker for memory-vault RAG queries |
+| **Required Service** | `reranker` |
+| **KeepAlive** | Yes |
+| **RunAtLoad** | Yes |
+| **Port** | `42070` (loopback only) |
+
+Companion to memory-vault on the next port up. Jina v2 reranker (Python + transformers) that re-scores retrieved memory chunks for relevance. The torch warmup adds ~10s to launch; the relevance gain over raw vector similarity is worth it for long-running agent sessions.
 
 ---
 
@@ -283,6 +315,39 @@ The system's white blood cells. It only acts when the body is under pressure, an
 | **StartInterval** | `600` |
 
 Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep. The most relatable agent in the fleet.
+
+The plist filename on disk is `com.sanctum.watchdog-rust.plist` (the binary is a Rust port — `sanctumd` from `sanctum-rs`). The launchd label inside is still `com.sanctum.watchdog`. File-vs-label drift is intentional, not a bug.
+
+---
+
+#### com.sanctum.lmstudio-guardian
+
+| Property | Value |
+|----------|-------|
+| **Label** | `com.sanctum.lmstudio-guardian` |
+| **Purpose** | Babysitter for LM Studio: SIGCONT stopped workers, reap orphans, restart on API hang, autoload expected model |
+| **Required Service** | `lm_studio` |
+| **KeepAlive** | No |
+| **RunAtLoad** | Yes |
+| **StartInterval** | `60` |
+
+Built 2026-04-24 after a multi-hour outage where macOS App Nap SIGSTOP'd LM Studio's `llmworker` children and never reaped them. Thirteen zombies accreted in thirty minutes before anyone noticed. This guardian wakes every minute, SIGCONTs any STAT=T workers, kills orphan workers (multiple loaded for the same model), restarts the LM Studio app entirely if the API on `:1234` is dead three minutes running (with a 3-restarts-per-5-min circuit breaker), and reloads the expected model (currently `qwen2.5-coder-14b-instruct`, 24h TTL) if it ever drops out. Logs JSON-lines to `~/.openclaw/logs/lmstudio-guardian.log`.
+
+---
+
+#### Council Observability Quartet
+
+A set of five plists that watch the council from different angles. Documented as a group because they share a pattern: each runs on a `StartInterval`, writes JSON-lines to `~/.openclaw/logs/`, and reports drift rather than fixing it. Logging-grade rather than enforcement-grade.
+
+| Label | Cadence | What it watches |
+|-------|---------|-----------------|
+| `com.sanctum.council-canary` | every 5 min | A pinned prompt sent through the proxy; logs latency + answer hash drift |
+| `com.sanctum.council-drift` | every 5 min | Cross-checks the running `sanctum-mlx` model hash against the manifest |
+| `com.sanctum.council-guardian` | every 1 min | Auto-heals `com.sanctum.mlx` if down. The only one in the quartet that fixes things instead of just observing |
+| `com.sanctum.council-integrity` | every 15 min | Validates mTLS cert expiry + manifest signature chain |
+| `com.sanctum.council-parity-smoke` | every 30 min | Runs a tiny golden-prompt diff between local council and a cloud reference; flags deviations |
+
+Five separate plists is more than the average homelab needs. Five separate plists is the answer to the question "how do you keep a 35-billion-parameter model in compliance with itself?"
 
 ---
 
