@@ -1,0 +1,128 @@
+---
+title: Sanctum TTS
+description: One stable front door for every voice in the haus. Adapter-dispatched to the right backend, defended in five independent layers, every clip signed so origin is provable.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A single lit door in a stone wall with five distinct latches — cert, key, pin, seal, ledger — pencil-sketched against a dark void, an amber line glowing from under the door](./images/hero-sanctum-tts.jpg)
+
+Yoda's voice answers the phone. Mothma narrates the morning briefing. Someday soon Bert's own digital twin does both, in English and in Quebec French, depending on who dialed. For any of that to be safe to put on a phone line that connects to the outside world, the TTS layer has to be two things at once: **clean enough that adding a new voice is a YAML edit**, and **boundary-enforced enough that an adversary who reaches the port can't impersonate someone**. `sanctum-tts` is that layer.
+
+## One Front Door, Many Backends
+
+Every TTS engine brings its own Python environment, model format, and cloning quirks. Qwen3-TTS lives inside mlx-audio's venv. OpenVoice v2 clashes with it on torch/transformers pins. Coqui XTTS had its own world before we retired it. Keeping them in separate processes, each behind its own LaunchAgent, is the only sane way to add new engines without deps wars.
+
+`sanctum-tts` is the Rust dispatcher on `:8007`. Callers address voices by name; the daemon routes to whichever adapter the voice registry declares. The dispatcher never imports Python. Adapters are thin HTTP proxies.
+
+```
+           ┌──────────────┐       ┌──────────────┐
+clients ──▶│ sanctum-tts  │──────▶│ qwen3-tts    │
+ (mTLS)    │   :8007      │       │   :8008 (py) │
+ Bearer ──▶│  dispatches  │──────▶│ openvoice    │
+           │  by voice    │       │   :8009 (py) │ (planned)
+           │  signs WAV   │       └──────────────┘
+           │  audits      │
+           └──────────────┘
+```
+
+## The Five Layers
+
+Every `POST /speak` passes through five independent defenses. Each is individually toggleable, so a laptop dev run can disable all of them while a phone-facing production deploy can demand every one.
+
+| # | Layer | Purpose | Stored in |
+|---|---|---|---|
+| 1 | **mTLS** | Cert-authenticated wire; same CA as `council-mlx`. | `~/.sanctum/certs/` |
+| 2 | **Bearer-token ACL** | Per-voice authorization. Hashes only in config; plaintext lives with the client. | `tts.yaml` (SHA-256 only) |
+| 3 | **Reference-clip pin** | SHA-256 of every voice's reference WAV. Mismatch at startup disables the voice. | `tts.yaml` per voice |
+| 4 | **Ed25519 signing** | Every synthesized WAV carries a signed manifest (caller, voice, timestamp, text hash, audio hash). | WAV LIST/INFO chunk + HTTP header |
+| 5 | **Hashed audit log** | Append-only JSONL; text is SHA-256'd before write so the log never becomes a surveillance vector. | `~/.openclaw/logs/tts-audit.jsonl` |
+
+## What Each Layer Defends Against
+
+<Aside type="caution" title="Adversary → defense map">
+- Network access, no token → **401** (layer 2).
+- Valid token for `yoda`, tries to mint Bert's voice → **403** (layer 2 per-voice ACL).
+- Filesystem access, swaps `yoda-do-or-do-not.wav` for a stranger's clip → **503** at startup (layer 3).
+- Captures a synthesized clip, replays elsewhere → the clip carries sanctum's signature. `sanctum-tts-verify` confirms origin; any "sanctum didn't produce this" claim is refutable.
+- Fabricates a clip → no signature, `sanctum-tts-verify` exits 2.
+- Tampers with audio bytes after signing → manifest's `audio_sha256` mismatches, `sanctum-tts-verify` exits 4.
+- Asks "did caller X ever request voice Y with text Z?" → audit log answers. Plaintext of Z is never on disk.
+</Aside>
+
+## Signing — What It Proves, What It Doesn't
+
+The signed manifest is canonical JSON with a stable field order:
+
+```
+{"v":1,"ts":"...","signer_id":"...","caller_id":"...","voice":"...","text_sha256":"...","audio_sha256":"..."}
+```
+
+Ed25519 over the UTF-8 bytes of that JSON. The signature + JSON both embed into the WAV as a RIFF `LIST/INFO` chunk (`ICMT` = manifest, `IART` = base64 signature). Clip travels, signature travels with it. Standard WAV readers ignore the chunk and play the audio; `sanctum-tts-verify` reads it and answers.
+
+**What this proves**: any intact WAV came from a specific sanctum-tts instance (identified by `signer_id` = first 8 hex of SHA-256(pubkey)), with known caller/voice/text/timestamp.
+
+**What it does not prove**: robustness to re-encoding. `wav → mp3 → wav` drops the RIFF INFO chunk; signature gone. The clip still sounds the same; we just lose the origin proof. Closing that gap needs a perceptual watermark layer (SilentCipher, AudioSeal) — deliberately scoped out of the MVP rather than shipped as handwritten theater.
+
+## Operator Tools
+
+```bash
+# One-time: create the Ed25519 keypair at ~/.sanctum/keys/
+sanctum-tts-admin keygen
+
+# Mint a bearer token for a caller. Plaintext shown ONCE.
+sanctum-tts-admin issue-token livekit-agent
+
+# Compute SHA-256 for a reference clip to pin in tts.yaml
+sanctum-tts-admin pin ~/.openclaw/tts-voices/yoda-do-or-do-not.wav
+
+# Inspect the current signer
+sanctum-tts-admin show-pubkey
+
+# Verify a clip's signature + integrity
+sanctum-tts-verify clip.wav
+sanctum-tts-verify --json clip.wav
+```
+
+Exit codes of `sanctum-tts-verify`: `0` verified, `1` I/O, `2` unsigned, `3` signature invalid, `4` audio tampered after signing.
+
+## Voice Registry
+
+Add a voice with three YAML lines plus a pin:
+
+```yaml
+voices:
+  yoda:
+    adapter: qwen3
+    reference: yoda-do-or-do-not
+    language: en
+    reference_sha256: 8f2a...  # sanctum-tts-admin pin
+```
+
+Adding Bert as a digital twin once OpenVoice v2 lands becomes two entries — `bert` (English) and `bert_fr` (Quebec French) — pointing at the same 2-3 min reference recording.
+
+## What Shipped 2026-04-24
+
+- `sanctum-xtts` renamed → `sanctum-tts` (Coqui worker retired).
+- `TtsAdapter` trait + typed `TtsError`.
+- Dispatcher with `POST /speak`, `GET /voices`, `GET /voices/{id}`, `GET /health`.
+- `QwenAdapter` proxies to the existing Qwen3-TTS server on `:8008`.
+- `OpenVoiceAdapter` stub + 5-step wiring checklist in README.
+- All five defense layers, toggle-by-toggle.
+- `sanctum-tts-admin` + `sanctum-tts-verify` CLIs.
+- 35 unit tests.
+
+## Next
+
+- Record Bert's reference.
+- Stand up `com.sanctum.openvoice-tts` on `:8009`.
+- Flip `OpenVoiceAdapter` from `NotImplemented` to real proxy.
+- A/B blind-test Bert-English through Qwen3 vs OpenVoice.
+- Bert-in-French becomes a YAML line.
+- Later: perceptual watermarking layer for re-encode robustness.
+
+## Related
+
+- [The Living Force](/architecture/living-force/) — the immune system this service plugs into
+- [Chitti — The Fascial Layer](/architecture/chitti/) — the pressure/presence field sanctum-tts will read before heavy loads
+- [2026-04-24 — Five Locks on the Voice Door](/operations/2026-04-24-sanctum-tts-hardening/) — field note for the hardening session

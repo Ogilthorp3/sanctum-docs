@@ -111,6 +111,7 @@ export default defineConfig({
 						{ label: 'Smart Router Cathedral', slug: 'architecture/smart-router-cathedral' },
 						{ label: 'Hybrid Sidecar', slug: 'architecture/hybrid-sidecar' },
 						{ label: 'Sanctum MLX', slug: 'architecture/sanctum-mlx' },
+						{ label: 'Sanctum TTS', slug: 'architecture/sanctum-tts' },
 						{ label: 'Sanctum Triage', slug: 'architecture/sanctum-triage' },
 						{ label: 'LoRA in Rust', slug: 'architecture/lora-rust' },
 						{ label: 'Turboquant KV Compression', slug: 'architecture/turboquant-kv-compression' },
@@ -203,6 +204,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-04-24 — Five Locks on the Voice Door', slug: 'operations/2026-04-24-sanctum-tts-hardening' },
 								{ label: '2026-04-24 — Every Jedi Answers to Their Name', slug: 'operations/2026-04-24-council-roll-call' },
 								{ label: '2026-04-21 — The mTLS Day', slug: 'operations/2026-04-21-mtls-migration' },
 								{ label: '2026-04-20 — The Pressure Valve Trilogy', slug: 'operations/2026-04-20-the-pressure-valve-trilogy' },
