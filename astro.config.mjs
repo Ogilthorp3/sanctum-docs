@@ -205,6 +205,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-04-26 — Wisdom Informs Reflex', slug: 'operations/2026-04-26-wisdom-informs-reflex' },
 								{ label: '2026-04-24 — Five Locks on the Voice Door', slug: 'operations/2026-04-24-sanctum-tts-hardening' },
 								{ label: '2026-04-24 — Every Jedi Answers to Their Name', slug: 'operations/2026-04-24-council-roll-call' },
 								{ label: '2026-04-21 — The mTLS Day', slug: 'operations/2026-04-21-mtls-migration' },
