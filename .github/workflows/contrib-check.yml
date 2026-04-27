@@ -1,5 +1,11 @@
 name: CONTRIBUTING compliance
 
+# Diff-scoped gate: validates ONLY the files changed in this PR / push.
+# Contributors see issues with their own work — never the chronic backlog
+# on untouched older pages. The full-repo audit moved to
+# .github/workflows/health-audit.yml; it runs weekly and files an issue,
+# never blocks CI.
+
 on:
   pull_request:
     paths:
@@ -12,11 +18,6 @@ on:
     paths:
       - "src/content/docs/**/*.mdx"
       - "scripts/contrib-check.py"
-  schedule:
-    # Weekly full-repo sweep — catches drift the diff-based check can miss
-    # (e.g. if a new rule is added that exposes an old violation in an
-    # unchanged file).
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 jobs:
@@ -64,17 +65,3 @@ jobs:
         if: steps.changed.outputs.files != ''
         run: |
           python3 scripts/contrib-check.py ${{ steps.changed.outputs.files }}
-
-  check-all:
-    # Full-repo scan: runs on push to main, weekly schedule, or manual dispatch.
-    # The diff-based `check` job misses leaks that already lived in untouched
-    # files when a rule is added or tightened; this one doesn't.
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Full-repo CONTRIBUTING check
-        run: python3 scripts/contrib-check.py

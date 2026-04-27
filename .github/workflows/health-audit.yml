@@ -1,0 +1,143 @@
+name: Docs health audit
+
+# Weekly full-repo CONTRIBUTING.md audit. Runs the same `contrib-check.py`
+# the PR gate uses, but against the entire docs tree — catches drift on
+# pages no PR touched, plus violations that older pages predate today's
+# rules.
+#
+# The workflow always succeeds. When violations are found it opens (or
+# updates) a tracking issue labelled `docs-audit`, which is the durable
+# signal we triage from. Failing CI on every push for pre-existing
+# backlog burns the badge for community contributors and tells them
+# nothing actionable about their own work.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run full-repo CONTRIBUTING check
+        id: check
+        run: |
+          set +e
+          out=$(python3 scripts/contrib-check.py 2>&1)
+          ec=$?
+          {
+            echo 'output<<__EOF__'
+            echo "$out"
+            echo '__EOF__'
+            echo "exit_code=$ec"
+            err_count=$(echo "$out" | grep -c '^FAIL:' || true)
+            warn_count=$(echo "$out" | grep -c '^warn:' || true)
+            echo "err_count=$err_count"
+            echo "warn_count=$warn_count"
+          } >> "$GITHUB_OUTPUT"
+          # Always succeed — failures get reported via the tracking issue.
+          exit 0
+
+      - name: Ensure docs-audit label exists
+        if: steps.check.outputs.exit_code != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create docs-audit \
+            --repo "${{ github.repository }}" \
+            --color "BFD4F2" \
+            --description "Tracked by the weekly contrib-check audit" \
+            2>/dev/null || true
+
+      - name: Open or update tracking issue
+        if: steps.check.outputs.exit_code != '0'
+        env:
+          GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          AUDIT_OUTPUT: ${{ steps.check.outputs.output }}
+          ERR_COUNT:    ${{ steps.check.outputs.err_count }}
+          WARN_COUNT:   ${{ steps.check.outputs.warn_count }}
+          RUN_URL:      ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -eu
+          ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          body=$(cat <<BODY
+          Tracking issue for the weekly full-repo \`contrib-check.py\` audit. PR
+          CI only validates *changed* files; this issue captures the backlog
+          of pre-existing violations on untouched pages so they're visible
+          without painting the badge red on every push.
+
+          - **Last audit:** $ts
+          - **Errors:** $ERR_COUNT
+          - **Warnings:** $WARN_COUNT
+          - **Workflow run:** $RUN_URL
+
+          The body is replaced on each weekly run, so this issue always
+          shows the current state. Close it when the audit is clean and
+          the next run will reopen it if regressions appear.
+
+          ## Violations
+
+          \`\`\`
+          $AUDIT_OUTPUT
+          \`\`\`
+          BODY
+          )
+
+          existing=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label docs-audit \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+
+          if [ -n "$existing" ]; then
+            echo "Updating existing audit issue #$existing"
+            gh issue edit "$existing" \
+              --repo "${{ github.repository }}" \
+              --body "$body"
+          else
+            echo "Opening new audit issue"
+            gh issue create \
+              --repo "${{ github.repository }}" \
+              --title "Docs CONTRIBUTING compliance backlog" \
+              --label docs-audit \
+              --body "$body"
+          fi
+
+      - name: Close tracking issue when clean
+        if: steps.check.outputs.exit_code == '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          existing=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --label docs-audit \
+            --state open \
+            --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Audit clean — closing #$existing"
+            gh issue close "$existing" \
+              --repo "${{ github.repository }}" \
+              --comment "Audit clean as of $(date -u +%Y-%m-%dT%H:%M:%SZ). Auto-closed by Docs health audit."
+          else
+            echo "Audit clean — no open issue to close."
+          fi
+
+      - name: Summary
+        run: |
+          echo "exit_code=${{ steps.check.outputs.exit_code }}"
+          echo "errors=${{ steps.check.outputs.err_count }}"
+          echo "warnings=${{ steps.check.outputs.warn_count }}"
