@@ -55,6 +55,19 @@ Every process the valve will consider lives in `ALLOWLIST` inside `services/sanc
 
 **KillAllowed** is the "restart-safe" tier. At RED, if the target's RSS is ≥ `min_kill`, the valve SIGKILLs. Below that it falls back to SIGSTOP — small leaks get frozen, not whacked, to preserve diagnosability.
 
+## Phase-4: shed-effectiveness gating
+
+A SHED action that succeeds but doesn't move `swap_used_mb` is a no-op the valve mistakes for progress. Phase-4 (shipped 2026-04-27) closes that loop:
+
+- When a SHED fires, the valve records `pre_swap_mb` and the cooldown deadline.
+- Every tick after the deadline, the valve compares current `swap_used_mb` to `pre_swap_mb`. A drop of less than 100 MB counts as ineffective.
+- After two consecutive ineffective sheds for the same label, the planner skips that label for 30 minutes; iteration falls through to the next TIER candidate or `Noop`.
+- The marker decays after the window so the label is reconsidered fresh.
+
+Heartbeat at `~/.openclaw/state/sanctum-pressure-valve.json` gains an `ineffective_targets: [(label, secs_remaining)]` field, only serialized when non-empty. Operators can see exactly which sheds are skipped and for how long.
+
+The mechanism is the same shape as the 2026-04-26 `T`-state-skip fix in the picker, one layer up. The doctrine: a remediation should be observable in the signal it tries to relieve. If it isn't, escalate or stop.
+
 ## The absolute denylist
 
 `DENYLIST` substrings match against both `comm` and `cmd`. A hit here ends the evaluation immediately — no allowlist entry can override it. You cannot freeze `sshd` even if a bug renames its binary to "sanctum-mlx".
