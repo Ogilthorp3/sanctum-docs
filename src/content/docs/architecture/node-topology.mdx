@@ -21,7 +21,7 @@ What you're looking at is a multi-site distributed system. The kind of thing a m
     A lighter deployment at a secondary haus. Runs a subset of services (typically a gateway, Home Assistant, and a small local model). Syncs configuration and state with the hub over Tailscale.
   </Card>
   <Card title="Mobile" icon="star">
-    A MacBook Pro or similar portable device. Connects to the hub remotely via Tailscale for agent access, SSH, and API calls. Does not run persistent services.
+    A MacBook Pro or similar portable device. Connects to the hub remotely via Tailscale for agent access, SSH, and API calls. Runs a small set of persistent guardrail daemons (see "Persistent Services Across Hosts" below) but no user-facing primary services.
   </Card>
   <Card title="Sensor" icon="setting">
     A future node type for dedicated IoT or monitoring hardware. Planned for low-power devices that report data to the hub without running the full Sanctum stack.
@@ -222,7 +222,7 @@ Hub (hub)                             Satellite (satellite)
 
 ## Mobile Node
 
-Mobile nodes are laptops that connect to the Sanctum instance remotely. They do not run persistent services but can SSH into the hub, query agents, and access dashboards over Tailscale.
+Mobile nodes are laptops that connect to the Sanctum instance remotely. They run a small set of persistent guardrail daemons (see below) but no user-facing primary services. Otherwise they SSH into the hub, query agents, and access dashboards over Tailscale.
 
 ### Mobile Access Patterns
 
@@ -237,6 +237,20 @@ Mobile nodes are laptops that connect to the Sanctum instance remotely. They do 
 <Aside>
   The MacBook Pro restricts SSH access to the Thunderbolt interface only. It is reachable via Tailscale IP but does not expose SSH on the general LAN. The laptop has boundaries. Respect them.
 </Aside>
+
+## Persistent Services Across Hosts
+
+Three Sanctum daemons run on **both** the hub and the mobile node. They are deliberately symmetric: each host enforces its own RAM ceiling, sheds its own offenders, and exposes its own Claude Max subscription. There is no central authority — that was the point of the 2026-04-24 capacity doctrine. Each host is responsible for its own air supply.
+
+| Daemon | Hub (Mac Mini) | Mobile (MacBook Pro) | Role |
+|--------|----------------|----------------------|------|
+| `com.sanctum.admit` | `:2189` | `:2189` | RAM-pool admission control. Per-host doctrine. |
+| `com.sanctum.pressure-valve` | `:N/A` (no listener) | `:N/A` (no listener) | Sheds and freezes offenders before the kernel does. Per-host. |
+| `com.sanctum.claude-max-proxy` | `:3456` | `:3456` | OpenAI-compatible HTTP wrapper around the local `claude` CLI. Each host has its own Claude Max OAuth session; no cross-machine routing required. |
+
+The Claude proxy was unified on 2026-04-27 — before that the hub ran a per-request CLI-spawn proxy on `:2001` (`com.sanctum.claude-cli-proxy`), while the mobile ran the persistent `claude-max-api-proxy` npm package. Both hosts now run the same npm package via a tiny wrapper at `/Users/neo/.sanctum/bin/claude-max-api-tailscale.js`. Smart-router cloud-backend fallback is symmetric: either host can serve the other's escalations if the primary is down.
+
+Per-host symmetry by design: each machine answers for its own air supply (capacity doctrine, 2026-04-24). User-facing and stateful daemons (watchdog, chitti, livekit-server, lmstudio-bridge, home-assistant, outline) remain hub-only — the mobile is a dev and validation surface and doesn't carry production state.
 
 ## Querying the Topology
 
