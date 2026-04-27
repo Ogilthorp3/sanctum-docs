@@ -5,75 +5,129 @@ description: One terminal binary that is the unified front door to a Sanctum hos
 
 import { Aside } from '@astrojs/starlight/components';
 
-<Aside type="caution">
-**Status: design.** Not yet implemented. The canonical specification lives at `~/Projects/sanctum-cli/SPEC.md` (548 lines, architecture + CLI surface + config schema + roadmap + failure modes + testing). This page is the elevator pitch.
+<Aside type="tip">
+**Status: shipped — productization-ready.** v0.7.1 on [github.com/Ogilthorp3/sanctum-cli](https://github.com/Ogilthorp3/sanctum-cli) (private). 12 top-level commands, 4 cloud backends, 201 / 201 tests, ruff + mypy --strict clean across 36 source files. The lambda-family demo path — `sanctum onboard --recipe family --yes` — runs in ~3-5 minutes end-to-end on a fresh Mac.
 </Aside>
 
 ## Mission
 
 `sanctum` is to a Sanctum host what `kubectl` is to a Kubernetes cluster: one terminal binary that turns a heterogeneous control plane and a pile of bespoke shell scripts into a single composable CLI.
 
-It does three things, all of which are currently scattered across half a dozen scripts and zero good UX:
+It does three things, all of which used to be scattered across half a dozen scripts and zero good UX:
 
-1. **Routes prompts** to the right model — Claude default, Gemini for spatial/vision, MLX-local as offline fallback. The router is a pure function of `intent × attachments × flags × instance.yaml`. Every dispatch is logged with the rule that fired.
-2. **Walks operators through painful provisioning** — cloud backups (Backblaze B2, Storj, Drive, S3, local NAS), credential rotation, agent installation. Built as resumable Textual TUI wizards with explicit state machines and round-trip verification.
-3. **Reports honest health** — a `doctor` subcommand that probes every `com.sanctum.*` LaunchAgent, the LaunchAgent capacity pool, the restic repos, the proxy chain. Brevity-gated by default (one line on quiet, expanded only on real findings, per Jedi briefing rule).
+1. **Routes prompts** to the right model — Claude (via the local Max-subscription proxy by default, or direct API), Gemini for spatial/vision, MLX-local as offline fallback. The router is a pure function of `intent × attachments × flags × instance.yaml`. Every dispatch is logged with the rule that fired.
+2. **Walks operators through painful provisioning** — cloud backups (Cloudflare R2 default, Backblaze B2, Google Drive, GitHub Tier 0), credential rotation, first-run onboarding. Resumable wizards with regex-validated paste, atomic instance.yaml writes, and round-trip verification before declaring success.
+3. **Reports honest health** — `doctor` probes every `com.sanctum.*` LaunchAgent, the configured providers, and the restic repos. Brevity-gated by default (one line on quiet, expanded only on real findings).
 
-## Why this needs to exist
+## Why this needed to exist
 
-The 2026-04-26 backup migration took ~90 minutes of manual click-ops to wire up Google Drive: create Cloud project, enable Drive API, configure OAuth consent screen, create OAuth client, publish app, click through "unverified app" warning, paste credentials into rclone, reconnect, retry. Every one of those steps had a non-obvious failure mode (rate limits, test-user list, missing client_secret on the credentials page, OAuth token mismatched with new client_id).
+The 2026-04-26 backup migration took ~90 minutes of manual click-ops to wire up Google Drive: create Cloud project, enable Drive API, configure OAuth consent screen, create OAuth client, publish app, click through "unverified app" warning, paste credentials into rclone, reconnect, retry. Every one of those steps had a non-obvious failure mode.
 
-If "Sanctum power user" is a real audience — anyone who's not Bertrand running this in their own home — that flow has to collapse from 90 minutes to under 10. The only way to do that without lying about Google's verification gate is to wrap each click in a wizard step that opens the exact URL, validates pasted input live, and recovers from each known failure with a "retry / skip / quit" prompt rather than dumping a JSON 403 in the log.
-
-Same pattern applies to: rotating an SSH key, adding a new MCP server, provisioning a council agent, swapping an AI provider, setting up a fresh Mac. They are all 5–90 minute manual flows today. They should all be 30-second wizards.
+If "Sanctum power user" is a real audience — anyone who's not Bertrand running this in their own home — that flow had to collapse from 90 minutes to under 10. The CLI's `cloud setup` wizard exists exactly to wrap each painful click in a step that opens the right URL, validates pasted input live, and recovers from known failures with a clear next action. The R2 wizard does it in ~3 minutes; the GDrive wizard does it in ~10.
 
 ## Design doctrine
 
 | Pillar | Means |
 |---|---|
-| **Closed-loop** | Every operation either completes and verifies or rolls back and reports. No silent partial states. |
-| **Honest** | Telemetry reflects reality. Provider rate-limited? Says so. Route was overridden? Surfaced. No fake green checks. |
-| **Bounded** | Each command has a documented worst-case latency, network footprint, and cost. No surprise cloud charges. |
-| **Defense-in-depth** | Credentials only in macOS Keychain, never on disk. Schema validation at boundaries. Graceful degradation through pre-defined fallbacks. |
+| **Closed-loop** | Every operation either completes and verifies or rolls back and reports. Every wizard ends with a round-trip canary that proves the wiring works. |
+| **Honest** | Telemetry reflects reality. Provider rate-limited? Says so. Route was overridden? Surfaced. The estimator says "11 GB raw" without claiming dedup will fix it; only the live `--dry-run` reveals the actual stored size. |
+| **Bounded** | Each command has a documented worst-case latency. No surprise cloud charges. |
+| **Defense-in-depth** | Credentials only in macOS Keychain, never on disk. Pre-commit secret scanner refuses to push anything matching 16 well-known credential patterns. Schema validation at every config boundary. |
 | **Discovery-first** | No hardcoded IPs, ports, hostnames. Everything via `~/.sanctum/instance.yaml` or runtime discovery. |
 | **Brevity by default** | `sanctum` with no args returns a one-liner. Verbose only when something is wrong or `-v`. |
-| **Python now, Rust later** | Build in Python with full type hints + tests. Promote dispatcher to Rust once the surface stabilizes (per [language-maturity doctrine](./language-maturity)). |
+| **Python now, Rust later** | Built in Python with full type hints + tests. Dispatcher hot path will be promoted to Rust at v1.0+ (per [language-maturity doctrine](./language-maturity)). |
 
-## CLI surface (sketch)
+## CLI surface
+
+The 12 top-level commands shipped:
 
 ```
 sanctum                              # one-liner status
-sanctum chat "..."                   # router decides; default Claude
-sanctum vision <file> "..."          # forced Gemini
+sanctum onboard --recipe family      # one-shot first-run wizard
+
+sanctum chat "..."                   # router decides; default Claude (Max subscription)
 sanctum code "..."                   # forced Claude
-sanctum local "..."                  # forced MLX-local
+sanctum vision <file> "..."          # forced Gemini, multimodal
 
-sanctum cloud setup                  # TUI wizard: B2 / Drive / S3 / Storj / NAS
-sanctum cloud status
-sanctum cloud verify
-sanctum backup [run|snapshots|restore]
+sanctum cloud setup [--backend r2|b2|gdrive|github]
+sanctum backup recipes               # list recipes (family / operator / code)
+sanctum backup estimate <recipe>     # raw size + R2-free-tier compare
+sanctum backup run [--recipe NAME] [--dry-run]
+sanctum backup snapshots / verify / restore
 
-sanctum doctor [--full|--fix]
-sanctum agent <name> [start|stop|status|logs]
-sanctum proxy [restart|logs|status]
-sanctum keychain [list|rotate <service>]
+sanctum doctor [--full|--json]
+sanctum agent [list|status|start|stop|restart|logs]
+sanctum proxy [status|restart|logs]
+sanctum keychain [list|test|rotate]
 sanctum config validate
 ```
 
-## Roadmap
+## Cloud backends
 
-- **v0.1** — `chat`, `vision`, `cloud setup` (B2 + Drive only), `status`, `config validate`. Acceptance: zero-to-backup in ≤ 5 minutes on a fresh Mac.
-- **v0.2** — `doctor`, `backup [run|verify|restore]`, `agent`, `proxy`, Holocron telemetry panel.
-- **v0.3** — Storj / S3 / Local NAS in wizard, offline MLX fallback, rate-limit-aware retries, key rotation.
-- **v1.0** — Rust dispatcher port, single static binary distribution, Sigstore-signed releases.
+| Backend | Tier | Setup time | Free quota | Egress |
+|---|---|---|---|---|
+| **r2** (default) | Tier 1 — restic-encrypted | ~3 min | 10 GB / 1 M class A / 10 M class B | **$0 always** |
+| **b2** | Tier 1 — restic-encrypted | ~3 min | none ($0.005/GB) | 3× stored free |
+| **gdrive** | Tier 1 — restic-encrypted | ~10 min | up to 30 TiB if AI Ultra | n/a |
+| **github** | Tier 0 — public-safe configs | ~1 min | unlimited private repos | n/a |
 
-## Productization angle
+The R2 + GitHub combo is the productization sweet spot: GitHub Tier 0 holds dotfiles + brew lists + sanctum LaunchAgent plists ($0); R2 Tier 1 holds documents + secrets ($0 for the typical lambda-family scope under 10 GB after dedup); Photos library stays in iCloud Photos (Apple's job, the wizard auto-detects + excludes the bundle).
 
-If Sanctum ever ships beyond manoir, **the default cloud-backup target is Backblaze B2** — no OAuth, no Cloud Console, no consent screen, just paste a key + secret and go. Drive is the privacy-preserving escape hatch for users who already own their Google ecosystem (AI Ultra in particular — 30 TiB of room). OneDrive and iCloud are explicitly *not* supported as primary backup targets: iCloud has no API for backup tools, and OneDrive throttles aggressively for restic-style small-pack workloads.
+## Backup recipes
+
+A recipe is a named bundle of sources + excludes for an audience:
+
+| Recipe | Audience | Sources | Typical post-dedup size |
+|---|---|---|---|
+| **family** | Lambda household | Documents, Desktop, ssh, dotfiles | ~5 GB (fits R2 free) |
+| **operator** | Sanctum host | `.sanctum`, `.openclaw`, `.claude`, dev projects | ~15 GB+ (T9 + GDrive) |
+| **code** | Source-only | `~/Projects` | varies (pairs with GitHub Tier 0) |
+
+User-defined recipes go in `instance.yaml` under `cli.recipes`; built-ins are overridable. iCloud Photos auto-detection adds the exclude pattern automatically when the bundle is present.
+
+## Shipped versions
+
+- **v0.1** — foundation: config schema, pure router, telemetry, Keychain wrapper, exit-code taxonomy, `status` + `config validate`
+- **v0.2** — providers: Claude (direct API), Gemini, MLX-local; `chat`; `doctor`
+- **v0.3** — backup commands; `code` shortcut; B2 cloud-setup wizard
+- **v0.4** — `vision` (multimodal Gemini); `agent`; `proxy`; `keychain`; GDrive wizard
+- **v0.5** — R2 wizard with hand-rolled SigV4; **R2 becomes the default backend**
+- **v0.6** — Claude via Max-subscription proxy (default — `sanctum chat -p claude` is now $0 marginal); R2 secondary-slot promotion
+- **v0.7** — backup recipes (family / operator / code); `estimate` with R2-free-tier compare; iCloud Photos auto-detection
+- **v0.7.1** — GitHub Tier 0 backend; `sanctum onboard` super-command; 16-pattern secret scanner
+
+## What's next — v0.8 (May target)
+
+These are packaging and polish, not architecture. The architecture is done.
+
+| Item | Why | Effort |
+|---|---|---|
+| **brew formula + tap** | `brew install sanctum-cli` for the public install path. Tap published from a `homebrew-sanctum` repo. | ~half-day |
+| **Sigstore-signed releases** | Self-update path verifies signatures before swapping the binary. Required before recommending public install. | ~half-day |
+| **Atomic-replace flow for cloud_backup** | Wizard currently refuses if both slots are full. The replace flow walks the operator through retiring an old target + wiring a new one safely. | ~half-day |
+| **Storj / S3 / MinIO / Local-NAS in cloud setup** | R2 covers most users; these are escape hatches for sovereignty-maximalists. Mostly endpoint changes on top of the existing S3-compat code path. | ~day |
+| **TUI dashboard** (`sanctum dashboard`) | Live tail of telemetry + LaunchAgent state. Textual-based; the wow factor for power-user demos. | ~day |
+| **README + demo gif** | Public-facing launch surface. The CLI is the interface with the geeks; the README is the front door. | ~half-day |
+| **Rust dispatcher port** | Per [language-maturity doctrine](./language-maturity), promote the hot path once the surface is stable. v1.0 milestone. | multi-week, deferred |
+
+## Productization shape
+
+For new users, the recommended flow is `sanctum onboard --recipe family --yes`:
+
+1. Photos-scope notice (sets correct expectations).
+2. Pre-flight estimate vs. R2 free tier.
+3. R2 cloud setup wizard (3 hex-string pastes + a bucket auto-created).
+4. `--dry-run` for transparent preview.
+5. Real backup.
+6. Restore canary against `~/.zshrc` to prove the round-trip.
+7. Done — `sanctum doctor` and `sanctum backup snapshots` for verification.
+
+Total time: ~3-5 minutes. Total cost: $0 for any backup repo under 10 GB. Photos remain Apple's responsibility via iCloud Photos.
 
 ## See also
 
-- `~/Projects/sanctum-cli/SPEC.md` — canonical design doc (mission, architecture, CLI surface, config schema, routing, providers, wizard architecture per backend, security model, failure modes, roadmap, testing). Will be promoted to a public repo once v0.1 is implementable.
+- [`~/Projects/sanctum-cli/SPEC.md`](https://github.com/Ogilthorp3/sanctum-cli) — canonical design doc
 - [language-maturity](./language-maturity) — Python → Rust transition pattern
-- [engineering-discipline](./engineering-discipline) — discovery-first config rule lives here
-- [backup-restore](../operations/backup-restore) — the backup architecture this CLI will productize
+- [engineering-discipline](./engineering-discipline) — discovery-first config rule
+- [backup-restore](../operations/backup-restore) — the backup architecture this CLI productizes
+- [Roadmap](../operations/roadmap) — Phase 2 + sanctum-cli v0.8
