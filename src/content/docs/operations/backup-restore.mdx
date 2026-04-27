@@ -13,48 +13,79 @@ If you're reading this at 3 AM because a disk just made a sound disks should nev
 
 ## Daily Backup (on manoir)
 
-Runs automatically at 4:15am via cron — an hour when nothing good or bad is happening, which is precisely the hour you want for the thing standing between you and oblivion.
+Runs automatically at 04:00 via the `com.sanctum.backup` LaunchAgent — an hour when nothing good or bad is happening, which is precisely the hour you want for the thing standing between you and oblivion.
 
 ```bash
 # Manual run
 bash ~/Backups/sanctum-backup.sh
 ```
 
+### Architecture: restic, content-addressed, dual repo
+
+The daily backup uses [**restic**](https://restic.net) — a content-addressed deduplicating backup tool that splits files into ~1 MB chunks (Rabin fingerprinting), stores each unique chunk exactly once, and encrypts everything client-side with AES-256 + Poly1305. Two repos receive the same snapshot every day:
+
+| Repo | Purpose | Where |
+|---|---|---|
+| **T9** (primary) | Local, fast restore, full history | `/Volumes/T9/sanctum-restic` |
+| **Google Drive** (offsite) | Disaster recovery, encrypted | `rclone:gdrive-sanctum:sanctum-restic` |
+
+Each daily run only ships *changed blocks*. Typical delta after the first snapshot is **tens of MB**, not the 46 GB of raw `~/.sanctum`. The first snapshot took 20 minutes; daily increments take seconds.
+
+<Aside type="tip">
+3-2-1 backup posture: **3 copies** (live system + T9 + cloud), **2 media types** (NVMe SSD + cloud object store), **1 offsite** (Google Drive in the AI Ultra account, 30 TiB headroom). Anything less is gambling.
+</Aside>
+
 ### What Gets Backed Up
 
 - OpenClaw config (`~/.openclaw/`)
 - Sanctum config (`~/.sanctum/`)
+- Claude Code state (`~/.claude/`, with cache/telemetry excluded)
 - All LaunchAgent plists
-- SSH keys and config
-- 6 project directories
+- SSH keys and config (the whole repo is encrypted, so private keys live alongside everything else)
+- Shell + git config (`.zshrc`, `.zprofile`, `.gitconfig`)
 - TTS models and voice files
-- Crontab, Homebrew package lists
-- Docker container state and tool versions
+- Selected project source trees (`node_modules`, `.venv`, `target`, model files excluded — restic dedups, but excluding rebuildables saves scan time)
+- Per-run metadata: crontab, Homebrew lists, Docker state, LM Studio model list, tool versions, VM SSH-side configs
 
 <Aside type="tip">
-If it took you more than a weekend to configure, it gets backed up. That's the rule. Weekday-afternoon work is expendable. Weekend work is sacred.
-</Aside>
-
-### Backup Location
-
-```
-iCloud/Backups/daily/YYYY-MM-DD/mac/
-```
-
-14-day daily retention, then bi-weekly archives for longer history. Everything else is purged. This is managed by `backup-retention.sh`, which runs weekly via automated job and enforces a two-tier lifecycle: recent dailies stay for two weeks (enough to notice something is wrong, investigate, and fix it without panic), then one backup per two-week period is kept as a historical checkpoint. The rest are purged. Digital hoarding is not a backup strategy.
-
-The initial cleanup freed approximately 23 GB from iCloud — a reminder that "keep everything forever" is not free when iCloud is the filing cabinet.
-
-<Aside type="note">
-The retention script lives at `~/.sanctum/scripts/backup-retention.sh` and runs weekly via automated job. It is deliberately conservative: it deletes nothing on the first run without `--confirm`, and it logs every deletion to `~/.sanctum/logs/backup-retention.log`. Paranoia is a feature, not a bug, when the thing being deleted is the thing that saves you.
+If it took you more than a weekend to configure, it gets backed up. That's the rule. Weekday-afternoon work is expendable. Weekend work is sacred. Restic dedup means even "back up everything" costs almost nothing past day one.
 </Aside>
 
 ### Encryption
 
-Sensitive files (SSH keys, secrets) are encrypted with AES-256-CBC using a key stored in macOS Keychain (`sanctum-backup`).
+The entire repo — every byte that hits T9 or leaves your machine for Google Drive — is encrypted client-side with AES-256 using a passphrase from macOS Keychain (`sanctum-backup-key`). Even if someone walked off with T9 or compromised your Drive folder, they would see opaque ciphertext blobs.
 
 <Aside type="danger">
-If you lose the Keychain and the 1Password backup simultaneously, those encrypted files become the world's most meticulously organized collection of random bytes. Don't let this happen.
+The Keychain entry is the **single trust anchor**. Lose `sanctum-backup-key` from both Keychain *and* 1Password and the data is genuinely unrecoverable — restic has no backdoor, which is exactly the security model you want. Mirror it to 1Password the day you create it. Then test the restore once a quarter so "I have a backup" doesn't quietly decay into "I had a backup."
+</Aside>
+
+### Retention (GFS, enforced by restic forget --prune)
+
+```
+--keep-daily 7    # last 7 daily snapshots
+--keep-weekly 4   # one snapshot per week, last 4 weeks
+--keep-monthly 12 # one snapshot per month, last year
+```
+
+Runs inline on every backup. Restic's prune does block-level garbage collection — old snapshots are removed and any chunks no longer referenced by *any* surviving snapshot are reclaimed. There is no separate retention script; the policy lives in the backup script itself.
+
+<Aside type="note">
+Earlier iterations used a custom GFS function in bash that ran weekly via a separate LaunchAgent (`com.triptyq.backup-retention`). It worked, but split logic between two scripts and used a different host-naming convention. Both have been retired in favor of restic's built-in policy + a single canonical job.
+</Aside>
+
+### Why we moved off iCloud full-copy snapshots
+
+Until 2026-04-26 the daily backup was an `rsync` of `~/.sanctum` into a new dated directory under `iCloud/Backups/daily/YYYY-MM-DD/`. Each snapshot was a full copy. iCloud Drive doesn't understand hardlinks, so even a `--link-dest`-based incremental wouldn't have worked through the Files-app sync layer. The result, observed empirically:
+
+- 15 daily directories on internal SSD: **356 GB**
+- Each snapshot: ~46 GB of mostly-identical bytes copied fresh
+- iCloud was syncing all of that every day in both directions
+- Internal SSD hit 95% capacity, triggering this entire migration
+
+The same retention window in restic: **15 GB on disk** after seven days, growing by a few hundred MB per week. Reclaimed **357 GB** the moment the legacy iCloud tree was deleted.
+
+<Aside type="caution">
+**iCloud is sync, not backup.** Same applies to OneDrive and Google Drive *via the Files-app sync client.* Cloud backup tools (restic, borg, kopia) talk to cloud object stores via API (rclone, S3 SDK), not via local sync clients — that's the layer where deduplication, retention, and integrity checking live. If your backups land in `~/Library/Mobile Documents/` or `~/Library/CloudStorage/`, you have a sync, not a backup.
 </Aside>
 
 ## VM Snapshot
@@ -95,14 +126,69 @@ Phase 5 is a re-download, not a restore. Multi-gigabyte model files don't back u
 
 | Script | Purpose |
 |--------|---------|
-| `sanctum-backup.sh` | Full daily Mac backup |
-| `sanctum-restore.sh` | Multi-phase restore |
+| `sanctum-backup.sh` | Daily restic backup → T9 + Google Drive |
+| `sanctum-restore.sh` | Multi-phase restore (legacy, predates restic — see "Restoring from restic" below) |
 | `vm-snapshot.sh` | Weekly VM disk snapshot |
 | `rotate-secrets.sh` | Monthly secret rotation |
-| `backup-retention.sh` | Weekly iCloud backup pruning (14-day daily + bi-weekly archive) |
 | `backup-sanctum.sh` (MBP) | Weekly cross-machine snapshot, pulls ~/.sanctum/ from manoir to MBP — see below |
 
-Five scripts between you and starting from scratch. Treat them with the respect you'd give a fire extinguisher — boring until the day they're the only thing that matters.
+Treat each one with the respect you'd give a fire extinguisher — boring until the day it's the only thing that matters.
+
+<Aside type="note">
+The retired `backup-retention.sh` and `~/.openclaw/scripts/icloud-backup.sh` live in the same dir with `.legacy` suffixes — kept for forensic value and to make the cron line removal reversible if anything goes sideways during the cut-over. Safe to delete after a couple of clean weeks under restic.
+</Aside>
+
+## Restoring from restic
+
+```bash
+export RESTIC_PASSWORD=$(security find-generic-password -a sanctum-backup -s sanctum-backup-key -w)
+
+# List snapshots from either repo
+restic -r /Volumes/T9/sanctum-restic snapshots
+restic -r rclone:gdrive-sanctum:sanctum-restic snapshots
+
+# Restore everything from the latest snapshot to a target dir
+restic -r /Volumes/T9/sanctum-restic restore latest --target /tmp/restore
+
+# Restore one file (mount the repo as a read-only FUSE filesystem and just `cp`)
+restic -r /Volumes/T9/sanctum-restic mount /tmp/restic-mount    # (Linux only; on macOS use `restore --include`)
+restic -r /Volumes/T9/sanctum-restic restore latest \
+  --target /tmp/restore \
+  --include /Users/neo/.sanctum/instance.yaml
+
+# Verify a repo end-to-end (run quarterly)
+restic -r /Volumes/T9/sanctum-restic check
+restic -r rclone:gdrive-sanctum:sanctum-restic check
+```
+
+<Aside type="tip">
+"Untested backups aren't backups." Schedule a quarterly drill where you pick a random snapshot, restore it to `/tmp/restore-test`, and diff it against live state. The drill is the only thing that proves the strategy still works.
+</Aside>
+
+## Disk-Pressure Tripwire
+
+The 2026-04-26 incident — internal SSD at 95% capacity from full-copy iCloud snapshots — exposed a missing layer: there was no early signal. The `/status` endpoint of the Navigator Sidecar (`navigator-sidecar.js`, port 3344) now emits a `disk` block:
+
+```json
+{
+  "disk": {
+    "path": "/System/Volumes/Data",
+    "status": "OPERATIONAL",
+    "usedPct": 55,
+    "usedGb": 476,
+    "freeGb": 400,
+    "totalGb": 926,
+    "thresholds": { "warn": 85, "fail": 90 },
+    "message": "55% used"
+  }
+}
+```
+
+Status flips to `DEGRADED` at 85% (warn) and `FAILED` at 90% (page). Disk health folds into the aggregate sidecar status, so a Holocron tile turning yellow now means *either* a project monitor flagged degradation *or* the disk is filling. Configurable via `NAVIGATOR_DISK_PATH`, `NAVIGATOR_DISK_WARN_PCT`, `NAVIGATOR_DISK_FAIL_PCT`.
+
+<Aside type="note">
+This is a tripwire, not a janitor. It tells you the disk is filling; it doesn't try to fix it. Auto-deleting things on disk pressure is exactly the kind of "helpful" behavior that loses data — every cleanup must be a deliberate, reviewable action.
+</Aside>
 
 ## Weekly Cross-Machine Snapshot (MBP pulls from manoir)
 

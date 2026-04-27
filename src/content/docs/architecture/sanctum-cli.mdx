@@ -1,0 +1,79 @@
+---
+title: sanctum-cli
+description: One terminal binary that is the unified front door to a Sanctum host. Routes prompts, runs wizards, surfaces health.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+<Aside type="caution">
+**Status: design.** Not yet implemented. The canonical specification lives at `~/Projects/sanctum-cli/SPEC.md` (548 lines, architecture + CLI surface + config schema + roadmap + failure modes + testing). This page is the elevator pitch.
+</Aside>
+
+## Mission
+
+`sanctum` is to a Sanctum host what `kubectl` is to a Kubernetes cluster: one terminal binary that turns a heterogeneous control plane and a pile of bespoke shell scripts into a single composable CLI.
+
+It does three things, all of which are currently scattered across half a dozen scripts and zero good UX:
+
+1. **Routes prompts** to the right model — Claude default, Gemini for spatial/vision, MLX-local as offline fallback. The router is a pure function of `intent × attachments × flags × instance.yaml`. Every dispatch is logged with the rule that fired.
+2. **Walks operators through painful provisioning** — cloud backups (Backblaze B2, Storj, Drive, S3, local NAS), credential rotation, agent installation. Built as resumable Textual TUI wizards with explicit state machines and round-trip verification.
+3. **Reports honest health** — a `doctor` subcommand that probes every `com.sanctum.*` LaunchAgent, the LaunchAgent capacity pool, the restic repos, the proxy chain. Brevity-gated by default (one line on quiet, expanded only on real findings, per Jedi briefing rule).
+
+## Why this needs to exist
+
+The 2026-04-26 backup migration took ~90 minutes of manual click-ops to wire up Google Drive: create Cloud project, enable Drive API, configure OAuth consent screen, create OAuth client, publish app, click through "unverified app" warning, paste credentials into rclone, reconnect, retry. Every one of those steps had a non-obvious failure mode (rate limits, test-user list, missing client_secret on the credentials page, OAuth token mismatched with new client_id).
+
+If "Sanctum power user" is a real audience — anyone who's not Bertrand running this in their own home — that flow has to collapse from 90 minutes to under 10. The only way to do that without lying about Google's verification gate is to wrap each click in a wizard step that opens the exact URL, validates pasted input live, and recovers from each known failure with a "retry / skip / quit" prompt rather than dumping a JSON 403 in the log.
+
+Same pattern applies to: rotating an SSH key, adding a new MCP server, provisioning a council agent, swapping an AI provider, setting up a fresh Mac. They are all 5–90 minute manual flows today. They should all be 30-second wizards.
+
+## Design doctrine
+
+| Pillar | Means |
+|---|---|
+| **Closed-loop** | Every operation either completes and verifies or rolls back and reports. No silent partial states. |
+| **Honest** | Telemetry reflects reality. Provider rate-limited? Says so. Route was overridden? Surfaced. No fake green checks. |
+| **Bounded** | Each command has a documented worst-case latency, network footprint, and cost. No surprise cloud charges. |
+| **Defense-in-depth** | Credentials only in macOS Keychain, never on disk. Schema validation at boundaries. Graceful degradation through pre-defined fallbacks. |
+| **Discovery-first** | No hardcoded IPs, ports, hostnames. Everything via `~/.sanctum/instance.yaml` or runtime discovery. |
+| **Brevity by default** | `sanctum` with no args returns a one-liner. Verbose only when something is wrong or `-v`. |
+| **Python now, Rust later** | Build in Python with full type hints + tests. Promote dispatcher to Rust once the surface stabilizes (per [language-maturity doctrine](./language-maturity)). |
+
+## CLI surface (sketch)
+
+```
+sanctum                              # one-liner status
+sanctum chat "..."                   # router decides; default Claude
+sanctum vision <file> "..."          # forced Gemini
+sanctum code "..."                   # forced Claude
+sanctum local "..."                  # forced MLX-local
+
+sanctum cloud setup                  # TUI wizard: B2 / Drive / S3 / Storj / NAS
+sanctum cloud status
+sanctum cloud verify
+sanctum backup [run|snapshots|restore]
+
+sanctum doctor [--full|--fix]
+sanctum agent <name> [start|stop|status|logs]
+sanctum proxy [restart|logs|status]
+sanctum keychain [list|rotate <service>]
+sanctum config validate
+```
+
+## Roadmap
+
+- **v0.1** — `chat`, `vision`, `cloud setup` (B2 + Drive only), `status`, `config validate`. Acceptance: zero-to-backup in ≤ 5 minutes on a fresh Mac.
+- **v0.2** — `doctor`, `backup [run|verify|restore]`, `agent`, `proxy`, Holocron telemetry panel.
+- **v0.3** — Storj / S3 / Local NAS in wizard, offline MLX fallback, rate-limit-aware retries, key rotation.
+- **v1.0** — Rust dispatcher port, single static binary distribution, Sigstore-signed releases.
+
+## Productization angle
+
+If Sanctum ever ships beyond manoir, **the default cloud-backup target is Backblaze B2** — no OAuth, no Cloud Console, no consent screen, just paste a key + secret and go. Drive is the privacy-preserving escape hatch for users who already own their Google ecosystem (AI Ultra in particular — 30 TiB of room). OneDrive and iCloud are explicitly *not* supported as primary backup targets: iCloud has no API for backup tools, and OneDrive throttles aggressively for restic-style small-pack workloads.
+
+## See also
+
+- `~/Projects/sanctum-cli/SPEC.md` — canonical design doc (mission, architecture, CLI surface, config schema, routing, providers, wizard architecture per backend, security model, failure modes, roadmap, testing). Will be promoted to a public repo once v0.1 is implementable.
+- [language-maturity](./language-maturity) — Python → Rust transition pattern
+- [engineering-discipline](./engineering-discipline) — discovery-first config rule lives here
+- [backup-restore](../operations/backup-restore) — the backup architecture this CLI will productize
