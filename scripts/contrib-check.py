@@ -33,6 +33,10 @@ INLINE_CODE_RE = re.compile(r'`[^`]*`')
 IMAGE_REF_RE = re.compile(r'!\[([^\]]*)\]\(([^)]+)\)')
 FRONTMATTER_RE = re.compile(r'^---\n(.*?)\n---\n?', re.S)
 
+# MDX-tag-character pitfall: `<` followed by a digit is interpreted as
+# the start of a JSX tag and the parser dies. See check_mdx_tag_chars.
+MDX_BAD_LT_RE = re.compile(r'<(\d)')
+
 # Placeholder tokens CONTRIBUTING.md flags as a failing offense.
 PLACEHOLDER_TOKENS = [
     "example.com",
@@ -256,6 +260,36 @@ def check_no_leak(path, rel, body, body_line_offset, report):
                 )
 
 
+def check_mdx_tag_chars(path, rel, body, body_line_offset, report):
+    """Catch `<digit` patterns that break MDX parsing.
+
+    The MDX parser reads `<` as the start of a JSX/HTML tag. The next
+    character must be a name-start character (letter, `$`, `_`) or `/`
+    (closing tag). A digit, `&`, or other punctuation crashes the build
+    with `Unexpected character ... before name`. Symptom: Cloudflare
+    Pages deploy fails with a long Vite trace pointing at the offending
+    line.
+
+    Catches: bare `<0`..`<9` in prose. Allows the same patterns inside
+    fenced code blocks and inline backticks (where MDX doesn't parse
+    them as JSX).
+
+    Pinned 2026-04-26 after chitti.mdx broke the deploy: prose said
+    `<20%` and the build refused. Workarounds: `&lt;20%`, `` `<20%` ``,
+    or rewording to `under 20%`.
+    """
+    stripped = CODE_BLOCK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), body)
+    stripped = INLINE_CODE_RE.sub("", stripped)
+    for i, line in enumerate(stripped.splitlines(), start=body_line_offset):
+        for m in MDX_BAD_LT_RE.finditer(line):
+            ch = m.group(1)
+            report.err(
+                rel, i, "mdx-tag-chars",
+                f"`<{ch}` starts a broken JSX tag — escape as `&lt;{ch}` "
+                f"or wrap in backticks (cause of the 2026-04-26 deploy break)",
+            )
+
+
 def check_length(path, rel, body, body_line_offset, report):
     clean = CODE_BLOCK_RE.sub("", body)
     clean = IMAGE_REF_RE.sub("", clean)
@@ -291,6 +325,7 @@ def check_page(path, report):
     check_emojis(path, rel, body, body_line_offset, report)
     check_placeholders(path, rel, body, body_line_offset, report)
     check_no_leak(path, rel, body, body_line_offset, report)
+    check_mdx_tag_chars(path, rel, body, body_line_offset, report)
     check_length(path, rel, body, body_line_offset, report)
 
 
