@@ -1,0 +1,156 @@
+---
+title: The Holocron Bridge — Yoda Signal Chat
+description: How a Signal message from Bert's iPhone reaches a 35B-parameter model on a Mac Mini and comes back with a Yoda-style reply, and how the path stays alive.
+---
+
+import { Card, CardGrid, Aside, Steps } from '@astrojs/starlight/components';
+
+![A pencil-sketch holographic Jedi Holocron projecting seven concentric arcs of code, rimmed by a single teal accent halo.](./images/hero-yoda-chat.jpg)
+
+The most important interface in Sanctum is the one the operator uses without thinking: a normal Signal thread with "Yoda" — same UX as texting a friend. Behind that thread sits a 35B-parameter Qwen running locally on the Mac Mini, an openclaw agent with the Jedi Master's persona, and seven hops between the two.
+
+When the chat is healthy, none of that is visible. When it isn't, the silence is deafening — and we learned the hard way that silence has many causes.
+
+The Holocron Bridge is the system that keeps the chat alive: the transport, the dispatcher, the agent, the watchdog, and a single CLI that gives you the truth in two seconds.
+
+## The seven hops
+
+```
+                              Signal Server
+                                   │
+                                   ▼
+                         signal-cli daemon (Mac)
+                          TCP localhost:7583
+                                   │
+                          socat bridge :7583
+                                   │
+                                   ▼
+                    ┌───────────────────────────┐
+                    │    yoda-chat (this pkg)    │
+                    │                            │
+                    │   ┌──────────┐             │
+                    │   │  proxy   │ HTTP-JSON-  │
+                    │   │  :5150   │ RPC for     │
+                    │   │          │ openclaw    │
+                    │   ├──────────┤             │
+                    │   │ consumer │ inbound     │
+                    │   │          │ dispatcher  │
+                    │   └──────────┘             │
+                    └───────────────────────────┘
+                                   │
+                                   ▼
+                         openclaw gateway :1977
+                                   │
+                                   ▼
+                  council-local provider via TLS bridge
+                   http://10.10.10.1:1339 → :1337
+                                   │
+                                   ▼
+                      sanctum-mlx (Mac, 64 GiB)
+```
+
+| # | Hop | Host | Port | Purpose |
+|---|---|---|---|---|
+| 1 | Signal Server | cloud | — | The thing that delivers messages between phones |
+| 2 | `signal-cli` daemon | Mac | TCP `:7583`, HTTP `:8080` | Long-poll Signal Server, expose JSON-RPC |
+| 3 | `socat` bridge | Mac → VM | `10.10.10.1:7583` | NAT-friendly TCP forward to VM |
+| 4 | `yoda-chat-proxy` | VM | `:5150` | HTTP-JSON-RPC ⇄ TCP-JSON-RPC for openclaw |
+| 5 | `yoda-chat-consumer` | VM | (subscribes) | inbound `receive` → openclaw agent |
+| 6 | `openclaw-gateway` | VM | `:1977` | model routing + agent runtime |
+| 7 | `sanctum-mlx` | Mac | TLS `:1337` (via `:1339`) | Qwen 3.6 35B inference |
+
+## Three rules that make it boring
+
+<CardGrid>
+  <Card title="One transport, one connection" icon="document">
+    Every component shares the same Python `SignalTransport` — a single persistent TCP-JSON-RPC client to `signal-cli`. Reconnect with bounded exponential backoff, fail-fast on disconnect (so callers don't hang), and one writer per process. No race between subscribers; no zombie sockets.
+  </Card>
+  <Card title="No silent failures" icon="approve-check">
+    Every hop has a structured log. Every envelope is classified — data / receipt / typing / sync / other. Receipts and typing indicators are visibly logged so silence in the log reflects an actual silence, not a misparse. The `Connection closed unexpectedly` line that used to look terrifying is now a footnote — it's signal-cli's normal long-poll cycle.
+  </Card>
+  <Card title="Self-heal in 10 minutes" icon="shield">
+    A `yoda-chat-doctor.timer` runs every 10 min on the VM. It stamps any unstamped workspace, archives any poisoned session, and restarts any dead service. On the Mac, `sanctum-watchdog` already does the same for `signal-cli`, the `socat` bridge, and `sanctum-mlx`. The chat heals itself before you notice.
+  </Card>
+</CardGrid>
+
+## The CLI that tells the truth
+
+```sh
+$ yoda-chat status
+The Holocron Bridge — OK
+
+  ✓  signal-cli TCP 10.10.10.1:7583            8ms  v0.14.3
+  ✓  signal-proxy :5150                       14ms  healthy
+  ✓  mlx bridge http://10.10.10.1:1339        11ms  1 model(s)
+  ✓  openclaw-gateway :1977                    1ms  healthy
+  ✓  yoda-chat consumer log                    0ms  active (7s ago)
+  ✓  Yoda session                              0ms  session d73c1c95, 4 turns
+  ✓  Workspace bootstrap state                 0ms  all workspaces stamped complete
+
+  Account:     +15555550100    Operator:  +15555550101
+  Session:     d73c1c95    Turns:     4
+  Last in:    Where the work continues, friend?
+  Last out:   Strong with the Force, you are.
+
+  Stable, all services are.
+```
+
+`yoda-chat doctor` walks the same checks but applies remediation:
+
+- Workspace state missing `setupCompletedAt`? Stamp it.
+- Session JSONL has two consecutive bootstrap-pending replies? Archive it.
+- Proxy or consumer down? `systemctl --user restart`.
+
+`yoda-chat e2e` is the no-mercy regression test. It exercises every hop in order — TCP probe, proxy /check, mlx /v1/models, gateway /health, agent CLI round-trip, real send to Bert, real `--deliver` round-trip — and prints a green checkmark per stage with a duration. If it's all green, the chat works. If not, the failing stage names the problem.
+
+## Hard-won lessons (the ones we never want to relearn)
+
+<Steps>
+
+1. **Bundled openclaw extensions stage their npm deps on every load.**
+
+   The VM is offline. Every load hangs forever on `npm install @mariozechner/pi-ai@0.69.0`. The fix is not to disable each extension (the staging path bypasses the deny list); it's to pre-populate sentinel `package.json` files in each extension's `node_modules/<dep>/` so the staging code thinks deps are already installed. We have 136 sentinels installed.
+
+2. **`signal-cli-rest-api` Docker containers are retired.**
+
+   Native `signal-cli` on TCP `:7583` is the live transport. Don't put a REST shim in front. The previous `signal-proxy.js` translated JSON-RPC ⇄ REST against dead Docker IPs (`10.10.10.1:18081/18082`). The new `yoda-chat proxy` forwards JSON-RPC verbatim to TCP — no translation, no impedance mismatch.
+
+3. **Session poisoning is the silent killer.**
+
+   If the agent ever falls into a "Bootstrap is still pending" reply (because some workspace hasn't been stamped), every subsequent ambiguous prompt continues that pattern. The model is doing the right thing — continuing the conversation. But the conversation is poisoned. The session JSONL has to be archived. `yoda_chat.session.archive_poisoned_session_for()` does this automatically; the doctor runs it on every tick.
+
+4. **`setupCompletedAt` must be set in *every* workspace.**
+
+   Both the per-agent sandbox (`sandboxes/agent-<id>-*/.openclaw/workspace-state.json`) AND the runtime workspace (`workspace/.openclaw/workspace-state.json`), and the per-Jedi siblings: `workspace-windu`, `workspace-cilghal`, `workspace-mundi`, `workspace-quigon`. `stamp_workspaces_complete()` does all of them.
+
+5. **The 100ms WebSocket reconnect log is normal.**
+
+   `signal-cli` polls Signal Server in short bursts; the `Connection closed unexpectedly, reconnecting in 100 ms` is the long-poll cycle completing, not a fault. Don't restart the daemon on this signal.
+
+6. **`pkill -f openclaw` over SSH closes your own session.**
+
+   The shell that's running `pkill` matches the pattern. Use specific PIDs, `pkill -x` (exact match), or `pkill -f <very-specific>`.
+
+</Steps>
+
+<Aside type="note" title="Codename glossary">
+**Yoda** is the persona; the openclaw agent id is `main`. The runtime workspace is `~/.openclaw/workspace`; the persistent identity sandbox is `~/.openclaw/sandboxes/agent-main-<uuid>`. Bert is the **operator** at `+15555550100`; Yoda's account is `+15555550101`. The Mac Mini has codename `manoir` (`haus.local`); the VM is `yoda` at `10.10.10.10`.
+</Aside>
+
+## When the chat goes silent — diagnose in 60 seconds
+
+<Steps>
+
+1. **`yoda-chat status` from any host.** Either Mac or VM. The first failing row names the broken layer.
+
+2. **If it's all green but no reply lands:** check the **session** row. If turns is high and `Last out:` starts with "Bootstrap is still pending", the session is poisoned. `yoda-chat doctor` archives it.
+
+3. **If `signal-cli TCP` is red:** the Mac daemon is down or the bridge is broken. On Mac: `launchctl list | grep com.sanctum.signal` should show `com.sanctum.signal-cli` and `com.sanctum.signal-tcp-bridge`. Kickstart with `launchctl kickstart -k gui/$(id -u)/com.sanctum.signal-cli`.
+
+4. **If `signal-proxy` is red but `signal-cli TCP` is green:** the VM proxy is down. `ssh ubuntu@10.10.10.10 systemctl --user restart yoda-chat-proxy`. The doctor timer will catch this within 10 min anyway.
+
+5. **If `mlx bridge` is red:** sanctum-mlx is down or the TLS-termination bridge isn't running. Sanctum-watchdog handles this Mac-side; if it doesn't, manual: `launchctl kickstart -k gui/$(id -u)/com.sanctum.mlx-coder-bridge`.
+
+6. **If everything is green and you still feel something is off:** run `yoda-chat e2e`. It will send two test messages to Bert's Signal — proof of life from every hop.
+
+</Steps>
