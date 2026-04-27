@@ -127,6 +127,7 @@ export default defineConfig({
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
+						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
 						{ label: 'Screen Time', slug: 'architecture/screen-time' },
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
 					],
@@ -205,6 +206,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-04-27 — Two Gates, One Subscription', slug: 'operations/2026-04-27-claude-max-symmetry' },
 								{ label: '2026-04-26 — Pressure-Valve Trilogy Redux', slug: 'operations/2026-04-26-valve-trilogy-redux' },
 								{ label: '2026-04-26 — Wisdom Informs Reflex', slug: 'operations/2026-04-26-wisdom-informs-reflex' },
 								{ label: '2026-04-24 — Five Locks on the Voice Door', slug: 'operations/2026-04-24-sanctum-tts-hardening' },
