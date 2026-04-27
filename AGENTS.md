@@ -7,10 +7,10 @@ It is the source of truth for voice, structure, images, and the rules
 that will fail your commit if you violate them.
 
 This file exists because AI agents too often skip straight to the edit.
-The five rules below are the ones that break most often and fail fastest
+The six rules below are the ones that break most often and fail fastest
 in CI. None of them are suggestions.
 
-## The five you can't skip
+## The six you can't skip
 
 1. **Every new page has a unique hero image.** Pencil sketch, dark background,
    one teal or amber accent halo. Generate with `tools/gen_hero_image.py` in
@@ -37,6 +37,13 @@ in CI. None of them are suggestions.
    or similar. Use the real Sanctum default — real ports, real paths, real
    model IDs, real endpoint names. If you don't know the real value, stop
    and ask before you ship fiction.
+
+6. **Escape `<digit` in MDX.** A `<` followed by a digit (or any non-letter)
+   is parsed as the start of a JSX tag and crashes the Astro build with
+   `Unexpected character ... before name`. Pure prose like `<20%` or
+   `<3 attempts` is the most common case. Three valid fixes:
+   `&lt;20%`, `` `<20%` `` (inline code), or reword to `under 20%`.
+   `contrib-check.py` will catch this locally before the deploy does.
 
 ## Before you commit
 
