@@ -100,6 +100,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'architecture/overview' },
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
+						{ label: '(Neuro)diversity is Paramount', slug: 'architecture/neurodiversity-doctrine' },
 						{ label: 'Chitti — The Fascial Layer', slug: 'architecture/chitti' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
 						{ label: 'Council Router', slug: 'architecture/council-router' },

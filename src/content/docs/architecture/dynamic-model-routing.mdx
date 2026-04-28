@@ -69,18 +69,41 @@ router:
 
 ### Jedi → backend assignments
 
-| Jedi | Primary | Escalation | Rationale |
-|---|---|---|---|
-| **Yoda** | council-secure | cloud (Opus 4.7) | Synthesis; local by default, cloud for multi-agent novel reasoning |
-| **Mothma** | council-secure | — | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — her daily bread |
-| **Windu** | council-secure | **spatial (Gemini 3.1 Pro)** | Gemini wins at spatial reasoning — network topology, zone maps, physical layout |
-| **Cilghal** | council-secure | — | Health data is privacy-critical; stays local, always |
-| **Mundi** | council-secure | cloud (Opus 4.7) | Finance / tax / FBAR edge cases warrant careful cloud reasoning |
-| **Jocasta** | council-secure | — | Email/CRM; privacy-first |
-| **Qui-Gon** | coder (Coder-14B) | — | Tight code gen; 22 tok/s on Mini via LM Studio |
-| **Ahsoka** | coder (Coder-14B) | — | Runs on a Mac Mini M1 16 GB at the chalet — 35B won't fit |
+This table reflects the **post-2026-04-28 routing**, when the Council went heterogeneous. Every Jedi now starts on a different model family by default and falls back to the local Qwen3.6 if the primary path fails. See [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for why we did this and what it bought us.
 
-The Olympics (2026-04-23) drove most of this: Qwen3.6-35B-A3B at 0.957 beats everything locally and beats Opus 4.7 at 0.887, so it became the house default. Coder-14B (0.929) stays on the bench for coding-specific work and the chalet where RAM is the constraint. Opus 4.7 and Gemini 3.1 Pro are escalation-only — they exist to be summoned, not to handle daily traffic. See [Model Comparison](./model-comparison) for the full per-task score breakdown.
+| Jedi | Primary | Fallback | Why |
+|---|---|---|---|
+| **Yoda** | **cloud — Claude Opus 4.7** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
+| **Mundi** | **cloud — Claude Opus 4.7** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
+| **Qui-Gon** | **coder — Qwen2.5-Coder-14B** (LM Studio `<MINI>:1234`) | council-secure | Dense code gen, infrastructure pragmatism; 22 tok/s on the Mini |
+| **Windu** | **spatial — Gemini 3.1 Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
+| **Cilghal** | **council-secure — Qwen3.6-35B-A3B** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
+| **Mothma** | council-secure — Qwen3.6-35B-A3B | council-secure | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — local-only by mandate |
+| **Jocasta** | council-secure — Qwen3.6-35B-A3B | council-secure | Email / CRM; privacy-first |
+| **Ahsoka** | coder — Qwen2.5-Coder-14B (chalet LM Studio) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit |
+
+Cloud Opus runs through the Claude Max subscription bridge at `<MINI>:3456`, not the metered Anthropic API. Routine Council questions consume zero API credits. Bring-out-the-good-china reasoning happens for the price of the monthly subscription, not per-token.
+
+The Olympics (2026-04-23) informed this lineup: Qwen3.6-35B-A3B at 0.957 is still the house default for any seat without a domain-specific upgrade — Mothma/Jocasta/Cilghal stay there because their work is privacy-critical or local-by-mandate, and Coder-14B (0.929) stays on the bench for coding-specific work and the chalet where RAM is the constraint. Opus 4.7 and Gemini 3.1 Pro now sit at the head of two seats each, not as escalations. See [Model Comparison](./model-comparison) for the full per-task score breakdown and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for the doctrine that made this routing the default rather than the escalation.
+
+### Two routing layers, one Council
+
+There are now two routers in front of every Council request, and they answer different questions:
+
+| Layer | Lives at | Routes by | Caller |
+|---|---|---|---|
+| **openclaw-gateway agents.list** | `<VM>:1977` then `<MINI>:4040` (proxyd) | Agent identity → primary model | `openclaw agent --agent <id>` calls; the daily Council interface |
+| **sanctum-server Smart Router** (this page) | `<MINI>:8900` | Model name + glob + intent classification | Direct API callers (eval harness, integrations, anyone hitting `/v1/chat/completions` with an explicit `model:`) |
+
+The agent layer chooses the model from the agent's role. The Smart Router chooses the backend from the model name. They compose: an agent call resolves to a model alias on the agent side, then the Smart Router (or proxyd, the per-tier router) maps that alias to a backend. The flow `openclaw agent --agent main → council-max-thinking → :3456 (Claude Max bridge) → Opus 4.7` is the canonical path for Yoda after 2026-04-28.
+
+To verify the agent-layer routing is healthy:
+
+```bash
+~/Documents/Claude_Code/tools/test-council-routing.sh
+```
+
+The script invokes each Jedi, parses the embedded execution trace's `winnerModel` field, and asserts each one reaches their assigned model. Five passes means the Council is heterogeneous and behaving. Run it ~weekly; cloud paths fail silently sometimes (rate limit hits, billing flips, preview models get deprecated) and the script catches drift before the morning briefing notices.
 
 The `models` arrays are glob patterns. The `intent_keywords` are plain strings matched against the last user message. If you're wondering whether regex would be more powerful here — yes, and also no. Keyword matching is predictable, debuggable, and has never once woken anyone up at 3 AM with a catastrophic backtrack.
 
