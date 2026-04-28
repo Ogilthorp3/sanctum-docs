@@ -206,6 +206,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-04-28 — The Clean Stage', slug: 'operations/2026-04-28-the-clean-stage' },
 								{ label: '2026-04-27 — The Vajrayogini Cut', slug: 'operations/2026-04-27-the-vajrayogini-cut' },
 								{ label: '2026-04-27 — Two Gates, One Subscription', slug: 'operations/2026-04-27-claude-max-symmetry' },
 								{ label: '2026-04-26 — Pressure-Valve Trilogy Redux', slug: 'operations/2026-04-26-valve-trilogy-redux' },
