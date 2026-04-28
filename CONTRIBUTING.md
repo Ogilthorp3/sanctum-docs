@@ -289,7 +289,11 @@ Ports that are defaults (22, 8123) or sequential allocations (18080/18081/18085)
 
 ## Typography
 
-Body text is justified (`text-align: justify`). This gives clean left and right edges across all documentation pages. Do not override this with centered or left-aligned prose blocks — the justified layout is a deliberate choice for readability.
+Body text is justified (`text-align: justify`) **on every page including the landing page** at `sanctum.run`. Combined with `hyphens: auto` and `text-justify: inter-word`, this gives clean left and right edges across all documentation without ugly inter-word rivers on narrow viewports.
+
+The rule lives in `src/styles/custom.css` under `.sl-markdown-content` and the `[data-has-hero]` overrides. Do not override it with centered or left-aligned prose blocks — the justified layout is doctrine, not decoration. UI elements rendered outside `.sl-markdown-content` (Starlight's hero tagline, CTA buttons, navigation, logos) keep their template-default centering; only the body prose justifies.
+
+If you add a new wrapper class for prose content, justify it. If you find a wrapper that left-aligns or centers prose, fix it.
 
 ## Technical Accuracy — Current Architecture
 
