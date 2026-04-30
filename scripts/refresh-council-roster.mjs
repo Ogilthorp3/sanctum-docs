@@ -27,13 +27,13 @@ const OUT = join(HERE, "..", "src", "data", "council-roster.json");
 const OPENCLAW = join(homedir(), ".openclaw", "openclaw.json");
 const PROXY = join(homedir(), ".sanctum", "sanctum-proxy", "config.yaml");
 
-// Persona-level metadata: emoji + one-line role. Sourced from openclaw.json
-// itself (agent.identity.theme), but the canonical Council display order
-// here keeps the table stable across renames.
-const ORDER = ["yoda", "mothma", "quigon", "windu", "cilghal", "mundi", "main", "ahsoka"];
-const DISPLAY_NAME = {
-  main: "Jocasta",
-};
+// The five Council seats per the (Neuro)diversity is Paramount doctrine
+// (2026-04-28). Display order matches the doctrine page so a side-by-side
+// reader can spot drift instantly. Other openclaw.json agents (Jocasta,
+// Ahsoka, …) have their own pages and are intentionally not in this
+// table — the Council is the 5 seats listed below.
+const ORDER = ["yoda", "mundi", "quigon", "windu", "cilghal"];
+const DISPLAY_NAME = {};
 
 function loadJson(path) {
   if (!existsSync(path)) throw new Error(`missing: ${path}`);
@@ -107,25 +107,13 @@ function main() {
     });
   }
 
-  // Anything in openclaw.json not in our display order — append at the end.
-  for (const a of oc.agents?.list ?? []) {
-    if (ORDER.includes(a.id)) continue;
-    const resolved = resolveModel(a.model, proxyModels);
-    rows.push({
-      id: a.id,
-      label: a.identity?.name ?? DISPLAY_NAME[a.id] ?? a.id,
-      emoji: a.identity?.emoji ?? "",
-      role: (a.identity?.theme ?? "").slice(0, 200),
-      logical_model: a.model,
-      provider: resolved.provider,
-      provider_label: describeProvider(resolved.provider, resolved.api_base),
-      api_model: resolved.api_model,
-      api_base: resolved.api_base,
-    });
-  }
-
   const generatedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-  const out = { generated_at: generatedAt, source: "openclaw.json + sanctum-proxy/config.yaml", agents: rows };
+  const out = {
+    generated_at: generatedAt,
+    source: "openclaw.json + sanctum-proxy/config.yaml",
+    doctrine: "/architecture/neurodiversity-doctrine/",
+    agents: rows,
+  };
 
   writeFileSync(OUT, JSON.stringify(out, null, 2) + "\n", "utf8");
   console.log(`wrote ${OUT} (${rows.length} agents, generated ${generatedAt})`);
