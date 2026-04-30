@@ -1,0 +1,226 @@
+---
+title: Sanctum Gateway runbook
+description: "Day-to-day ops for the bridge.nepveu.name gateway: bring-up on a fresh Mac, secret rotation, recovering from a wedged daemon, debugging a 401, restoring from backup."
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+Operational reference for [Sanctum Gateway](/architecture/sanctum-gateway/).
+Architecture, threat model, and resolved decisions live there; this page
+is the runbook a future Bert reaches for at 2 a.m.
+
+## Bring-up on a fresh Mac
+
+Assumes `brew`, `uv`, `sops`, `age`, `cloudflared`, `gh`, `jq`,
+`shasum` (any CLT install) are present.
+
+```sh
+# 1. Repo + Python env
+sudo mkdir -p /opt/sanctum/bridge /opt/sanctum/keys /var/log/sanctum
+sudo chown -R $(whoami) /opt/sanctum /var/log/sanctum
+sudo chmod 700 /opt/sanctum/keys
+git clone git@github.com:Ogilthorp3/sanctum-gateway.git /opt/sanctum/bridge
+cd /opt/sanctum/bridge
+uv python pin 3.12
+uv sync --extra dev
+make test                                # 47/47 must be green
+
+# 2. Restore the age master key
+op item get "SanctumBridge — age private key (master)" \
+  --reveal --format json \
+  | jq -r '.fields[] | select(.label=="private_key") | .value' \
+  > /opt/sanctum/keys/age.key
+chmod 600 /opt/sanctum/keys/age.key
+
+# 3. Verify decryption round-trips
+SOPS_AGE_KEY_FILE=/opt/sanctum/keys/age.key sops -d secrets.yaml | head -3
+
+# 4. Install launchd jobs
+sudo install -m 644 -o root -g wheel \
+    launchd/name.nepveu.sanctum-bridge.plist /Library/LaunchDaemons/
+sudo launchctl load -w /Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist
+cp launchd/sanctum-bridge-rotate ~/.sanctum/bin/
+cp launchd/sanctum-bridge-canary ~/.sanctum/bin/
+cp launchd/com.sanctum.bridge-rotate.plist ~/Library/LaunchAgents/
+cp launchd/com.sanctum.bridge-canary.plist ~/Library/LaunchAgents/
+cp launchd/com.sanctum.bridge-manifest-sync.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.sanctum.bridge-rotate.plist
+launchctl load ~/Library/LaunchAgents/com.sanctum.bridge-canary.plist
+launchctl load ~/Library/LaunchAgents/com.sanctum.bridge-manifest-sync.plist
+
+# 5. Newsyslog rotation
+sudo install -m 644 -o root -g wheel \
+    etc/newsyslog.d/sanctum-bridge.conf /etc/newsyslog.d/
+
+# 6. Smoke check
+sanctum bridge doctor                    # all rows green
+sanctum bridge upload README.md "01_Gestion Triptyq/_smoke" --doc-type meeting-notes
+```
+
+The Cloudflare side (Tunnel hostname, Access app + service token policy,
+DNS CNAME) is account state, not host state — bring-up of a *new* Mac
+re-uses the existing tunnel and Access app. Re-creating those is a
+separate procedure (and rarely needed; nothing about the tunnel is
+host-bound).
+
+## `sanctum bridge doctor` — what each row means
+
+```
+keychain: sanctum-bridge-cf-access-client-id     OK/FAIL
+keychain: sanctum-bridge-cf-access-client-secret OK/FAIL
+keychain: sanctum-bridge-cf-access-token-id      OK/FAIL
+keychain: sanctum-bridge-hmac-sharepoint         OK/FAIL
+keychain: sanctum-bridge-sp-*                    OK or SKIP (gateway-only)
+bridge /_health                                   reachable + version + commit
+modules loaded                                    list — sharepoint, optionally slack
+uptime                                            since last respawn
+allowlist count                                   count of allowed_roots from the SoT
+CF Access JWT                                     "enabled" — secrets.cloudflare.* set
+rotator last_run                                  hours since last run; FAIL if >48 h
+rotator outcome                                   skip / rotated / fail
+requests since boot                               sanity check
+```
+
+`FAIL` on Keychain → a previous bring-up didn't complete; re-run the
+appropriate `security add-generic-password` line from `secrets.yaml`.
+
+`FAIL` on `bridge /_health` → daemon wedged or tunnel down. See
+[Recovering a wedged daemon](#recovering-a-wedged-daemon) and
+[Tunnel debugging](#tunnel-debugging).
+
+`FAIL` on rotator → either the script crashed or the launchd timer
+isn't loaded. `tail ~/.openclaw/logs/sanctum-bridge-rotate.log` for the
+last run's stderr.
+
+## Secret rotation
+
+### CF Access service token
+
+Automatic via `com.sanctum.bridge-rotate`, daily 09:00 local. Gates on
+the current token's `expires_at`; fires when ≤ 7 days remain. Two-token
+cutover policy means a verify failure during rotation rolls back to
+old-only, with the bridge still serving on the old token. A successful
+rotation updates Keychain + 1Password in place and deletes the old
+token.
+
+To force-run early (e.g. you suspect the secret leaked):
+
+```sh
+ROTATE_WITHIN_DAYS=999 ~/.sanctum/bin/sanctum-bridge-rotate
+```
+
+To rotate manually via the dashboard, follow the runbook at the bottom
+of `sanctum-bridge-rotate` itself — the script is the canonical
+sequence.
+
+### HMAC secret (per module)
+
+Rotation is manual today: edit `secrets.yaml` via SOPS, restart the
+bridge, push the new secret to every consuming skill's runtime env or
+Keychain. There's no token-list-style cutover; coordinate with skills
+beforehand.
+
+### Azure SharePoint app secret
+
+Update via the Azure portal, then:
+
+```sh
+SOPS_AGE_KEY_FILE=/opt/sanctum/keys/age.key \
+  sops set /opt/sanctum/bridge/secrets.yaml \
+    '["sharepoint"]["client_secret"]' '"<new value>"'
+security add-generic-password -s sanctum-bridge-sp-client-secret \
+    -a client_secret -w '<new value>' -U
+op item edit 74gcslibchm5ru5nsf352tdu3a \
+    "credential[concealed]=<new value>"
+sudo launchctl kickstart -k system/name.nepveu.sanctum-bridge
+```
+
+### Age master key
+
+Don't. The encrypted `secrets.yaml` is bound to this key — losing it
+forces a from-scratch bootstrap. The 1Password Secure Note named
+`SanctumBridge — age private key (master)` is the recovery copy.
+
+## Recovering a wedged daemon
+
+```sh
+# 1. Confirm it's down
+sanctum bridge doctor                # red on bridge /_health
+pgrep -fl '\\-m sanctum_bridge'
+sudo launchctl list | grep sanctum-bridge   # PID column should be a number
+
+# 2. Tail the most recent boot
+tail -50 /var/log/sanctum/bridge.err.log
+
+# 3. Bounce
+sudo launchctl kickstart -k system/name.nepveu.sanctum-bridge
+sleep 5
+sanctum bridge doctor
+```
+
+If the daemon's log shows a SOPS decrypt failure: the age key got moved
+or its mode changed. `chmod 600 /opt/sanctum/keys/age.key` and bounce.
+
+If the daemon refuses to bootstrap (`launchctl bootstrap` returns EIO),
+fall back to `sudo launchctl load -w /Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist`
+— the legacy load path works around a launchd domain transition issue.
+
+## Tunnel debugging
+
+```sh
+# 1. Is cloudflared running?
+launchctl list | grep -i cloud
+ps aux | grep cloudflared | grep -v grep
+
+# 2. Does DNS still point at CF Anycast?
+dig +short bridge.nepveu.name @1.1.1.1   # 172.64.x.x or 104.x.x.x
+
+# 3. Does CF Access front the hostname?
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://bridge.nepveu.name/_health
+# expect 403 without service-token headers
+
+# 4. Hit local /_health directly
+curl -sS http://127.0.0.1:8443/_health
+```
+
+A 502 with valid headers = bridge daemon is down (see above). A 403
+without `cf_access_failed` = CF Access policy issue (probably token
+expired and the rotator hasn't fired). A `cf_access_failed jwt_invalid`
+on the *local* path = `cloudflare.access_aud` in `secrets.yaml` doesn't
+match the real CF Access app's AUD; re-fetch via
+`/accounts/{acc}/access/apps/{id}` and re-encrypt.
+
+## Restoring from backup
+
+The restic snapshot at `/Volumes/T9/sanctum-restic` (or the gdrive
+remote) carries `/opt/sanctum`, `~/Projects/triptyq-skills`, and the
+`launchd/` plist sources. Restore order:
+
+```sh
+# 1. Restic restore the bridge tree
+restic -r /Volumes/T9/sanctum-restic restore latest \
+  --target / --include /opt/sanctum
+
+# 2. Restore the age key from 1Password (NOT from restic; safer)
+op item get "SanctumBridge — age private key (master)" \
+  --reveal --format json \
+  | jq -r '.fields[] | select(.label=="private_key") | .value' \
+  > /opt/sanctum/keys/age.key
+chmod 600 /opt/sanctum/keys/age.key
+
+# 3. Restic the launchd-sources directory
+restic -r /Volumes/T9/sanctum-restic restore latest \
+  --target / --include /Users/bert/Projects/triptyq-skills
+
+# 4. Re-install plists + start
+# (same step 4-5 from the bring-up section)
+```
+
+Verify with `sanctum bridge doctor`.
+
+## When in doubt
+
+The architecture spec at [Sanctum Gateway](/architecture/sanctum-gateway/)
+documents *what* and *why*. This page documents *how*. The audit log at
+`/var/log/sanctum/audit.jsonl` is the source-of-truth for what
+happened.
