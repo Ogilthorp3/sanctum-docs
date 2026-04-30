@@ -6,7 +6,7 @@
 // that JSON, so refreshing the docs after a model swap is one command.
 //
 // Sources:
-//   ~/.openclaw/openclaw.json              agent → logical model name
+//   ~/.openclaw/openclaw.json              agent → {primary, fallbacks}
 //   ~/.sanctum/sanctum-proxy/config.yaml   logical → provider/api_model
 //
 // Run: pnpm refresh:council   (or: node scripts/refresh-council-roster.mjs)
@@ -27,13 +27,11 @@ const OUT = join(HERE, "..", "src", "data", "council-roster.json");
 const OPENCLAW = join(homedir(), ".openclaw", "openclaw.json");
 const PROXY = join(homedir(), ".sanctum", "sanctum-proxy", "config.yaml");
 
-// The five Council seats per the (Neuro)diversity is Paramount doctrine
-// (2026-04-28). Display order matches the doctrine page so a side-by-side
-// reader can spot drift instantly. Other openclaw.json agents (Jocasta,
-// Ahsoka, …) have their own pages and are intentionally not in this
-// table — the Council is the 5 seats listed below.
-const ORDER = ["yoda", "mundi", "quigon", "windu", "cilghal"];
-const DISPLAY_NAME = {};
+// The five Council seats per the (Neuro)diversity is Paramount doctrine.
+// IDs match openclaw.json's agents.list[*].id (`main` is Yoda's seat —
+// the gateway routes user-facing traffic through it). Order is doctrine
+// order so a side-by-side reader can spot drift instantly.
+const ORDER = ["main", "mundi", "quigon", "windu", "cilghal"];
 
 function loadJson(path) {
   if (!existsSync(path)) throw new Error(`missing: ${path}`);
@@ -45,17 +43,28 @@ function loadYaml(path) {
 }
 
 function stripNamespace(logical) {
-  // openclaw.json prefixes models like "sanctum/council-brain" or
-  // "openrouter/qwen35-27b" — the prefix is a routing namespace. The
-  // proxy config keys on the bare name.
+  // openclaw.json prefixes models like "council-tiered/council-max-thinking"
+  // or "council-local/Qwen3.6-…" — the prefix is a routing namespace. The
+  // proxy config keys on the bare model name.
   const idx = logical.indexOf("/");
   return idx >= 0 ? logical.slice(idx + 1) : logical;
 }
 
 function resolveModel(logical, proxyModels) {
   const bare = stripNamespace(logical);
+  // council-local/* names refer to whatever sanctum-mlx is currently
+  // serving on :1337. The bare name IS the model id (e.g.
+  // "Qwen3.6-35B-A3B-4bit-text"). No proxy lookup needed.
+  if (logical.startsWith("council-local/")) {
+    return {
+      provider: "local",
+      api_model: bare,
+      api_base: "https://127.0.0.1:1337",
+      source: logical,
+    };
+  }
   const m = proxyModels.find((x) => x.name === bare);
-  if (!m) return { provider: "unknown", api_model: bare, source: logical };
+  if (!m) return { provider: "unknown", api_model: bare, api_base: null, source: logical };
   return {
     provider: m.provider,
     api_model: m.api_model,
@@ -79,6 +88,22 @@ function describeProvider(provider, api_base) {
   return provider;
 }
 
+function modelField(agent) {
+  // openclaw.json's per-agent model can be either:
+  //   - the canonical {primary, fallbacks} shape (VM-aligned), or
+  //   - a flat string (older Mac-only deployments).
+  // Returns { primary, fallbacks } in both cases.
+  const m = agent?.model;
+  if (typeof m === "string") return { primary: m, fallbacks: [] };
+  if (m && typeof m === "object") {
+    return {
+      primary: m.primary ?? "",
+      fallbacks: Array.isArray(m.fallbacks) ? m.fallbacks : [],
+    };
+  }
+  return { primary: "", fallbacks: [] };
+}
+
 function main() {
   const oc = loadJson(OPENCLAW);
   const proxy = loadYaml(PROXY);
@@ -93,17 +118,27 @@ function main() {
   for (const id of ORDER) {
     const a = agentsById.get(id);
     if (!a) continue;
-    const resolved = resolveModel(a.model, proxyModels);
+    const { primary, fallbacks } = modelField(a);
+    const resolved = resolveModel(primary, proxyModels);
+    const fallbackResolved = fallbacks.map((f) => {
+      const r = resolveModel(f, proxyModels);
+      return {
+        logical_model: f,
+        provider: r.provider,
+        provider_label: describeProvider(r.provider, r.api_base),
+        api_model: r.api_model,
+      };
+    });
     rows.push({
       id,
-      label: a.identity?.name ?? DISPLAY_NAME[id] ?? id,
-      emoji: a.identity?.emoji ?? "",
+      label: a.identity?.name ?? id,
       role: (a.identity?.theme ?? "").slice(0, 200),
-      logical_model: a.model,
+      logical_model: primary,
       provider: resolved.provider,
       provider_label: describeProvider(resolved.provider, resolved.api_base),
       api_model: resolved.api_model,
       api_base: resolved.api_base,
+      fallbacks: fallbackResolved,
     });
   }
 
