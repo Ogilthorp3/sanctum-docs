@@ -1,0 +1,390 @@
+---
+title: Sanctum Gateway
+description: "HTTP+MCP bridge that lets Claude push artifacts into SharePoint and other destinations from outside the host. Layered defense: Cloudflare Access service token at the edge, HMAC-SHA256 + nonce + body cap + per-client rate limit + CF Access JWT verification at the origin, per-module scoped secrets in SOPS+age."
+---
+
+import { Aside } from '@astrojs/starlight/components'
+
+
+![Sanctum Gateway — five concentric defensive rings around a gatehouse, a signed scroll being scrutinized by a clockwork sentinel that has read this signature before.](./images/hero-sanctum-gateway.png)
+
+Claude has no credentials, and no network of its own. Yet it needs to
+drop a tearsheet into the right SharePoint folder at Triptyq — in under
+two seconds, without ever holding a secret. This gateway is how it does
+that: a pluggable HTTP + MCP gateway on the Mac Mini that lets Claude
+push artifacts — memos, tearsheets, DD docs, transcripts — into
+SharePoint, or any future destination, with one self-contained call.
+
+Three modules are live and HMAC-scoped — `sharepoint` (writes), `m365`
+(reads), and `tearsheets` (renders a portco `.docx`) — with a fourth,
+`slack`, code-complete but dormant. Each is detailed below.
+
+<Aside type="caution" title="Naming">
+  This is the *gateway* whose code lives at
+  [`Ogilthorp3/sanctum-gateway`](https://github.com/Ogilthorp3/sanctum-gateway)
+  and serves traffic at `bridge.nepveu.name`. The unrelated SQLite proxy
+  documented in [SanctumBridge](/architecture/sanctum-bridge/) shares no
+  code, no traffic, and no install path with this gateway.
+</Aside>
+
+## Goals
+
+Our bar, before writing a line:
+
+- Replace the Rube → Composio File Bridge recipe with a stable, owned path.
+- One curl from Claude's bash sandbox uploads a file to the right
+  SharePoint folder, with metadata, in under 2 s.
+- Same logic also reachable as MCP tools from claude.ai custom connectors.
+- Adding a new destination is a module drop, not a service rewrite.
+- Auth strong enough to survive a leaked HMAC secret OR a leaked CF token
+  OR a tunnel misconfig — but not so heavy it slows the call path.
+
+## Architecture
+
+Five middleware layers, one process. Each can short-circuit, and every
+rejection is captured by the audit middleware before it leaves. We walk
+them from the edge inward.
+
+```
+                 https://bridge.nepveu.name
+                            │
+              ┌─────────────▼─────────────┐
+              │    Cloudflare Access      │   service-token gate (90d)
+              └─────────────┬─────────────┘
+                            │
+              ┌─────────────▼─────────────┐
+              │  cloudflared tunnel       │   token-based, no local cert.pem
+              └─────────────┬─────────────┘
+                            ▼
+   ┌────────────────────────────────────────────────────┐
+   │         Sanctum Gateway (FastAPI, :8443)           │
+   ├────────────────────────────────────────────────────┤
+   │  Middleware stack (top → bottom):                  │
+   │    AuditMiddleware                                 │
+   │    RateLimitMiddleware (per CFid)                  │
+   │    CfAccessJwtMiddleware (JWKS)                    │
+   │    HMACAuthMiddleware (size + sig)                 │
+   ├────────────────────────────────────────────────────┤
+   │  Routes:                                           │
+   │    /sharepoint/upload + /folder  ─────────► Graph  │
+   │    /m365/search  ─────────────────────────► Graph  │
+   │    /tearsheets/render  ──────► python renderer     │
+   │    /slack/post  ─────► dormant (no hmac.slack)     │
+   │    /_health  /_manifest  /_diagnostic              │
+   │    /_metrics  /mcp/                                │
+   ├────────────────────────────────────────────────────┤
+   │  secrets.yaml (SOPS+age)  audit.jsonl (newsyslog)  │
+   └────────────────────────────────────────────────────┘
+```
+
+## At the edge
+
+Two layers stand between the public internet and the Mini — neither is
+our code.
+
+### Layer A — Cloudflare Access (edge)
+
+`bridge.nepveu.name` sits behind a CF Access app whose only policy is
+`non_identity → service_token`. Claude's sandbox carries
+`CF-Access-Client-Id` + `CF-Access-Client-Secret`; without them the
+request 403s at the edge, never touching the Mini. Token TTL is 90 days;
+rotation is automatic (see Operations).
+
+### Layer B — Cloudflared tunnel (token-managed)
+
+A token-based tunnel forwards `bridge.nepveu.name` → `localhost:8443` on
+the Mini. Its UUID, account id, and routing live in the CF Zero Trust
+dashboard, not `~/.cloudflared/config.yml` — no local `cert.pem`, no
+config to drift — and it shares the tunnel that already terminates
+`health.example.net`.
+
+## Inside the process
+
+Past the tunnel, the two outer middlewares watch and throttle — they
+don't yet ask who you are.
+
+### Layer C — Audit middleware (outermost)
+
+Every request leaves a JSONL line at `/var/log/sanctum/audit.jsonl`,
+auth rejections included because it sits outside HMAC. Fields:
+`module`, `action`, `method`, `path`, `status`, `latency_ms`,
+`body_sha256`, `cf_access_id`. No body, no headers logged.
+`WatchedFileHandler` reopens the file when newsyslog rotates the inode
+(every 50 MB or daily, 7 generations gzip).
+
+### Layer D — Rate limit (token bucket per CF Access client id)
+
+Default 10 rps with a 50-token burst, scoped per `Cf-Access-Client-Id`.
+Headroom for a skill running fan-out, but it cuts off a runaway loop
+within seconds. Tunable via `SANCTUM_RATE_LIMIT_RPS` /
+`SANCTUM_RATE_LIMIT_BURST`.
+
+## Proving identity and integrity
+
+The inner two layers are where a request proves who it is and that nobody
+altered it in flight — the part [Windu](/architecture/agents/) loses sleep
+over.
+
+### Layer E — CF Access JWT verification
+
+CF Access signs a JWT for every authenticated request — even service
+tokens — and forwards it in `Cf-Access-Jwt-Assertion`. The middleware
+verifies it against the team's JWKS at
+`https://<team_domain>/cdn-cgi/access/certs`; `<team_domain>` comes from
+`cloudflare.team_domain` in `secrets.yaml`, never hardcoded, so the URL
+can't drift from the Access app it checks. PyJWT caches keys by `kid`,
+refetches on rotation, and matches `aud` against `cloudflare.access_aud`.
+This closes the gap where a tunnel misconfig — or a second cloudflared on
+the same token — could present trusted-looking `Cf-Access-Client-Id`
+headers with no real CF Access flow behind them. Unset
+`cloudflare.team_domain` / `cloudflare.access_aud` make the middleware
+construct as `None` and short-circuit — handy for tests and runs with no
+tunnel.
+
+### Layer F — HMAC + size cap (innermost)
+
+Every request to a module action carries:
+
+```
+Authorization: SanctumHMAC v1
+X-Sanctum-Module: sharepoint
+X-Sanctum-Timestamp: 2026-04-29T16:42:01Z
+X-Sanctum-Nonce: 01HXYZ…
+X-Sanctum-Signature: <hex>
+```
+
+with `signature = HMAC-SHA256(module_secret, f"{timestamp}\n{nonce}\n{method}\n{path}\n{sha256(body)}")`.
+
+Server-side, in source order (`auth.py`):
+
+0. `Content-Length > 250 MiB` → 413 before the body is read — the only
+   check outside `_verify`.
+1. `Authorization` is exactly `SanctumHMAC v1` and all five headers present.
+2. `X-Sanctum-Module` matches the module in the path — you can't sign for
+   one module and POST to another.
+3. Timestamp within ±60 s of UTC.
+4. Nonce not seen in the last 5 min (3-bucket bloom filter, 64 KB each).
+5. The module's secret resolves; unknown module rejects here.
+6. Signature matches under that secret.
+
+The body's sha256 is computed once and stashed on the ASGI scope, so the
+audit layer logs it without re-reading.
+
+### Per-module scoped secrets
+
+`module_secret` differs per bridge (`hmac.sharepoint`, `hmac.slack`, …),
+so a compromised SharePoint secret can't invoke the Slack module. Stored
+in `/opt/sanctum/bridge/secrets.yaml`, SOPS-encrypted with the age key at
+`/opt/sanctum/keys/age.key` (mode 600, neo-owned); the public key is also
+in 1Password as a recovery anchor — the same
+[secrets trifecta](/architecture/secrets-trifecta/) the rest of the haus
+runs on.
+
+## Threat model
+
+Windu's question for any gate is blunt: which single failure does each
+layer survive?
+
+### What this protects against
+
+| Attack                          | Layer that catches it       |
+|---------------------------------|-----------------------------|
+| Public-internet probe           | A (CF Access)               |
+| Replay of captured request      | F (timestamp + nonce)       |
+| Body tampering                  | F (sig covers body hash)    |
+| Resource exhaustion via huge POST | F (250 MiB cap before read) |
+| Leaked CF token alone           | F (still need HMAC secret)  |
+| Leaked HMAC secret alone        | A (still need CF token)     |
+| Leaked SharePoint secret        | per-module scope            |
+| Tunnel misconfig / header spoof | E (JWT verified via JWKS)   |
+| Runaway skill loop              | D (rate limit)              |
+
+### What this does NOT protect against
+
+- Mac Mini host compromise (every secret is at rest there; host hardening
+  is a separate, out-of-scope problem).
+- Claude itself being prompt-injected into a malicious upload — mitigated
+  at the skill layer with the explicit-list allowlist
+  (`work-skills/sharepoint-structure.yaml`), the hard-coded
+  `@triptyq.vc` suffix on `m365` reads, and — once Slack is live —
+  per-channel webhook scoping.
+
+## Modules
+
+Four modules ship today. You add a fifth by dropping a `bridges/<name>/`
+package the discovery loop imports at boot — no service rewrite.
+
+### `sharepoint`
+
+App-only auth via MSAL client-credentials against the Triptyq Azure AD
+app `SharePoint MCP Server`. Scopes: `Sites.ReadWrite.All`,
+`Files.ReadWrite.All`. Token cached in-process, refreshed at 80 % TTL.
+
+The site ID and a specific drive ID both live in `secrets.yaml`. Triptyq
+has multi-library sites (`Documents` and `Documents Triptyq` on one
+`/sites/<work-site>` URL), so the gateway honors the configured drive
+explicitly rather than calling `/sites/{id}/drive` blindly.
+
+Allowed write roots come from
+`work-skills/sharepoint-structure.yaml` (private work repo),
+fetched at startup and refreshed hourly. The parser preserves
+multi-segment roots verbatim (`03_Pipeline/02_Deal Flow`), and
+boundary matching uses `path == root or path.startswith(root + "/")` so
+`01_Fund AdminEvilLookalike` can't pass off as `01_Fund Admin`.
+
+Upload behavior:
+
+- `< 4 MiB`  — single `PUT /drives/{drive}/items/{parent}:/<name>:/content`
+- `>= 4 MiB` — Graph upload session, body streamed in 10 MiB chunks
+- Native SharePoint versioning under `if_exists: "version"` (default);
+  the response includes the new version number.
+- `metadata_applied: bool`: `false` means the file landed but the
+  listItem field PATCH was rejected (usually a custom column undefined in
+  the SP library), so skills branch on it without parsing prose.
+
+### `m365`
+
+`/m365/search` runs a
+Graph mail `$search` over a partner mailbox so a partner Mac can run
+`tq scan-mail` without holding the SOPS age key locally, reusing the
+SharePoint app registration's credentials with `Mail.Read` granted. Two
+guards reject before Graph is touched: a hard-coded `@triptyq.vc` suffix
+check (deliberately *not* env-configurable, so a typo'd allowlist edit
+can't pivot to an outside address) and a `MailboxAllowlist` of current
+partners. The `needle` is hashed, never logged — partners search the
+names of confidential deals, so the audit line carries only its sha256.
+
+### `tearsheets`
+
+Wraps `triptyq.generator.render_tearsheet` so the portal's Render button
+produces a `.docx` byte-identical to the CLI's. `POST /tearsheets/render`
+takes a `slug` + `quarter` (regex-validated), reads the matching
+`<slug>_<quarter>.yaml` from the CLI checkout, and returns
+`<slug>_tearsheet_<quarter>.docx` base64-encoded. No secrets — the data
+is on disk — so `build()` returns `None` only when the checkout or the
+`triptyq.generator` import is missing, which keeps canary hosts clean.
+Being CPU-bound, it runs in a worker thread so the event loop stays
+answerable.
+
+### `slack` (dormant)
+
+Code-complete but unconfigured: with no `hmac.slack` in `secrets.yaml`,
+`build()` returns `None` and the discovery loop skips it. When it lights
+up, the model is per-channel incoming webhooks — Council ruled these over
+a forever-valid bot token: the webhook URL *is* the destination, so a leak
+can only spam its own channel. The belt-and-suspenders allowlist at
+`work-skills/slack-allowed-channels.yaml` isn't provisioned yet —
+create it before going live.
+
+## Endpoints
+
+The CF Access JWT layer fronts *everything* except `/_health` and
+`/_metrics` (the only two paths in `_NO_JWT_EXACT`), so behind the tunnel
+the "auth" below is really CF JWT *plus* the inner gate named.
+
+| Path             | Auth          | Notes                                            |
+|------------------|---------------|--------------------------------------------------|
+| `/_health`       | none          | Public liveness — `ok`, `version`, `commit`, `started_at`, `modules`, `allowlist_count`. CF Access still gates the public URL. |
+| `/_diagnostic`   | CF JWT + HMAC | Everything in `/_health` plus rotator status, request count, full allowlist roots, JWT enabled flag. |
+| `/_manifest`     | CF JWT + HMAC | Module + action listing with JSONSchema for every request/response model. Powers `work-skills/scripts/sync-bridge-manifest.py`. |
+| `/_metrics`      | none; localhost-bound | Prometheus exposition format. No route-level IP guard — it's private only because the whole server binds `127.0.0.1`. |
+| `/mcp/`          | CF JWT + HMAC | FastMCP `streamable_http_app`. v0.1 has no MCP-side session auth, so this rides the same HMAC as everything else; the previous "skip /mcp" path was a silent bypass. |
+| `/<module>/<action>` | CF JWT + HMAC | Module-defined: `/sharepoint/upload`, `/sharepoint/folder`, `/m365/search`, `/tearsheets/render` today. |
+
+## Operations
+
+Day-to-day lives in the
+[gateway runbook](/operations/sanctum-gateway-runbook/); the shape is here.
+
+### Process supervision
+
+A single LaunchDaemon at
+`/Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist` runs
+`/opt/sanctum/bridge/.venv/bin/python -m sanctum_bridge` as user `neo`
+(via `UserName/GroupName`). `KeepAlive=true`, `RunAtLoad=true`,
+`ThrottleInterval=30` so a bad `secrets.yaml` or code deploy can't
+restart-loop it.
+
+Three user agents back it:
+
+- `com.sanctum.bridge-rotate` — daily 09:00 local. Self-gates: reads the
+  current CF Access token's `expires_at`, exits unless it expires within
+  `ROTATE_WITHIN_DAYS=7`. In-window it mints a new 90-day token, sets the
+  Access policy to accept BOTH old and new during cutover, verifies
+  external `_health` with the new creds, then narrows to new-only and
+  deletes the old. A verify failure rolls back — new token deleted, policy
+  reset to old-only, alarm logged — and the next daily run retries.
+- `com.sanctum.bridge-canary` — every 6 h. Writes a tiny payload via
+  the public bridge into `01_Fund Admin/_canary/canary-<host>.txt`
+  with `if_exists=version`; SP's native versioning then gives a
+  monotonically-climbing count per success, and a stuck count means the
+  path broke.
+- `com.sanctum.bridge-manifest-sync` — daily 06:30 local; runs
+  `work-skills/scripts/sync-bridge-manifest.py`. Idempotent unless the
+  manifest drifted, when it regenerates the helper's `<!-- AUTO -->` block.
+
+Status one-liners land at `~/.sanctum/state/bridge-rotate.status` and
+`~/.sanctum/state/bridge-canary.status` for the morning briefing.
+
+### Logs
+
+- `/var/log/sanctum/audit.jsonl` — structured per-request log.
+  `WatchedFileHandler` + newsyslog rotation: 50 MB or daily, 7
+  generations, gzip.
+- `/var/log/sanctum/bridge.out.log` + `bridge.err.log` — uvicorn /
+  structlog stdout / stderr from launchd. Not newsyslog-rotated (launchd
+  won't reopen the inode); they grow a few hundred KB per year at typical
+  traffic — restart the daemon if they ever balloon.
+
+### Backup
+
+The restic SOURCES (`~/Backups/sanctum-backup.sh`) include
+`/opt/sanctum` (the encrypted `secrets.yaml`, the bridge code, the keys
+directory) and `~/Projects/work-skills` (allowlist SoT + the manifest
+sync script). The age master key is *also* in 1Password as a Secure
+Note — losing the SSD plus the 1P entry plus restic is the only recovery
+floor.
+
+### `sanctum bridge doctor`
+
+An end-to-end probe that touches Keychain, `/_health`, `/_diagnostic`,
+the rotator status file, allowlist count, and CF Access JWT enablement,
+then prints a Rich table of green/red rows. Run it as the daily
+heartbeat: green means Keychain-to-SharePoint is wired correctly; the
+first red row is what to fix.
+
+## Repos
+
+- [`Ogilthorp3/sanctum-gateway`](https://github.com/Ogilthorp3/sanctum-gateway) — gateway code, secrets.yaml (encrypted), launchd plists, newsyslog conf.
+- `work-skills` (private work repo) — skill helpers, sharepoint-structure.yaml, sync-bridge-manifest.py.
+- [`Ogilthorp3/sanctum-cli`](https://github.com/Ogilthorp3/sanctum-cli) — `sanctum bridge {health,whoami,manifest,folder,upload,doctor}`.
+- [`Ogilthorp3/sanctum-backup-config`](https://github.com/Ogilthorp3/sanctum-backup-config) — restic + canary scripts on manoir.
+
+## Resolved decisions
+
+1. **Scopes — read AND write.** `Sites.ReadWrite.All` +
+   `Files.ReadWrite.All`, reusing the existing `SharePoint MCP Server`
+   app registration rather than a separate one — operator's call, 2026-04-28.
+2. **Allowlist SoT — `work-skills/sharepoint-structure.yaml`.** A stale
+   cache falls back to last-known-good; a new root is a skills-repo PR.
+3. **Versioning — hybrid.** `if_exists: "version"` (default) uses native
+   versioning; `if_exists: "rename"` for signed final docs where siblings
+   make sense.
+4. **MCP transport — `streamable-http`.** Single POST per call, now under
+   HMAC; the original "skip /mcp" path was a silent bypass.
+5. **Slack auth — per-channel incoming webhooks + channel-ID allowlist.**
+   Council 2026-04-29: rotation cadence and the prompt-injection model
+   both point here.
+6. **Bridge canary — `01_Fund Admin/_canary` with
+   `if_exists=version`.** Version count = success count.
+7. **CF Access rotation — local launchd, not remote agent.** The remote
+   path has no Keychain or 1P; `com.sanctum.bridge-rotate` on manoir runs
+   the full two-token cutover.
+
+## The daily green
+
+None of this shows up on a normal day. Claude calls the gateway, the file
+lands in the right folder, and `sanctum bridge doctor` prints another
+green row. Windu approved the layers; nobody upstairs thinks about them
+again. A good gate earns its keep by being forgotten —
+until the morning it turns something away, and you are glad you built it.
