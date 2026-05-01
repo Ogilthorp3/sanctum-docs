@@ -1,0 +1,51 @@
+---
+title: "2026-05-01: Asymmetric Doors"
+description: A wedged macOS daemon, the diagnostic asymmetry that named it, and the watchdog we built so the next wedge heals itself.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil-sketched ancient stone door embedded in a dark cliff, outer face open, inner face sealed shut with iron hasps, single amber lantern glowing in the chamber behind, one teal mist thread bleeding through the hairline crack between the two doors, dark void surrounding](./images/hero-2026-05-01-asymmetric-doors.jpg)
+
+The local Terminal said `Operation not permitted` on `ls ~/Documents`. The same `ls` from the SSH session, on the same path, returned fifty entries cleanly. Full Disk Access was already granted to Terminal. The folder was owned by `bert:staff`, mode 700. No policy file in the way, no quarantine flag, no extended attribute we could remove. Two doors into the same room — one open, one sealed.
+
+The asymmetry was the diagnosis. SSH bypasses the GUI sandbox layer; local Terminal goes through it. When the local path returns a different verdict than the SSH path, the issue is not the filesystem and not the user — it is a daemon between the app and the kernel that owes someone an answer and is not delivering it.
+
+The daemon was `fileproviderd`. State R, accumulated CPU time **1203 minutes** over five days, since the last boot on April 26. macOS routes file-provider permission queries through that process — iCloud Drive, OneDrive, Google Drive, Photos all share it — and when its main thread is wedged in a tight loop, it stops servicing the TCC handshake the kernel needs to authorize the local app's `open()`. The kernel times out and returns EPERM. The user sees "Operation not permitted." The doors look asymmetric because one of them is waiting for a reply that never comes.
+
+## The unstick
+
+SIGKILL the daemon. Launchd respawns it within a second. Wait thirty seconds for it to re-enumerate the registered file-provider domains. The local `ls` works again. Total downtime: about five seconds, during which Finder and any other GUI consumer of a file provider sees a brief stutter.
+
+The shape of the kill matters. `launchctl kickstart -k gui/$(id -u)/com.apple.FileProvider` returns **150: Operation not permitted while System Integrity Protection is engaged**. SIP protects fileproviderd from the orderly restart path. Direct `kill -9` works, because the user owns the process and SIGKILL is not a launchctl operation. After the kill, launchd's `KeepAlive` brings it back automatically.
+
+We tried the dignified paths first. Removing the file-provider xattrs from `~/Documents` (`com.apple.file-provider-domain-id`, `com.apple.fileprovider.detached#B`) — both EPERM, both SIP-protected. Renaming the directory (`mv Documents Documents.tombstone`) — Permission denied, blocked by the same daemon. Re-toggling iCloud Drive's "Sync this Mac" — refused with "iCloud Drive needs to finish updating before being turned off," because fileproviderd was the thing that needed to finish, and it was wedged.
+
+<Aside type="note">
+The xattrs are not the bug. They are the normal active state when iCloud Desktop+Documents is enrolled. We spent twenty minutes trying to strip them before realizing the process behind them was the actual culprit. The asymmetry test — SSH versus local — is faster than xattr archeology.
+</Aside>
+
+## The watchdog
+
+A wedge that lasted five days deserves a sentinel. The new `com.sanctum.fileproviderd-watchdog` ticks every sixty seconds and looks for two signals:
+
+| Signal | Trigger |
+|---|---|
+| Primary | `STAT=R` and `%CPU > 20` for 5 consecutive ticks |
+| Symptom | `fileproviderctl dump` against the iCloud domain times out for 2 consecutive ticks |
+| Cooldown | 30 minutes between kills (no thrash) |
+| Boot grace | First 5 minutes of process lifetime exempt (legit startup busyness) |
+
+When either signal fires, the watchdog captures a `sample` stack to `~/.openclaw/logs/fileproviderd-stacks/` — five seconds of every thread, written before the SIGKILL — then kills the daemon and waits for the new PID. If launchd respawns successfully, it logs `wedge_healed` and posts to Force Flow with severity `warn`. If respawn fails, it escalates to `critical` and stops trying.
+
+Qui-Gon's lens shaped the design more than mine did. The original draft had only the primary signal. He pushed for the symptom probe (a functional test, not a process-state proxy), the boot exemption, the cooldown, and the stack capture before the kill. All four came in. The result is closer to a fascia layer than a heart-rate monitor: it does not just observe, it tests, and it remembers.
+
+<Aside type="caution">
+macOS ships neither `timeout` nor `gtimeout`. Homebrew's `coreutils` is not installed on this Mini. The watchdog uses a pure-bash `shell_timeout` helper — background the command, schedule a `kill -KILL`, wait, return 124 if the killer fired. If you copy this script to another Mac and find every probe registering as a timeout, check that `timeout` exists before assuming the daemon is wedged. We learned this when the first force-fire test silently no-op'd because `timeout 0.001 cmd` returned `command not found` instead of 124.
+</Aside>
+
+## What we still don't know
+
+We do not know why fileproviderd wedged. The sample stack from the force-fire smoke test shows the main thread parked in `start` with no clear culprit — because the process was healthy at the moment we forced the trigger. The next real wedge will produce a stack we can read. After three or four of them — the watchdog logs the kill reason, the consec counters, the CPU time — there will be a pattern, and either the upstream cause or its trigger will surface. We will know whether it is OneDrive, Google Drive, iCloud, or an interaction between two of them, because the symptom probe targets a specific domain and the others can be tested in isolation.
+
+Until then, the user does not see the wedge. The daemon heals itself within five minutes, the local Terminal stays usable, and Force Flow logs the event for the morning briefing. The asymmetric door is closed by a process that knows when one side has stopped answering.
