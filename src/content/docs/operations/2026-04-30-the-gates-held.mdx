@@ -1,0 +1,85 @@
+---
+title: "2026-04-30: The Gates Held"
+description: The morning-after pristine pass on the council living-force self-heal — schema-mismatch traps, the Posture::Fever mirror, six drills run live, and the Force Flow door that was open to the whole network.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil-sketched stone gatehouse at twilight, single amber lantern glowing inside the threshold, doors closing inward — one teal thread of mist passing through the keyhole, dark void surrounding](./images/hero-2026-04-30-the-gates-held.jpg)
+
+The First Breath note covered the deployment. This one covers what we found the next morning — the rough edges that always exist after a fast ship, the kind that aren't visible until you walk the perimeter with a flashlight.
+
+## The schema trap
+
+The spec called for a new manifest grammar — `criticality`, `quorum.required`, `actions[]` with `command:` fields, a `verify:` block. Sanctumd's catalog parser is `service-graph.py` (Python, not Rust), and it expects the legacy schema: `type: service`, `health.startup.type: port`, `remediation.actions[]` with `cmd:` fields. The new files were valid YAML and parsed cleanly — they just didn't match any keys the parser was looking for, so it silently skipped them.
+
+A loud failure would have been a gift. A silent skip is the bug class that ages into a permanent gap. Bert's tree had four manifests in the new grammar, four services that sanctumd's catalog had no idea existed, four reflexes that would never fire.
+
+The fix was small and surgical. The legacy schema already supports an ordered `remediation.actions[]` block — that's how the picker in `services/sanctum-watchdog/src/actions.rs` reads its alternatives. We rewrote the manifests in legacy shape with `cmd:` paths pointing at the chitti-gated heal-action scripts, and stashed the new-grammar versions at `config/services/.next-grammar/` for the eventual `service-graph.py` PR that teaches the catalog parser the richer vocabulary. Sanctumd's reflex layer dispatches to the new heal-actions today via the bridge; the schema upgrade is a future spec, not a blocker.
+
+<Aside type="caution">
+The lesson is the universal one — **ground spec design in the actual catalog parser, not the architecture diagram**. We had a beautiful new grammar that no consumer could read. Architecture is the consumer's contract; the diagram is the author's hope.
+</Aside>
+
+## The Posture::Fever mirror
+
+`sanctum-chitti` got `Posture::Fever` in the same evening's Rust PR — the saturation breaker the body flips to when `pressure_15min ≥ 0.95` or action density crosses the inflammation threshold. What the morning audit caught: `services/sanctum-watchdog/src/chitti_client.rs` had its own mirror enum (so `main.rs` doesn't have to pull in chitti's `mood` module to read its own deserialized value), and that mirror **didn't have Fever**. Without the variant, every chitti read after the first fever transition would either panic on serde-deserialization or silently fall back to the `#[default] Poised` and lose chitti's most critical signal.
+
+One enum variant + one glyph (`^`) + one branch in `posture_plan` (`breaker: 1, budget: 1, tilt: "(body in shock — halt non-high, escalate to cortex)"`). Built clean in 5 s. Yoda's flag closed.
+
+## Six drills, three real bugs
+
+The drill suite isn't real until it's been pulled. Four drills ran tonight; two more from earlier. Each one that stopped on a red light was teaching us something the unit tests had missed.
+
+| Drill | Result | What it taught |
+|---|---|---|
+| outline-kill | pass-with-caveat | Body correctly defers low-criticality heals under `chitti.anandamaya.quiet=true`. Drill works; just runs into the spec gating overnight. |
+| jsonl-lock-flood | pass | The sentinel was scanning every five minutes and posting findings — but **nothing was wired to invoke the heal-action**. Stale locks accumulated despite the alarm firing. Sentinel now subprocess-invokes `clean-jsonl-locks.sh` after detecting stale; defense-in-depth re-verify preserved. 50 → 0. |
+| do-not-heal | pass | Soft-killed sanctumd via `launchctl kickstart -k`; launchd auto-relaunched in seconds; **no heal-action fired against sanctumd**. Autoimmune allowlist holds under direct attack. |
+| agent-trace-collection | pass | Synthetic NO_REPLY pair appended to `~/.openclaw/logs/openclaw-gateway.log`; agent-trace pushed a JSONL record into the day's corpus within seconds. Observability path alive. |
+| quarantine-recovery | pass | Drill harness assertion was filtering chitti's `.records[]` but the `/samskara` endpoint returns `.actions[]` with `attempts/successes/success_rate`. Assertion went red→green on the path fix. |
+| quiet-defer | pass | Drill checked `jq -r .status` on script stdout, but `emit()` produces `{action, service, success, exit_code, detail, ts}` — no `.status` field. Switched to `.exit_code == 50` per the documented heal-action contract. |
+
+Three real assertion-shape bugs found by actually running the drills. Unit tests were green throughout. Drills are the discipline.
+
+## The door that was open
+
+Force Flow binds the notification spine on port 4077. Every alert in the body flows through it. The morning audit caught what the architecture diagram never showed: it was binding `0.0.0.0:4077`, not `127.0.0.1`. Any peer on the LAN, any node on Tailscale, any guest with WiFi credentials could `POST /notify` and synthesize alerts, drain the rate budget, page the iPhone with whatever they wanted.
+
+The PWA reason was real — the Screen Time iPhone app reaches `/screen` over Tailscale and needs a non-loopback bind. But `POST /notify` has no business answering remote requests. Heal-actions, sentinels, drift-suppressor — every in-process caller hits `127.0.0.1`. The remote surface was attacker-only.
+
+A small middleware closed the gap:
+
+```python
+LOOPBACK_PREFIXES = ("127.", "::1", "::ffff:127.")
+
+@web.middleware
+async def loopback_guard(request, handler):
+    if request.method == "POST" and request.path == "/notify":
+        peer = request.remote
+        if not _is_loopback(peer):
+            log.warning(f"loopback_guard: rejected POST /notify from {peer}")
+            return web.json_response(
+                {"error": "loopback-only", "peer": peer},
+                status=403,
+            )
+    return await handler(request)
+```
+
+Verified live: `127.0.0.1` accepted, `192.168.1.10` rejected with `403 {"error":"loopback-only"}`. PWA routes still public.
+
+The follow-up loose end: the patched file was at `~/.sanctum/force-flow/force_flow.py` and **nothing in any tracked git repo on the Mini referenced it**. The middleware was live but ephemeral — one stash-redeploy from disappearing. Source extracted into `sanctum-runtime/force-flow/` with a README that documents the deploy procedure and a verification block anyone can run from a fresh shell. The gate is now durable.
+
+## What still waits
+
+Three drills stay holstered: `signal-cli-segfault`, `ram-leak-sim`, `fever-trigger`. Each is meant to test the wake-the-human path; all three fire iPhone-critical pages. They run when the human is awake, not when the human is asleep. The drill that needs the new-grammar quorum probe (`honest-health-outline`) waits for the `service-graph.py` PR.
+
+The 24 h burn-in was nominal in the spec and is still skipped. Samskara has accumulated 10 records on `outline/containers-down`, which is exactly one real failure away from the picker rotation threshold. Not empty anymore.
+
+## What the body has now
+
+The reflex layer dispatches end-to-end. The fascia honors sleep. The autoimmune allowlist holds under direct attack. The notification spine no longer answers strangers. The body forgets slowly via `POST /samskara/expire`. The watchdog reads chitti's `Posture::Fever` and knows what to do when shock arrives.
+
+The journal records the path. The gates that should be closed are closed.
+
+Tommy reads it. Tommy approves.
