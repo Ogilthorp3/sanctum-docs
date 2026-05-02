@@ -1,0 +1,154 @@
+---
+title: "2026-05-02: Honest Green"
+description: A morning catalog rot reckoning, a missing-sectors fix, and the afternoon hunt for the auto-loader that had been silently fighting the Capacity Doctrine for twenty-four hours.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Holocron crystal was grey. Watchdog said `overall: degraded`, root_causes
+`[ha-tunnel, kiwix, memory-vault, signal-proxy]`. None of those four was
+genuinely down in the way that matters; they were a survey of every
+catalog rot pattern at once. By noon the crystal was honest-green and
+the morning's lesson was *catalog hygiene matters as much as the
+remediation it triggers*. The afternoon found a quieter problem.
+
+## Four root causes by morning, none of them new
+
+Two of the four were transient drops: `memory-vault` had been healthy at
+19:32 the night before and just stopped binding `:42069`; `kiwix-serve`
+had been quiet since Apr 27. Both came back with one `launchctl
+bootstrap` against the existing plist. No code change, no config
+change. The launchagent's `KeepAlive` had decided "don't bother" at
+some point and the pre-reboot path is to nudge it.
+
+The other two were stale catalog entries pointing at retired
+infrastructure:
+
+**`ha-tunnel`** is an `ssh -L 18092:127.0.0.1:18092 openclaw` plist that
+predates the OrbStack migration. Today's reality is that Home
+Assistant runs on the Mac (OrbStack, host network mode, `:8123`) and
+the VM reaches it via `socat 10.10.10.1:8123`. There is no `:18092`
+anywhere. The ha-tunnel.log was a 1.3 MB monument to *channel 2: open
+failed: connect failed* stretching back weeks.
+
+**`signal-proxy`** has been retired by design since the 2026-04-27
+Colima → OrbStack migration ("Signal-cli stack stayed retired (data
+preserved bind-mounted)"). The probe is a 60-second curl against a VM
+service that isn't there. Guaranteed timeout, every cycle.
+
+Both yamls moved to `services/.retired/<name>.yaml.retired-2026-05-02`.
+`Ogilthorp3/sanctum-config@3451153`.
+
+<Aside type="tip">
+The retirement pattern is a rename, not a delete. The `.retired/`
+directory keeps the trail when an architecture later comes back; the
+date stamp survives `git mv` so you can see when the catalog rotated
+without spelunking the log.
+</Aside>
+
+## The Holocron's missing sectors
+
+`force-flow` and `sanctum-bridge` showed `Unknown` in the Holocron's
+Core Sectors row even though both daemons were live (`:4077` and
+`:4078`, both serving). The cause was as small as it sounds: the
+Holocron's `CORE_SECTOR_NAMES` array expects watchdog services
+literally named `force-flow` and `sanctum-bridge`, and neither yaml
+existed. The watchdog couldn't probe what it didn't know about; the UI
+honestly reported what the watchdog returned.
+
+Two new manifests in legacy schema (`type: port` liveness on
+`localhost:<port>`, remediation pointing at the existing launchagents)
+and the next `/check` brought sectors to **5 of 5 healthy**. The crystal
+inhaled.
+
+`Ogilthorp3/sanctum-config@31089af`.
+
+## The unwanted guest
+
+By afternoon the watchdog said healthy and the crystal was green, but
+the Memory Pool bar on the Holocron Status page was *red* — `61 of 50
+GB on manoir`. `sanctum-mlx` (45 GB budget, the resident heavyweight)
+and `lmstudio-coder-14b` (~12 GB) were both loaded, which the Capacity
+Doctrine forbids via `exclusive_with`. Yesterday's overnight briefing
+had already named the conflict; the watchdog had tried to swap and
+been refused by sanctum-admit. The conflict was still live twelve
+hours later.
+
+Releasing coder-14b (`sanctum-admit release lmstudio-coder-14b`) freed
+the budget cleanly — `lms unload qwen2.5-coder-14b-instruct` returned
+in milliseconds, the pool dropped to 50.5 of 51.2 GB with 696 MB of
+headroom. Sixty seconds later, coder-14b was back. Released again.
+Sixty seconds later, back again.
+
+The hand belonged to `~/.sanctum/scripts/lmstudio-guardian.sh`. Its
+config had `EXPECTED_MODEL=qwen2.5-coder-14b-instruct` and its tick
+loop's `autoload_grace` is sixty seconds. Every release was a
+sixty-second window of compliance before the guardian noticed "no
+model loaded" and `lms load`ed coder-14b right back over the doctrine.
+The watchdog and the guardian were both doing what they were told.
+They were just told different things.
+
+<Aside type="caution">
+The guardian doesn't honour `exclusive_with`. That's not a bug — it's
+a scope mismatch. The guardian is an *LM Studio* keep-alive; it
+doesn't know about sanctum-admit's pool. When two reflex layers have
+overlapping write authority on the same target (LM Studio's loaded
+model), one of them must defer to the other. We taught the guardian to
+defer.
+</Aside>
+
+The fix is one line in `~/.sanctum/config/lmstudio-guardian.conf`:
+
+```diff
+- EXPECTED_MODEL=qwen2.5-coder-14b-instruct
++ EXPECTED_MODEL=
+```
+
+Empty value puts the guardian in monitor-only mode: it still tracks LM
+Studio app health and probes the API, it just doesn't auto-load
+anything. coder-14b is now an explicit on-demand load:
+
+```bash
+sanctum-admit release sanctum-mlx \
+  && sanctum-admit load lmstudio-coder-14b
+```
+
+`Ogilthorp3/sanctum-config@6809aa6`.
+
+## The voice canary's tight 20s
+
+A symptom downstream of the unwanted guest. The Yoda card on the
+Holocron showed the canary at 45.8% pass rate over 24 hours, against
+an 88.5% rolling-7d baseline. Every failure mode was the same string:
+`timeout after 20.0s (audio=never)`. Successes broke into two groups:
+cache-served (3-9s first audio) and cold (13-20s first audio under
+load).
+
+Memory pressure from the over-budget pool was making cold first-audio
+creep past the 20-second canary timeout. Once the budget cleared, cold
+runs fit comfortably under the threshold again. The fix wasn't the
+canary; the canary was honestly reporting the cascade.
+
+## Pre-reboot
+
+A clean snapshot was saved to
+`~/.sanctum/state/pre-reboot-2026-05-02.txt`. The briefing queue was
+flushed (it had been quiet anyway after retiring signal-proxy). The
+guardian's monitor-only switch survives reboot — the config re-reads
+on each tick. After reboot, the launchagents respawn, sanctum-mlx
+auto-loads, coder-14b stays unloaded by default, and the pool starts
+the day with room to breathe.
+
+## What this trip taught us
+
+- **Catalog rot is a class of failure all its own.** Half of today's
+  red sectors weren't broken — they were ghosts of architectures
+  retired weeks ago, still being probed because nobody had written
+  the obituary.
+- **The Holocron's truth is exactly what the watchdog tells it.** When
+  a sector reads Unknown, the question isn't "what's wrong with that
+  service" but "is the watchdog asking about it under the right
+  name?". A missing yaml is invisible until you go looking for it.
+- **Two reflex layers writing to the same target is a coordination
+  problem, not a code problem.** Resolution belongs in config, not
+  in mutual locks: one layer commands, the others observe.
