@@ -85,7 +85,7 @@ Generate each with Gemini image generation. Save as PNG to
 > Black and white pencil sketch illustration, wide format. A large architect's
 > drafting table with blueprints spread out. An Abyssinian cat sits at the
 > table with a pencil behind its ear, one paw on the blueprints. The
-> blueprints show a house cross-section with labeled rooms representing
+> blueprints show a haus cross-section with labeled rooms representing
 > features: "Frigate NVR", "Screen Time", "Kitchen Loop." Some rooms are
 > fully drawn (shipped), some are sketched in outline (planned), and some
 > are just dotted lines (parked ideas). A "NOW / NEXT / LATER" sticky note
