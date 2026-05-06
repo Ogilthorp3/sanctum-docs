@@ -124,6 +124,7 @@ export default defineConfig({
 						{ label: 'Model Tournament', slug: 'architecture/model-tournament' },
 						{ label: 'Training Lessons', slug: 'architecture/training-lessons' },
 						{ label: 'Engineering Discipline', slug: 'architecture/engineering-discipline' },
+						{ label: 'The Reliability Doctrine', slug: 'architecture/reliability-doctrine-v1' },
 						{ label: 'Language Maturity', slug: 'architecture/language-maturity' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
