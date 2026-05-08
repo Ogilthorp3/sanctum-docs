@@ -134,7 +134,14 @@ def check_frontmatter(path, rel, content, report):
     return fm_m
 
 
-def check_hero(path, rel, body, body_line_offset, report):
+def check_hero(path, rel, body, body_line_offset, report, fm_text=""):
+    # Starlight splash pages put the hero in frontmatter (`template: splash`
+    # + `hero.image.{dark,light}`), not as a markdown ![alt](path). Treat
+    # that as a valid hero so contrib-check doesn't false-fail homepages.
+    if fm_text and re.search(r'^\s*template:\s*splash\s*$', fm_text, re.M) \
+       and re.search(r'^\s{2,}image\s*:', fm_text, re.M):
+        return
+
     head = "\n".join(body.splitlines()[:30])
     hero_m = IMAGE_REF_RE.search(head)
     if not hero_m:
@@ -321,7 +328,7 @@ def check_page(path, report):
     body_line_offset = body_starts_at(content, fm_m.end())
     body = content[fm_m.end():]
 
-    check_hero(path, rel, body, body_line_offset, report)
+    check_hero(path, rel, body, body_line_offset, report, fm_m.group(1))
     check_emojis(path, rel, body, body_line_offset, report)
     check_placeholders(path, rel, body, body_line_offset, report)
     check_no_leak(path, rel, body, body_line_offset, report)
