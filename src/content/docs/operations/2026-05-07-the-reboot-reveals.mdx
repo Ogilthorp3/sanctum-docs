@@ -1,0 +1,125 @@
+---
+title: "2026-05-07: The Reboot Reveals"
+description: A pre-flight reboot at 04:25 EDT became a nine-hour audit of every silent assumption the doctrine had been carrying. Seven latent bugs, four waves shipped, six P0 daemons promoted to system-domain. The haus now survives reboots without needing a human to log in.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Mini was rebooted before a flight to SFO. Three minutes later it was back on
+the network, SSH responsive, and — by every external sign — running. The
+external signs were lying. The login keychain was locked. `/etc/kcpassword` was
+missing, so auto-login didn't fire, so no GUI session was created, so the 94
+gui/501 LaunchAgents that the haus depends on hadn't loaded. Six P0 services
+were silently dark for the entire flight.
+
+That is the kind of bug only a real-world reboot performs. Drills find what
+they are looking for; reboots find what nobody knew to look for.
+
+## Seven findings the drill surfaced
+
+| # | Finding | Class |
+|---|---|---|
+| 1 | `/etc/kcpassword` missing → no auto-login → six P0 user-agents absent | Architectural — every "P0 user-agent" was a P0 *gui-session* dependency in disguise |
+| 2 | `~/.sanctum/living-force.sh` is `exec sanctum-watchdog`, colliding with `sanctumd` system daemon on `:2187` | Aliased duplicate launch path — W3.1 missed it |
+| 3 | macOS `/bin/bash` is 3.2; `declare -A` killed the promotion script silently | Tooling — lint with `/bin/bash -n`, not `bash -n` |
+| 4 | `LimitLoadToSessionType=Aqua` carried verbatim from user → daemon plist; system-domain refuses with errno 5 | Promotion artifact gap |
+| 5 | `launchctl bootstrap` raced its own `bootout` (label not yet freed) | launchd async behavior — sleep between teardown and rebuild |
+| 6 | `ha-gateway` used `docker exec` to read HA's `secrets.yaml` — fails in daemon context | Service-specific — bind-mount path was always available |
+| 7 | `firewalla` read its token from Keychain — locked at boot without GUI | Doctrine-level — Keychain ≠ daemon-safe |
+
+Six were fixable in the same session. The seventh — auto-login itself — is
+parked because the cleanest fix obviates the need for it.
+
+## Four waves to clean it up
+
+<Aside type="tip" title="The pattern">
+W6 promoted services to a layer they could survive in. W7 made one of them
+actually able to live there. W8 taught the audit script about the new layer.
+W9 deleted the duplicate that kept reappearing. The waves are independent in
+isolation, related only because every one of them was made necessary by the
+same five-second reboot.
+</Aside>
+
+**Wave 6 — LaunchDaemon promotion.** Five P0 services moved from
+`~/Library/LaunchAgents/` (gui/501) to `/Library/LaunchDaemons/` (system).
+Three latent bugs surfaced during the move: bash 3.2 syntax, a stowaway
+gui-only plist key, and the bootout/bootstrap race. All three got fix-forward
+patches in the same wave (`88071da`, `f04df32`).
+
+**Wave 7 — firewalla daemon-safe.** Token extracted from the running
+user-agent's process environment (`ps eww`), written to
+`~/.sanctum/secrets/firewalla-bridge-token` (mode 600). Wrapper script
+patched to read filesystem first, fall back to Keychain. Then promoted to
+system-domain. Six of six P0 daemons.
+
+**Wave 8 — doctrine-audit dual-domain.** The audit script had been blind to
+`/Library/LaunchDaemons/`, so the W6 promotion looked like a regression
+(violations 13 vs 8 baseline). One twelve-line patch later it understands
+both domains, and a second patch taught it that `StartCalendarInterval` is a
+real cron form. Violations went 13 → 0 across the day.
+
+**Wave 9 — bootstrap.sh refactor.** `living-force.sh` is a four-line
+wrapper that just `exec`s `sanctum-watchdog` — a separate cargo build of
+the watchdog binary that fights the legitimate `sanctumd` system daemon for
+`:2187`. The `svc "Living Force"` line in `sanctum-bootstrap.sh` was the
+source of every orphan-port-squatter for the last week. Removed.
+
+## Where the daemons live now
+
+| Service | Domain | PID | Bound |
+|---|---|---|---|
+| force-flow | system | 8602 | `:4077` |
+| proxyd | system | 54072 | `:4040` |
+| watchdog | system | 41084 | `:2187` |
+| mlx (Cathedral) | system | 38804 | `:1337` (mTLS) |
+| ha-gateway | system | 41095 | `:8199` |
+| firewalla | system | 84653 | `:1984` |
+
+Six of six. The previous reboot pattern had four of these on
+`gui/501` and three of them — `ha-gateway`, `firewalla`, and `mlx` — could
+not survive a daemon-only environment without source-code changes. They
+can now.
+
+## The §1.1.H amendment
+
+The drill produced one doctrine change. The original v1 §4.5 secrets trifecta
+(1Password → SOPS → Keychain) implicitly treated the three tiers as
+interchangeable. They aren't. 1P is unreachable from any service runtime.
+SOPS requires VM SSH plus the sops binary plus the age key — reachable but
+slow. Keychain is fast and local but **gated on a user session**, which the
+doctrine had quietly assumed always existed.
+
+`firewalla-bridge-token` had been on the `sync-from-sops.sh` skip-list with
+the comment "entries the operator rotates LIVE in keychain ahead of SOPS."
+That was an unwritten departure from the trifecta — daemon-unsafe by
+construction. Today's amendment makes the rule explicit:
+
+> Any P0 service must have its secrets readable from a process with no user
+> session and no network. Filesystem-first; Keychain only as fallback.
+
+Codified in
+[`docs/doctrine/2026-05-07-reliability-v1.1-amendments.md` §1.1.H](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/2026-05-07-reliability-v1.1-amendments.md).
+
+## Drill cost vs drill yield
+
+| | |
+|---|---|
+| Wall clock | ~9 hours from `sudo reboot` to W12 commit |
+| Bugs surfaced | 7 (in 5 distinct categories) |
+| Commits shipped | 14 across `sanctum-runtime` |
+| Doctrine violations | 13 (mid-recovery) → 8 (pre-reboot baseline) → 0 (final) |
+| P0 daemons in system-domain | 0 → 6 |
+
+The §3.4 quarterly drill cadence justified itself in a single cycle. Without
+the drill, the seven bugs were going to be discovered one at a time over the
+next several months — most likely at 3 AM on a Tuesday.
+
+<Aside type="caution" title="The drill found seven bugs because no one was looking for them">
+The doctrine's stated purpose is "the haus always knows." Today the haus
+mostly didn't, and the drill is the mechanism that surfaces the difference
+between the doctrine on paper and the doctrine in practice. Quarterly is the
+floor, not the ceiling.
+</Aside>
+
+The next reboot won't reproduce any of these. If it produces seven different
+ones, that's also fine. That's what drills are for.
