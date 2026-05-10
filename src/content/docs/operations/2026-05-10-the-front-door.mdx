@@ -1,0 +1,103 @@
+---
+title: "2026-05-10: The Front Door"
+description: Sanctum gets a public front door at sanctum.haus — a marketing site separate from the technical docs at sanctum.run, with a tunnel-to-Pages migration that didn't take down the wiki.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Sanctum has been a private project for fourteen months. Today it gets a public-facing front door — `sanctum.haus`, a marketing site for the prepper-tech parent who already runs Tailscale, Plex Pass, and a Pi-hole and is wondering when AI will get the same treatment. The technical documentation you are reading stays at `sanctum.run`. The two-domain split is intentional, and the migration that made it possible was the kind of small, careful operation worth writing down.
+
+## Two doors, two audiences
+
+For a year sanctum.haus served exactly one thing: an internal wiki, gated behind Cloudflare Access, served via a Cloudflare Tunnel from a Mac Mini in Québec. It was a private street address. Today it becomes a public storefront.
+
+The split:
+
+| | sanctum.haus | sanctum.run |
+|---|---|---|
+| Audience | Prepper-tech parents, podcast listeners, future Family Pass buyers | Developers, contributors, ops people, anyone reading this chapter |
+| Voice | Warm, narrative, slightly literary | Technical, doctrine-driven |
+| Purpose | Funnel — email capture → demo video → lifetime-pass purchase | Documentation, runbooks, architecture |
+| Energy | "What it *feels* like to have a Sanctum" | "What Sanctum *is*" |
+
+The handoff is intentional: someone clicks "Install" on `.haus`, lands on `.run`. Marketing-to-engineering as a domain transition. Calm prepper-parents shopping the storefront don't want `mTLS` in the hero. HN engineers reading the architecture don't want a founder story above the fold. Two doors. Right cost.
+
+## The migration without downtime
+
+The interesting part wasn't the new site — that was an Astro scaffold and twenty minutes of copy. The interesting part was getting `sanctum.haus` to serve marketing without breaking the wiki that had been answering at that hostname for a year.
+
+Initial state:
+
+```
+sanctum.haus  → CNAME → manoir-nepveu cfargotunnel
+                          → http://localhost:3100  (Outline wiki)
+                          ← Cloudflare Access gate (Bert only)
+```
+
+Target state:
+
+```
+sanctum.haus       → CNAME → sanctum-haus.pages.dev  (marketing site, public)
+www.sanctum.haus   → CNAME → sanctum-haus.pages.dev  (marketing site, public)
+wiki.sanctum.haus  → CNAME → manoir-nepveu cfargotunnel
+                              → http://localhost:3100  (Outline wiki, unchanged)
+                              ← Cloudflare Access gate (Bert only, unchanged)
+```
+
+The plan, after [the council reviewed it](#the-council-review):
+
+1. Read the existing tunnel ingress config, find the wiki service.
+2. Add a new ingress rule `wiki.sanctum.haus` → same `localhost:3100`. Keep the existing `sanctum.haus` rule alongside, so the wiki keeps responding through the cutover.
+3. Create DNS `wiki.sanctum.haus` CNAME → cfargotunnel (proxied).
+4. Verify `https://wiki.sanctum.haus` returns 200 with the Outline `<title>`.
+5. Mint a narrowly-scoped Cloudflare API token (Pages.Write only, no broader permissions), set it as a GitHub Actions secret on the new repo.
+6. Push to main; the Pages workflow deploys to `sanctum-haus.pages.dev`.
+7. Verify the staging URL serves the marketing site.
+8. Flip the apex CNAME from cfargotunnel → `sanctum-haus.pages.dev`.
+9. Verify `https://sanctum.haus` serves the marketing site, `https://wiki.sanctum.haus` still serves the wiki gated.
+10. Remove the now-stale `sanctum.haus` ingress rule from the tunnel for cleanup.
+
+Steps 1–7 went exactly as planned. Step 8 produced a 302 redirect to a Cloudflare Access login — not what you want when a stranger from Hacker News types your URL.
+
+## The Access app remembered what it was guarding
+
+The Cloudflare Access app named "Sanctum Wiki" was attached to hostname `sanctum.haus`, not to the tunnel itself. When the apex DNS flipped, the hostname-to-Access-app binding stayed in place. The marketing-site request from a stranger was hitting the Access challenge meant for Bert opening the wiki.
+
+The fix was to delete the app, then recreate it on `wiki.sanctum.haus` (the API token had DELETE+POST permission on Access apps but not PATCH — different scopes, same outcome). The new app has a single explicit "allow" policy: emails matching `bert@triptyq.vc` or `bertrand@nepveu.name`. The wiki is gated again, the marketing site is public, and the front door doesn't ask strangers for a token.
+
+<Aside type="caution" title="Lesson: Cloudflare Access binds to hostname, not DNS">
+When you flip a DNS record at the apex, anything Cloudflare-edge-aware that was attached to that hostname — Access, WAF rules, Page Rules, Workers routes — comes along for the ride and applies to the new origin. If the old hostname was protected and the new content shouldn't be, that's a security regression dressed up as a redirect. Probe with `curl -skI https://<apex>` before declaring the migration done; the response code tells the truth.
+</Aside>
+
+## The council review
+
+Before any DNS touched production, the four-agent council looked at the plan:
+
+- **Yoda (decision/strategy):** "The path is clear, yet the leap from tunnel to pages must be timed with the rhythm of the DNS, not rushed by haste."
+- **Qui-Gon (infrastructure/perf):** "Ensure your DNS TTL is lowered to 60 seconds prior to step 7 to prevent stale cache errors during the flip." *(Already addressed: the apex CNAME is `proxied: true`, so TTL is Cloudflare-managed at the edge — invalidation is seconds, not minutes.)*
+- **Windu (security/risk):** "The API token grants full account access; restrict it to the specific zone ID and use a GitHub secret with no broader permissions." *(Applied: minted a new token scoped only to Pages.Write on the account, with no Zone or Access permissions.)*
+- **Cilghal (quality/discipline):** "Implement a Staging environment first to validate the Pages deploy and ingress rules before touching the production apex record." *(Applied: `sanctum-haus.pages.dev` was the staging URL; the apex flip happened only after the staging URL probed clean.)*
+
+Verdict: approved. Two of the four amendments turned into pre-flight gates that caught the Access-app issue half a step before it would have been visible from the public internet. That's the council doing what councils are for.
+
+## What's at sanctum.haus now
+
+The current state is a coming-soon page with two email-capture forms, pricing tiers (Sanctum Core free / Family Pass $129 lifetime / Cloud Sync $5 optional), and a founder note. The form posts to `/api/notify-me` which is intentionally absent — the form gracefully falls back to a `mailto:` to `founders@sanctum.haus` so early founder-list traffic still reaches a human while the email backend gets wired (Buttondown is the leading candidate; Cloudflare KV is the cheaper one).
+
+The marketing site is built with vanilla Astro, deployed through GitHub Actions to Cloudflare Pages on every push to `main`, lives in a private repo (`Ogilthorp3/sanctum-haus`). The license model is **FSL-1.1-MIT** for application code (cathedral, council orchestration, family agents — auto-converts to MIT after two years) and **Apache-2.0** for libraries (`sanctum-mlx-fast` and any future helpers — embed-anywhere). The marketing site itself isn't open-sourced; it's brand and copy.
+
+## What's next
+
+Three concrete things, in order:
+
+- **Hero illustration.** The current site has copy and structure but no image. The visual-language doc in the marketing repo specifies pencil-sketch with selective teal accents, three modes (haus / council / threshold). Either commission this or generate it through the existing pipeline; the rest of the launch waits on it.
+- **Demo video.** Seventy-five seconds. Mac Mini hero shot, council-in-action, the unplug moment ("now the cloud is gone"), pricing close. Script is already in-tree at `marketing/demo-video-v1.md`. Highest-leverage thing a solo dev can produce; rough-cut on QuickTime + iPhone Mirroring + a $20 ElevenLabs trial gets you eighty percent of the way there.
+- **Email backend.** Wire `/api/notify-me` to whichever email provider survives the founder-beta dilution. Until then the mailto fallback handles the first ~50 signups by hand.
+
+The technical foundation is ready. The narrative isn't, yet.
+
+## Related
+
+- [The Clean Stage](/operations/2026-04-28-the-clean-stage/) — same doctrine, different surface: the durable fix is structural, not cosmetic. The two-domain split is the marketing equivalent.
+- [Borders and Edges](/operations/2026-04-26-borders-and-edges/) — Cloudflare Access topology and tag-based ACLs, where the security model lives.
+- [Council Always-Alive](/operations/council-always-alive/) — the council whose review approved this migration.
