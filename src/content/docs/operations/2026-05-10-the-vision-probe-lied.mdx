@@ -1,0 +1,133 @@
+---
+title: "2026-05-10: The Vision Probe Lied"
+description: A vision-canary failure cluster looked like a new mlx race. It wasn't. It was 10.4 GB of swap, an LM Studio worker that woke up unannounced, a cathedral plist that had been missing for three days, and a DuckDB lock held for the same three days by a script with no subprocess timeout. Four bugs caught by one symptom; all four fixed in one session, and four jedi briefings trimmed to blockers-only on the way out.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch forensic tableau: a brass diagnostic probe needle pointing confidently to a healthy green dial, while behind it a magnetic-tape spool labeled SWAP has unspooled onto the floor and a chained padlock marked DAY 3 hangs from a sealed door, with a small cathedral spire standing quietly in the distance, its front door wide open and no guard in sight](./images/the-vision-probe-lied.png)
+
+The afternoon started with what looked like a new bug. Three vision-canary failures in nine minutes: `multi_code=0, models_code=200`. Same shape as the mlx 0.30.6 races we had chased for weeks. PR #10's mutex was supposed to have closed those. First instinct: a missed path.
+
+The instinct was wrong. The probe was telling the truth, but about the wrong server.
+
+## 1. The number that did not lie
+
+The cathedral log around 17:02 UTC told the story in microseconds:
+
+```
+17:02:25.766  processing multimodal request 1072
+17:03:24.997  LM embed-prefill complete  prefill_us=59,229,150  ← 59 SECONDS
+17:03:31.027  decode complete            decode_us=6,030,439    ← 6 SECONDS
+```
+
+Steady-state prefill on this binary is ~200 ms. This one was 300× slower. The canary's `--max-time 10` curl gave up forty-nine seconds before the server could answer. Three failures landed inside the slow window. The rest of the day was clean.
+
+A 300× slowdown on a binary stable for eleven hours is not a code bug. It is a memory bug.
+
+`vm.swapusage` showed `10386.19M used`. `vm_stat` showed 820 MiB free out of 64 GiB. The Mini was paging its working set to disk. When the cathedral asked Metal for a command encoder, it got one — eventually, after the OS swapped in the layer it needed.
+
+## 2. The thieves
+
+Three processes had collectively pushed the Mini past capacity:
+
+| RSS | process | story |
+|---|---|---|
+| ~50 GB | `sanctum-mlx` (cathedral) | mlx-lm#1185 compile-cache drift, ~+3.5 GB/h on a binary uptime of eleven hours |
+| ~13 GB | `LM Studio` worker (Coder-14B GGUF) | autoloaded by the LM Studio Guardian twenty-eight minutes earlier, exactly when the failure window opened |
+| ~1.3 GB + 368% CPU | `qemu-system-aarch64` | the known QEMU HVF idle-spin bug, four cores stolen permanently from a 16-core CPU |
+
+Total resident: ~70 GB on a 64 GB machine. The eleven-hour cathedral uptime had brought it to the edge. The Coder-14B autoload at 12:42 EDT was the straw.
+
+A second session was already mid-flight migrating that QEMU VM to Lima `vmType=vz` — the permanent fix for the 368% CPU thief. We got out of the way, watched load drop from 19.49 to 8.03 as their Phase 1 completed, then looked at the next layer.
+
+## 3. The orphan
+
+The next layer was worse than the swap. The cathedral was running with `PPID=1`. Its plist was missing.
+
+```
+$ ls ~/Library/LaunchAgents/com.sanctum.mlx.plist
+ls: ... No such file or directory
+
+$ ls ~/Library/LaunchAgents/com.sanctum.mlx.plist.*
+... pre-disable-compile-20260507-030615
+... pre-multimodal-20260503-135006
+... pre-metalcaps-20260424-184209
+... (etc.)
+```
+
+Backups everywhere. The live plist had been renamed during the May 7 disable-compile experiments and never restored. Cathedral kept serving for three days unsupervised. The Sunday 04:00 weekly-restart cron had exited 5 because its `launchctl bootstrap` could not find the plist. The script had no precondition check. The exit-5 went to a log nobody read.
+
+The fix was mechanical and low-risk. The most recent backup's `ProgramArguments` matched the running cathedral's `ps -ww -o command` byte for byte. Copy backup to the canonical path, `plutil -lint`, SIGTERM the orphan, wait one second for `:1337` to free, `launchctl bootstrap gui/$(id -u)`, poll `/v1/models` until 200. Twenty-seven seconds of total downtime. One canary tick failed inside the restart window and aged out of the SLO immediately.
+
+The cathedral now reports `state = running` to launchd, with `KeepAlive=true`. If anything kills it during the rest of the migration, launchd respawns within thirty seconds. The weekly cron will work next Sunday because the plist it expects now exists.
+
+## 4. The three-day lock
+
+Mundi's briefing log had been quietly logging the same error for three days:
+
+```
+DuckDB error: Could not set lock on file "workspace.duckdb":
+  Conflicting lock is held in .../python@3.14/.../Python (PID 10832) by user bert
+nothing to report — skipping
+```
+
+PID 10832's `etime` confirmed it: `03-02:15:11`. Three days, two hours, fifteen minutes. The script holding the lock was `~/.openclaw/workspace/scripts/message-to-duckdb.py`. It opens the database in write mode, calls one of three sync functions, then `con.close()`. No `finally` block. No subprocess timeout on the `apple-imessage.sh` / `apple-whatsapp.sh` / `apple-signal.sh` shell scripts it wraps. If any of those shell scripts hangs — and one of them did, three days ago — the Python process hangs forever, holding the DuckDB lock, blocking every reader.
+
+Mundi's briefing was the visible victim. Anything else that opened the same database silently lost too.
+
+`SIGTERM` to PID 10832, lock released in under a second, Mundi briefing ran successfully on the next manual invocation, sent a 237-character "10 stale deals" alert to Force Flow. Then the durable fix to the script:
+
+```python
+def main():
+    con = duckdb.connect(str(DB_PATH))
+    try:
+        sync_imessage(con); sync_whatsapp(con); sync_signal(con)
+    finally:
+        con.close()
+
+# subprocess.check_output(cmd, text=True, timeout=300)  ← was missing
+```
+
+A `finally` block on the connection. A `finally` block on the file lock outside `if __name__`. A 300-second timeout on every `subprocess.check_output` so a hung shell script can never again hold the database hostage for three days.
+
+## 5. The sweep
+
+While the system was already on the table, every jedi briefing got the same treatment.
+
+Cilghal sent a Health Diagnostics block every three hours with vitals regardless of whether anything was wrong. Windu sent an "All Clear" status every three hours. Mundi sent pipeline summaries even when no deals were going cold. Yoda's master-briefing prompt told the agent "do not send if there is nothing actionable" — and the agent obliged by writing three-paragraph explanations of the absence of intel, then declining to send them.
+
+All four now follow the same rule: silent on green, alert-only on red.
+
+| briefing | before | after |
+|---|---|---|
+| Cilghal | always sends vitals + alerts if any | returns `None` if no `🔴/🟡` alerts; alerts-only otherwise |
+| Windu | always sends "All Clear" status block | returns `None` if no alerts; alerts-only otherwise |
+| Mundi | sends pipeline + activity + portfolio + meetings + contacts | sends only when stale-deal alert exists |
+| Yoda master-briefing | LLM rambles when no actionable intel | prompt enforces `NO_BRIEFING_NEEDED` sentinel + "no rambling" hard rule |
+
+The Mundi run that fired immediately after the lock was released — and after the trim — sent a 237-character message about ten deals going cold. Real signal. The kind worth a Signal ping.
+
+## The doctrine
+
+> The probe is honest about what it measured, not about what is broken. A `multi_code=0` says the multimodal endpoint did not respond inside ten seconds. Whether that is a code bug, a swap-page bug, a thermal-throttle bug, or a network bug is on the operator. Read the prefill microseconds before reading the source.
+
+> A service running with `PPID=1` and no entry in `launchctl print` is not supervised; it is a coincidence. The next time it dies, it stays dead. If a backup plist matches the running argv byte for byte, the recovery is twenty-seven seconds, not "schedule a maintenance window."
+
+> Briefings that send on green train the operator to ignore them. Then they send on red and the training holds.
+
+## What is next
+
+- The migration to Lima `vmType=vz` continues in the parallel session — Phase 2.1 acid test cleared, Phase 2.2 staging build in progress. The 368% CPU QEMU thief is on a seven-day rollback hold.
+- The 72-hour soak on PR #10's global mutex continues; the deploy resets the clock to 2026-05-13 02:00 EDT. Today's three vision failures were swap-induced and do not count against the soak.
+- LM Studio Coder-14B retirement (Phase 7 G3) frees ~13 GB and removes the autoload-into-pressure failure mode. Gated on Coder-14B parity eval against cathedral.
+- Cilghal/Windu briefings will not visibly change behavior until the VM is back up post-cutover; right now their `VM unreachable at 10.10.10.10` alerts are correct and load-bearing.
+- Sunday weekly-restart cron will re-run next Sunday at 04:00 EDT against the restored plist. If it fails again the script needs a precondition check on `$PLIST` existence with a Force Flow alert; documented as a follow-up.
+
+## Related
+
+- [The Stress Test Caught It](/operations/2026-05-10-the-stress-test-caught-it/) — earlier today. PR #10's global mutex shipped to main after a 5-minute stress test rejected PR #11. That mutex is the binary the swap pressure made look guilty this afternoon.
+- [The Council Fell Silent](/operations/2026-05-07-the-council-fell-silent/) — May 7. The plist that went missing today was renamed during this incident's compile-disable experiments. The orphan started here.
+- [Honest Green](/operations/2026-05-02-honest-green.mdx) — May 2. The doctrine on auto-loaders fighting capacity. Today's LM Studio Guardian autoload of Coder-14B is the same pattern at a different layer.
+- [Ogilthorp3/Claude_Code tools/cathedral/weekly-restart-fix.md](https://github.com/Ogilthorp3/Claude_Code/blob/main/tools/cathedral/weekly-restart-fix.md) — diagnosis + restore plan for the orphan plist.
+- [Ogilthorp3/Claude_Code tools/cathedral/lima-cutover-checklist.md](https://github.com/Ogilthorp3/Claude_Code/blob/main/tools/cathedral/lima-cutover-checklist.md) — sixteen-item P0/P1/P2 checklist for the in-flight Lima migration.
