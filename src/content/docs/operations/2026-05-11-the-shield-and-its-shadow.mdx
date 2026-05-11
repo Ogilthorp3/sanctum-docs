@@ -60,29 +60,13 @@ Category total: **0.775 → 0.950**.
 
 The windu case is the test that this is not a Goodhart fix. If the patch made every case score 1.0 we'd have stripped a behavior the eval was right to penalize. It didn't. Windu still loses a point because the trained model still verbalizes the forbidden term while refusing it, and the eval correctly catches that. The patch removes a measurement artifact and keeps the real signal.
 
-## 4. The bridge in CLOSE_WAIT
+## 4. Two side stories, one paragraph each
 
-The patch validation needed Opus-generated training data. The Mini's `claude-max-proxy` (the OpenAI-compat wrapper around the local `claude` CLI) was crashing on every request — `cli-to-openai.js:88` calling `model.includes("opus")` on an `undefined` returned by `Object.keys(result.modelUsage)[0]` when the CLI subprocess exited non-zero. The bridge's Node process crashed; the TCP socket sat in CLOSE_WAIT; the next request hit a CLOSE_WAIT and hung. Every request from MBP looked like a Tailscale-direct hang.
+The patch validation needed Opus-generated training data, and the Mini's `claude-max-proxy` was crashing on every request. `cli-to-openai.js:88` called `model.includes("opus")` on an `undefined` returned by `Object.keys(result.modelUsage)[0]` when the CLI subprocess exited non-zero. The Node process crashed mid-request; the socket sat in `CLOSE_WAIT`; the next request hung. Two-line patch into the pnpm store (marker `PATCH-sanctum-2026-05-10`) guards the `normalizeModelName` against undefined input. The Tailscale-direct HTTP-layer hang from MBP to `:3456` is still there with no root cause — but `com.sanctum.claude-max-tunnel.plist` and its 60-second watchdog route around it via SSH local-port-forward.
 
-Two-line patch into the pnpm-store copy of the package, marker `PATCH-sanctum-2026-05-10` so the next session can detect it:
+Mid-validation, the Mini went unresponsive. Tailscale `offline, relay tor`, LAN ping fail, SSH timeout, ARP still had the MAC. WoL magic packet broadcast on `192.168.1.255` revived it in thirty seconds; `uptime` confirmed 3d 13h — sleep, not reboot. Recipe lives at `tools/wake-mini.sh`; council verdict was to leave WoL manual rather than automate.
 
-```js
-function normalizeModelName(model) {
-    if (!model || typeof model !== "string") return "claude-sonnet-4";
-    if (model.includes("opus")) return "claude-opus-4";
-    ...
-}
-```
-
-The Tailscale-direct hang is still there, root-cause unknown. The durable workaround is `com.sanctum.claude-max-tunnel.plist` — an SSH local-port-forward on MBP that routes `127.0.0.1:3457 → neo@manoir:3456`. A 60-second `com.sanctum.claude-max-tunnel-watchdog.plist` ticks alongside it, probing `/health` and kickstarting the tunnel plist on hang with a 300-second cooldown. Validated against the same failure mode caught by hand earlier.
-
-## 5. The Mini that slept
-
-Mid-validation, the Mini went unresponsive. Tailscale showed `offline, relay tor`. LAN ping failed. SSH timed out. ARP still had the MAC. A Wake-on-LAN magic packet broadcast on `192.168.1.255` revived it in thirty seconds; `uptime` came back at 3d 13h — sleep, not reboot.
-
-The recipe lives at `tools/wake-mini.sh`. Council verdict (Windu speaking): don't automate auto-WoL. Mini sleep is rare, an auto-WoL daemon adds attack surface for negligible benefit. Manual recipe, documented, that's the floor.
-
-## 6. The four champions
+## 5. The four champions
 
 Tonight's orchestrator landed four `kept` rungs against the 0.881 threshold:
 
@@ -99,9 +83,11 @@ Two findings the orchestrator confirmed empirically that the council had called 
 
 Per-category on the rank-32 champion: identity 0.852, jailbreak 0.950, reasoning 1.000, tool_calling 0.938, domain 0.933, cross_agent 0.800. The jailbreak gain is the CoT-strip patch holding through training; the identity gain is the +147 new identity pairs landing as the trendline predicted. Overall lift +0.040, above the +0.025-0.030 we'd forecast pre-run.
 
-## 7. The promotion that wasn't (yet)
+## 6. The promotion that wasn't
 
-The plan was: copy the adapter to the Mini, add `--adapter-path` to `com.sanctum.mlx.plist`, kickstart, smoke-test, declare victory. The plan ran into a five-minute outage.
+Two attempts. Two outages. Same root cause, read at progressively deeper layers.
+
+**Attempt 1 — direct `--adapter-path`.** Copy the adapter to the Mini, add `--adapter-path` to `com.sanctum.mlx.plist`, kickstart. `sanctum-mlx` failed at startup:
 
 ```
 ERROR sanctum_mlx: Failed to load model: LoRA adapter merging for
@@ -109,72 +95,66 @@ qwen3_5_moe is not yet implemented (Phase 4 deferred). Load the
 vanilla checkpoint without --adapter-path to exercise the MoE loader.
 ```
 
-The qwen3_5_moe loader landed in April [as a vanilla-only path](/operations/2026-04-23-the-vanilla-runs/). LoRA merging for the MoE routed-gather is the deferred Phase 4. The plist was reverted to its pre-adapter form (`com.sanctum.mlx.plist.pre-adapter-2026-05-11` for the audit trail), `sanctum-mlx` came back clean, council was mute for five minutes and then alive again.
+Plist reverted from `com.sanctum.mlx.plist.pre-adapter-2026-05-11`, council came back clean. Five-minute outage.
 
-The adapter is staged on the Mini at `/Users/neo/.sanctum/adapters/champion-2026-05-11-rank32/` and ready for the alternate path. Council verdict (Option B): stage, document, defer the expensive fuse-and-sign dance until Bert has read the runbook.
+**Attempt 2 — `mlx_lm.fuse` then deploy as a regular model.** Fuse the adapter into the base weights on MBP, sign the new manifest with `~/.ssh/sanctum-manifest-signing.key`, rsync the 14 GB fused model to the Mini, swap three paths in the plist, reload. Signature verified clean. Manifest verified all 10 files. `sanctum-mlx` then logged:
 
-## 8. SOP — Promote a champion adapter to the council
+```
+LoadedModel: dispatching to qwen3_5 (dense) model_type="qwen3_5"
+```
 
-The procedure when the operator decides to flip:
+And hung. `mlx_lm.fuse` had rewritten `config.json`:
 
-```bash
-# 1. Fuse LoRA into base weights (one-time per champion). ~5-10 min on MBP.
-~/Projects/mlx-finetune/.venv/bin/python -m mlx_lm.fuse \
-    --model    ~/Projects/mlx-finetune/models/Qwen3.6-35B-A3B-4bit-text \
-    --adapter-path  ~/Projects/council-autoresearch/adapters-experimental/<CHAMPION_DIR> \
-    --save-path     ~/Projects/mlx-finetune/models/Qwen3.6-35B-A3B-4bit-champion-<DATE>
+| Field | Base | After fuse |
+|---|---|---|
+| `model_type` | `qwen3_5_moe` | `qwen3_5` |
+| `architectures` | `Qwen3_5MoeForConditionalGeneration` | `Qwen3_5ForConditionalGeneration` |
+| safetensors count | 4 | 3 |
 
-# 2. rsync fused model to Mini's HF cache layout. ~10-20 min over Tailscale.
-rsync -avh --progress \
-    ~/Projects/mlx-finetune/models/Qwen3.6-35B-A3B-4bit-champion-<DATE>/ \
-    neo@manoir.tail7c6d11.ts.net:/Users/neo/.cache/huggingface/hub/models--sanctum--qwen3.6-35b-a3b-4bit-champion-<DATE>/snapshots/v1/
+The fuse hadn't just merged adapter weights — it collapsed the MoE routing into dense MLP. The safetensors index has zero `experts.N.` keys; all routing weights are gone. The dense loader can't load this either; the layout it expects differs from what collapsed-MoE produces. Silent hang mid-load.
 
-# 3. Generate manifest on Mini (shasum every safetensors + config).
-ssh neo@manoir.tail7c6d11.ts.net '
-    cd ~/.cache/huggingface/hub/models--sanctum--qwen3.6-35b-a3b-4bit-champion-<DATE>/snapshots/v1 &&
-    shasum -a 256 *.safetensors *.json > ~/.sanctum/manifests/qwen36-35b-a3b-4bit-champion-<DATE>.manifest.sha256
-'
+Plist reverted from `com.sanctum.mlx.plist.pre-champion-20260511`. Second five-minute outage. The 14 GB fused model sits dormant on both ends, manifest valid against itself but useless against any loader.
 
-# 4. Sign the manifest. **Operator only — requires the manifest private key.**
-#    Result lands at ~/.sanctum/manifests/qwen36-35b-a3b-4bit-champion-<DATE>.manifest.sha256.sig
+The "Phase 4 deferred" message wasn't a surface complaint. There is no current path to deploy a LoRA-trained MoE adapter on this codepath. `mlx_lm.fuse` is not the workaround. Neither is `--adapter-path`. Both terminate at the same wall, at different layers.
 
-# 5. Update the plist. Backup first.
-ssh neo@manoir.tail7c6d11.ts.net '
-    cp ~/Library/LaunchAgents/com.sanctum.mlx.plist \
-       ~/Library/LaunchAgents/com.sanctum.mlx.plist.pre-promotion-<DATE>
-    # In plist: --model → champion path, --manifest + --manifest-sig → new files
-'
+## 7. SOP — Promote a champion adapter to the council (corrected)
 
-# 6. Reload sanctum-mlx.
-ssh neo@manoir.tail7c6d11.ts.net '
-    launchctl bootout gui/$(id -u)/com.sanctum.mlx
-    sleep 2
-    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.mlx.plist
-    sleep 30
-    tail -30 ~/.openclaw/logs/sanctum-mlx.log  # confirm "manifest verified" + ":1337 listening"
-'
+The fuse-then-deploy SOP this page originally shipped was wrong; `mlx_lm.fuse` destroys MoE structure on qwen3_5_moe. The real promotion path is sanctum-rs work, not deploy-time orchestration.
 
-# 7. Smoke. tools/ask-council.sh "say PONG and your name" — refusal still works on the
-#    four eval cases — Holocron canary still green.
+```text
+1. Land Phase 4 in sanctum-rs/services/sanctum-mlx — implement
+   routed-gather LoRA merging in the qwen3_5_moe loader. The adapter
+   is loaded alongside the base and applied at the routed-gather call,
+   without ever materializing a dense merged checkpoint. Reference:
+   the existing qwen3_5_moe (sparse) loader, plus the LoRA Phase 1-3
+   work already on the dense path.
 
-# 8. Rollback (if anything misbehaves):
-ssh neo@manoir.tail7c6d11.ts.net '
-    cp ~/Library/LaunchAgents/com.sanctum.mlx.plist.pre-promotion-<DATE> \
-       ~/Library/LaunchAgents/com.sanctum.mlx.plist
-    launchctl kickstart -k gui/$(id -u)/com.sanctum.mlx
-'
+2. Rebuild sanctum-mlx and deploy. Same plist surface as today
+   (--adapter-path), now with MoE support behind it.
+
+3. Smoke against the four eval cases. Jailbreak category should hold
+   ~0.950 if the routed-gather merge is correct; if it drops, the
+   merger is dropping the LoRA contribution on the routing path.
+
+4. Manifest covers the BASE weights only; adapter integrity is its own
+   problem (the adapter dir is small enough to hash inline at load
+   time, mirroring how mlx_lm validates adapter_config.json).
+
+5. Rollback is removing --adapter-path from the plist and kickstarting.
 ```
 
 <Aside type="caution">
-The fused-model approach is required because `sanctum-mlx`'s `--adapter-path` rejects qwen3_5_moe ("Phase 4 deferred"). Direct LoRA loading on the MoE base lands when sanctum-rs ships the routed-gather LoRA merger; until then, fuse-and-deploy is the path. The trade is disk (a fresh ~20GB model dir per champion) for code (no MoE-LoRA merger needed).
+Until Phase 4 lands, **promotion is blocked**. The training pipeline is correct, the eval is correct, the champion adapter is real. Inference-side serving of that champion requires code work in sanctum-rs that's separate from this loop. The autoresearch ledger marks results `kept` for tracking; "kept" does not mean deployed.
 </Aside>
 
-The four eval cases against the fused model are the gate. If the post-promotion smoke shows the jailbreak category dropped below the rank-32 champion's 0.950, the fuse process or the manifest swap introduced a regression and the rollback is the move, not a debug session at 02:00.
+The four eval cases will be the gate when Phase 4 ships. If the post-Phase-4 smoke shows the jailbreak category dropped below the rank-32 champion's 0.950, the routed-gather merger is dropping the LoRA contribution somewhere in the routing path — that is the bisect, not a deploy regression.
 
 ## What did not move
 
 The Tailscale-direct HTTP layer hang from MBP to Mini's `:3456`. We have a tunnel; we don't have the root cause. The packet capture in `tcpdump` requires sudo on the Mini we don't have a passwordless path to. The forensic deadline is a future session; the operational workaround is shipped and watching itself.
 
-The promotion. Council called it: stage, document, decide. The adapter is on the Mini. The runbook is here. The keys are with the operator.
+The promotion. Two attempts, two ten-minute outage windows, one architectural truth named at last: deploy-time tooling isn't going to flip this lever. The adapter and the fused model are on the Mini, valid against themselves and useless to the loader. The code-side path opens in sanctum-rs Phase 4 — routed-gather LoRA merging in the qwen3_5_moe loader. Until that ships, the champion lives in the autoresearch ledger and the field note, and the council answers from the base.
+
+The instrument was wrong, then the deploy path was wrong, then both got corrected to the layer they should have been at all along. Three days of work in one session, two five-minute outages along the way, and one promotion that has to wait for a code change.
 
 The instrument and the instrumented were both telling the truth the whole time. We were measuring the shadow.
