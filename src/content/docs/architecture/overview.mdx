@@ -15,13 +15,13 @@ That is Sanctum working correctly. Thirty-eight services, two machines, one priv
 
 ## The Shape
 
-Physically, Sanctum is a Mac Mini M4 Pro and a QEMU-headless Ubuntu VM running on it, connected by a private `bridge100` interface on `10.10.10.0/24`. The Mac is where hardware lives: Apple Silicon inference, Sonos bridging, Signal, HomeKit, and everything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet. If the VM wants to reach the outside world, it asks the Mac nicely, and the Mac decides whether the request is reasonable. It is an air-gapped tenant with an indoor-plumbing privilege.
+Physically, Sanctum is a Mac Mini M4 Pro and a Lima `vmType=vz` Ubuntu VM (24.04 LTS) running on it, connected by a private `bridge100` interface on `10.10.10.0/24`. The VM was [migrated from QEMU+HVF to Lima vz on 2026-05-10](/operations/2026-05-10-the-vision-probe-lied/) to end the 370% idle-spin the QEMU/HVF bind was burning. The Mac is where hardware lives: Apple Silicon inference, Sonos bridging, Signal, HomeKit, and everything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet. If the VM wants to reach the outside world, it asks the Mac nicely, and the Mac decides whether the request is reasonable. It is an air-gapped tenant with an indoor-plumbing privilege.
 
 <ZoomImage src={networkTopology.src} alt="Sanctum network topology — Mac Mini host and Ubuntu VM connected via bridge100, with Cloudflare Tunnel and Tailscale as the two external on-ramps" />
 
 Conceptually, though, the physical diagram is the least interesting view. What makes Sanctum work is what runs inside those two boxes and how the pieces relate to each other — which is where the body metaphor becomes less cute and more operationally useful.
 
-There's also a less-physical principle that runs through the rest of this anatomy: **the Council is plural on purpose**. Each Jedi runs on a different model family by default — Yoda and Mundi on Claude Opus 4.7 via the haus's Max subscription bridge, Qui-Gon on Qwen2.5-Coder-14B, Windu on Gemini 3.1 Pro, the privacy-critical seats (Cilghal, Mothma, Jocasta) on the local Qwen3.6 — because a council of one model wearing five robes returns one kind of answer regardless of who asks. See **[(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx)** for the full doctrine and Principle 10 in [The Living Force](./living-force.mdx) for the canonical short version.
+There's also a less-physical principle that runs through the rest of this anatomy: **the Council is plural on purpose**. Each Jedi runs on a different model family by default — Yoda and Mundi on Claude Opus 4.7 via the haus's Max subscription bridge, Qui-Gon and Cilghal on the [Temple of the Kyber](./temple-of-the-kyber.mdx) (the local Qwen3.6-35B-A3B-4bit served by `sanctum-mlx`), Windu on Gemini 3.1 Pro — because a council of one model wearing five robes returns one kind of answer regardless of who asks. See **[(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx)** for the full doctrine and Principle 10 in [The Living Force](./living-force.mdx) for the canonical short version.
 
 ## The Bones
 
@@ -94,9 +94,9 @@ Each agent in the cluster is a specialized perception. Sanctum does not have one
 | Agent | Role | Model Tier |
 |-------|------|------------|
 | **Yoda** | [Consigliere](/agents/yoda/) — absorbs everyone else's escalations, advises the Don | `council-brain` — Opus 4.7 by default; smart-routed to local `council-mlx` for general chat and Opus 4.7 `--effort max` (Claude Team) for deep reasoning |
-| **Windu** | Security master — Firewalla rules, PF policy, perimeter audits | Cloud (Opus 4.7) |
-| **Qui-Gon** | Infrastructure — Docker health, systemd units, recovery | Local ops |
-| **Cilghal** | Health — Apple Health, sleep, cognitive scaffolding | Local secure (Gemma4+LoRA) |
+| **Windu** | Security master — Firewalla rules, PF policy, perimeter audits | Gemini 3.1 Pro Preview, [Temple of the Kyber](./temple-of-the-kyber.mdx) fallback |
+| **Qui-Gon** | Infrastructure & code — Docker health, systemd units, recovery | [Temple of the Kyber](./temple-of-the-kyber.mdx) (since 2026-05-10 G3 retirement of Coder-14B) |
+| **Cilghal** | Health — Apple Health, sleep, cognitive scaffolding | [Temple of the Kyber](./temple-of-the-kyber.mdx) (no fallback — she is the local) |
 | **Ki-Adi-Mundi** | Finance — Triptyq deal flow, personal treasury | Local secure |
 | **Jocasta** | Archivist — CRM, communications, long memory | Cloud |
 | **Mon Mothma** | Operations — Force Flow + Living Force orchestration | Cloud |
