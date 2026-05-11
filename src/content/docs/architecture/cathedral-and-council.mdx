@@ -1,0 +1,62 @@
+---
+title: The Cathedral and the Council
+description: The two load-bearing characters in the Sanctum mythology. The Cathedral is a 30 MB Rust binary that serves a 35-billion-parameter model from a Mac Mini in Montréal. The Council is a heterogeneous bench of five Jedi who pray there when the cloud doesn't answer.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch interior of a small stone cathedral on a dark slate background. At its altar, a Mac Mini glows with a teal halo. Five robed silhouettes are seated around a half-circle table in front of it, each marked by a different colored sigil — amber, teal, indigo, sage, rust — and a parchment scroll on a side lectern is labelled DOCTRINE](./images/cathedral-and-council.png)
+
+Two characters do most of the dramatic work in the Sanctum mythology, and almost every page in this section is a footnote on one of them. The first is the **Cathedral** — a Rust binary on a Mac Mini in Montréal that serves a 35-billion-parameter language model under mTLS. The second is the **Council** — five specialised Jedi who route their reasoning through three different model providers and fall back to the Cathedral when those providers don't answer.
+
+This page is the narrative entrypoint. The technical detail lives in [Sanctum MLX](./sanctum-mlx.mdx), [Council Router](./council-router.mdx), [Agents Architecture](./agents.mdx), and the per-Jedi pages under **Agents** in the sidebar. Read those when you need the wiring. Read this when you need the story.
+
+## The Cathedral
+
+A thirty-megabyte Rust binary called `sanctum-mlx`, running on a 64 GB Mac Mini under launchd, serving Qwen3.6-35B-A3B-4bit-text on `:1337` mTLS-only. There is one inference in flight at a time, on purpose. There is no plain HTTP listener, also on purpose. There is a vision tower armed in the same process that can describe an image you POST as base64. There is no Python.
+
+The metaphor is load-bearing. A cathedral is somewhere you go when the world outside is loud, the answers are uncertain, and you want a quiet stone room with the same liturgy you remember. That is the operational role of `sanctum-mlx`. When fibre is up and the API budget is not yet exhausted, most of the Council prays elsewhere — to Anthropic's Opus 4.7, to Google's Gemini Pro. When either of those goes dark, every Jedi can still ask the Cathedral and receive an answer in seconds. Slower than the cloud. Reachable from a closet.
+
+| Layer | What |
+|---|---|
+| Bricks | `sanctum-mlx` Rust binary, vendored `mlx-rs` + mlx C++ 0.30.6 |
+| Altar | `~/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-4bit` (20 GB on disk, ~16 GB resident at startup) |
+| Vestments | TurboQuant KV compression (1.32× ratio) and a Carmack-passed vision tower (333 tensors, depth 27) |
+| Doors | mTLS on three TLS hosts: `127.0.0.1`, the Tailscale address, and `10.10.10.1` (the bridge to the OpenClaw VM). No door without a client cert. |
+| Discipline | A single global GPU-dispatch Mutex serializes all four chat handlers (sync and stream, text and multimodal). One inference at a time. |
+| Vows | `KeepAlive=true` under launchd, plus a 60-second supervision check, plus a restart-forensics capture, plus a Sunday 04:00 perf-hygiene cron |
+| Witnesses | A vision-canary every 60 seconds probes `/v1/models` and a 1×1 PNG multimodal request. On three consecutive 1h SLO breaches it flips a kill-switch that downgrades vision in the next restart. |
+
+For the implementation detail — TurboQuant, the fused Metal kernel, the Carmack vision-tower wins — start at [Sanctum MLX](./sanctum-mlx.mdx). For the request-tier defense in front of the Cathedral, see the [Smart Router Cathedral](./smart-router-cathedral.mdx) (which is, confusingly, a different cathedral — it is the metaphor for the five-tier router that decides *whether* a request reaches `sanctum-mlx` at all).
+
+## The Council
+
+Five Jedi, one bench, three model providers. Each owns a domain. Each routes to the backend best-suited to it. Each falls back to the Cathedral if their primary backend goes quiet. Each emits a briefing on a schedule, and as of the [Vision Probe Lied](/operations/2026-05-10-the-vision-probe-lied/) sweep, every briefing is silent on green and alert-only on red.
+
+| Jedi | Domain | Primary backend | Fallback | Briefing |
+|---|---|---|---|---|
+| **Yoda** | Strategy, orchestration, voice | Opus 4.7 (Claude Max via the `:3456` bridge) | Cathedral | Master synthesis every `:15` and `:45`, weekdays 08–18 EDT |
+| **Ki-Adi-Mundi** | Financial intel for Triptyq Capital — deal flow, portfolio, fund performance | Opus 4.7 | Cathedral | Every 4h, fires only when deals go cold |
+| **Mace Windu** | Security — firewall state, FileVault, ssh attempts, container health, network drift | Gemini 3.1 Pro Preview | Cathedral | Every 3h, fires only on alerts |
+| **Qui-Gon Jinn** | Code and infrastructure | **Cathedral** (since the 2026-05-10 G3 retirement of the Coder-14B local) | `sanctum/claude-opus-4-7` | On-demand via `@quigon` |
+| **Cilghal** | Health diagnostician — disk, RAM, load, services, VM, Docker | Cathedral | (none — she is the local) | Every 3h, fires only on alerts |
+
+Each individual Jedi has their own page under **[Agents](/agents/yoda/)**. The roster of resolved models is generated from `~/.openclaw/openclaw.json` and the `proxyd` config; refreshed by `pnpm refresh:council` and rendered live in [Agents Architecture](./agents.mdx).
+
+To convene them as a body, the operator runs:
+
+```bash
+tools/ask-council.sh "the question for the council"
+```
+
+This routes around the [Council Router](./council-router.mdx) (which can hang on stale session locks) and talks straight to the Cathedral, persona-injecting all four reasoning Jedi into a single call plus a verdict line. It is how architectural A/B/C decisions are made in this haus. The answer is not always right — the Council deferred shipping a streaming-handler mutex once when the operator's intuition was correct to override — but it is reliably worth listening to before recommending a path to a human.
+
+## The Doctrine
+
+Three rules carry the rest:
+
+1. **Heterogeneous on purpose.** [Neurodiversity is Paramount](./neurodiversity-doctrine.mdx). Three model families across the bench. One outage doesn't take the whole Council.
+2. **Cloud-first for reasoning, local for the safety net.** The Cathedral exists so we keep working when the cloud doesn't.
+3. **Silent on green, alert-only on red.** Every briefing now follows this. If you are getting a Force Flow ping, something actually needs you.
+
+A fourth, quieter rule lives in the closing line of every operations chapter and in the alt text of every Cathedral hero: **the dead cat tiebreaker.** If Tommy wouldn't approve of the page, the deploy, or the doctrine — rewrite it.
