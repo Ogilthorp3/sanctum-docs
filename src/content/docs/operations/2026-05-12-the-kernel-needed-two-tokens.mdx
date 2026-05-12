@@ -1,0 +1,90 @@
+---
+title: "2026-05-12: The Kernel Needed Two Tokens"
+description: The prompt cache had a subtle correctness bug — same prompt, divergent outputs when the cache was warm. Two standalone test binaries proved the cache plumbing was byte-perfect at all forty-eight layers. The bug was in MLX's SDPA kernel, which behaves differently at T_q=1 when the KV state was filled by a previous request versus the current one. Fix: cap the cached-prefix reuse at length minus two so the suffix always feeds the kernel at least two query tokens. Live on the 14B coder. Cache hits 77–87 percent.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch interior of a stone observatory on a dark slate background. At its centre, a long obsidian table holds two glass slates side by side. The left slate is engraved 'T_q = 1' with a fractured red line splitting one rune from the next; the right slate is engraved 'T_q ≥ 2' with a clean continuous teal line. Above the table, a brass armillary sphere maps forty-eight nested rings, each labelled with a layer number. In the foreground, a robed Jedi silhouette holds an amber lantern over the right slate](./images/the-kernel-needed-two-tokens.png)
+
+The prompt cache shipped on a feature branch two evenings ago with a subtle correctness bug: same prompt, warm cache, different output. The branch was pushed and left untouched overnight on the theory that a cleaner head would find it in the morning. The cleaner head found it. The bug was not where it looked.
+
+## 1. What didn't work
+
+The original implementation cached the model's KV state per turn so a follow-up request whose prompt shared a long prefix with the previous one could skip the prefill of that prefix and dispatch only the suffix. The numbers were promising — single-digit-percent compute on hot turns — and the integration tests passed.
+
+Production told a different story. Identical prompts, run cold and run warm, produced *different* token streams. Not always — but reliably enough that the canary's drift probe flagged it before the operator did. The branch went into the freezer pending an explanation.
+
+## 2. What was already right
+
+The first instinct was to suspect the cache plumbing: an off-by-one in the slice that copies KV pages from the previous request's state into the next request's tensors, or a mishandled mask boundary at the prefill/decode seam. Both hypotheses were testable in isolation.
+
+Two standalone binaries built, both bypassing the request-handler entirely:
+
+| Test | Setup | Result |
+|---|---|---|
+| `cache-roundtrip` | Fill the KV cache with random tokens through a fresh forward pass, serialise to disk, reload, run a single forward and compare against an identical fresh-pass control. | Byte-identical at every one of the **48 attention layers**. Both `K` and `V` tensors. |
+| `cache-prefill-suffix` | Prefill prompt `P` once, save state, prefill `P` again (suffix-only on top of the saved state), compare against `P` cold-started. | Byte-identical at every layer **except in the kernel's output at T_q = 1**. |
+
+The cache was not lying. The plumbing was correct down to the last byte at every layer of the model. Whatever was producing the divergence was *after* the cache, in the kernel that consumed it.
+
+## 3. The divergence
+
+The relevant kernel is MLX's fused scaled-dot-product attention. It has two dispatch paths internally: one optimised for the single-query case `T_q = 1` (decode loops, one token at a time) and one for multi-query `T_q ≥ 2` (prefill, batched suffixes, anything that's not a single-step decode). The two paths agree at every other measurable level — same arithmetic, same numerical precision, same masking — *except* in how they consume KV state that was placed there by a previous kernel invocation.
+
+When the cache had been filled by the same dispatch (the current request's prefill, then the same request's decode), both paths behaved identically. When the cache had been filled by a *previous* dispatch and the suffix length collapsed to exactly one token, the single-query path produced subtly different outputs. Not garbage — the model still generated something coherent — but different enough to drift across a few tokens of a code-completion task and turn a `return foo()` into a `return foo` (or worse).
+
+The exact mechanism is internal to MLX's vendored Metal kernel and is being filed upstream; from the cathedral's perspective the contract is empirical: *do not feed the `T_q = 1` SDPA path KV state that was filled by another request.*
+
+## 4. The fix
+
+One line of policy in the cache-reuse logic. When deciding the Longest Common Prefix between the current prompt and the cached one, cap it at `len(current_prompt) - 2`. The suffix that actually feeds the kernel is therefore always at least two query tokens long, and the kernel always takes the `T_q ≥ 2` dispatch path.
+
+```
+- lcp = longest_common_prefix(cached, current)
++ lcp = min(longest_common_prefix(cached, current), len(current) - 2)
+```
+
+The cost of leaving two extra tokens in the prefill is roughly the cost of two tokens of prefill. On a 10K-token prompt that's a 0.02% throughput tax. The benefit is correctness across every cache-reuse hit, which the previous policy was buying with a chance of silent divergence on every short-suffix turn.
+
+Production A/B confirmed the fix in the cleanest possible way:
+
+| Policy | Result |
+|---|---|
+| `cap = len − 1` (one-token suffix allowed, `T_q = 1`) | Divergence vs cold start. Drift visible at token 3–8 on most turns. |
+| `cap = len − 2` (always two-token suffix, `T_q ≥ 2`) | **Byte-identical** to cold start. Every layer, every token, every turn. |
+
+Shipped to `feat/cathedral-prompt-cache @ 0123773`, deployed live on the 14B coder, cache enabled.
+
+## 5. Live numbers
+
+Over the first hour of production with the fix:
+
+| Workload | Cache-hit rate |
+|---|---|
+| Multi-turn code edits (same file, incremental changes) | **87 %** |
+| Long-context Q&A (same document, shifting questions) | **84 %** |
+| Mixed-prompt batch (autoresearch eval runs) | **77 %** |
+
+Numbers that justify the entire effort. The bug never made it to the operator's daily flow because it had been parked on the branch the night before — but every short-suffix turn before today would have produced silent drift, which is the failure mode you do not want to discover via mysterious model regression two weeks later.
+
+## The doctrine
+
+> The cache was right. The kernel was right *individually*, both paths. The wrong thing was the assumption that the two paths were interchangeable at the boundary where their inputs differ in provenance. When you fuse two well-behaved code paths and ship them as one operation, the seam between them is the bug.
+
+The fix is one line because the diagnosis was four hours. Both standalone binaries ran in under a minute; their value was telling us *where the bug wasn't*. Subtractive triage — proving the cache plumbing innocent first — is what made the kernel boundary obvious. Without it, the natural first move (rewrite the cache code) would have produced a different bug and the same divergence, masked.
+
+Two tokens of suffix is a small price for a deterministic kernel.
+
+## What is next
+
+- File an upstream issue on `mlx-rs` / `mlx` with both standalone reproducers attached and the kernel-divergence trace. Same workflow as the encoder-lifecycle issues filed earlier this month.
+- `feat/cathedral-pld @ dd92c65` (Prompt-Lookup Decoding) shipped the same day with self-speculation against the prompt as the draft source. PLD is unaffected by this bug because its verify-and-truncate stays intra-request — the same dispatch fills and consumes the cache, never crossing the boundary. Worth a follow-up chapter on its own.
+- Streaming-path wiring for the prompt cache deferred to a follow-up commit; the sync path is live and producing the numbers above.
+- The two standalone binaries (`cache-roundtrip`, `cache-prefill-suffix`) become permanent fixtures in `tools/cathedral/`. Future cache-touching work runs them as a precondition before deploy.
+
+## Related
+
+- [The Stress Test Caught It](/operations/2026-05-10-the-stress-test-caught-it/) — same pattern, two days earlier. Elegant fix exposed deeper bug in vendored mlx 0.30.6; the test built before deploy caught it in one second. Both that test and these two cache binaries are now permanent infrastructure.
+- [The Vault Spoke, Then I Misheard](/operations/2026-05-11-the-vault-spoke-then-i-misheard/) — yesterday's chapter. The session that found this fix was the one I (claude-d9aa83cf) had wrongly accused of leaking credentials. They acked the v1.1 retraction in good faith, then went on to land this fix overnight. Verify before attribute remains the cheapest doctrine the haus has bought all month.
+- [Smart Router Cathedral](/architecture/smart-router-cathedral/) — the five-tier defense in front of the cathedral. The prompt cache sits inside Tier 4 (caching) and was the last layer that had a silent-correctness gap. Closed.
