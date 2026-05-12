@@ -1,0 +1,181 @@
+---
+title: sanctum.yaml Reference
+description: Complete configuration reference for the Sanctum Family Pass instance file. Five top-level keys. That is the whole surface.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Family Pass configuration file lives at `~/.sanctum/sanctum.yaml`. It is intentionally smaller than [`instance.yaml`](./instance-yaml) — the latter describes a full multi-machine Sanctum constellation, this one describes a single Mac running the v1 pilot. Five top-level keys. That is the whole surface.
+
+The installer writes a stub here in Step 6 and opens it in `$EDITOR`. Every subcommand that touches state reads from this file via `config_get` in `lib/common.sh`. If this file is wrong, `sanctum doctor` will tell you what is wrong before anything else gets a chance to fail more interestingly.
+
+<Aside type="note">
+This file is read by Python through the standard `yaml.safe_load`. Comments are preserved on disk but not exposed to subcommands. Write notes for the future operator (probably you, in six months) liberally.
+</Aside>
+
+## Minimal Example
+
+The smallest valid `sanctum.yaml` that satisfies `sanctum doctor`:
+
+```yaml
+haushold:
+  name: "Nepveu Haushold"
+  slug: "nepveu"
+  members: []
+
+firewalla:
+  host: "192.168.1.1"
+  bridge_token_keychain_label: "firewalla-bridge-token"
+
+paths:
+  sanctum_home: "${HOME}/.sanctum"
+  openclaw_home: "${HOME}/.openclaw"
+
+modules: {}
+```
+
+`anthropic` is optional. If you skip it, the Cilghal assistant runs offline-only on the local cathedral. Anyone who has watched a long Anthropic outage in real time will understand why this is a feature, not a regression.
+
+---
+
+## haushold
+
+The name of the home this Sanctum runs in, and (optionally) who lives there. Sanctum uses `slug` for filesystem paths and tunnel hostnames; `name` shows up in the Holocron UI and in alerts; `members` is consumed by Screen Time and (in v1.1) the Cilghal family assistant.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `name` | `string` | Yes | Human-readable haushold display name. Example: `Nepveu Haushold` |
+| `slug` | `string` | Yes | URL-safe identifier. Used in DNS, file paths, alert subjects. Lowercase, no spaces. |
+| `members` | `list` | No | List of household members. Empty list is fine in v1; expanded in v1.1. |
+
+```yaml
+haushold:
+  name: "Nepveu Haushold"
+  slug: "nepveu"
+  members:
+    - name: "Bertrand"
+      role: "parent"
+    - name: "Andreanne"
+      role: "parent"
+    - name: "Albert"
+      role: "child"
+      age: 16
+```
+
+<Aside type="tip">
+The slug becomes part of file paths and (in v1.1) Tailscale hostnames. Choose something short, lowercase, and easy to type. The renaming surface is small but non-zero; doing it once is cheaper than doing it twice.
+</Aside>
+
+---
+
+## firewalla
+
+Where the Firewalla lives on your LAN, which Keychain entry holds the bridge token, and where group keys go if you bind them. Sanctum talks to the Firewalla through a local bridge process — there is no MSP cloud round-trip in the hot path.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `host` | `string` | Yes | Firewalla IP on your LAN. Default: `192.168.1.1` |
+| `msp_port` | `int` | No | Informational only. The MSP HTTPS port, default 8833. Sanctum does not call it from the hot path; this exists so the installer can document what is open and what is not. |
+| `bridge_token_keychain_label` | `string` | Yes | macOS Keychain item name that holds the bridge bearer token. Default: `firewalla-bridge-token`. The token itself lives in Keychain — never in this file. |
+| `fwgroup_keys_dir` | `string` | No | Directory holding per-fwgroup public keys, if you split rule scope across multiple Firewalla device groups. Optional in v1. |
+
+```yaml
+firewalla:
+  host: "192.168.1.1"
+  msp_port: 8833
+  bridge_token_keychain_label: "firewalla-bridge-token"
+  fwgroup_keys_dir: "${HOME}/.sanctum/fwgroup-keys"
+```
+
+The bridge token itself is read at runtime from macOS Keychain — `security find-generic-password -s firewalla-bridge-token -w` is the canonical lookup. The label can be overridden via the env var `FIREWALLA_BRIDGE_TOKEN_LABEL`; the token itself can be overridden in test environments via `FIREWALLA_BRIDGE_TOKEN`, which short-circuits the Keychain read.
+
+<Aside type="caution">
+The token is not in this file. It is not in any file in `~/.sanctum`. It is in Keychain. This is deliberate — config syncs, repo backups, and screenshots are all reasons your config file may end up in places you did not expect. The token never goes with it.
+</Aside>
+
+---
+
+## anthropic
+
+Optional. If present, the Cilghal helper can call the Anthropic API when offline inference would be slower than the cloud round-trip is worth. If absent, Cilghal runs purely against the local cathedral and never reaches out.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `api_key_keychain_label` | `string` | No | macOS Keychain item name that holds your Anthropic API key. Default: `anthropic-api-key`. |
+
+```yaml
+anthropic:
+  api_key_keychain_label: "anthropic-api-key"
+```
+
+The key is read at runtime from Keychain. The label can be overridden via the env var `ANTHROPIC_API_KEY_LABEL`; the key itself via `ANTHROPIC_API_KEY`, which short-circuits the Keychain read. Same pattern as the Firewalla bridge token — no secret material lives in the yaml.
+
+<Aside type="note">
+Pilot policy: Sanctum brings its own cathedral, you bring your own Anthropic key. If you do not want Cilghal calling out at all, omit this block entirely. The CLI will not prompt for it again.
+</Aside>
+
+---
+
+## paths
+
+Where Sanctum and OpenClaw keep their state on disk. Almost every subcommand reads these. Move them only if you know exactly why you are moving them.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `sanctum_home` | `string` | Yes | Sanctum state root. Default: `${HOME}/.sanctum`. Holds `sanctum.yaml`, `devices.yaml`, `schedule.yaml`, age key bundle, backup archives. |
+| `openclaw_home` | `string` | Yes | OpenClaw state root. Default: `${HOME}/.openclaw`. Holds agent configs, log directory, and (under `logs/`) every subsystem's tail-able log. |
+
+```yaml
+paths:
+  sanctum_home: "${HOME}/.sanctum"
+  openclaw_home: "${HOME}/.openclaw"
+```
+
+These can be overridden at runtime via env vars `SANCTUM_HOME` and `SANCTUM_OPENCLAW_HOME` — useful for `bats` tests, sandboxed evals, or anyone who really likes putting things in `/opt`. The yaml values are the durable defaults; the env vars are the per-invocation escape hatch.
+
+<Aside type="tip">
+`sanctum logs <service>` resolves its log file under `${openclaw_home}/logs/`. If you move `openclaw_home`, every `sanctum logs` call follows automatically. If you forget that detail, you will spend a confusing five minutes tailing a path that no longer has anything to tail.
+</Aside>
+
+---
+
+## modules
+
+Reserved for v1.1. In the v1 pilot, the only module Sanctum ships is Screen Time, and Screen Time is wired directly into the LaunchAgent stack rather than gated through this key. Leaving it as an empty object now means your config will keep validating after the v1.1 module loader lands.
+
+| Key | Type | Required | Description |
+|-----|------|----------|-------------|
+| `modules` | `object` | Yes | Module enable/disable map. In v1: leave as `{}`. In v1.1: per-module config blocks (Cilghal, Eero adapter, Cloud Sync, Yoda voice, etc.) live under here. |
+
+```yaml
+modules: {}
+```
+
+<Aside type="note">
+The empty object is load-bearing. `config_get modules` returning `{}` is a different signal than the key being missing entirely — present-but-empty means "you have opted into the module surface, you just have nothing turned on yet." When v1.1 ships, your `modules: {}` upgrades cleanly. A missing key would require a migration prompt.
+</Aside>
+
+---
+
+## Environment Variable Overrides
+
+A short index of the env vars that supersede `sanctum.yaml` at runtime. Useful for tests, sandboxes, and one-off `bats` runs. None of these are needed for normal operation.
+
+| Variable | Overrides | Notes |
+|----------|-----------|-------|
+| `SANCTUM_HOME` | `paths.sanctum_home` | Default: `~/.sanctum` |
+| `SANCTUM_CONFIG` | Full path to `sanctum.yaml` | Default: `$SANCTUM_HOME/sanctum.yaml` |
+| `SANCTUM_OPENCLAW_HOME` | `paths.openclaw_home` | Default: `~/.openclaw` |
+| `SANCTUM_DEVICES_YAML` | Devices file path | Default: `$SANCTUM_HOME/devices.yaml` |
+| `SANCTUM_SCHEDULE_YAML` | Schedule file path | Default: `$SANCTUM_HOME/schedule.yaml` |
+| `SANCTUM_AGE_KEYS` | Age key file path | Default: `~/.config/sops/age/keys.txt` |
+| `SANCTUM_LIB_DIR` | Library directory | Default: `bin/../lib` relative to `sanctum` binary |
+| `SANCTUM_PROBES_DIR` | Self-test probe directory | Default: `bin/../probes` |
+| `FIREWALLA_BRIDGE_TOKEN_LABEL` | `firewalla.bridge_token_keychain_label` | Keychain label override |
+| `FIREWALLA_BRIDGE_TOKEN` | Bridge token directly | Bypasses Keychain entirely. Test-only. |
+| `ANTHROPIC_API_KEY_LABEL` | `anthropic.api_key_keychain_label` | Keychain label override |
+| `ANTHROPIC_API_KEY` | API key directly | Bypasses Keychain entirely. Test-only. |
+
+<Aside type="caution">
+`FIREWALLA_BRIDGE_TOKEN` and `ANTHROPIC_API_KEY` are documented for test scaffolding only. In production, the Keychain path is the source of truth — env-var secrets show up in process listings, shell history, and crash dumps in places config files do not.
+</Aside>
