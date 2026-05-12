@@ -1,0 +1,93 @@
+---
+title: Installing Sanctum Family Pass
+description: How to install Sanctum on a Mac for your haushold — the hash-pinned 2-step pattern.
+---
+
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+This is the pilot installation flow. One curl pair, one hash check, one bash run. If you came expecting a thousand-line bootstrap script with a fugue-state config phase, you have the wrong era of Sanctum.
+
+## Prerequisites
+
+- Mac with Apple Silicon (M-series), macOS >=14
+- >=16 GB RAM, >=80 GB free disk
+- Firewalla Gold / Purple / Gold Pro on your LAN (you do not need to pair it yet)
+- Homebrew installed
+
+The installer does the rest. It does not assume you have Lima, socket_vmnet, age, sops, or the rest of the dependency parade installed. If something is missing, it tells you what is missing and stops.
+
+## Install
+
+<Steps>
+
+1. **Download the installer and its hash.**
+
+   ```bash
+   curl -fsSLO https://sanctum.haus/install.sh
+   curl -fsSLO https://sanctum.haus/install.sh.sha256
+   ```
+
+   Two files. The script, and the cryptographic fingerprint of the script. The fingerprint is short. The script is not.
+
+2. **Verify the hash before running anything.**
+
+   ```bash
+   shasum -a 256 -c install.sh.sha256
+   ```
+
+   Expected output: `install.sh: OK`.
+
+   <Aside type="danger">
+     If this does not say `OK`, **stop**. The download is corrupt, mid-flight tampered, or pointed at the wrong file. Do not run the script. Re-download both files and try again. If the second attempt fails the same way, ask in the Sanctum channels before proceeding. We did not write this step for fun.
+   </Aside>
+
+3. **Eyeball the script.**
+
+   ```bash
+   less install.sh
+   ```
+
+   The script opens with a numbered plan of what it will do — directory creation, Lima VM provisioning, LaunchAgent installation, self-test. Read the plan. Trust is earned, not curled.
+
+4. **Dry-run first.**
+
+   ```bash
+   bash install.sh --dry-run
+   ```
+
+   This walks the plan without making changes. It prints what it would create, where, and which sudo prompts you should expect. If the dry run says something you do not want, the wet run will do that same thing.
+
+5. **Run it.**
+
+   ```bash
+   bash install.sh
+   ```
+
+   You will be prompted for your sudo password exactly once — Lima and socket_vmnet need it to set up host networking for the VM. The script ends when `sanctum self-test` passes. If self-test fails, the installer leaves you with a populated `~/.sanctum` and a non-zero exit code; `sanctum doctor` will tell you what is broken.
+
+6. **Back up your age key immediately.**
+
+   ```bash
+   sanctum keys backup ~/Desktop/sanctum-keys.age
+   ```
+
+   Move the resulting file to a USB drive, an encrypted external disk, or wherever you keep recovery codes. Without this key your encrypted Sanctum secrets are unrecoverable. We mean unrecoverable. There is no recovery email. There is no support line that will undo this for you. This is the price of running on hardware you actually own.
+
+</Steps>
+
+## After install
+
+A short tour of the operator surface:
+
+- `sanctum status` — daily green/red health glance.
+- `sanctum doctor` — full diagnostic, prints what failed and a hint per failure.
+- `sanctum logs <service>` — tail any subsystem (e.g. `sanctum logs firewalla-bridge`).
+- `sanctum self-test` — re-run the post-install verification wall any time.
+
+<Aside type="tip">
+  `sanctum doctor` is the answer to most "why is X red?" questions. Run it before you ask. It will not be offended.
+</Aside>
+
+## Next step
+
+Pair the Firewalla bridge so Sanctum can actually enforce schedules. See [Firewalla pairing](./firewalla-pairing).
