@@ -1,0 +1,187 @@
+---
+title: Troubleshooting
+description: Pilot-facing FAQ for the things that go wrong on day one. Scan the symptoms; copy the fix; keep going.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+This page is for the pilot who just ran the installer and is looking at a red light. The symptoms below are the ones we've seen most often. The fixes are the durable ones — not workarounds, not "try restarting" cargo-culting.
+
+If your specific failure isn't listed, run `sanctum doctor` first and read its output. If `sanctum doctor` is green and something is still wrong, ask in the Sanctum channels with the doctor output attached.
+
+<Aside type="tip">
+The single most useful command when you don't know what's broken is `sanctum self-test`. It runs all 11 probes and prints a per-probe pass/fail line. Whatever's failing tells you which question to ask below.
+</Aside>
+
+## Doctor and self-test
+
+<details>
+<summary>`sanctum doctor` says Firewalla is unreachable. Now what?</summary>
+
+The doctor's Firewalla check pings the LAN IP in `sanctum.yaml`'s `firewalla.host`. Default is `192.168.1.1`. If your Firewalla lives elsewhere on your LAN, the doctor is right and the config is wrong.
+
+```bash
+# What does sanctum think your Firewalla's IP is?
+grep -A1 '^firewalla:' ~/.sanctum/sanctum.yaml
+
+# Is something there actually answering?
+ping -c 3 192.168.1.1
+```
+
+If the IP is wrong, edit `~/.sanctum/sanctum.yaml`, fix the `firewalla.host` value, and restart the bridge:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla
+```
+
+If the IP is right but `ping` fails, that's a network problem, not a Sanctum problem. Check that you're on the same LAN your Firewalla is on (a different WiFi SSID can put you on a guest subnet that can't reach the Firewalla's management VLAN).
+</details>
+
+<details>
+<summary>`sanctum self-test` fails with `probe 02-firewalla-bridge-bearer-auth (rc=1)`</summary>
+
+The bridge's bearer token isn't in your Keychain. The bridge invents this token and stores it; if it isn't there, every authenticated request to `localhost:1984` gets refused.
+
+```bash
+# Mint a strong token and add it.
+security add-generic-password -s firewalla-bridge-token -a "$(whoami)" -w
+# (paste a hex string when prompted, e.g., from `openssl rand -hex 24`)
+
+# Restart the bridge so it picks up the new value.
+launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla
+```
+
+Re-run `sanctum self-test`. Probe 02 should turn green.
+
+<Aside type="note">
+This token is **not** a Firewalla-side credential — it's a local secret the bridge enforces on its own listener. The Firewalla itself authenticates via the FWGroup keys at `~/.openclaw/firewalla/keys/`, which are a separate setup step covered in [Firewalla Pairing](/getting-started/firewalla-pairing/).
+</Aside>
+</details>
+
+<details>
+<summary>`sanctum self-test` fails with `probe 06-devices-yaml-parses (rc=1)`</summary>
+
+Either `~/.sanctum/devices.yaml` doesn't exist yet, or it exists but has no `devices:` list. The probe expects at least one device.
+
+```bash
+sanctum devices add AA:BB:CC:DD:EE:FF MyDevice gaming
+```
+
+That seeds the file with one device. Add more for each child's phone, tablet, console, or laptop. The third argument is the category (`gaming`, `social`, `homework`, `streaming` — see `sanctum devices --help` for the full list).
+</details>
+
+<details>
+<summary>`sanctum self-test` fails with `probe 09-sops-roundtrip (rc=1)` or `probe 10-age-key-roundtrip (rc=1)`</summary>
+
+Your sops/age key was never generated. Sanctum needs it to encrypt and decrypt the secrets it ships with — without it, the secrets layer is offline.
+
+```bash
+mkdir -p ~/.config/sops/age
+age-keygen -o ~/.config/sops/age/keys.txt
+```
+
+The installer should have done this in Step 5; if it didn't, that's a bug — please file it. In the meantime, the command above is the fix.
+
+<Aside type="danger">
+**Back up the key immediately.** Without it, your sops-encrypted secrets are unrecoverable.
+
+```bash
+sanctum keys backup ~/Desktop/sanctum-keys.age
+```
+
+Move that file off the Mac (USB drive, encrypted disk image, password manager attachment — your call) and treat it like the recovery seed for your Sanctum.
+</Aside>
+</details>
+
+## Install and first-run
+
+<details>
+<summary>My PWA still says "Manoir Nepveu" after install</summary>
+
+`install.sh` Step 8.5 rewrites the PWA's `manifest.json` and `index.html` with the `haushold.name` value from `sanctum.yaml`. Either you edited `sanctum.yaml` *after* running the installer, or Step 8.5 didn't run.
+
+Re-run the installer (it's idempotent, so this is safe), or do the rewrite by hand:
+
+```bash
+HN=$(grep -E '^\s*name:' ~/.sanctum/sanctum.yaml | head -1 | sed 's/.*name:\s*//; s/["'\'']//g')
+sed -i '' "s/Manoir Nepveu/$HN/g" /opt/sanctum/sanctum-screen-time/pwa/index.html
+sed -i '' "s/Manoir Nepveu/$HN/g" /opt/sanctum/sanctum-screen-time/pwa/manifest.json
+```
+
+Refresh the PWA in your browser. If it still shows the old name, hard-reload to bust the service worker cache (Cmd-Shift-R on macOS Safari/Chrome, or uninstall and reinstall the PWA from the share sheet).
+</details>
+
+<details>
+<summary>`sanctum status` shows everything red</summary>
+
+The most common cause is the Lima VM didn't come up on boot. Sanctum's enforcement layer depends on it; if Lima is down, every downstream service looks dead.
+
+```bash
+LIMA_HOME=$HOME/.lima limactl start openclaw-staging --tty=false
+```
+
+If that succeeds, re-run `sanctum status` — most lights should turn green within a minute. If `limactl start` itself fails, look at the autostart log:
+
+```bash
+sanctum logs vm-autostart
+```
+
+The two most common failure modes are (1) `socket_vmnet` isn't running (the installer should have set it up — `brew services list | grep socket_vmnet` to check) and (2) macOS asked for a sudo prompt the autostart script can't answer (the installer's sudoers entry should have prevented that — `sudo -n true 2>&1` to check).
+</details>
+
+## Operational signals
+
+<details>
+<summary>Firewalla bridge log says `60s without successful op (via cache)`</summary>
+
+That's a misleading discovery-checker log line, not a real failure. The bridge's internal discovery loop runs every 60 seconds; if a probe happens to land between Firewalla-API calls, the loop logs the gap and falls back to its cache. The data it returns is still correct.
+
+Look for `[error]` lines instead — those are the real signal. If the only thing you see is the discovery message, the bridge is healthy and you can ignore it.
+
+(We are aware this is confusing log verbiage. Toning it down is on the to-do list.)
+</details>
+
+<details>
+<summary>How do I uninstall Sanctum?</summary>
+
+Two flavors:
+
+```bash
+# Preserves your data (devices.yaml, schedules, encrypted secrets, logs).
+# If you reinstall later, you pick up where you left off.
+sanctum uninstall
+
+# Removes everything Sanctum-managed, including your data.
+sanctum uninstall --purge
+```
+
+The age-key backup you made earlier survives both — it lives on the USB drive / password manager you put it on, not on the Mac. As long as you have that file, you can decrypt your old secrets even after `--purge`.
+</details>
+
+<details>
+<summary>Where should I store my age-key backup?</summary>
+
+Anywhere that isn't your Sanctum-managed Mac. Sanctum doesn't probe for it, doesn't depend on it being in any particular place, and doesn't push it anywhere on your behalf.
+
+Some shapes that work:
+
+- A USB drive in a desk drawer
+- An encrypted disk image (`hdiutil create -encryption -size 100m -volname sanctum-keys ...`)
+- A password manager attachment (1Password, Bitwarden, etc — but **the backup itself**, not a screenshot)
+- A second Mac, copied via AirDrop or scp, stored in a similarly safe spot
+
+The one shape that doesn't work: leaving it in `~/Desktop/` on the same Mac. If that Mac dies, so does your only copy of the key, and your sops secrets become unrecoverable.
+
+The threat model is "Sanctum's Mac dies or gets stolen and you need to recover." If your backup is on the same Mac, you have no recovery path. If it's anywhere else, you do.
+</details>
+
+## When in doubt
+
+`sanctum doctor` is the first stop. `sanctum self-test` is the second. If both are green and something is still wrong, the issue is probably specific enough that it deserves a real bug report — file it in the Sanctum channels with:
+
+- The `sanctum doctor` output
+- The `sanctum self-test` output
+- The contents of `~/.sanctum/sanctum.yaml` (with any secrets redacted)
+- A description of what you expected to happen and what happened instead
+
+The maintainers read these. The fix usually ships in the next pilot point-release.
