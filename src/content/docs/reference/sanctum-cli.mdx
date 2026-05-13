@@ -149,6 +149,7 @@ Pulls every Sanctum repo, restarts the LaunchAgents that need restarting, then r
 ```bash
 sanctum update
 sanctum update --dry-run
+sanctum update --auto
 ```
 
 ### What it does
@@ -165,16 +166,27 @@ sanctum update --dry-run
 | Flag | Behavior |
 |------|----------|
 | `--dry-run` | Print every action without executing |
+| `--auto`    | Tag HEAD before pull, roll back to the tag if self-test regresses |
 
 If a pull fails (uncommitted local changes, divergent history) the update halts at that repo. Sanctum does not stash your changes for you. The assumption is that if you have edits in `/opt/sanctum/`, you know what they are and you would rather we ask.
 
+### Autonomous mode (`--auto`)
+
+`sanctum update --auto` is the autonomous variant. It tags the current
+HEAD before pulling (`auto-rollback-YYYYMMDD-HHMMSS`), pulls, restarts
+services, runs `sanctum self-test`, and **rolls back to the tag if
+self-test regresses**. On rollback it alerts Force Flow with
+`severity: error`. The tag is retained for manual inspection.
+
+Manual `sanctum update` behavior is unchanged — `--auto` is strictly opt-in. The flag is designed for unattended runs (cron, launchd) where a bad release must not brick the pilot. Combine with `--dry-run` to inspect the rollback plan without touching anything.
+
 <Aside type="tip">
-If `sanctum self-test` fails immediately after an update, the most common cause is a probe that expects a new env var you have not set yet. Check the release notes before reaching for `git revert`.
+If `sanctum self-test` fails immediately after a manual update (without `--auto`), the most common cause is a probe that expects a new env var you have not set yet. Check the release notes before reaching for `git revert`.
 </Aside>
 
 ### Mocked mode
 
-`SANCTUM_UPDATE_MOCK=1` skips the actual `git pull`, `launchctl kickstart`, and `self-test` invocations. Tests only.
+`SANCTUM_UPDATE_MOCK=1` skips the actual `git pull`, `launchctl kickstart`, `self-test`, and rollback-tag invocations. Tests only.
 
 ---
 
