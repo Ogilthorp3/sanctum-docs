@@ -1,0 +1,61 @@
+---
+title: "2026-05-12: The Fortnight In One Night"
+description: How Sanctum Family Pass v1.0's two-week pilot infrastructure shipped in a single autonomous overnight push — four phases, two repos, one lite-acid-test, and one unanimous council on a question Bert wasn't around to ask.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Bert took Albert to a hockey game. The two-week pilot-infrastructure scope was supposed to anchor the next fortnight: installer, PWA rebranding, LaunchAgent registration, probe corrections, schema-tolerant config helpers, a getting-started runbook, and a Firewalla-pairing guide. The plan was rationed in P1/P2/P3 tranches, with the smaller items deferred to Saturday.
+
+The plan didn't survive contact with the actual evening. By the time the puck dropped at the rink, the subagent fleet was working on Phase 1; by the time Albert was asleep, four phases had landed across two repos and the lite-acid-test had surfaced three real bugs that the mock harness had been quietly hiding. Most of the fortnight is now in. What's left is what couldn't be done autonomously: actually pulling the trigger on the pilot recruitment, and three small architecture decisions Bert may want to revisit in daylight.
+
+## What we built tonight
+
+**Phase 1 — Pilot LaunchAgent registration.** [`sanctum-runtime b02909c`](https://github.com/Ogilthorp3/sanctum-runtime/commit/b02909c) extracted the seven critical plists a fresh-install pilot needs (force-flow, firewalla bridge, ha-gateway, drift-suppressor, watchdog, openclaw-gateway, and the screen-time door-opener) into `launchagents/pilot/`. The CLI's `install.sh` Step 8 now globs the subdirectory and `sed`-rewrites the hard-coded `/Users/bert/...` paths to `$HOME` at install time, which is the durable fix the prior pilot-experiment had stubbed with a copy-paste plist edit ritual. [`sanctum-cli b0f9dfb`](https://github.com/Ogilthorp3/sanctum-cli/commit/b0f9dfb) is the consumer side.
+
+**Phase 2 — Schema-mismatch trap repair.** The screen-time daemon question was the architectural choice Bert wasn't around to make in person, so the [council was convened](#council-consults). Verdict was unanimous on Option A — `screen_time.py` is and remains a library, with the daemon role co-bundled into the Force Flow process Bert already runs on the Mac. [`sanctum-runtime 4e3a973`](https://github.com/Ogilthorp3/sanctum-runtime/commit/4e3a973) ships a `com.sanctum.screen-time.plist` LaunchAgent at `launchagents/pilot/` anyway — Option A is what runs on Bert's machine, but the standalone shape is the fallback for pilots who don't run Force Flow. Two daemon-shapes, one library underneath. The probe correction this implies is the subject of Phase 4.
+
+**Phase 3 — PWA rebranding at install time.** Sanctum-screen-time ships with the string `"Manoir Nepveu"` baked into its PWA's `manifest.json` and `index.html`. [`sanctum-cli f53f5f0`](https://github.com/Ogilthorp3/sanctum-cli/commit/f53f5f0) inserts a new Step 8.5 between LaunchAgent registration and the self-test gate that `sed`-rewrites those strings to whatever the operator put in `sanctum.yaml`'s `haushold.name`. The canonical template strings are flagged in the source repo so future pilots don't inherit a private name they never chose. Idempotent — re-running the installer on an already-branded install is a no-op.
+
+**Phase 4 — The lite-acid-test, and the pyyaml hand-grenade.** This is the part the plan didn't budget for. With Phases 1–3 in, we ran the installer end-to-end against a scratch fixture instead of trusting the mocks. The acid test found three bugs the bats harness had been carrying for weeks: [`sanctum-cli 5978ee7`](https://github.com/Ogilthorp3/sanctum-cli/commit/5978ee7) fixes probes 09 and 10 (greping for `public_key` underscore when `age-keygen` actually writes `public key` with a space — empty `$PUB` was silently encrypting against an empty recipient), probe 07's awk substring-match (matching only the exact cutoff hour and missing every minute after it), and a scoped SSH `known_hosts` for the install runbook. Separately, [`sanctum-cli 0949af4`](https://github.com/Ogilthorp3/sanctum-cli/commit/0949af4) makes `lib/common.sh::config_get` tolerate a missing `pyyaml` — its module-level `import yaml` was crashing the helper any time the host hadn't installed it yet, which a prior subagent had been working around with `--break-system-packages`. The installer now does the right thing and `pip install --user pyyaml`'s the dependency in Step 2.
+
+Two more dropped tonight on the docs side. [`sanctum-docs 49b119a`](https://github.com/Ogilthorp3/sanctum-docs/commit/49b119a) rewrote `getting-started/installation.mdx` as the new hash-pinned two-step pattern (curl pair → shasum verify → bash run, with the kind of `<Aside type="danger">` you write when you actually mean it) and added a Firewalla-pairing guide that doesn't assume the operator has ever seen an MSP token. [`sanctum-docs adadb05`](https://github.com/Ogilthorp3/sanctum-docs/commit/adadb05) added the reference pages for `sanctum.yaml` and the `sanctum` CLI's full subcommand surface, because the pilot can't read what isn't written.
+
+## The lite-acid-test
+
+The bats harness on `sanctum-cli` has been green at 42 tests for the last week. The lite-acid-test — a clean fixture install, end-to-end, with all probes run against real files instead of mocked stdout — was red on three. Each of the three had a property the mock harness was structurally blind to.
+
+Probe 09's `grep 'public_key'` looked correct to the mock (which stubbed `age-keygen` output to include the underscore). Probe 07's awk `substr($0,1,13)` only matched lex-equal-or-greater, which is fine if the cutoff falls on a clean hour boundary and the test runs at 30 past — and the mock test ran at 30 past. Probe 10's `known_hosts` was reading the operator's actual SSH host-key store, which the mock had no way to discover. **Mock harnesses test that the script's structure matches its author's mental model**. They cannot find bugs that live in the gap between the mental model and the real filesystem. The lite-acid-test is the discipline that closes that gap.
+
+The bats suite is now 44/44 (the two new tests being probe 07's force-flow.log path, added in [`sanctum-cli 19c5f6e`](https://github.com/Ogilthorp3/sanctum-cli/commit/19c5f6e) — see the council section). Three real bugs caught before any pilot ever ran the installer.
+
+## Council consults
+
+Two consults tonight, one on the table and one on the floor.
+
+**The screen-time daemon question.** The library-vs-daemon ambiguity in `screen_time.py` had been a latent question for months — Force Flow imports the library on line 551 and registers screen-time routes into its own aiohttp app, which means on Bert's machine there is no `com.sanctum.screen-time` daemon; on a pilot's machine there might be. The two shapes need different LaunchAgents, different log paths, and different probe logic, and committing to one shape too early would harden a pilot-only or Bert-only artifact into a doctrine. The council was unanimous on **Option A**: keep `screen_time.py` as a library, ship the standalone plist as a fallback for pilots who don't run Force Flow, and teach the probe to check both log files. The standalone shape exists; the co-bundled shape is canonical. The probe lands on the operator's actual configuration without forcing them to declare one in `sanctum.yaml`.
+
+The [Lima `vmType=vz` migration](/operations/2026-05-07-the-reboot-reveals/#wave-9--bootstrapsh-refactor) consult was earlier on May 10 and isn't tonight's work — that's the canonical openclaw vz config that landed as [`sanctum-runtime 6ffdda3`](https://github.com/Ogilthorp3/sanctum-runtime/commit/6ffdda3), feeding into Phase 1's installer. Mentioning it here for the timeline; the migration itself is unrelated to tonight's pilot push.
+
+## What's left for Bert
+
+- **T3.5 acid test on a fresh macOS user.** Tonight's lite-acid-test was on a scratch fixture, not a clean macOS user account. T3.5 spins up a fresh account, runs the installer cold, and walks the full first-run path including TCC prompts. Sub-30-minute job; the script's there, it just hasn't been run yet.
+- **Pilot recruitment (Phase 5).** Three to five pilots, all parents Bert already knows by first name. Channel-and-message is Bert's call — this isn't a thing a subagent should be drafting.
+- **Three architecture decisions to revisit:**
+  - **T1.2-a — Schema adapter for the new manifest grammar.** [The Gates Held](/operations/2026-04-30-the-gates-held/#the-schema-trap) note documented this trap in detail: `service-graph.py` parses the legacy schema, the new grammar parses cleanly but silently skips. Tonight kept the workaround. The PR that teaches the catalog parser the richer vocabulary is still pending.
+  - **T1.2-b — Real `push_rules` integration.** The pilot installer ships with a stub `push_rules` placeholder. The real one needs the iOS push-notification flow connected end-to-end and is gated on the Yoda voice-cert renewal cycle.
+  - **T1.2-c — iPhone-MAC drift.** The 30-minute MAC-rotation window on iOS 17+ silently breaks Sanctum's device-pinned rules whenever an iPhone re-associates. The fix is a MAC-history table on the Firewalla bridge; the bridge side knows how, but the screen-time enforcement loop still treats the freshly-drifted MAC as a new device.
+
+None of these are tonight-shaped. All three are good morning-coffee shaped.
+
+## What I learned
+
+Three things surprised me.
+
+**`screen_time.py` is a library.** I treated it as a daemon for two days before reading line 551. The architectural reality has consequences for every probe, every log path, every plist; the doctrine entry now says so out loud. The probe correction in [`sanctum-cli 19c5f6e`](https://github.com/Ogilthorp3/sanctum-cli/commit/19c5f6e) is the durable fix. Two log paths, either-passes-means-healthy, no operator-facing config required.
+
+**The pyyaml import was a latent crash, not a warning.** A previous subagent had worked around it with `pip install --break-system-packages`, which is the kind of fix that looks like progress in a single session and looks like rot a month later. The durable fix is one `try/except` and one `pip install --user`. The standing rule applies — fix the upstream in the same turn, don't ship the workaround.
+
+**The Lima port collision was the actual May 3 bug.** The [Firewalla bridge degradation field note](/operations/2026-05-03-the-cathedral-sees/) had pointed at the MSP API as the prime suspect; that turned out to be a downstream symptom. The actual root cause was a port collision on the Lima vz config that prevented the bridge from binding cleanly on cold-start, which the Phase 1 canonical openclaw vz config closes for good. The bridge's `60s without successful op (via cache)` log line is misleading discovery-checker verbiage, not a real failure — the [troubleshooting page](/getting-started/troubleshooting/) documents this so the next pilot doesn't chase the ghost.
+
+The fortnight became a single overnight push because the work was, mostly, the kind of work a careful subagent can do in parallel. The parts that couldn't — the council vote, the pilot recruitment, the three architecture decisions — are flagged. The kind of evening you get when the plan is small enough and the standing rules are clear enough that the haus mostly knows what to do next.
