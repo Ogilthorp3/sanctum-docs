@@ -1,0 +1,183 @@
+---
+title: Service Troubleshooting
+description: Five service-specific failures — VM-local-model bridge drift, MLX port conflict, proxy keys missing after manual restart, fallback chain dead ends, and the Holocron app starting black.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Service troubleshooting — a repair workshop with five mechanical service machines lined up; three glow amber, two are disassembled on the bench while a mechanic in a leather apron mid-diagnoses one with a magnifier.](./images/hero-service-troubleshooting.png)
+
+Service-level failures that don't have a one-line fix — each of these earned its own section through a real outage that hid behind a cheerful green probe. The main [Troubleshooting](/operations/troubleshooting/) page keeps the universal infrastructure scenarios; this annex carries the ones a few clicks down the diagnostic tree.
+
+## VM Can Reach OpenClaw But Not Local Models
+
+**Symptom:** The VM can talk to the Mac gateway on `10.10.10.1:1977`, but model calls to `10.10.10.1:1337` or `10.10.10.1:1234` fail.
+
+That means the VM bridge exists, but the model-serving side of the Mac has drifted. Usually one of two things is true:
+
+1. The MLX model server is down or bound incorrectly.
+2. The LM Studio bridge listener on `10.10.10.1:1234` is gone.
+
+**Check from the VM:**
+
+```bash
+ssh openclaw "curl -fsS http://10.10.10.1:1337/v1/models | jq '.data | length'"
+ssh openclaw "curl -fsS http://10.10.10.1:1234/v1/models | jq '.data | length'"
+```
+
+**Check on the Mac:**
+
+```bash
+curl -fsS http://127.0.0.1:1337/v1/models
+curl -fsS http://127.0.0.1:1234/v1/models
+lsof -nP -iTCP@10.10.10.1:1234 -sTCP:LISTEN
+```
+
+**Fix:**
+
+```bash
+# Re-run the VM startup path to restore the bridge surfaces
+bash ~/.openclaw/scripts/vm-autostart.sh
+```
+
+If `127.0.0.1:1337` is down too, the MLX server itself is the problem, not the bridge. Fix the model server first, then re-run `vm-autostart` so the VM-side path matches reality again.
+
+## MLX Server Returning 503 (sanctum-idle Port Conflict)
+
+**Symptom:** Local model requests fail with `502 All models failed. Last error: 503 http://10.10.10.1:1337/v1/chat/completions`. The MLX server process is running but returning empty 503 responses.
+
+**Root cause:** Two LaunchAgents competing for the same model server:
+
+- `com.sanctum.council-mlx` starts the MLX server directly on `0.0.0.0:1337`
+- `com.sanctum.idle-mlx` runs `sanctum-idle`, which listens on `10.10.10.1:1337` and expects to manage the MLX server on `127.0.0.1:8900`
+
+When both are active, `council-mlx` binds MLX directly to port 1337. The `sanctum-idle` proxy still accepts connections on `10.10.10.1:1337` but its backend on port 8900 is empty — nothing is listening there. Every request gets a 503.
+
+**Diagnosis:**
+
+```bash
+# Check for the conflict — two processes on port 1337 is the giveaway
+lsof -i :1337
+# If you see BOTH a Python/MLX process AND a sanctum-idle process, that's the bug
+
+# Confirm nothing on 8900 (where idle expects the backend)
+lsof -i :8900
+# Empty = confirmed conflict
+```
+
+**Fix:**
+
+```bash
+# 1. Unload the conflicting agent (stops the process AND removes from launchd)
+launchctl bootout gui/$(id -u)/com.sanctum.council-mlx
+
+# 2. Permanently disable it so it never loads again at boot
+launchctl disable gui/$(id -u)/com.sanctum.council-mlx
+
+# 3. Kill any orphaned MLX process still on port 1337
+kill $(pgrep -f 'mlx_lm.server.*--port 1337') 2>/dev/null
+
+# 4. Restart idle-mlx so it manages the lifecycle properly
+launchctl kickstart -k gui/$(id -u)/com.sanctum.idle-mlx
+```
+
+<Aside type="caution">
+  `launchctl disable` only prevents the agent from starting at next boot — it does **not** stop a currently running instance. You must use `launchctl bootout` first to actually unload and terminate the running service. Without bootout, the orphaned MLX process will keep squatting on port 1337 with PPID 1 (reparented to launchd).
+</Aside>
+
+**Verify:**
+
+```bash
+# Should show only sanctum-idle on 1337
+lsof -i :1337
+
+# Send a test request — idle will wake the model (may take ~30s first time)
+curl -s http://10.10.10.1:1337/v1/models
+```
+
+<Aside type="caution">
+  `com.sanctum.council-mlx` is the legacy direct-launch agent. `com.sanctum.idle-mlx` is the replacement that adds idle shutdown (300s timeout) and on-demand wake. They cannot coexist. Keep `idle-mlx`, disable `council-mlx`. The model is the same, the port is the same, you just gain RAM reclamation when nobody is using inference.
+</Aside>
+
+## Sanctum Proxy Missing API Keys After Manual Restart
+
+**Symptom:** Claude Code requests fall through to `deepseek-v3` or other fallback models instead of reaching Anthropic. The proxy is running but all Anthropic requests fail silently.
+
+**Root cause:** The proxy binary was started directly (`./target/release/sanctum-proxy`) instead of through the LaunchAgent. The launcher script (`~/.sanctum/scripts/proxy-launcher.sh`) injects API keys from macOS Keychain. Without it, `ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, and `GEMINI_API_KEY` are all empty.
+
+**Diagnosis:**
+
+```bash
+# Check the launcher log — look for "anthropic=yes"
+tail -5 ~/.openclaw/logs/sanctum-proxy-launcher.log
+
+# If the last entry doesn't show key loading, the proxy was started manually
+```
+
+**Fix:**
+
+```bash
+# Always restart through the LaunchAgent, never the binary directly
+launchctl kickstart -k gui/$(id -u)/com.sanctum.proxy
+```
+
+<Aside type="danger">
+  Never run `sanctum-proxy` directly from the command line in production. The binary has no way to access Keychain on its own — it relies on environment variables that only the launcher script provides. Direct execution means zero API keys, which means every cloud provider request fails and the fallback chain burns through alternatives until it lands on a local model or gives up entirely.
+</Aside>
+
+## Fallback Chain Dead End (council-heartbeat)
+
+**Symptom:** Heartbeat or briefing requests fail with 502 even though remote providers are healthy.
+
+**Root cause:** The model's fallback chain only contains other local models on the same server. If that server is down, every fallback also fails.
+
+**Example:** `council-heartbeat` originally had only `council-mlx` as a fallback — both pointing at `http://10.10.10.1:1337`. When the MLX server was down, there was no escape route to a remote provider.
+
+**Fix:** Ensure every local model has at least one remote fallback in `config.yaml`:
+
+```yaml
+fallbacks:
+  council-heartbeat:
+    - council-mlx        # same local server (fast path)
+    - nemotron-free      # remote escape route (OpenRouter)
+```
+
+<Aside type="tip">
+  Rule of thumb: every fallback chain should end with at least one model on a different provider than where it started. Local-only chains are a single point of failure. A free OpenRouter model like `nemotron-free` or `minimax-m25-free` costs nothing and prevents total blackout.
+</Aside>
+
+## Holocron App Starts Black
+
+**Symptom:** `/Applications/The Holocron.app` launches, the window appears, and then all you get is a black rectangle contemplating its choices.
+
+The browser dashboard can still be healthy while the packaged Electron shell is busy sabotaging itself. They are related, not identical.
+
+**Check:**
+```bash
+ps -ef | rg '/Applications/The Holocron.app/Contents/MacOS/The Holocron'
+tail -50 ~/.openclaw/logs/living-force.log
+tail -50 ~/Library/Application\ Support/the-holocron/logs/main.log 2>/dev/null
+```
+
+**Common root cause:** `run_sanctum.sh` used an overly broad process cleanup rule:
+
+```bash
+pkill -f "the-holocron"
+```
+
+That matched Electron helper processes via the user-data path and killed the renderer just after launch. Technically precise. Spiritually deranged.
+
+**Fix:**
+```bash
+# Only target Holocron dev/Vite processes, never the packaged app
+pkill -f '/Users/neo/Projects/the-holocron/.*vite' || true
+pkill -f 'vite --host 127.0.0.1 --port 3333' || true
+
+# Reinstall the current tested app bundle
+cd /Users/neo/Projects/the-holocron
+npm run update:app
+```
+
+<Aside type="caution">
+If you use `pkill -f` with a vague substring around Electron, you are delegating process selection to chaos. Chaos is enthusiastic but not detail-oriented.
+</Aside>
