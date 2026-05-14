@@ -14,8 +14,10 @@ Usage:
     python3 scripts/contrib-check.py path/to.mdx  # check one file
 """
 
+import hashlib
 import re
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -103,6 +105,12 @@ EMOJI_ALLOW = {
     "qc.mdx",
 }
 
+# Pages exempt from the unique-hero requirement. 404.mdx is a template
+# error page, not content; it carries the splash brand glyph instead.
+HERO_EXEMPT = {
+    "404.mdx",
+}
+
 
 class Report:
     def __init__(self):
@@ -135,6 +143,8 @@ def check_frontmatter(path, rel, content, report):
 
 
 def check_hero(path, rel, body, body_line_offset, report, fm_text=""):
+    if path.name in HERO_EXEMPT:
+        return
     # Starlight splash pages put the hero in frontmatter (`template: splash`
     # + `hero.image.{dark,light}`), not as a markdown ![alt](path). Treat
     # that as a valid hero so contrib-check doesn't false-fail homepages.
@@ -297,6 +307,133 @@ def check_mdx_tag_chars(path, rel, body, body_line_offset, report):
             )
 
 
+def collect_all_heroes():
+    """Walk every .mdx under docs/ and return (page_rel_path, hero_abs_path) tuples.
+
+    Always runs against the full repo (not just the targets passed on the CLI),
+    because rule-1 is a cross-page invariant: a hero shared by two pages is a
+    violation even when only one of them is being checked.
+    """
+    pairs = []
+    for p in sorted(DOCS.rglob("*.mdx")):
+        try:
+            content = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        fm_m = FRONTMATTER_RE.match(content)
+        if not fm_m:
+            continue
+        fm_text = fm_m.group(1)
+        if re.search(r'^\s*template:\s*splash\s*$', fm_text, re.M) and \
+           re.search(r'^\s{2,}image\s*:', fm_text, re.M):
+            continue
+        body = content[fm_m.end():]
+        head = "\n".join(body.splitlines()[:30])
+        m = IMAGE_REF_RE.search(head)
+        if not m:
+            continue
+        src = m.group(2)
+        if src.startswith(("http://", "https://")):
+            continue
+        if src.startswith("./"):
+            src = src[2:]
+        img = (p.parent / src).resolve()
+        pairs.append((p.relative_to(ROOT), img))
+    return pairs
+
+
+def check_heroes_unique(report):
+    """Flag any hero referenced by 2+ pages.
+
+    Rule #1 (CONTRIBUTING.md): every page gets a UNIQUE hero. Reusing one
+    across pages signals a generation step got skipped.
+    """
+    by_hero = defaultdict(list)
+    for page, hero in collect_all_heroes():
+        by_hero[hero].append(str(page))
+    for hero, pages in by_hero.items():
+        if len(pages) < 2:
+            continue
+        try:
+            hero_rel = hero.relative_to(ROOT)
+        except ValueError:
+            hero_rel = hero
+        for page in pages:
+            report.err(
+                page, 0, "hero-unique",
+                f"hero `{hero_rel}` is shared by {len(pages)} pages "
+                f"({', '.join(sorted(pages))}) — rule #1 wants a unique hero per page",
+            )
+
+
+def check_image_files_on_disk(report):
+    """Detect orphan image files, byte-identical duplicates, and Finder-suffix names.
+
+    Walks src/content/docs/**/images/* and reports:
+    - Orphans: file is not referenced by any .mdx (warn — clean up or assign)
+    - Byte-dups: two+ files with identical sha256 (err — pick one canonical home)
+    - Suffix names: ` 2.`, `-1.`, ` copy.`, `_copy.`, `(1).` patterns (warn)
+    """
+    image_exts = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+    image_files = []
+    for img_dir in DOCS.rglob("images"):
+        if not img_dir.is_dir():
+            continue
+        for f in img_dir.iterdir():
+            if f.is_file() and f.suffix.lower() in image_exts:
+                image_files.append(f)
+
+    referenced = set()
+    for p in DOCS.rglob("*.mdx"):
+        try:
+            text = p.read_text(encoding="utf-8")
+        except Exception:
+            continue
+        for m in IMAGE_REF_RE.finditer(text):
+            src = m.group(2)
+            if src.startswith(("http://", "https://")):
+                continue
+            if src.startswith("./"):
+                src = src[2:]
+            referenced.add((p.parent / src).resolve())
+
+    for f in image_files:
+        if f.resolve() not in referenced:
+            report.warn(
+                str(f.relative_to(ROOT)), 0, "hero-orphan",
+                "image is not referenced by any .mdx — clean up or assign to a page",
+            )
+
+    by_hash = defaultdict(list)
+    for f in image_files:
+        try:
+            h = hashlib.sha256(f.read_bytes()).hexdigest()
+        except Exception:
+            continue
+        by_hash[h].append(f)
+    for files in by_hash.values():
+        if len(files) < 2:
+            continue
+        rels = sorted(str(f.relative_to(ROOT)) for f in files)
+        for f in files:
+            report.err(
+                str(f.relative_to(ROOT)), 0, "hero-bytedup",
+                f"byte-identical to {len(files) - 1} other file(s): "
+                f"{', '.join(r for r in rels if r != str(f.relative_to(ROOT)))} "
+                f"— pick one canonical home",
+            )
+
+    # Only Finder-canonical duplicate patterns: ` 2.png`, ` copy.png`, `(1).png`.
+    # `-N.` is too common in legitimate names (`hero-slice-4.png`, `v1-snapshot.png`).
+    suffix_re = re.compile(r"( \d+\.| copy\.|_copy\.|\(\d+\)\.)")
+    for f in image_files:
+        if suffix_re.search(f.name):
+            report.warn(
+                str(f.relative_to(ROOT)), 0, "hero-suffix",
+                f"filename '{f.name}' looks like a Finder duplicate — rename or remove",
+            )
+
+
 def check_length(path, rel, body, body_line_offset, report):
     clean = CODE_BLOCK_RE.sub("", body)
     clean = IMAGE_REF_RE.sub("", clean)
@@ -357,6 +494,12 @@ def main(argv):
     report = Report()
     for p in targets:
         check_page(p, report)
+
+    # Cross-page invariants — always run against the full docs/ tree, even
+    # when the CLI passed a single-file target. Hero uniqueness is a global
+    # property; a single-file check can't see its own violations.
+    check_heroes_unique(report)
+    check_image_files_on_disk(report)
 
     for w in report.warnings:
         print(f"warn: {w}")
