@@ -1,49 +1,55 @@
-# Starlight Starter Kit: Basics
+# sanctum-docs
 
-[![Built with Starlight](https://astro.badg.es/v2/built-with-starlight/tiny.svg)](https://starlight.astro.build)
+Public developer + architecture documentation for **Sanctum** at
+[sanctum.run](https://sanctum.run). Sister to
+[sanctum-haus](https://github.com/Ogilthorp3/sanctum-haus) (consumer
+marketing at [sanctum.haus](https://sanctum.haus)).
 
+Astro Starlight static site, deployed to Cloudflare Pages.
+
+## What's here
+
+| Section | Path | What it covers |
+|---|---|---|
+| Agents | `src/content/docs/agents/` | The 9 character-themed agent personas (Yoda, Cilghal, Mothma, Ahsoka, Jocasta, Qui-Gon, Tommy, Windu, Mundi) — their roles, backing models, and operating envelopes |
+| Architecture | `src/content/docs/architecture/` | Deep-dives on every Sanctum subsystem: cathedral, council router, smart-router-cathedral, screen-time, sanctum-mlx, sanctum-gateway, sanctum-bridge, kitchen-loop, living-force, reliability-doctrine, force-flow, model-tournament, TurboQuant KV compression, secrets-trifecta, and more |
+| Operations | `src/content/docs/operations/` | Field notes from real incidents and migrations |
+| Getting started | `src/content/docs/getting-started/` | First-touch orientation |
+
+Illustrations live alongside each section under `images/`.
+
+## Dev
+
+```sh
+pnpm install
+pnpm dev          # localhost:4321
+pnpm build        # production build to ./dist/
+pnpm preview      # preview the build locally
 ```
-npm create astro@latest -- --template starlight
-```
 
-> 🧑‍🚀 **Seasoned astronaut?** Delete this file. Have fun!
+## Agent instructions
 
-## 🚀 Project Structure
+`AGENTS.md`, `CLAUDE.md`, and `GEMINI.md` are all symlinks to the same
+file. Edit `AGENTS.md`; the other two follow automatically. Any LLM
+working in this repo reads the same operating rules — no risk of
+drift between agent personas.
 
-Inside of your Astro + Starlight project, you'll see the following folders and files:
+## Drift detection
 
-```
-.
-├── public/
-├── src/
-│   ├── assets/
-│   ├── content/
-│   │   └── docs/
-│   └── content.config.ts
-├── astro.config.mjs
-├── package.json
-└── tsconfig.json
-```
+`.docs-drift-marker` + `scripts/` enforce that documented architecture
+keeps pace with the running systems. The `com.sanctum.docs-drift-audit`
+LaunchAgent (in `sanctum-runtime`) periodically reconciles claims here
+against live state on `manoir` and surfaces any divergence.
 
-Starlight looks for `.md` or `.mdx` files in the `src/content/docs/` directory. Each file is exposed as a route based on its file name.
+## Contributing
 
-Images can be added to `src/assets/` and embedded in Markdown with a relative link.
+See [CONTRIBUTING.md](CONTRIBUTING.md) (substantial — covers editorial
+voice, drift discipline, illustration sourcing, and the doc-types
+taxonomy). Editorial roadmap lives in [HERO_ROADMAP.md](HERO_ROADMAP.md).
 
-Static assets, like favicons, can be placed in the `public/` directory.
+## License
 
-## 🧞 Commands
-
-All commands are run from the root of the project, from a terminal:
-
-| Command                   | Action                                           |
-| :------------------------ | :----------------------------------------------- |
-| `pnpm install`            | Installs dependencies                            |
-| `pnpm dev`                | Starts local dev server at `localhost:4321`      |
-| `pnpm build`              | Build your production site to `./dist/`          |
-| `npm run preview`         | Preview your build locally, before deploying     |
-| `npm run astro ...`       | Run CLI commands like `astro add`, `astro check` |
-| `npm run astro -- --help` | Get help using the Astro CLI                     |
-
-## 👀 Want to learn more?
-
-Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+Content under [CC-BY-4.0](LICENSE) (attribute to Sanctum / Bertrand
+Nepveu when reusing prose or illustrations). Source code (Astro
+configuration, components, scripts) under MIT — see code-file headers
+where applicable.
