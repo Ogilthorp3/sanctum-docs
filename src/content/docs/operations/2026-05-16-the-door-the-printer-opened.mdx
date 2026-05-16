@@ -1,0 +1,129 @@
+---
+title: The Door the Printer Opened
+description: A Brother MFC-L8900 install that wouldn't take cracked open a routing bug that had been quietly breaking Bell Fibe on hockey nights since April. Then it kept opening doors.
+date: 2026-05-16
+---
+
+The operator wanted to install a printer.
+
+The printer was a Brother MFC-L8900CDW. AirPrint. Discoverable. The dialog
+saw it. The dialog refused to add it. The MacBook Pro pinged the printer at
+700 to 2700 milliseconds with 17 percent packet loss, which is the latency
+profile of a printer that lives on the moon, or a printer that lives in the
+living room while your packets visit the moon first.
+
+The packets, it turned out, were visiting the moon.
+
+## What the moon was
+
+`manoir` advertises `192.168.1.0/24` as a Tailscale subnet route, so the
+operator can reach LAN devices while traveling. That same setting,
+unflipped while sitting at home, was sending every LAN packet on a tour:
+MacBook to Tailscale to `manoir` to the LAN and back. ~300 ms of detour.
+For most things this is invisible. For CUPS' five-second IPP handshake,
+it is fatal.
+
+This was discovered while the printer was sleeping. The printer was also
+sleeping. Both things were true at once. This is operations.
+
+## What had been quietly broken since April
+
+The first-floor Apple TVs held 52 durable streaming-block policies each
+from a 2026-04-18 service-mode experiment. The audit at the time grepped
+for `bell` in policy targets and reported clean. None of the matching
+entries had `bell` in them. They had `capi.9c9media.com` and
+`pe-ak-vp01a-9c9media.akamaized.net` — which are Bell Media's video
+pipeline. Which is what Bell Fibe streams through.
+
+Which is why, on Stanley Cup playoff night, the Habs were on TSN, TSN was
+on Bell Media, Bell Media was on 9c9media, and 9c9media was blocked.
+
+The fix was not to delete the blocks (the Firewalla MSP delete API is
+intermittent; SSH iptables fallback gets resurrected by MSP DB at the
+next sync). The fix was to issue allow-rules that the same MSP DB does
+honor on create — and let allow-precedence settle the matter. Eighteen
+allow-rules across five Apple TV MACs. Bell Fibe routes around the dead
+blocks the way the Internet was supposed to route around damage in the
+first place.
+
+## What the printer became
+
+Not a printer, in the end. A daemon.
+
+[`tailscale-smart-routes`](https://github.com/Ogilthorp3/sanctum-tailscale-smart-routes)
+auto-toggles `accept-routes` based on whether any Tailscale peer is
+reachable as a real-LAN P2P connection. It keys off the peer's `CurAddr`
+field, not the router's MAC, not the SSID. If you swap your Firewalla
+Purple for a Gold Pro tomorrow, the daemon doesn't notice and doesn't
+care. If you move to a different country, it just turns itself back on.
+
+A friend can install it with `./install.sh`. The install script hard-fails
+on missing `tailscale` or `python3` with messages that name the fix. The
+LaunchAgent migrates a prior in-house label cleanly. There is a
+`--status` subcommand because every daemon worth running deserves one.
+
+This is the shape, and the shape is becoming Sanctum's shape.
+
+## The audit that became a pass
+
+A daemon that ships as a real product made the rest of the fleet look
+unfinished. Nineteen Sanctum repos. Eighteen of them had no LICENSE.
+Zero had GitHub topics. Zero had a tagged release. Four had GitHub
+*descriptions* that read like product taglines and READMEs that were
+empty files. Which is the most misleading shape an open-source project
+can take, a thing that looks productized from the outside and is opaque
+inside.
+
+So the same pattern got cloned across the eligible repos:
+
+- `LICENSE` (FSL-1.1-Apache-2.0 for code; same anti-SaaS clause as
+  FSL-1.1-MIT but with Apache's patent grant).
+- README that explains what, why, and how to install.
+- Topics for discoverability.
+- A v0.1.0 release marker so there is somewhere to point a friend at.
+
+The four standalone Rust crates (`sanctum-mlx`, `sanctum-watchdog`,
+`sanctum-idle`, `sanctum-memory`) turned out to be legacy projections of
+the `sanctum-rs` monorepo. Their README drafts got migrated into the
+monorepo's `services/<crate>/README.md` slots; the standalones got
+`MOVED.md` redirects and an archive flag. The work survived; the dead
+surface stopped being a footgun.
+
+## The license unbundling
+
+"Available to all, fair about what we built, willing to take the Disney
+risk" is three different goals that wanted three different mechanisms:
+
+| Asset | License | Why |
+|---|---|---|
+| Code | FSL-1.1-Apache-2.0 | Personal + research + professional-services use immediate. Anti-SaaS-competition for 2 years. Auto-converts to plain Apache-2.0. Patent grant included. |
+| Docs content | CC-BY-4.0 | Maximum reach. Attribution required. Even paywalled derivatives allowed (democracy choice over share-alike). |
+| Marketing surface | Proprietary | Brand voice is not an open-source asset class. `NOTICE.md` points readers at the openly-licensed repos so the visitor who wanted source can find it. |
+
+This is internally consistent: most generous license that matches the
+asset class. The Family Pass and Cloud Sync business models stay
+protected on any given version for two years. After two years, the world
+gets every version free under Apache-2.0. That's the stated long-arc
+philosophy, now in the LICENSE files instead of in the operator's head.
+
+## The thing the printer was really about
+
+It started as a printer install. It became:
+
+- 18 Bell Fibe allow-rules per affected Apple TV
+- A productized auto-routing daemon
+- 14 productized repo upgrades
+- 4 standalone archives with redirects
+- 8 LICENSE upgrades (FSL-1.1-MIT to FSL-1.1-Apache-2.0)
+- 1 dual-license docs update
+- 1 marketing-site NOTICE
+- 1 302-GB SSD migration in flight to the Transcend external
+
+Operations is what happens when you pull on one thread and the rest of
+the sweater is honest about what it is.
+
+The printer prints now.
+
+---
+
+*Field note from the operator's seat. The Cathedral was undisturbed.*
