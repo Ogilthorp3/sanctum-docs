@@ -1,0 +1,96 @@
+---
+title: "2026-05-16: The Port, The Renames, And The Orphan VM"
+description: Two questions started this — "why are there two Lima VMs?" and "this should be in Rust." Both answers led to actual cleanups. The orphan Colima VM got retired, the rust_readiness audit got memory-vault-mcp moved into Rust, four processes got names that match their service identity in Activity Monitor, and the daily Force Flow notice goes quiet.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A small crab perched on the rim of a coiled python, both as soft architectural pencil sketches with a teal halo around the crab](./images/2026-05-16-the-port-the-renames-and-the-orphan.png)
+
+A normal "what else is obsolete?" sweep turned into five parallel ships: a 19-day orphan VM retired, an MCP server ported from Python to Rust, three process names that finally match their service identity, and a stale FTS5 index rebuilt against the live vault. None of these were planned at the start of the day. All of them came out of looking at what was actually running and asking why.
+
+## The orphan Lima
+
+The opening question was "why are there two Lima VMs?" One was the legitimate openclaw-staging instance. The other was Colima — which IS Lima underneath, sitting in `~/.colima/_lima/`. It was supposed to retire during the [2026-04-27 OrbStack migration](https://github.com/Ogilthorp3/sanctum-docs/blob/main/src/content/docs/operations/operational-history.mdx) but the `com.sanctum.openclaw.colima` LaunchAgent was left in place. It faithfully respawned the orphan VM at every boot for 19 days, burning 2 CPUs + 4 GiB RAM for a workload that no longer existed.
+
+Cleanup was straightforward: `launchctl bootout`, retire the plist with a dated suffix, `colima stop default`, `colima delete default --force`, `rm -rf ~/.colima` to reclaim the residual 9 GB of container cache. Memory pinned in [`colima_retirement_completed_2026_05_16.md`](https://github.com/Ogilthorp3/sanctum-docs) with the lesson: **retire the plist in the same commit as the service it manages**. A faithful daemon respawning a dead VM is the deprecation pattern that's most painful to catch — there are no errors to alert on.
+
+## The Force Flow notice
+
+The second question was "this TTS Python process should be in Rust." That turned out to be a misread — the running `python -m workers.tts_server` is the deliberate ML-inference backend that the Rust `sanctum-tts` adapter on `:8007` proxies to. But the question pointed at a real tool: `~/Documents/Claude_Code/tools/rust_readiness.py` audits every service in `rust_readiness.yaml` and posts a daily Force Flow notice when something hits the `ready` stage. The notice had been firing since May 15.
+
+Running the audit:
+
+```text
+SERVICE             LANG         CRIT   30D   90D    LOC STAGE
+force-flow          python  critical      1     5    564 hardening
+screen-time         python  critical     10    13   2414 organic
+memory-vault-mcp    python  medium        0     1    388 ready    ← the notice
+sanctum-firewalla   rust    high          0     1      3 porting
+...
+```
+
+Stage `ready` means: feature velocity below the threshold, low criticality, hardened. The audit had a target path picked out (`sanctum-rs/services/memory-vault-mcp/`) and was waiting for someone to do the work.
+
+## The port
+
+`memory-vault-mcp` is a FastMCP server with 8 tools — search, read, write, delete, list, links, consolidate, health — backed by SQLite FTS5 over Obsidian-compatible Markdown notes with YAML frontmatter and `[[wikilinks]]`. The Python tree is ~800 LOC across `server.py`, `vault.py`, `index.py`. Direct port shape, no behavior changes:
+
+- `vault.rs` — atomic-rename file I/O, `[[wikilink]]` regex via `once_cell`, path-traversal guard, `serde_yaml` for frontmatter, `chrono` for ISO-8601 timestamps
+- `index.rs` — `rusqlite` with the `bundled` feature (FTS5 ships with the bundled sqlite), identical CREATE TABLE + triggers + `snippet()` call, BFS for the link graph
+- `main.rs` — `rmcp` 0.8 stdio transport, 8 `#[tool]`-annotated async handlers, identical schema-default policy in `memory_write`
+
+`memory_consolidate` shells out to the Python `memory_vault.consolidate` module because that's 515 LOC of policy logic — TTL decay, importance scoring, dedup, archive eviction — that isn't what the audit was asking to port. Bring it inline when feature churn there also flattens.
+
+Live-tested against the production vault on stdio JSON-RPC:
+
+```text
+tools/list: 8 tools registered with valid JSON schemas
+memory_health → markdown table, 2,032 notes across 5 layers
+memory_search('cathedral') → 3 results with FTS5 >>>snippets<<<
+```
+
+[`sanctum-rs PR #22`](https://github.com/Ogilthorp3/sanctum-rs/pull/22) merged. The audit now shows `memory-vault-mcp: rust/rusted` and the Force Flow notice goes quiet.
+
+## Four processes, four names
+
+The other thread of the day was naming. Activity Monitor on macOS displays the process by the basename of the executable. Several Sanctum services had names that didn't match their service identity, which made it harder to find a thing under the canonical name.
+
+- **`Python -m workers.tts_server` → `sanctum-tts`** via `setproctitle.setproctitle("sanctum-tts")` at the top of `tts_server.py`. The library is in the `.tts-venv`, so the import is wrapped in try/except for the case where the venv hasn't been bootstrapped.
+- **`sanctum-mlx` (the coder cathedral binary) → `sanctum-mlx-coder`** via a binary symlink in `target/release/` plus a one-line plist edit. The Yoda cathedral still shows as `sanctum-mlx` — same trick available if desired, just not done today.
+- **`openclaw-staging` Lima VM → `sanctum-vm`** via `limactl stop && limactl rename && limactl start`. The instance directory at `~/.lima/sanctum-vm/` is the canonical path now. No callers referenced the old name.
+- **(`Colima` VM removed entirely)** — see the orphan section above.
+
+The `limactl` binary is still `limactl` in Activity Monitor (it's the tool, not the instance). The `limactl hostagent` process for `sanctum-vm` shows the binary basename plus the instance pid-file path, which now reads `~/.lima/sanctum-vm/ha.pid`. Good enough.
+
+## The hot reload that wasn't
+
+While running the coder cathedral's memory check, a discrepancy turned up: the running coder process started **May 14 23:51**, but [Carmack #1](https://github.com/Ogilthorp3/sanctum-rs/pull/20) (drop the fused-fallback weights) was merged **May 15 03:46**. The running binary was four hours older than the code that was supposed to free its memory. The fix was the obvious one: rebuild, `launchctl bootout && bootstrap`, verify 48 + 48 fusion-build log lines, verify the cache prewarm fired. Working set went from however-much-the-old-binary-held down to ~4.5 GB RSS resident.
+
+The lesson, which is the same lesson as the Colima orphan: **a deploy isn't done when the PR merges**. The shipped binary has to actually be loaded by the running process. Both cathedrals now run from a binary timestamped after the most recent perf-relevant commit, and the launchd plist for the coder is also pointing at the new `sanctum-mlx-coder` symlink, so any operator who restarts the service gets the right binary by name.
+
+## The stale index
+
+The vault has 2,032 markdown files on disk. The pre-existing Python `.vault.db` had **11 rows**. The Rust port's auto-reindex was gated on `count == 0`, so it didn't fire against the stale-but-nonzero index. Moved the old DB aside with a `.stale-2026-05-16` suffix and let the Rust binary rebuild from scratch on the next stdio invocation. `memory_search('cathedral')` now returns hits with proper FTS5 snippets.
+
+The 11-row index was a long-standing latent bug. Nobody had asked the vault a search question in a while, and the Python service never logged its degraded state. The Rust binary doesn't fix the underlying detection problem either — it just inherited a fresh DB by accident. Worth adding a "file count vs index count" sanity check on startup; filed mentally for the next pass.
+
+## What's running now
+
+```text
+$ python3 tools/rust_readiness.py
+SERVICE             LANG    CRIT      LOC  STAGE
+force-flow          python  critical  564  hardening   watch
+screen-time         python  critical  2414 organic     keep iterating
+memory-vault-mcp    rust    medium    589  rusted   ← was python this morning
+sanctum-firewalla   rust    high      3    porting
+sanctum-proxy       rust    critical  185  graduated
+sanctum-tts         rust    medium    509  rusted
+sanctum-watchdog    rust    critical  1731 graduated
+```
+
+Three Sanctum binaries deserve their names in Activity Monitor (`sanctum-mlx-coder`, `sanctum-tts`, `memory-vault-mcp`), one Lima VM does too (`sanctum-vm`), and the orphan that wasn't supposed to be there isn't anymore. Force Flow has nothing to flag.
+
+<Aside type="note">
+The pattern across all five today: the cost of leaving deprecated state in place is small per-day and easy to ignore, but compounds. 19 days × 2 CPUs is most of a CPU-week. 4 GiB held by a dead VM is 4 GiB the cathedrals don't have for their KV cache. A Python service that the audit script identifies as ready to port stays Python until someone asks "what's the daily notice about?" The cleanup loop fires when someone notices, which is rarely.
+</Aside>
