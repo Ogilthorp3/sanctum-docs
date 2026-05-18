@@ -1,0 +1,123 @@
+---
+title: Windu Sweeps the Stuck
+description: A first-floor Apple TV lost all internet at 14:03 Monday because two iptables block rules from April refused to leave. The bridge said it cleaned them. It hadn't. Now Windu checks every five minutes.
+date: 2026-05-18
+---
+
+The complaint arrived on a Monday afternoon: *no internet on the
+first-floor Apple TV, even Bell Fibe is dead.* That was about an hour
+after the curfew should have lifted, so something had not let go.
+
+What had not let go was a pair of iptables rules.
+
+## What survived
+
+`rule_484` and `rule_485` were created on 2026-04-16 — over a month
+old — during the early Apple TV blocking experiments. Each was a
+*bidirection* device-wide MAC block: one rule blocked outbound, one
+rule blocked inbound, paired by Firewalla policy ID. The rules
+themselves were straightforward: any packet whose destination matched
+the device's ipset got `MARK`-ed for drop.
+
+For a month they had been technically dormant — Firewalla's reconciler
+treated the parent policy as stale, the kid wasn't being blocked, life
+went on. Then on Saturday night the weekend curfew kicked in at 23:30
+and the bridge applied a fresh round of blocks to the Apple TVs. When
+the wake hit at 10:00 Sunday morning, the bridge's `_unblock_mac` API
+call returned `undefined` (Firewalla MSP delete is degraded), so the
+bridge fell back to its SSH path:
+
+```
+[ssh-fallback] batch cleanup: 1/2 iptables rules removed for PIDs [485]
+```
+
+One of two rules removed. The bridge then logged:
+
+```
+[unpause] SSH iptables screen_time rules cleaned for 44:67:55:23:F7:1A
+```
+
+Claimed success. Returned `success: true` for the PID. Moved on.
+
+The inbound-direction rule stayed in place. Inbound video stream
+packets had nowhere to go. Bell Fibe streams through an inbound TCP
+connection. So did everything else.
+
+This is exactly the failure mode Principle 8 was written about. *A
+system that lies about its health is more dangerous than one that
+fails.* The "1/2 cleaned" was visible in the log, but the per-PID
+contract said "succeeded" — and downstream consumers (the screen-time
+enforcer, the operator's mental model, the SwiftBar glyph) all trusted
+the contract.
+
+## What's now in place
+
+Two changes, layered:
+
+### Layer 1 — the bridge stops lying
+
+`sshCleanupIptablesRules` in `~/.openclaw/firewalla-bridge.js` now
+runs a read-back grep in the same SSH session that issued the `-D`
+commands. After the `while read rule; do sudo iptables $rule; done`
+loop completes, the same session asks `sudo iptables -S | grep
+'rule_<pid>' || true` and the script parses the residuals. Any PID
+whose rule survived the delete is reported with `success: false` and
+the log line escalates from INFO to ERROR:
+
+```
+[ssh-fallback] batch cleanup PARTIAL: cleaned 1/2 rules, 1 RESIDUAL
+for PIDs [485] — drift-sentinel will sweep within 5min
+```
+
+Honest signal in, honest signal out. The downstream consumer can now
+decide what to do about a partial cleanup, because the partial
+cleanup looks like a partial cleanup instead of a complete one.
+
+### Layer 2 — Windu sweeps every five minutes
+
+`check_stale_blocks` is a new check in
+[Windu's drift-sentinel](/architecture/services/) (the `com.sanctum.
+drift-sentinel` LaunchAgent that already runs every 5 min on the
+Mini). Every cycle, it:
+
+1. Asks Firewalla over SSH for `iptables -S FW_FIREWALL_DEV_BLOCK`
+2. Extracts every `rule_<PID>` token in the chain
+3. For each PID, asks Firewalla's redis: `EXISTS policy:<PID>`
+4. Any PID whose `EXISTS` returns 0 is an **orphan** — an iptables
+   rule with no enforceable source policy
+5. Deletes each orphan via `iptables -D` using the rule spec, plus
+   any redis `policy:<PID>` remnant
+6. Capped at 10 deletes per run — anything more escalates to Force
+   Flow `/notify` (severity=warning) instead of bulk-deleting (a
+   panic would look exactly like a runaway clean)
+
+Each individual delete logs `stale_block_healed`; the run's
+aggregate logs `stale_blocks_healed` with `{healed, orphan_pids,
+stuck}`. The drift-sentinel's existing 30-min alert cooldown still
+applies on top.
+
+If yesterday's stuck pair had happened with this check in place,
+recovery would have been five minutes instead of twenty-eight hours.
+
+## What this leaves
+
+The two stuck rules from this incident were cleaned manually at
+12:30 Monday via `iptables -D` + `redis-cli DEL policy:484
+policy:485`. Drift-sentinel ran immediately after and reported
+`stale_blocks_clean { pids_checked: 48 }` — 48 active block PIDs
+verified, 0 orphans. Tonight at 23:30 the curfew will fire again;
+tomorrow morning at 10:00 the wake will unpause, and any rule that
+doesn't get cleaned through normal channels will be caught by Windu
+inside the same five minutes the operator brushes their teeth.
+
+The bridge's other SSH-fallback paths (single-PID cleanup, DNS
+custom-conf edits) still use the older claim-success-without-verify
+pattern. They have not produced the same class of failure yet —
+but Principle 8 says "yet" is a noun the haus has been wrong about
+before. Those will be hardened the next time we touch them.
+
+---
+
+*Field note from the operator's seat. The cleanup that was half-done
+is now done, and the daemon that pretends to know is now the daemon
+that actually checks.*
