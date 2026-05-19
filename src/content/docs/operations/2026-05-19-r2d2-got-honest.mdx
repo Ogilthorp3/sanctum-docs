@@ -1,0 +1,118 @@
+---
+title: "2026-05-19: R2D2 Got Honest"
+description: "Three days after R2D2 shipped, a 72-hour audit caught three KeepAlive services running stale Homebrew Python — the exact pattern R2D2 was built to detect. Then a closer look revealed R2D2 itself had four silent-failure paths. The Apple-plus-military doctrine says the agent that audits other services must hold itself to the same bar. v0.4 closes that gap."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide pencil sketch of an audit desk under a single lamp; a ledger lies open with three handwritten entries, a small mechanical drone sits beside it logging its own work in a second ledger labeled “mine”, and a striped cat watches both from a shelf](./images/2026-05-19-r2d2-got-honest.png)
+
+Three days after R2D2 [shipped its first sweep](./2026-05-16-r2d2-found-eight-things), the 72-hour audit roll-up flagged three new findings. All three were the same shape: KeepAlive Python services running an old binary. Homebrew had upgraded `python3` on May 17 at 09:30; the running launchd processes had loaded the previous binary into memory and were still serving from it. Classic stale-deploy pattern, exactly what R2D2 was built to catch.
+
+Three findings, in classifier-only mode, all skipped per safety policy. Operator-driven repair was a 30-second `bootout` + `bootstrap` pair per service. Fresh sweep after the fixes: zero detections.
+
+That was the easy half of the afternoon. The harder half started when the question shifted from *what is R2D2 catching* to *can anyone catch R2D2*.
+
+## The bar the auditor failed
+
+The sanctum doctrine for family-facing services has four words: **honest, bounded, defense-in-depth, no silent failures**. R2D2 was built to enforce three of those across its targets. It wasn't enforcing them on itself.
+
+Reading the v0.3 code with an audit eye, four gaps surfaced:
+
+1. **No cycle bookends.** The audit log had `detection` rows and `hermes_classify` rows, but nothing said "this is the start of cycle X" or "cycle X ended after Y seconds." To bisect what happened during a single 10-minute sweep, you'd have to reconstruct it from timestamps and pray nothing ran concurrently. That's not honest — the structure of activity was hidden from the structure of the log.
+2. **No heartbeat to peer agents.** chitti samskara is the shared status bus the rest of Sanctum reads. windu, yoda, jocasta all post liveness through it. R2D2 didn't. Other agents had no way to know whether R2D2 was alive, stuck, or last fired at 03:00.
+3. **Silent failures on detector errors.** When a detector raised, the code wrote a `detector_error` row to the audit log and moved on. The row was honest, but nobody was reading the log in real time. The Apple+military bar says: a failure that doesn't page is not closed-loop.
+4. **Unbounded growth.** The audit log was 960 KB after three days. At the current cadence that's ~10 MB a month, ~120 MB a year. Not urgent, but unbounded resources are not bounded.
+
+The same agent that flagged Homebrew's Python drift had its own four bookkeeping drifts. That's the test of whether you mean the doctrine or just write it down.
+
+## What v0.4 added
+
+The fix is ninety lines of Python in `~/.sanctum/r2d2/classify.py`. Each gap closes with one mechanism:
+
+```python
+# Cycle bookends
+cycle_id = uuid.uuid4().hex[:12]
+_audit({"event": "cycle_start", "cycle_id": cycle_id,
+        "kill_switch": kill, "classifier_only": classifier_only,
+        "recipes": list(recipes.keys())})
+# ...sweep...
+_audit({"event": "cycle_end", "cycle_id": cycle_id,
+        "duration_s": round(time.time() - cycle_started, 3), ...})
+```
+
+Every cycle now opens and closes with a row carrying the same UUID. Grep the UUID, get the full activity timeline for one 10-minute window. The cycle summary at stdout also carries the UUID, so a process supervisor watching launchd output can join it to the audit log without parsing timestamps.
+
+```python
+# chitti heartbeat
+_chitti_samskara(
+    service="r2d2", pattern="cycle", action="heartbeat",
+    success=True,
+    evidence=f"cycle={cycle_id} det={d} fired={f} hermes={h} cost_usd={c} dur={s}s",
+)
+```
+
+POST to `http://127.0.0.1:2188/action` at cycle end. Peer agents query `GET /samskara?service=r2d2&pattern=cycle` and get back `{attempts, success_rate, last_seen}`. R2D2 is now visible to the rest of the haus the same way the rest of the haus is visible to R2D2.
+
+```python
+# Force Flow escalation on silent-failure paths
+if record.get("event") in ("detector_error", "missing_detector") or (
+    record.get("event") == "detection" and record.get("decision") == "exec_error"
+):
+    _force_flow_notify(severity="critical", title="r2d2: silent-failure escalation",
+                       message=json.dumps(record)[:500])
+```
+
+The audit row still gets written; in addition, a `critical` Force Flow notice fires. The operator sees the escalation in the briefing, not just in a log file they have to remember to read.
+
+```python
+# Bounded growth
+AUDIT_MAX_BYTES = 50 * 1024 * 1024
+if AUDIT_PATH.stat().st_size > AUDIT_MAX_BYTES:
+    AUDIT_PATH.replace(AUDIT_PATH.with_suffix(AUDIT_PATH.suffix + ".1"))
+```
+
+At 50 MB the log rotates. Nothing exotic — `.replace()` is atomic on the same filesystem, and the next `open("a")` creates a fresh file. At current cadence the first rotation will land roughly five years from now, but the cap is in place either way.
+
+## Both helpers are best-effort
+
+`_force_flow_notify` and `_chitti_samskara` both wrap `urllib.request.urlopen` in `try/except`. Either one going down does not block R2D2's cycle. The agent that audits other services must keep auditing even when its own observability channels are broken — otherwise the first failure of the briefing system would silence the audit trail too.
+
+That decision is the small one that the doctrine is actually about. Defense-in-depth doesn't mean every layer always works; it means a layer's failure doesn't cascade into the other layers. A best-effort heartbeat is honest about what it is. A blocking heartbeat would be a single point of failure dressed up as observability.
+
+## End-to-end verification
+
+Six gates, each in one command:
+
+```text
+[1/6] launchd state           → not running (interval-fired, between firings), last exit 0
+[2/6] fresh cycle             → 0.987s, cycle_id=b017ddff1ea3, detections=0
+[3/6] audit log               → cycle_start + cycle_end rows tagged b017ddff1ea3
+[4/6] chitti heartbeat        → attempts=4, success_rate=1.0, last_seen=fresh
+[5/6] Force Flow escalation   → injected detector_error, audit row + critical notify fired
+[6/6] audit log size          → 963 KB (rotation threshold 50 MB)
+```
+
+Sweep clean, instrumentation observable from three independent channels (audit log, chitti, Force Flow), kill-switch and classifier-only both held.
+
+## What's stacked now
+
+| Layer | Mechanism |
+|---|---|
+| 1 | kill-switch file → short-circuits every detection |
+| 2 | allowlist → script path must be under `~/.sanctum/scripts/r2d2/` |
+| 3 | cooldown → recipe-specific window prevents flap loops |
+| 4 | classifier-only mode → audit without fire |
+| 5 | dry-run-first → real action only on the second cycle for a given finding |
+| 6 | Hermes-extra-dry-run → LLM-classified detections never bypass `--dry-run` |
+| 7 | recipe-id validation → hallucinated ids get coerced to `escalate` |
+| 8 | cycle bookends → every action traceable to a UUID |
+| 9 | chitti heartbeat → peer agents see liveness |
+| 10 | Force Flow escalation → silent failures become noisy |
+| 11 | bounded audit log → 50 MB cap with rotation |
+
+Eleven gates. The agent fires zero actions a day on average. The point isn't the firing rate — it's that when the firing rate goes to one, eleven things will be observable about it.
+
+<Aside type="note">
+The pattern across v0.1 → v0.4: the doctrine is the cheap part. Writing "honest, bounded, defense-in-depth, no silent failures" takes ten seconds. Holding the agent that enforces those four words on other services to the same four words takes a day of sweeping its own bookkeeping. The Apple+military bar is mostly that second day — the boring polish, the heartbeat that nobody asked for, the audit rows that look redundant until the day they aren't. The v0.4 commit is ninety lines. The doctrine that made it necessary is twelve words. Most of the work in any system worth running lives in the gap between the two.
+</Aside>
