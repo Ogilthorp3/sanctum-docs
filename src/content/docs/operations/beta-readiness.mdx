@@ -56,15 +56,18 @@ Task 11 (full operating runbook) still to write. A live trend run against the ca
 
 ### 3. R2D2 has never fired in production
 
-600+ classifier-only cycles, 0 false positives, 0 fires. The fire path is unit-tested but has never been validated against a real surfaced detection in the production environment. Before flipping out of classifier-only, the operator should:
+**Status as of 2026-05-21**: classifier-only mode flipped OFF in v0.5 (commit fb8f546). The two-cycle promotion path the v0.1 doctrine promised but earlier code skipped is now wired (commit 4a88ca4) — `~/.sanctum/state/r2d2-promotions.json` is the new state file that maps stable_id → dry-run completion timestamp + exit code. Promotion window is 24h.
 
-- Wait for R2D2 to surface a real detection (most likely candidate: another stale-binary find after the next reboot)
-- Manually validate that the proposed fix is correct
-- Remove the `~/.sanctum/state/r2d2-classifier-only` marker for that one detection
-- Watch it fire under operator supervision
-- Re-create the marker
+Behavior by recipe:
 
-Until that's happened at least once, beta testers shouldn't see R2D2 in fire mode.
+| Recipe | dry_run_required | Behavior |
+|---|---|---|
+| `reload-service-after-merge` | false | real fire immediately (benign on KeepAlive services) |
+| `reindex-stale-fts` | false | real fire immediately (moves DB aside, fully reversible) |
+| `retire-orphan-launchagent` | true | dry-run → promotion → real fire on next detection within 24h |
+| `repair-keychain-secret-drift` | true | dry-run → promotion → real fire on next detection within 24h |
+
+The first real fire under the new posture will appear in `~/.sanctum/logs/r2d2-audit.jsonl` with `"decision": "fired"` or `"fired_after_promotion"`. Force Flow gets a critical notify on any `exec_error`. Kill-switch is one `touch ~/.sanctum/state/r2d2-disabled` away if anything looks wrong.
 
 ### 4. MBP-side automation key
 
