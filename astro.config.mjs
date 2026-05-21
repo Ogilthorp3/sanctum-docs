@@ -89,6 +89,7 @@ export default defineConfig({
 					label: 'Getting Started',
 					items: [
 						{ label: 'What is Sanctum?', slug: 'getting-started/what-is-sanctum' },
+						{ label: 'Quick Start', slug: 'getting-started/quick-start' },
 						{ label: 'Requirements', slug: 'getting-started/requirements' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run', slug: 'getting-started/first-run' },
