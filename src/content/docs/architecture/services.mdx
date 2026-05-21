@@ -5,6 +5,7 @@ description: Complete catalog of every Sanctum service, organized by category wi
 
 import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 import ZoomImage from '../../../components/ZoomImage.astro';
+import CouncilRoster from '../../../components/CouncilRoster.astro';
 import servicesCatalog from './images/sanctum-services-catalog.svg';
 
 Every Sanctum service has an `enabled` flag in `instance.yaml`. Disabled services are skipped by the plist generator, excluded from the dashboard, and ignored by the watchdog. This page is the authoritative catalog of all services in the platform.
@@ -70,7 +71,7 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| LM Studio | 1234 | — | `com.sanctum.lmstudio-bridge` | Local LLM inference for VM agents. Currently serving `qwen2.5-coder-14b-instruct` via socat bridge from `10.10.10.1:1234` to `127.0.0.1:1234`. API key: `lm-studio`. |
+| LM Studio | 1234 | — | `com.sanctum.lmstudio-bridge` | Local LLM inference for VM agents. Currently serving `qwen3.6-35b-a3b` (the council heartbeat / general local tier) via socat bridge from `10.10.10.1:1234` to `127.0.0.1:1234`. API key: `lm-studio`. The `qwen2.5-coder-14b-instruct` it used to serve was retired 2026-05-10. |
 | Council MLX | `1337` | leet — the local workhorse | `com.sanctum.mlx` | Pure-Rust `sanctum-mlx` server. Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. mTLS-only. The 27B-distilled era ended 2026-04-22 when the council moved to the 35B MoE. |
 | TTS Voice | `8008` | BOOB — Yoda's mouth | `com.sanctum.yoda-tts-worker` | Qwen3-TTS via mlx-audio (`workers.tts_server`). XTTS retired 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. |
 | Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
@@ -78,18 +79,15 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 | Memory Vault | `42069` | Nice. | `com.sanctum.memory-vault` | Long-term memory store for agent context. SQLite vault at `~/.sanctum/memory/.vault.db`, consolidates every 6h. SSE transport for MCP clients. |
 | Jina Reranker | `42070` | The Pair Port | `com.sanctum.reranker` | Jina v2 reranking server. Companion to Memory Vault on 42069 — the two travel together by design. Improves RAG precision for long-context memory queries. |
 
-### Model Routing — 3-Tier Architecture
+### Model Routing
 
-Agents use a **3-tier model strategy** ranked by the Carmack Olympics benchmark system. The Smart Router dispatches each request based on model field, glob patterns, or intent keywords. When the primary tier is unavailable, traffic cascades down through the chain until it hits local Metal inference. The generator always kicks in.
+Each agent is pinned to a **logical model tier**, and the Smart Router resolves that tier to a concrete model at request time — dispatching on model field, glob patterns, or intent keywords. When the primary path is unavailable, traffic cascades down the fallback chain until it hits local Metal inference. The generator always kicks in.
 
-| Tier | Model | Port | Agents | Fallback |
-|------|-------|------|--------|----------|
-| `cloud` | Claude Opus 4.7 (Anthropic) | :4040 proxy | Windu, Mothma, Jocasta | Coder-14B → Council MLX → error |
-| `council-ops` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | Yoda, QuiGon, Ahsoka | Council MLX → error |
-| `council-secure` | Gemma4+LoRA (sanctum-mlx) | :1337 | Cilghal, Mundi | error |
-| `coder` | Qwen 2.5 Coder 14B (LM Studio) | :1234 | all coding tasks | Council MLX → error |
+The table below is rendered straight from `council-roster.json` — the same single source the [Council page](/architecture/agents/) owns. It is never hand-edited; a champion swap is one `pnpm refresh:council` away, and every page that names a model updates at once.
 
-Cloud tier runs through the Sanctum Proxy on :4040 with daily cost caps, audit logging, and automatic fallback to local models when the budget circuit breaker fires. The cloud proxy does not negotiate. It does math.
+<CouncilRoster variant="tiered" />
+
+Cloud-tier traffic runs through the Sanctum Proxy on :4040 with daily cost caps, audit logging, and automatic fallback to local models when the budget circuit breaker fires. The cloud proxy does not negotiate. It does math.
 
 The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step pipeline before routing them to the appropriate model. Seven steps between an agent's thought and the outside world. The TSA wishes they were this thorough.
 
