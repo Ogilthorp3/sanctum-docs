@@ -16,6 +16,12 @@
 //   <CouncilRoster variant="compact" />   one-line-per-agent list with
 //                                   logical-model and provider only,
 //                                   for embed in flowing prose.
+//   <CouncilRoster variant="tiered" />    routing-tier table — agent,
+//                                   logical tier, resolved primary
+//                                   model, and the fallback chain.
+//                                   For the Services page's "Model
+//                                   Routing" section, where the
+//                                   cascade-to-local matters.
 //   <CouncilRoster variant="inline" />    natural-language sentence —
 //                                   "Yoda + Mundi on Opus, Qui-Gon +
 //                                   Cilghal on Qwen, Windu on Gemini" —
@@ -33,9 +39,10 @@ interface Props {
   /**
    * "full" (default): table with logical model + provider + resolved API model
    * "compact": tighter table with logical model + provider only
+   * "tiered": routing table — logical tier, resolved primary, fallback chain
    * "inline": natural-sentence summary grouped by model family
    */
-  variant?: 'full' | 'compact' | 'inline';
+  variant?: 'full' | 'compact' | 'tiered' | 'inline';
   /** Show the "Generated from X at Y" footer (default: true for full/compact) */
   showSource?: boolean;
 }
@@ -92,6 +99,38 @@ const grouped = roster.agents.reduce((acc: Record<string, Agent[]>, a) => {
           <td><strong>{a.label}</strong></td>
           <td><code>{a.api_model}</code></td>
           <td>{a.provider_label}</td>
+        </tr>
+      ))}
+    </tbody>
+  </table>
+)}
+
+{variant === 'tiered' && (
+  <table>
+    <thead>
+      <tr>
+        <th>Agent</th>
+        <th>Logical tier</th>
+        <th>Resolved primary</th>
+        <th>Fallback chain</th>
+      </tr>
+    </thead>
+    <tbody>
+      {roster.agents.map((a) => (
+        <tr>
+          <td><strong>{a.label}</strong></td>
+          <td><code>{a.logical_model}</code></td>
+          <td>
+            <code>{a.api_model}</code>{' '}
+            <span style="opacity: 0.65">({a.provider_label})</span>
+          </td>
+          <td>
+            {(a.fallbacks ?? []).length === 0
+              ? '—'
+              : (a.fallbacks ?? []).map((f, i) => (
+                  <>{i > 0 && ' → '}<code>{f.api_model}</code></>
+                ))}
+          </td>
         </tr>
       ))}
     </tbody>
