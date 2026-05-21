@@ -1,0 +1,85 @@
+---
+title: "2026-05-20: Three Things That Woke You"
+description: "Sanctum already auto-recovered from power loss, rotated its API keys, and held its 11-layer R2D2 safety stack. But three small things still woke the operator on a roughly weekly cadence: TCC prompts after every brew upgrade, 1Password unlock to serve SSH keys, and log files growing toward disk fill. None of the three were urgent; all three were periodic. This sweep closes them."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide pencil sketch of an Abyssinian cat patrolling a dim hallway at first light; three lanterns hang at intervals along the wall, each one lit by itself, the cat passing them unhurried](./images/2026-05-20-three-things-that-woke-you.png)
+
+The honest answer to "can sanctum run for months unattended?" was, this morning, "probably weeks." Most of the long-term failure modes had already been engineered out. Power-cycle recovery was clean — `autorestart=1`, `womp=1`, `autoLogin=bert`, 14 system-domain LaunchDaemons under `/Library/LaunchDaemons/` that bring the privileged services back before the user session even starts. TLS certs ran to 2031. The four autohealers (OpenRouter rotate-key, mgmt-key-failover, mlx-drift bootout, SOPS sync) were armed. R2D2 v0.4 was 14 hours into its first soak with 90 chitti heartbeats logged and zero false fires.
+
+So what was the gap? Three small things — none of them outages, all of them periodic — were waking the operator on a roughly weekly cadence. None had been written about because each was independently boring. The sweep that fixed them is interesting because the three problems share a pattern.
+
+## The first: TCC re-prompts every brew upgrade
+
+macOS's TCC (transparency, consent, and control) framework keys permission grants to the **exact executable path** of the requesting binary. Homebrew installs each formula at a versioned Cellar path:
+
+```
+/opt/homebrew/Cellar/node/25.9.0_2/bin/node
+/opt/homebrew/Cellar/node/25.9.0_3/bin/node
+/opt/homebrew/Cellar/node/26.0.0/bin/node
+```
+
+Every `brew upgrade node` produces a new directory. The old binary's TCC grants are orphaned. The new binary has no grants. The first time anything tries to use it — SanctumBridge wanting iMessage, a python script wanting Calendar — macOS sees a fresh "app" and prompts the operator.
+
+Cadence: roughly every 3–7 days, matching node and python's update tempo. The TCC database tells the story directly:
+
+```text
+$ sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
+    "select distinct client from access where client LIKE '/opt/homebrew/Cellar/%'"
+/opt/homebrew/Cellar/node/25.4.0/bin/node       ← old, grants orphaned
+/opt/homebrew/Cellar/node/25.6.1_1/bin/node     ← old
+/opt/homebrew/Cellar/node/25.9.0_1/bin/node     ← old
+/opt/homebrew/Cellar/node/25.9.0_2/bin/node     ← old
+/opt/homebrew/Cellar/node/25.9.0_3/bin/node     ← old
+/opt/homebrew/Cellar/node/26.0.0/bin/node       ← current
+/opt/homebrew/Cellar/python@3.14/3.14.3_1/.../python3.14   ← same pattern
+/opt/homebrew/Cellar/python@3.14/3.14.4/.../python3.14
+/opt/homebrew/Cellar/python@3.14/3.14.4_1/.../python3.14
+/opt/homebrew/Cellar/python@3.14/3.14.5/.../python3.14
+```
+
+Seven formulas had live TCC entries — node, python@3.11, python@3.12, python@3.14, uv, restic, qemu. All seven got `brew pin`. The pins stop the upgrade cycle. Manual `brew unpin <formula> && brew upgrade <formula>` is still available when an actual security patch warrants it, with the knowledge that TCC will re-prompt for that formula's affected services.
+
+The structural alternative — code-signing each long-running service into an app bundle so TCC keys grants to the bundle ID instead of the executable path — is still on the table for the heaviest TCC consumer (SanctumBridge, which touches iMessage, Calendar, Contacts). It hasn't shipped yet because the pin alone buys weeks; the bundle wrapper is the right next move when the operator wants to start unpinning regularly.
+
+## The second: SSH that depended on 1Password being unlocked
+
+The `~/.ssh/config` `Host *` block routes all SSH to the 1Password agent. Convenient when you're at the keyboard. Inconvenient when 1Password locks itself after N hours of inactivity — at which point the agent denies key requests and every cross-machine sanctum script fails with `Permission denied (publickey)`.
+
+There was already a dedicated automation keypair sitting on the Mini at `~/.ssh/sanctum_automation_ed25519` — minted April 23, never wired up. The public key wasn't in manoir's `authorized_keys`. Installing it took thirty seconds:
+
+```text
+restrict ssh-ed25519 AAAAC3Nz...EQ6C0 sanctum-automation@mm64-20260423
+```
+
+The `restrict` prefix is the military-grade gate. It drops PTY allocation, port forwarding, agent forwarding, X11, and tunneling. The key can only `exec` remote commands — which is exactly what daemons need and nothing else. If the key file ever leaks, the blast radius is bounded to "run remote commands as bert with no interactive shell."
+
+A `Host manoir-automation` block in `~/.ssh/config`, placed above the catch-all `Host *`, points to the key with `IdentityAgent=none` and `IdentitiesOnly=yes`. Three scripts (`claude-vault-inbox-check.sh`, `cathedral-precondition.sh`, `cathedral-vision-canary.sh`) had their default SSH target switched to the new alias. All three still honor their env-var overrides for operator-controlled retargeting.
+
+Smoke test was clean — `ssh manoir-automation 'echo ok'` returned in ten milliseconds with no biometric, no agent, no DNS dependency. The same private key copied to the MBP will give the MBP-side instance of these scripts the same unattended posture.
+
+## The third: log files growing without rotation
+
+`signal-health.log` was 14 MB. `sanctum-mlx.log` (the Yoda cathedral's stdout/stderr) was 37 MB. `watchdog-rust.log`, 11 MB. `triage.log`, 16 MB. `yoda-token-minter.log`, 13 MB. Nobody had ever rotated them.
+
+Daily-30s of growth × months = gigabytes per file. Eventually the SSD fills, the launchd services start failing with `ENOSPC`, and the operator wakes up to a cascade.
+
+A small bash script — `sanctum-log-rotate.sh` — walks `~/.sanctum/logs/` and `~/.openclaw/logs/` once a day at 04:30. Anything above 25 MB rotates to `.1.gz`. The cascade keeps three historical rotations and drops the oldest. The first manual run rotated five files and reclaimed about 91 MB. `signal-health.log`'s 14 MB compressed to 734 KB — a 19× ratio, which is what append-only structured-log files typically give you.
+
+Bounded growth is the apple-like part: an unbounded resource is never bounded; the gzip compression is the polish; the cascade-rename (never delete-then-create) is the military-grade part. Even if the rotator crashes mid-cycle, no log content is destroyed.
+
+## What stayed quiet
+
+The audit also confirmed several latent gaps that *weren't* problems:
+
+- TLS certs in `~/.sanctum/certs/` expire 2027 (yoda) or 2031 (everything else). Five to eleven years of headroom.
+- The OpenRouter autoheal stack has dual-redundant mgmt keys with a 24h failover cooldown. The primary has been live since the failover script ran today and swapped the slots; the operator was asked to mint a fresh backup at their convenience but the system is functional without it.
+- 14 system-domain LaunchDaemons handle the privileged services. Auto-login plus the dual cathedrals' `KeepAlive=true` brings everything back from a cold power-cycle without operator interaction.
+
+What's left in the "next time you have a few minutes" queue is small and discretionary: replicate the automation key to the MBP, and consider a code-signed bundle wrapper for SanctumBridge so it survives an eventual brew unpin.
+
+<Aside type="note">
+The test for unattended ops isn't "did it run today" — that's "yes, like every day." The test is *"is there any human action that recurs on a predictable schedule?"* TCC re-prompts every brew upgrade was a yes. 1Password unlock for SSH was a yes. Log fill-up over months was a yes. After this sweep, all three are no. The next operator interaction will be something exceptional — a real mgmt-key death, a hardware event, a deliberate security upgrade — not a scheduled tax. That's the small but real difference between "works most of the time" and "runs."
+</Aside>
