@@ -80,8 +80,9 @@ function describeProvider(provider, api_base) {
   if (provider === "openrouter") return "OpenRouter";
   if (provider === "xai") return "xAI";
   if (provider === "local") {
-    if (api_base?.includes(":1234")) return "LM Studio (local)";
+    if (api_base?.includes(":1234")) return "sanctum-mlx-coder (local)";
     if (api_base?.includes(":1337")) return "sanctum-mlx (local, mTLS)";
+    if (api_base?.includes(":1339")) return "sanctum-mlx (local)";
     if (api_base?.includes(":3456")) return "Claude Max bridge (local)";
     return "Local";
   }
