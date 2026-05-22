@@ -1,6 +1,6 @@
 ---
 title: sanctum CLI Reference
-description: The Family Pass operator surface. Nine subcommands. They are all you should need.
+description: The Family Pass operator surface. Twelve user-facing subcommands and a handful of operator-grade helpers. They are all you should need.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -8,16 +8,16 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Sanctum CLI — a vintage Swiss Army knife laid open, exactly nine distinct hand-tools fanned out from a single pivot, a teal beam catching the hinge at the center. Nine subcommands. They are all you should need.](./images/hero-sanctum-cli.png)
 
-`sanctum` is the operator surface for Family Pass v1.0. It lives at `/opt/sanctum/sanctum-family-pass/bin/sanctum` and is symlinked into your `$PATH` during install. Nine subcommands cover the entire surface — health, regression, observability, upgrades, removal, and key custody.
+`sanctum` is the Family Pass operator surface. It's a Python application distributed through the Homebrew tap `Ogilthorp3/sanctum`; after `brew install ogilthorp3/sanctum/sanctum-cli` the binary lives at `/opt/homebrew/bin/sanctum` (a symlink into a private virtualenv under Homebrew's `libexec`). The 12 user-facing subcommands cover onboarding, health, regression, observability, upgrades, removal, key custody, and the agent surface; a handful of operator-grade helpers (`bridge`, `cloud`, `code`, `config`, `keychain`, `proxy`, `vision`) live alongside for power users.
 
 ```bash
 sanctum <subcommand> [args]
 ```
 
-Every command short-circuits cleanly when `~/.sanctum/sanctum.yaml` is missing. The errors are deliberately blunt — Family Pass is for technical-friend haushelds, and we trust you with the FATAL line rather than wrapping it in apology.
+Every command short-circuits cleanly when `~/.sanctum/instance.yaml` is missing or invalid. The errors are deliberately blunt — Family Pass is for technical-friend haushelds, and we trust you with the FATAL line rather than wrapping it in apology.
 
 <Aside type="note">
-There is no global `--verbose`. The subcommands are tight enough that adding one would mostly produce stack traces. If you need more than `sanctum doctor` and `sanctum logs <service>` tell you, the source is in `/opt/sanctum/sanctum-family-pass/lib/` and it is short enough to read end-to-end in one coffee.
+There is no global `--verbose`. The subcommands are tight enough that adding one would mostly produce stack traces. If you need more than `sanctum doctor` and `sanctum logs <service>` tell you, the source is in `~/Projects/sanctum-cli/sanctum_cli/commands/` (one Python file per command, average ~150 lines) and it is short enough to read end-to-end in one coffee.
 </Aside>
 
 ---
@@ -157,39 +157,22 @@ sanctum update --auto
 
 ### What it does
 
-1. `git pull --ff-only` in each of:
-   - `/opt/sanctum/sanctum-runtime`
-   - `/opt/sanctum/sanctum-screen-time`
-   - `/opt/sanctum/sanctum-family-pass`
-2. `launchctl kickstart -k` for `com.sanctum.screen-time` and `com.sanctum.firewalla`.
-3. `sanctum self-test`.
+1. `brew update` (refreshes Homebrew's view of the world)
+2. `brew upgrade ogilthorp3/sanctum/sanctum-cli` (pulls the latest tagged release from the tap)
+3. `sanctum self-test` as the gate — refuses to call the upgrade "done" unless every probe still passes
 
 ### Flags
 
 | Flag | Behavior |
 |------|----------|
 | `--dry-run` | Print every action without executing |
-| `--auto`    | Tag HEAD before pull, roll back to the tag if self-test regresses |
+| `--skip-self-test` | Skip the gate. Operator-grade — use when you know what you're doing |
 
-If a pull fails (uncommitted local changes, divergent history) the update halts at that repo. Sanctum does not stash your changes for you. The assumption is that if you have edits in `/opt/sanctum/`, you know what they are and you would rather we ask.
-
-### Autonomous mode (`--auto`)
-
-`sanctum update --auto` is the autonomous variant. It tags the current
-HEAD before pulling (`auto-rollback-YYYYMMDD-HHMMSS`), pulls, restarts
-services, runs `sanctum self-test`, and **rolls back to the tag if
-self-test regresses**. On rollback it alerts Force Flow with
-`severity: error`. The tag is retained for manual inspection.
-
-Manual `sanctum update` behavior is unchanged — `--auto` is strictly opt-in. The flag is designed for unattended runs (cron, launchd) where a bad release must not brick the pilot. Combine with `--dry-run` to inspect the rollback plan without touching anything.
+If `brew upgrade` reports "already installed" the command exits cheerfully without running the gate (no upgrade happened, nothing to verify). If the self-test gate fails after a real upgrade, the command exits non-zero and prints the failing probes — you investigate, decide whether to `brew unpin && downgrade` or fix forward.
 
 <Aside type="tip">
-If `sanctum self-test` fails immediately after a manual update (without `--auto`), the most common cause is a probe that expects a new env var you have not set yet. Check the release notes before reaching for `git revert`.
+If `sanctum self-test` fails immediately after `sanctum update`, the most common causes are: a probe that expects a new env var you have not set yet (check the release notes); a service that needs a manual restart after the upgrade (look at `launchctl print gui/$(id -u)/com.sanctum.<service>`); or a TCC grant that was orphaned by a related toolchain bump (see `architecture/tcc-identity-anchors`).
 </Aside>
-
-### Mocked mode
-
-`SANCTUM_UPDATE_MOCK=1` skips the actual `git pull`, `launchctl kickstart`, `self-test`, and rollback-tag invocations. Tests only.
 
 ---
 
