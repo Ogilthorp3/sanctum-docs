@@ -1,0 +1,80 @@
+---
+title: "2026-05-22: The Cathedral Could Not Read Long"
+description: "A long-context eval harness was built to trend the cathedral's retrieval quality at length. It was the first thing to ever exercise the cathedral past a few thousand tokens, and on day one it caught a real bug: every prompt above ~25,540 tokens came back with zero completion tokens. The cathedral prefilled the whole context, then emitted end-of-sequence as its very first generated token. The hunt took two wrong turns. The root cause was an unfused attention path going quadratic in memory and OOMing on a single 41.75 GB buffer. The fix chunks the prefill query axis; the cathedral now serves its full 262,144-token context."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A tall pencil-sketched stone cathedral on a dark slate background, an enormously long paper scroll of dense text unspooling from its doorway past a brass measuring rod, a red crack severing the scroll where a wax seal stamped END sits as the very first mark, a robed figure holding a teal-glowing lantern over the broken seam](./images/2026-05-22-the-cathedral-could-not-read-long.png)
+
+The cathedral — the council's LLM, Qwen3.6-35B-A3B served by `sanctum-mlx` on `:1337` — has a model card that says `max_position_embeddings: 262144`. For its entire life nobody had asked it for more than a few thousand tokens. The long-context eval harness was built to change that: needle-in-a-haystack plus a mini-RULER probe set, trending retrieval quality as the prompt grows. It was the first thing to ever exercise the cathedral at length. It caught a real bug on its very first real run.
+
+## 1. The bug the harness found
+
+The harness assembles a haystack, hides a needle, asks the cathedral to recall it, and scores the answer. At 4K tokens: clean. At 16K: clean. Above roughly 25,540 tokens the cathedral returned an *empty* completion. Not a wrong answer. Not a truncated one. Zero generated tokens.
+
+The request did not error. The server logged a `200`. The prefill counter ran the full prompt — every token of context was consumed. Then the decode loop emitted exactly one token, the end-of-sequence marker, and stopped. The cathedral read the whole library and answered with a closed book.
+
+This is the worst shape a bug can take: a success status, a plausible response object, nothing inside it. Without the harness it would have surfaced months later as "the council gets weird on long documents" — a vibes report with no line number.
+
+## 2. Two wrong turns
+
+The first suspect was TurboQuant — the cathedral's 4-bit V-cache quantization. A length-dependent failure that produces *no* output smells like a dequant kernel reading past a buffer once the KV state is large enough. The test was direct: rerun the same oversized prompt on the plain Fp16 attention path, TurboQuant disabled. It failed identically. Same threshold, same empty completion. TurboQuant was innocent — disproven, not argued away.
+
+The second suspect was the fused attention kernels, which `sanctum-mlx` appeared to gate behind environment toggles. The theory: a fused path enabled at length, disabled below it. The test was to read the build, not the env. The env vars were vestigial — leftovers from an older bring-up. Kernel fusion is always-built; there is no toggle to flip and no length-gated path to blame. Disproven again.
+
+Two hypotheses, both plausible, both killed by a test instead of a guess. The bug was lower than either.
+
+## 3. The root cause, proven to the byte
+
+Qwen3.6-35B-A3B has `head_dim = 256`.
+
+MLX's fused flash causal-SDPA kernel — the fast path for scaled-dot-product attention with a causal mask — supports `head_dim` of **64, 80, or 128**. Nothing else. A model with `head_dim = 256` does not match, so full-attention **prefill** silently falls back to an unfused implementation: a plain matmul that materializes the entire attention-score buffer before the softmax.
+
+That buffer has shape `[B, 16, L, L]` in fp32 — sixteen heads, query length by key length. Its size is `16 · L² · 4` bytes. The numbers do the rest:
+
+| Prompt length L | `[B, 16, L, L]` fp32 buffer | vs. Metal limit |
+|---|---|---|
+| 16,384 | 17.18 GB | under |
+| 24,000 | 36.86 GB | under |
+| 25,540 | 41.74 GB | right at the edge |
+| 25,600 | 41.94 GB | over |
+| 32,768 | 68.72 GB | far over |
+
+Metal has a hard `maxBufferLength` of 41.75 GB on the M4 Max. At `L ≈ 25,540` that single attention-score buffer crosses it. The allocation fails. The prefill cannot complete. The request dies — and the decode loop, handed a model state that never finished its prefill, emits end-of-sequence as the only thing it can.
+
+Decode survived all along because decode runs one query token against the full KV cache: `head_dim = 256` *is* supported by the fused kernel when query length is `≤ 8`. Prefill processes the whole prompt as one wide query block — thousands of tokens — the case with no fused kernel.
+
+The bug is not in the cathedral's code. It is a property of the model's geometry meeting a kernel's support matrix. But it is the cathedral's bug to fix.
+
+## 4. The fix
+
+Chunk the prefill's query axis.
+
+Instead of one attention call over a query block of length `L`, the prefill now iterates the query axis in blocks of **2048**. Each attention call materializes a bounded `[B, 16, 2048, L]` buffer — at most `16 · 2048 · L · 4` bytes, linear in `L`, not quadratic. The 41.75 GB ceiling is never approached.
+
+The change is numerically **bit-identical** to the unchunked path. Softmax is computed per row; a query row's attention distribution depends only on that row and the keys, never on sibling query rows, so splitting the query axis changes nothing arithmetically. The causal mask offset is preserved per block — block `k` starts at query position `k · 2048`, and its mask is shifted to match, so each query token still attends to exactly the keys it should and no others.
+
+One change covers both attention implementations the cathedral runs: the dense full-attention layers and the mixture-of-experts path share the same prefill attention call, so chunking it fixes both at once.
+
+Shipped in [`sanctum-rs 5731769`](https://github.com/Ogilthorp3/sanctum-rs/commit/5731769). The cathedral now serves its full advertised 262,144-token context. The harness, rescoped down to 4K/16K while the bug stood, can have its longer rungs restored.
+
+## The doctrine
+
+> An MLX model whose `head_dim` is not 64, 80, or 128 has **no fused causal SDPA**. Its prefill silently falls back to an unfused matmul that goes quadratic in memory, and it will OOM at length on a buffer the size limit forbids. Decode hides it, because decode's query length is small enough to keep the fused kernel. The failure waits for the first long prompt.
+
+The second doctrine is about the harness. The long-context eval was built to *trend* retrieval quality — to catch slow regressions over weeks. It earned its keep in a different way: it caught a hard defect on day one, a bug the performance-tuning work of the last fortnight had walked straight past because none of that work ever sent a prompt long enough to trip it. A benchmark's stated job is to measure. Its first job is to be the first caller who asks the hard question.
+
+You cannot regress a length you never test. You also cannot *discover* a length you never test.
+
+## What is next
+
+- Restore the harness's 64K and 128K rungs now that the cathedral serves them — a one-line change to the size table that the >25K bug had forced down to 4K/16K.
+- Watch whether the chunked prefill costs measurable throughput on short prompts. The block loop adds iteration overhead; for prompts under one block (2048 tokens) it is a single iteration and should be free, but the canary's prefill timing will confirm.
+- An upstream note to `mlx-rs` / `mlx`: the fused causal-SDPA `head_dim` support matrix deserves a documented fallback warning. A model author picking `head_dim = 256` has no signal that prefill will go quadratic until it OOMs.
+
+## Related
+
+- [The Stress Test Caught It](/operations/2026-05-10-the-stress-test-caught-it/) — same shape, twelve days earlier. A test built before deploy caught a regression a 24-hour soak would have surfaced slowly. The long-context harness is the same lesson on a different axis: build the thing that asks the hard question first.
+- [The Kernel Needed Two Tokens](/operations/2026-05-12-the-kernel-needed-two-tokens/) — another MLX SDPA dispatch boundary. There it was `T_q = 1` versus `T_q ≥ 2`; here it is `head_dim ∈ {64, 80, 128}` versus everything else. The cathedral lives or dies on which SDPA path its tensor shapes select.
+- [The Cathedral Doubled Itself](/operations/2026-05-14-the-cathedral-doubled-itself/) — the fusion-and-throughput work that immediately preceded this. It made the cathedral fast. It never made the cathedral read long, because no benchmark in that work ran past a few hundred tokens.
