@@ -1,0 +1,96 @@
+---
+title: "2026-05-22: The Installer The Friend Can Trust"
+description: "Eight commits and one tagged release later, Sanctum is in friend-acquisition mode. The install funnel ends in a green panel and a backup that round-tripped to the cloud; the verify path is cryptographic; the trust-gate commands let the friend walk away cleanly; the bug-report form refuses credentials by design. The friend can try it."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch of a curl pipe leading from an open laptop into a small wooden box labeled "Sanctum"; an Abyssinian cat watches from beside the box, paw resting on a wax-sealed envelope marked SHA-256](./images/2026-05-22-the-installer-the-friend-can-trust.png)
+
+The honest test for whether a system is ready to hand to a friend is the dry-run conversation in your head: "they DM me at 9pm saying it broke" — what do they have to do, what do they find, what's their second message? If the second message is "I think I've made it worse," the install funnel isn't ready. If the second message is "found it, it was Y, the doctor said so" — that's a system ready for beta.
+
+Today the second message became plausible.
+
+## The funnel
+
+```text
+curl -fsSL https://sanctum.run/install.sh | bash
+  → preflight (Apple Silicon? CLT installed? bail with operator action if not)
+  → Homebrew bootstrap (skipped if present)
+  → brew install ogilthorp3/sanctum/sanctum-cli  (v0.9.0)
+  → Node.js Foundation .pkg install (TCC stable anchor)
+  → hand-off to: sanctum onboard --recipe family
+       → splash with operator name
+       → backup-scope estimate (~5 GB after dedup)
+       → Cloudflare R2 wizard (opens the right tabs)
+       → dry-run backup (preview, no bytes written)
+       → real backup
+       → restore canary (round-trips a known file through the bucket)
+       → green panel: "Your Sanctum is alive, <name>"
+```
+
+The friend types one command. Sees one moment. The moment is verified by a round-trip through their own cloud bucket — not a "we believe everything worked" claim. The next thing they run is `sanctum self-test` and twelve probes either go green or tell them exactly what's red.
+
+## The trust-but-verify path
+
+For the friend who reads pipe-to-bash and feels the small dread that all of us should feel for it:
+
+```bash
+curl -fsSLO https://sanctum.run/install.sh
+curl -fsSLO https://sanctum.run/install.sh.sha256
+shasum -a 256 -c install.sh.sha256        # → install.sh: OK
+bash install.sh
+```
+
+The hash file is auto-regenerated on every commit to `main` that touches the installer. The path is served by Cloudflare with an explicit `_headers` entry because Cloudflare's default routing wanted to send `.sha256` extensions through the 404 handler — fixed by an explicit `content-type: text/plain` for the path, plus a `.txt` mirror for environments that filter exotic extensions. Two URLs, two extensions, one truth: the hash that lands on the friend's Mac equals the hash that Cloudflare ships, which equals the hash a GitHub Actions step computes on every push.
+
+## The verify command, made honest
+
+The first version of `sanctum self-test` ran twelve probes and reported pass/fail on each. On the operator's Mini it printed 12/12 green. On a friend's fresh Mac it would have printed 4 green and 8 red — because eight of the probes assumed the full haus deployment (Yoda cathedral on `:1337`, Coder cathedral on `:1338`, proxyd, Force Flow, chitti samskara, R2D2 supervisor, audit log within budget, TCC grants). The friend's machine has none of those; only the operator's Mac Mini does.
+
+A "8 of 12 probes failed" report is technically accurate and pragmatically a disaster — the friend reads it as "your software is broken" and DMs you to ask if they're supposed to keep going. The fix is the same shape as every honesty-doctrine fix in the haus: a third state. Probes now return `pass`, `fail`, or `n/a` (not applicable on this install tier). The summary panel reads "Sanctum CLI is healthy. 4/12 probes passed in 200 ms · 8 n/a on this install tier." Same code, different headline depending on what's actually installed. The friend gets the truth without the false alarm.
+
+The tier detection is one function: presence of any of `~/.sanctum/manifests/`, `~/.sanctum/sanctum-proxy/`, `~/.sanctum/r2d2/`, or `/Library/LaunchDaemons/com.sanctum.proxyd.plist` means "haus install." Absence means "CLI install." Either branch produces an honest report.
+
+## The trust gates
+
+A friend who installs has to also be a friend who can leave. The set of commands shipped today closes that loop:
+
+- **`sanctum keys backup <path>`** — exports the operator's 11-ish Keychain entries to an AES-256-CBC + PBKDF2 encrypted tar bundle with a passphrase only the friend knows. Move the bundle to a USB drive. The friend can wipe the Mac, walk to a different Mac, run a future `sanctum keys restore` with the same passphrase, and get their cloud credentials back. No central account. No recovery email.
+- **`sanctum uninstall`** — defaults to "preserve data, purge the machine." Bootouts every `com.sanctum.*` LaunchAgent and renames the plists with a `.uninstalled-YYYY-MM-DD` suffix; revokes the Keychain entries; untaps the brew formula; renames `SanctumBridge.app` and `SanctumLauncher.app` with the same suffix. Never touches `/usr/local/bin/node` (Apple Installer's domain) or the operator's cloud bucket. `--purge` exists for the friend who wants a full wipe, and even there the data dir is renamed `.purged-YYYY-MM-DD-HHMMSS` instead of deleted, recoverable for 30 days.
+- **`sanctum logs <service>`** — the friend who wants to peek under the hood can. 17 service log paths mapped to friendly names; default is `--follow` with the last 50 lines. `--list` shows what's known.
+
+Council vote on the uninstall design landed yesterday with one decisive sentence from council-brain: "Preserve data, purge the machine." That's the one.
+
+## The escalation path
+
+```text
+something looks weird
+  → sanctum doctor              (full diagnostic)
+  → sanctum self-test            (regression check)
+  → sanctum.run/operations/troubleshooting/   (top 10 with fixes)
+  → github.com/Ogilthorp3/sanctum-cli/issues/new/choose   (structured)
+```
+
+The issue form pre-asks for sanctum-cli version, macOS + chip, doctor output, self-test output, and **a mandatory checkbox: "I have NOT pasted credentials."** Sanctum's been opinionated for a year that family-facing services have to be honest, bounded, defense-in-depth, no silent failures. Privacy is a subset. So is the bug-report form's refusal to let you accidentally include an API key. The form's quick-help links — Quick Start, Troubleshooting, Architecture — give the reporter three pages of pre-filing self-rescue before the textarea.
+
+The [new Privacy page](/operations/privacy/) lays out the data-handling claims in a single table: what crosses the threshold, where it goes, who can read it. "Sanctum sends nothing" is the headline; "your backups are encrypted on your Mac before they leave it" is the substance; "if you lose your `keys backup` bundle and the passphrase, there is no party who could reset something" is the trade-off the friend is signing up for.
+
+## Bookkeeping
+
+Today's eight commits, in order:
+
+1. `8584799` (sanctum-cli) — tier-aware n/a state on `self-test`
+2. `9513756` (sanctum-cli) — GitHub issue templates (bug, feature, config)
+3. `0020a95` (sanctum-docs) — "Report a Problem" sidebar entry + footer links on Quick Start and installation-family-pass
+4. `9faa515` + tag `v0.9.0` (sanctum-cli) — version bump 0.8.0 → 0.9.0 with release notes covering the full Phase-2 surface
+5. `83d3d5f` (homebrew-sanctum) — formula bumped to v0.9.0 with new tarball SHA `5120f733...`
+6. `39a7ac0` (sanctum-docs) — Privacy page + sidebar entry under Operations → Security → Privacy
+7. `c327339` (sanctum-bridge) — `notarize.sh`, the one-shot Apple-notarize wrapper for SanctumBridge.app
+8. *(this commit)* — narrative
+
+The full Family Pass v1.0 fortnight plan is now Phase 1 through 4 complete. Phase 5 is "first pilot install" — which is the friend.
+
+<Aside type="note">
+The Apple-grade test is rarely the technology. It's whether the second message in the imagined 9pm conversation can plausibly be "found it." On a path where doctor → self-test → troubleshooting → structured issue form all exist, where the verify command is honest about install tier, where the trust gates let the friend walk away cleanly, where the privacy page is a table not a wall of legalese — the second message becomes plausible. That's the bar for "ready to send the link."
+</Aside>
