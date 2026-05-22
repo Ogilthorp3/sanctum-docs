@@ -1,0 +1,67 @@
+---
+title: The Champion Who Memorized the Exam
+description: The autoresearch pipeline had not crowned a new champion in ten nights. It looked like the search had run dry. It hadn't — the exam was twenty-six questions long, and the reigning champion had memorized every one.
+date: 2026-05-22
+---
+
+The autoresearch pipeline trains a LoRA adapter every night, scores it, and promotes a new Council champion whenever one beats the reigning best. It had not promoted anything since May 12. Ten nights of training, ten nights of evaluation, ten nights of *no*.
+
+From the outside that reads as a search that has exhausted itself — the ladder climbed, the rungs ran out, nothing left to find. So we went looking for a better search.
+
+That was the wrong place to look. The search was fine. The **ruler** was broken.
+
+## The ruler was twenty-six inches long
+
+The eval that decides *is this adapter better than the champion* was twenty-six test cases. Six categories, four or five cases each. Score it, take the mean.
+
+Twenty-six cases means one case is worth about 0.038 of the overall score. And the promotion gate — the bar a candidate has to clear — was *champion + 0.005*.
+
+Read those two numbers together. The gate asked candidates to win by 0.005. The smallest change the eval could actually *measure* was 0.038 — a whole test case flipping from fail to pass. The gate was a line drawn finer than the ruler's smallest tick.
+
+So every night, a candidate that was genuinely a little better than the champion produced a score that rounded to "the same," and the gate declined it. Ten nights of "no champion" was not a search out of ideas. It was a search being told, by an instrument too coarse to hear it, that it had found nothing.
+
+## Rebuilding the ruler
+
+Phase 1 of the fix was not a smarter search. It was an honest instrument.
+
+The eval went from twenty-six cases to a hundred and nine, in three tiers:
+
+- **gold** — the original twenty-six, frozen. The trusted anchor, and a fast nightly screen.
+- **extended** — new cases, authored by the cloud Council, each one checked by a contamination guard that blocks anything too close to an existing case or to the training data.
+- **held-out** — a clean room. Cases that nothing which generates training data is ever allowed to see. The held-out tier has exactly one job: catch a model that learned the *test* instead of the *skill*.
+
+A hundred and nine cases puts one case at about 0.009 of the score — now a real one-percent improvement is something the ruler can see. A two-stage design keeps it affordable: the cheap gold screen runs on every candidate, the full hundred and nine only on the ones worth the hours.
+
+Then we ran the new ruler over the old champion.
+
+## What the held-out tier caught
+
+The current production champion — the adapter the Council has actually been running — scored like this against the un-finetuned base model:
+
+| Tier | Champion | Base model |
+|------|---------:|-----------:|
+| gold *(the original 26)* | **0.929** | 0.868 |
+| extended | 0.575 | **0.643** |
+| held-out | 0.612 | **0.685** |
+
+Look at the column the champion wins. It wins exactly one tier: the twenty-six questions it was selected against. On every case it had not seen before, the reigning champion is **worse than the base model with no fine-tuning at all**.
+
+It had not learned to be a better Council member. It had learned the answer key.
+
+The held-out tier caught it on its first real run. The new promotion gate, handed this candidate, returned NO-OP — correctly, and for the first time with a reason that was actually true.
+
+## The lesson
+
+A fitness function too small to resolve a real improvement is not merely useless. It is *worse* than useless, because it does not fail honestly. It does not return "no winner." It returns a **false winner** — whichever model best memorized the small fixed test — and then every system downstream trusts the crown.
+
+Principle 8 of [the Living Force](/architecture/living-force/) holds that a system which lies about its health is more dangerous than one that fails. A metric that cannot tell memorization from skill is exactly that system. The ten nights of "no champion" were the pipeline being honest. The real error was older and quieter: trusting a twenty-six-question exam to crown a champion at all.
+
+## Where this leaves the Council
+
+The rebuilt eval is built, Council-reviewed, and waiting behind the operator's cutover gate. When it goes live, the nightly search finally has a signal worth climbing — and the next champion will have to be good at questions it has never seen, scored against a clean room it was never allowed to study.
+
+The current champion's reign is, by this measure, already over. That is not a regression. That is the instrument working.
+
+---
+
+*Field note from the operator's seat. The pipeline was never stuck. It was measuring with a ruler too short to see the thing it reached for — and the first honest measurement we took said the trophy on the shelf was a forgery.*
