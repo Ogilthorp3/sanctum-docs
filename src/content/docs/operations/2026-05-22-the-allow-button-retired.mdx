@@ -1,0 +1,112 @@
+---
+title: "2026-05-22: The Allow Button, Retired"
+description: "macOS kept asking for permission. The brew pin reduced the cadence; the Apple-grade fix retired the dialog entirely. Node.js Foundation's signed .pkg as the stable identity, SanctumBridge re-signed with Bertrand's Developer ID, and a one-second script that writes 13 TCC grants directly to the database. The infrastructure now holds its own permissions."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch of a small stamped clay tablet locked in a glass cabinet — the kind a courier carries to prove they may enter, drawn beside an Abyssinian cat asleep on the cabinet's flat top](./images/2026-05-22-the-allow-button-retired.png)
+
+A weekly thing was happening: a node prompt would pop up — "node would like to access X" — and the operator would click Allow. Then a few days later, same dialog, different category. "I allow them when they pop up, but this is not Apple-like and military-grade." That was correct. Apple-like is the permission landing once and staying landed. Family-friendly is the dialog never appearing in the first place because the system has its own identity.
+
+This is the story of how that became true.
+
+## What was actually happening
+
+macOS's TCC framework keys permission grants to two things: the exact path of the binary that's requesting, and the specific category of access. Brew node lives at `/opt/homebrew/Cellar/node/X.Y.Z/bin/node`. Every `brew upgrade node` changes the X.Y.Z, which changes the path, which orphans every previous grant. Pinning brew node stopped the path-churn. The cadence dropped from "every few days" to "every few weeks." That was a real win.
+
+It wasn't enough. Even on a pinned path, each *new* category of access produced a fresh prompt. The 9 sanctum services running on node touch a long tail of resources — Documents one week, AppData the next, Calendar the week after that. Every first-touch is a dialog. Pinning the path doesn't stop that.
+
+The doctrine wanted zero prompts. To get there, two things needed to be true:
+
+1. The binary's identity has to be stable across upgrades (Team ID, not path)
+2. All anticipated permissions have to be granted in advance, not deferred to first access
+
+## The bundle attempt that didn't work
+
+The first idea was to embed brew node inside a code-signed app bundle. Sanctum already has the Apple Developer cert for that. Re-sign the bundle with Team ID `GJ994MN2YF`, TCC keys to the Team ID instead of the binary path, problem solved.
+
+The Hardened Runtime had other plans. Brew node depends on a chain of brew-installed dylibs — `libnode.147.dylib`, `llhttp`, `libuv`, `ada-url`, `simdjson`, `brotli`, `c-ares`. Hardened Runtime refuses to load libraries with mismatched Team IDs. Re-signing every dylib in the chain recursively under the same Developer ID is `dylibbundler` territory: half a day of careful work, plus notarization, plus re-doing it after every brew upgrade if you want fresh security patches. The bundle path exists, it just isn't the right *first* thing to ship.
+
+The attempt was real — built the bundle scaffold, copied node in, hit the dylib wall, cleaned up. Good engineering meant abandoning that and finding the path that's actually stable.
+
+## What worked: Node.js Foundation's own signed `.pkg`
+
+Node.js Foundation ships an official macOS `.pkg` installer at `nodejs.org/dist/`. It's signed by them, with a stable Team ID that doesn't rotate every couple years:
+
+```
+Authority=Developer ID Application: Node.js Foundation (HX7739G8FX)
+Authority=Developer ID Certification Authority
+Authority=Apple Root CA
+TeamIdentifier=HX7739G8FX
+Notarization: trusted by the Apple notary service
+Signed with a trusted timestamp on: 2026-05-05 12:06:30 +0000
+```
+
+`HX7739G8FX` is the persistence anchor. macOS TCC sees it across years. Their `.pkg` installs to `/usr/local/bin/node` — a path that doesn't churn with brew or anything else. All the dylibs are statically linked or bundled by the Node.js Foundation themselves, so there's no Hardened Runtime mismatch to chase. Apple notarized the whole thing. Gatekeeper says yes.
+
+That's the real fix. It uses the upstream's own engineering instead of trying to re-engineer it. Apple-like products are usually like this: don't rebuild the wheel; pick the version of the wheel that has the manufacturer's mark on it and bolt it on.
+
+## The migration
+
+Ten sanctum services were running on brew node:
+
+- `dench-proxy.js`, `ha-gateway.js`, `firewalla-bridge.js` (system daemons)
+- `claude-max-api-tailscale.js`, `command-center`, jocasta `message-sync` (user agents)
+- `SanctumBridge.app` server (iMessage / WhatsApp / Calendar / Contacts bridge)
+- Three `jocasta-mcp` stdio instances spawned on-demand by MCP clients
+
+Each one's path-to-node was tracked down: LaunchAgent plists, system-domain LaunchDaemons, wrapper shell scripts, and one Mach-O C launcher embedded in the SanctumBridge bundle. The bundle launcher needed the most surgery — a `#define NODE_BIN "/opt/homebrew/bin/node"` constant compiled into a binary, plus the whole bundle re-signed with Bertrand's `GJ994MN2YF` Developer ID after the rebuild.
+
+System daemons in `/Library/LaunchDaemons/` needed sudo to patch, and `launchctl kickstart -k` turned out to be insufficient — it kicks the running instance but doesn't make launchd re-read the plist from disk. Full `bootout` + `bootstrap` was the spell that actually picked up the new node path. (Worth pinning that detail in operator memory for the next time someone edits a system daemon plist and wonders why nothing seems to change.)
+
+Net result: 7 of 10 services on `/usr/local/bin/node` immediately, plus 3 on-demand jocasta-mcp instances that auto-migrate the next time an MCP client reconnects.
+
+## The script that retired the Allow button
+
+Once `/usr/local/bin/node` was the canonical sanctum node, all 13 TCC categories needed to be granted to it. Manually that's: System Settings → Privacy & Security → Full Disk Access → `+` → file picker → paste path → toggle on → Touch ID. Then Calendar. Then Reminders. Then twelve more.
+
+The Apple-grade answer is one command:
+
+```bash
+~/.sanctum/scripts/sanctum-grant-tcc.sh
+```
+
+The script writes 13 rows directly to `~/Library/Application Support/com.apple.TCC/TCC.db` via `INSERT OR REPLACE INTO access` with `auth_value=2` (allowed). On this Mac it finished in under a second. The verification mode (`--verify`) reads the same rows back and confirms each one stuck. The uninstall mode (`--uninstall`) cleanly removes the sanctum-managed rows so the operator can step back to manual control.
+
+There's a bootstrap: TCC won't let just any process write to its database — Apple's "you need Full Disk Access to grant Full Disk Access" gate. The script detects the missing-FDA state on first run and prints exactly which path to add. After the one-time bootstrap, every future grant is a single command, including new sanctum services that need new binaries:
+
+```bash
+sanctum-grant-tcc.sh --client /path/to/some/other/binary
+```
+
+Idempotent (`INSERT OR REPLACE`). Reversible (`--uninstall`). Diagnostic (`--verify`). Operator never opens System Settings again unless they want to.
+
+## The chain that holds now
+
+```
+Apple Root CA
+ └─ Developer ID Certification Authority
+     └─ Developer ID Application: Node.js Foundation (HX7739G8FX)
+          └─ /usr/local/bin/node     ← Sanctum's only node binary
+               ├─ stable path (Apple Installer pkg layout, not brew Cellar)
+               ├─ notarized + trusted timestamp
+               ├─ Team ID HX7739G8FX is the TCC persistence anchor
+               └─ 13 TCC categories pre-granted, scriptable
+```
+
+Plus, in parallel:
+
+```
+ └─ Developer ID Application: Bertrand Nepveu (GJ994MN2YF)
+     └─ SanctumBridge.app           ← signed bundle for the iMessage/Calendar bridge
+          ├─ bundle ID ai.openclaw.denchclaw (stable)
+          ├─ embeds the C launcher that spawns /usr/local/bin/node
+          └─ inherits the .pkg node's grants for its child process
+```
+
+Two anchors: one Node.js Foundation, one Bertrand Nepveu. Both are years-stable identities. Both survive every plausible upgrade path. Neither requires the operator to click Allow again.
+
+<Aside type="note">
+The pattern under all of this: Apple-grade is rarely the maximum-effort *original* engineering. Apple-grade is usually the work of finding which manufacturer already did the maximum-effort engineering and using their stable identity instead of trying to forge a new one. The bundle attempt was the wrong shape because it tried to make Sanctum the manufacturer of node. The `.pkg` install is the right shape because it lets Node.js Foundation be the manufacturer of node and lets Sanctum be the assembler. The Allow button retired the moment someone else's identity stopped expiring weekly.
+</Aside>
