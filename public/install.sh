@@ -4,6 +4,10 @@
 # ║  https://sanctum.run                                                ║
 # ║                                                                     ║
 # ║  Usage:  curl -fsSL https://sanctum.run/install.sh | bash           ║
+# ║                                                                     ║
+# ║  What this does: minimal bootstrap. Installs Homebrew if missing,   ║
+# ║  installs sanctum-cli via the Ogilthorp3/sanctum tap, then hands    ║
+# ║  off to `sanctum onboard --recipe family` for the actual config.    ║
 # ╚══════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
@@ -25,36 +29,6 @@ warn()   { printf "${AMBER}  !${RESET} %s\n" "$*"; }
 fail()   { printf "${RED}  ✗${RESET} %s\n" "$*"; }
 step()   { printf "\n${AMBER}◆${RESET} ${BOLD}%s${RESET}\n" "$*"; }
 
-spinner() {
-    local pid=$1 msg=$2
-    local chars="⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    while kill -0 "$pid" 2>/dev/null; do
-        for (( i=0; i<${#chars}; i++ )); do
-            printf "\r${DIM}  ${chars:$i:1} %s${RESET}" "$msg"
-            sleep 0.08
-        done
-    done
-    printf "\r\033[K"
-}
-
-ask() {
-    local prompt=$1 default=${2:-}
-    if [ -n "$default" ]; then
-        printf "${WHITE}  %s ${DIM}[%s]${RESET}: " "$prompt" "$default"
-    else
-        printf "${WHITE}  %s${RESET}: " "$prompt"
-    fi
-    read -r answer
-    echo "${answer:-$default}"
-}
-
-confirm() {
-    local prompt=$1
-    printf "${WHITE}  %s ${DIM}[Y/n]${RESET}: " "$prompt"
-    read -r answer
-    [[ "${answer:-y}" =~ ^[Yy] ]]
-}
-
 # ── Preflight ────────────────────────────────────────────────────────────
 clear
 printf "\n"
@@ -63,362 +37,148 @@ cat << 'LOGO'
     ◇
    ╱ ╲
   ╱   ╲       S A N C T U M
-  ╲   ╱       Your home, intelligently managed.
+  ╲   ╱       your haus, your hardware, your AI
    ╲ ╱
     ◇
 LOGO
 printf "${RESET}\n"
-printf "${DIM}  Version 1.0  •  sanctum.run${RESET}\n\n"
+printf "${DIM}  sanctum.run installer  •  about a minute, no commitments${RESET}\n\n"
 
-# ── System Check ─────────────────────────────────────────────────────────
-step "Checking your system"
-
-# macOS version
-MACOS_VERSION=$(sw_vers -productVersion 2>/dev/null || echo "0")
-MACOS_MAJOR=$(echo "$MACOS_VERSION" | cut -d. -f1)
-if [ "$MACOS_MAJOR" -ge 15 ] 2>/dev/null; then
-    ok "macOS $MACOS_VERSION (Sequoia or later)"
-else
-    fail "macOS 15 (Sequoia) or later required — you have $MACOS_VERSION"
+# Refuse to run on anything other than macOS Apple Silicon.
+if [ "$(uname -s)" != "Darwin" ]; then
+    fail "Sanctum is macOS-only today."
+    detail "If you're on Linux/Windows, follow Sanctum on github.com/Ogilthorp3"
+    detail "for the cross-platform port — not shipped yet."
     exit 1
 fi
-
-# Apple Silicon
-ARCH=$(uname -m)
-if [ "$ARCH" = "arm64" ]; then
-    CHIP=$(sysctl -n machdep.cpu.brand_string 2>/dev/null || echo "Apple Silicon")
-    ok "$CHIP"
-else
-    fail "Apple Silicon required — detected $ARCH"
+if [ "$(uname -m)" != "arm64" ]; then
+    fail "Sanctum runs on Apple Silicon (M1/M2/M3/M4)."
+    detail "Intel Macs are not supported. The cathedrals use MLX, which is"
+    detail "Apple Silicon only."
     exit 1
 fi
+ok "macOS on Apple Silicon (uname=$(uname -m))"
 
-# RAM
-RAM_GB=$(( $(sysctl -n hw.memsize 2>/dev/null || echo 0) / 1073741824 ))
-if [ "$RAM_GB" -ge 16 ]; then
-    ok "${RAM_GB} GB RAM"
-else
-    warn "${RAM_GB} GB RAM — 16 GB minimum recommended"
-fi
+# ── Homebrew ─────────────────────────────────────────────────────────────
+step "Homebrew"
 
-# Disk space
-DISK_FREE_GB=$(df -g "$HOME" | tail -1 | awk '{print $4}')
-if [ "$DISK_FREE_GB" -ge 50 ]; then
-    ok "${DISK_FREE_GB} GB free disk space"
-else
-    warn "Only ${DISK_FREE_GB} GB free — 50 GB recommended"
-fi
-
-# ── Dependencies ─────────────────────────────────────────────────────────
-step "Checking dependencies"
-
-MISSING=()
-
-# Homebrew
 if command -v brew &>/dev/null; then
-    ok "Homebrew $(brew --version 2>/dev/null | head -1 | awk '{print $2}')"
+    ok "Homebrew already installed ($(brew --version 2>/dev/null | head -1))"
 else
-    MISSING+=("homebrew")
-    warn "Homebrew not found"
-fi
-
-# Git (comes with Xcode CLI tools)
-if command -v git &>/dev/null; then
-    ok "Git $(git --version | awk '{print $3}')"
-else
-    MISSING+=("git")
-    warn "Git not found"
-fi
-
-# Python
-if command -v python3 &>/dev/null; then
-    PY_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-    PY_MINOR=$(echo "$PY_VERSION" | cut -d. -f2)
-    if [ "$PY_MINOR" -ge 12 ] 2>/dev/null; then
-        ok "Python $PY_VERSION"
-    else
-        MISSING+=("python")
-        warn "Python 3.12+ required — you have $PY_VERSION"
-    fi
-else
-    MISSING+=("python")
-    warn "Python not found"
-fi
-
-# Node.js
-if command -v node &>/dev/null; then
-    NODE_VERSION=$(node --version 2>/dev/null)
-    NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v//' | cut -d. -f1)
-    if [ "$NODE_MAJOR" -ge 22 ] 2>/dev/null; then
-        ok "Node.js $NODE_VERSION"
-    else
-        MISSING+=("node")
-        warn "Node.js 22+ required — you have $NODE_VERSION"
-    fi
-else
-    MISSING+=("node")
-    warn "Node.js not found"
-fi
-
-# Docker
-if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
-    ok "Docker $(docker --version 2>/dev/null | awk '{print $3}' | tr -d ',')"
-else
-    MISSING+=("docker")
-    warn "Docker Desktop not found or not running"
-fi
-
-# Install missing dependencies
-if [ ${#MISSING[@]} -gt 0 ]; then
+    say "Installing Homebrew — Apple will ask for your password once."
+    detail "Homebrew is the macOS package manager. It installs into /opt/homebrew/"
+    detail "and is what we use to ship sanctum-cli + its dependencies."
     printf "\n"
-    say "Missing: ${MISSING[*]}"
-    if confirm "Install missing dependencies?"; then
-        # Homebrew first
-        if [[ " ${MISSING[*]} " =~ " homebrew " ]]; then
-            step "Installing Homebrew"
-            /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" &
-            spinner $! "Installing Homebrew..."
-            wait $!
-            eval "$(/opt/homebrew/bin/brew shellenv)"
-            ok "Homebrew installed"
-        fi
-
-        # Then brew packages
-        BREW_PKGS=()
-        [[ " ${MISSING[*]} " =~ " git " ]] && BREW_PKGS+=("git")
-        [[ " ${MISSING[*]} " =~ " python " ]] && BREW_PKGS+=("python@3.12")
-        [[ " ${MISSING[*]} " =~ " node " ]] && BREW_PKGS+=("node")
-
-        if [ ${#BREW_PKGS[@]} -gt 0 ]; then
-            step "Installing ${BREW_PKGS[*]}"
-            brew install "${BREW_PKGS[@]}" &>/dev/null &
-            spinner $! "Installing packages..."
-            wait $!
-            ok "Packages installed"
-        fi
-
-        # Docker Desktop
-        if [[ " ${MISSING[*]} " =~ " docker " ]]; then
-            step "Installing Docker Desktop"
-            brew install --cask docker &>/dev/null &
-            spinner $! "Installing Docker Desktop..."
-            wait $!
-            ok "Docker Desktop installed — please launch it from Applications"
-        fi
-    else
-        fail "Cannot continue without required dependencies."
-        detail "Install them manually and re-run the installer."
-        exit 1
-    fi
+    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    eval "$(/opt/homebrew/bin/brew shellenv)"
+    ok "Homebrew installed"
 fi
 
-# ── Configuration ────────────────────────────────────────────────────────
-step "Setting up your Sanctum"
+# ── Command Line Tools (Apple) ───────────────────────────────────────────
+step "Apple Command Line Tools"
 
-SANCTUM_HOME="$HOME/.sanctum"
-
-# Home name
-printf "\n"
-say "Let's name your home."
-detail "This is how Sanctum identifies your primary location."
-detail "Use something short and meaningful — you'll see it everywhere."
-printf "\n"
-
-HOSTNAME_GUESS=$(scutil --get ComputerName 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr ' ' '-' || echo "my-home")
-HOME_NAME=$(ask "Home name" "$HOSTNAME_GUESS")
-HOME_SLUG=$(echo "$HOME_NAME" | tr '[:upper:]' '[:lower:]' | tr ' ' '-' | tr -cd 'a-z0-9-')
-
-# LAN IP detection
-LAN_IP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || echo "192.168.1.10")
-LAN_IP=$(ask "Mac Mini LAN IP" "$LAN_IP")
-
-# Services selection
-printf "\n"
-say "Which features do you want?"
-detail "You can change these later in ~/.sanctum/instance.yaml"
-printf "\n"
-
-ENABLE_HA=false
-ENABLE_VOICE=false
-ENABLE_AGENTS=true
-ENABLE_DASHBOARD=true
-
-confirm "Home Assistant (smart home automation)" && ENABLE_HA=true
-confirm "Voice control (local text-to-speech)" && ENABLE_VOICE=true
-
-printf "\n"
-
-# ── Installation ─────────────────────────────────────────────────────────
-step "Creating Sanctum"
-
-# Directory structure
-mkdir -p "$SANCTUM_HOME"/{templates/launchagents,tests,lib,scripts,litellm,memory}
-
-ok "Created $SANCTUM_HOME"
-
-# Generate instance.yaml
-cat > "$SANCTUM_HOME/instance.yaml" << YAML
-# ──────────────────────────────────────────────────────────────────────────
-# Sanctum Instance Configuration
-# Generated by the Sanctum installer on $(date +%Y-%m-%d)
-# Documentation: https://sanctum.run/reference/instance-yaml/
-# ──────────────────────────────────────────────────────────────────────────
-
-instance:
-  name: "${HOME_NAME}"
-  slug: "${HOME_SLUG}"
-  tier: "core"   # core | pro | family | estate
-
-nodes:
-  ${HOME_SLUG}:
-    type: hub
-    host: ${LAN_IP}
-    services:
-      gateway:
-        enabled: true
-        port: 18789
-      dashboard:
-        enabled: ${ENABLE_DASHBOARD}
-        port: 3001
-      homeassistant:
-        enabled: ${ENABLE_HA}
-        port: 8123
-      voice:
-        enabled: ${ENABLE_VOICE}
-        port: 8020
-      agents:
-        enabled: ${ENABLE_AGENTS}
-        port: 18091
-      litellm:
-        enabled: true
-        port: 4000
-        internal_port: 4001
-
-vm:
-  ip: 10.10.10.10
-  bridge_ip: 10.10.10.1
-  ssh_user: ubuntu
-
-secrets:
-  backend: keychain
-  rotation_day: 1
-
-models:
-  local:
-    provider: lmstudio
-    port: 1234
-  cloud:
-    provider: openrouter
-    pii_scrubbing: true
-
-cloudflare:
-  tunnel_name: "${HOME_SLUG}"
-YAML
-
-ok "Generated instance.yaml"
-
-# Node identity
-echo "$HOME_SLUG" > "$SANCTUM_HOME/.node_id"
-ok "Set node identity: $HOME_SLUG"
-
-# Clone core repos if git is available
-if command -v git &>/dev/null; then
-    if [ ! -d "$HOME/Projects/sanctum-docs" ]; then
-        git clone -q https://github.com/Ogilthorp3/sanctum-docs.git "$HOME/Projects/sanctum-docs" 2>/dev/null &
-        spinner $! "Cloning documentation..."
-        wait $! && ok "Documentation cloned" || detail "Skipped (not available yet)"
-    fi
-
-    # Initialize the haus configuration repository
-    if [ ! -d "$HOME/$HOME_SLUG" ]; then
-        mkdir -p "$HOME/$HOME_SLUG"
-        (cd "$HOME/$HOME_SLUG" && git init -q && git commit --allow-empty -q -m "chore: initial commit for $HOME_NAME configuration")
-        ok "Initialized configuration repository at ~/$HOME_SLUG"
-    else
-        ok "Configuration repository ~/$HOME_SLUG already exists"
-    fi
+if xcode-select -p &>/dev/null; then
+    ok "Command Line Tools already present at $(xcode-select -p)"
+else
+    warn "Apple Command Line Tools missing."
+    detail "Brew needs them to build a couple of Python wheels. Apple will"
+    detail "open an installer dialog — accept it, wait for the install (~2 min),"
+    detail "then re-run this installer."
+    printf "\n"
+    sudo xcode-select --install || true
+    fail "Re-run: curl -fsSL https://sanctum.run/install.sh | bash"
+    exit 1
 fi
 
-# Presidio containers for PII scrubbing
-if command -v docker &>/dev/null && docker info &>/dev/null 2>&1; then
-    step "Setting up privacy layer"
+# ── sanctum-cli via the tap ──────────────────────────────────────────────
+step "sanctum-cli"
 
-    if ! docker ps --format '{{.Names}}' | grep -q presidio-analyzer; then
-        docker run -d --name presidio-analyzer --restart unless-stopped \
-            -p 127.0.0.1:5002:3000 \
-            mcr.microsoft.com/presidio-analyzer:latest &>/dev/null &
-        spinner $! "Starting PII analyzer..."
-        wait $! && ok "Presidio analyzer running (port 5002)" || warn "Failed to start analyzer"
-    else
-        ok "Presidio analyzer already running"
-    fi
-
-    if ! docker ps --format '{{.Names}}' | grep -q presidio-anonymizer; then
-        docker run -d --name presidio-anonymizer --restart unless-stopped \
-            -p 127.0.0.1:5001:3000 \
-            mcr.microsoft.com/presidio-anonymizer:latest &>/dev/null &
-        spinner $! "Starting PII anonymizer..."
-        wait $! && ok "Presidio anonymizer running (port 5001)" || warn "Failed to start anonymizer"
-    else
-        ok "Presidio anonymizer already running"
-    fi
+if command -v sanctum &>/dev/null; then
+    INSTALLED_VERSION=$(sanctum --version 2>/dev/null || echo "?")
+    ok "sanctum-cli already installed ($INSTALLED_VERSION)"
+    detail "Run 'sanctum update' to pull the latest."
+else
+    say "Installing sanctum-cli from the Ogilthorp3/sanctum tap."
+    detail "Tap repo:    https://github.com/Ogilthorp3/homebrew-sanctum"
+    detail "Source:      https://github.com/Ogilthorp3/sanctum-cli"
+    detail "License:     FSL-1.1-Apache-2.0 (source-available)"
+    printf "\n"
+    brew install ogilthorp3/sanctum/sanctum-cli
+    ok "sanctum-cli installed"
 fi
 
-# ── Activation ───────────────────────────────────────────────────────────
-step "Activating"
+# ── Node.js Foundation .pkg (TCC stability — optional but recommended) ───
+step "Node.js Foundation .pkg"
 
-# Add shell library to zshrc if not already there
-SHELL_SOURCE='source ~/.sanctum/lib/config.sh'
-if [ -f "$SANCTUM_HOME/lib/config.sh" ]; then
-    if ! grep -q 'sanctum/lib/config.sh' "$HOME/.zshrc" 2>/dev/null; then
-        echo "" >> "$HOME/.zshrc"
-        echo "# Sanctum shell library" >> "$HOME/.zshrc"
-        echo "$SHELL_SOURCE" >> "$HOME/.zshrc"
-        ok "Added shell library to ~/.zshrc"
+if [ -f /usr/local/bin/node ]; then
+    if codesign -dvv /usr/local/bin/node 2>&1 | grep -q HX7739G8FX; then
+        ok "/usr/local/bin/node is the Node.js Foundation .pkg install"
+        detail "Team ID HX7739G8FX — the TCC-stable identity for the haus services."
     else
-        ok "Shell library already in ~/.zshrc"
+        warn "/usr/local/bin/node exists but isn't signed by Node.js Foundation."
+        detail "This is fine for the brew install, but sanctum services routed"
+        detail "through node will hit periodic TCC prompts on brew upgrades."
+        detail "See: https://sanctum.run/architecture/tcc-identity-anchors/"
     fi
 else
-    detail "Shell library not found — will be available after full setup"
+    say "Installing Node.js Foundation .pkg (for TCC stability)."
+    detail "Why: sanctum services that touch protected resources (iMessage,"
+    detail "Calendar, etc) need a stable signed node binary. brew node's path"
+    detail "churns on every upgrade, retriggering permission prompts. The"
+    detail ".pkg install puts node at a fixed path with a stable Team ID."
+    printf "\n"
+    TMPDIR=$(mktemp -d)
+    PKG_URL="https://nodejs.org/dist/v26.0.0/node-v26.0.0.pkg"
+    say "Downloading $PKG_URL"
+    curl -sL -o "$TMPDIR/node.pkg" "$PKG_URL"
+    say "Opening the Apple Installer — accept the prompts."
+    open -W "$TMPDIR/node.pkg"
+    rm -rf "$TMPDIR"
+    if [ -f /usr/local/bin/node ]; then
+        ok "Node.js Foundation .pkg installed"
+    else
+        warn ".pkg install was cancelled or failed — continuing without it"
+        detail "You can re-run this installer later, or run only the .pkg leg manually."
+    fi
 fi
 
-# ── Done ─────────────────────────────────────────────────────────────────
+# ── Hand-off ─────────────────────────────────────────────────────────────
+step "Onboarding"
+
+say "Bootstrap complete. The rest of setup is interactive."
+detail "Next command runs sanctum-cli's family-recipe onboarding wizard:"
+detail "  • estimate the backup scope (~5 GB after dedup)"
+detail "  • walk through Cloudflare R2 cloud-bucket setup (free tier)"
+detail "  • run a dry-run + first real backup"
+detail "  • restore a known file as a canary to prove the round-trip"
+printf "\n"
+
+read -r -p "$(printf "${WHITE}  Run ${BOLD}sanctum onboard --recipe family${RESET}${WHITE} now? ${DIM}[Y/n]${RESET}: ")" answer
+if [[ "${answer:-y}" =~ ^[Yy] ]]; then
+    exec sanctum onboard --recipe family
+fi
+
+# ── Manual hand-off ──────────────────────────────────────────────────────
 printf "\n"
 printf "${AMBER}"
 cat << 'DONE'
     ◇
    ╱ ╲
-  ╱   ╲       Installation complete.
+  ╱   ╲       Bootstrap complete.
   ╲   ╱
    ╲ ╱
     ◇
 DONE
 printf "${RESET}\n"
 
-say "Your Sanctum is ready."
+say "You're ready. When you have a moment, run:"
 printf "\n"
-detail "Config:      ~/.sanctum/instance.yaml"
-detail "Node ID:     $HOME_SLUG"
-detail "LAN IP:      $LAN_IP"
-if [ "$ENABLE_HA" = true ]; then
-    detail "Home Asst:   http://$LAN_IP:8123"
-fi
-detail "Dashboard:   http://$LAN_IP:3001"
-detail "Docs:        https://sanctum.run"
-
+detail "  ${BOLD}sanctum onboard --recipe family${RESET}    ${DIM}— first-run wizard${RESET}"
+detail "  ${BOLD}sanctum self-test${RESET}                   ${DIM}— verify everything's healthy${RESET}"
+detail "  ${BOLD}sanctum status${RESET}                      ${DIM}— one-line snapshot${RESET}"
+detail "  ${BOLD}sanctum doctor${RESET}                      ${DIM}— deep diagnostic${RESET}"
 printf "\n"
-say "Next steps:"
-detail "1. Open ~/.sanctum/instance.yaml to review your config"
-detail "2. Run 'bash ~/.sanctum/generate-plists.sh' to create LaunchAgents"
-detail "3. Visit https://sanctum.run/getting-started/first-run/"
-printf "\n"
-
-# Analytics opt-in (respect privacy)
-if confirm "Send anonymous install analytics to help improve Sanctum?"; then
-    curl -sf "https://sanctum.run/api/install?v=1.0&chip=$(uname -m)&ram=$RAM_GB&ha=$ENABLE_HA&voice=$ENABLE_VOICE" &>/dev/null || true
-    detail "Thank you. No personal data is collected."
-else
-    detail "No data sent. Your privacy matters."
-fi
-
+detail "Quick start:  https://sanctum.run/getting-started/quick-start/"
+detail "Architecture: https://sanctum.run/architecture/"
+detail "Source:       https://github.com/Ogilthorp3/sanctum-cli"
 printf "\n"
