@@ -195,6 +195,7 @@ export default defineConfig({
 						{ label: 'Service Troubleshooting', slug: 'operations/service-troubleshooting' },
 						{ label: 'Signal Troubleshooting', slug: 'operations/signal-troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
+						{ label: 'Privacy', slug: 'operations/privacy' },
 						{ label: 'Secret Rotation', slug: 'operations/secret-rotation' },
 						{ label: 'Tooling', slug: 'operations/tooling' },
 						{ label: 'Verify', slug: 'operations/verify' },
