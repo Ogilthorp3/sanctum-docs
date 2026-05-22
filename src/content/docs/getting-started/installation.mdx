@@ -1,302 +1,173 @@
 ---
 title: Installation
-description: Install Sanctum on your Mac Mini from the checked-in operator CLI.
+description: The detailed reference for installing Sanctum on your Mac. If you just want the fastest path, see Quick Start. This page is the longer walkthrough with full troubleshooting.
 ---
 
 import { Steps, Aside, Tabs, TabItem, Code } from '@astrojs/starlight/components';
 
 ![Tommy supervises the Mac Mini setup — quality assurance by feline](./images/tommy-mac-mini.png)
 
-## Quick Install
+This is the detailed install reference. If you've never set up Sanctum before and you want the friendly 4-step version, start with [Quick Start](./quick-start/) — it's the same canonical flow, just terser.
 
-Sanctum's current installer surface is the checked-in `sanctumctl` operator CLI. Clone the repo, then run:
+This page goes deeper: full troubleshooting for the steps that occasionally go sideways, a verification protocol you can run after install, and an operator-grade appendix for people running Sanctum from source rather than from the published binary.
+
+## The canonical install path
+
+Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sanctum`. The tap installs the `sanctum-cli` Python application, which then orchestrates everything else (cloud backup setup, first backup, restore canary, all of it).
+
+<Steps>
+
+1. **Install Homebrew** if you don't already have it.
+
+   ```bash
+   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+   ```
+
+   Homebrew installs into `/opt/homebrew/` and will ask for your administrator password once during the install. That prompt is from Apple's installer, not Homebrew — it needs to create directories under `/opt/`. After it finishes, run `brew --version` to confirm; you should see something like `Homebrew 5.x.x`.
+
+   <Aside type="tip">
+   On a brand-new Mac, the first time you run `brew install` Homebrew may also prompt you to install Apple's Command Line Tools. Let it. That's a one-time macOS thing and Apple does it from System Settings → Software Update if your Mac doesn't have them yet.
+   </Aside>
+
+2. **Install `sanctum-cli` via the Homebrew tap.**
+
+   ```bash
+   brew install ogilthorp3/sanctum/sanctum-cli
+   ```
+
+   This installs Python 3.12 (if you don't already have it), creates a private virtual environment under Homebrew's `libexec`, pulls `sanctum-cli` v0.8.0 plus its 38 runtime Python dependencies from PyPI, and symlinks the `sanctum` command into `/opt/homebrew/bin/sanctum`.
+
+   Confirm:
+
+   ```bash
+   sanctum --help
+   ```
+
+   You should see a help screen listing the available sub-commands (`status`, `doctor`, `onboard`, `backup`, `chat`, `agent`, `proxy`, `bridge`, `cloud`, `code`, `config`, `keychain`, `vision`).
+
+3. **Run the one-shot onboarding flow.**
+
+   ```bash
+   sanctum onboard --recipe family
+   ```
+
+   The `family` recipe is the right pick for a new haus. It pulls a curated backup set (Documents, Desktop, ssh keys, dotfiles — about 5 GB after dedup), walks you through Cloudflare R2 cloud-bucket setup if you don't have one yet, runs a dry-run backup so you can see exactly what will happen, executes the real backup, and verifies the round-trip by restoring a known file as a canary.
+
+   When it finishes, you'll see a green panel that says **"Your Sanctum is alive, &lt;your name&gt;."** That's the moment.
+
+   <Aside type="note">
+   Other available recipes:
+   - `operator` — for an experienced operator setting up a hub Mac Mini with the full sanctum stack (broader backup scope, no Photos auto-exclude)
+   - `code` — for a developer machine (Documents, dotfiles, ssh keys, plus `~/Projects`)
+   - Or pass a path to a JSON file with custom paths.
+   </Aside>
+
+4. **Verify the install.**
+
+   ```bash
+   sanctum status        # one-line health snapshot
+   sanctum doctor        # full diagnostic
+   ```
+
+   `status` should print a single line ending in green text. `doctor` runs deeper checks: each cloud backend, the Keychain credentials, the LaunchAgent that runs daily backups, and the network paths. Everything green is the goal.
+
+</Steps>
+
+## What you just got
+
+| What | Where | How long it lasts |
+|---|---|---|
+| Daily backups (verified) | `com.sanctum.backup` LaunchAgent runs at a quiet hour | Forever, automatic |
+| Restore canary (proves round-trip works) | Same LaunchAgent, weekly | Forever, automatic |
+| Health snapshot command | `sanctum status` | On-demand |
+| Deep diagnostic | `sanctum doctor` | On-demand |
+| Local agent chat | `sanctum chat` | On-demand |
+| Audit log of every action | `~/.sanctum/logs/` with bounded rotation | Bounded at 50 MB per service |
+| Credentials in macOS Keychain | `security find-generic-password -s sanctum/...` | Until you rotate them |
+
+No phone-home. Nothing leaves your Mac unless you explicitly configured a cloud backup target (which you did, for backups, encrypted with a key only you control).
+
+## When something goes sideways
+
+The honest truth is most install runs work first time. The ones that don't usually hit one of these.
+
+### "Your Command Line Tools are too outdated"
+
+`brew install` checks for Xcode's Command Line Tools and refuses to build dependencies if they're missing or stale.
 
 ```bash
-cd ~/Projects/sanctum
-python3 tools/sanctumctl.py bootstrap --write
-python3 tools/sanctumctl.py doctor
+# Check what's installed
+xcode-select -p
+pkgutil --pkg-info=com.apple.pkg.CLTools_Executables
+
+# Install or update
+sudo xcode-select --install
 ```
 
-That flow creates the local `~/.sanctum` scaffold, drops in the annotated `instance.yaml` example, writes a node identity file, and verifies that the checked-in renderers, runtime calibration layer, and audit suites all agree.
+If the install dialog doesn't appear, open System Settings → Software Update — Apple sometimes routes CLT updates through the regular macOS Update path.
 
-<Aside type="tip">
-  Prefer to inspect before writing? Good instinct. `python3 tools/sanctumctl.py bootstrap` previews the filesystem plan without touching your home directory.
-</Aside>
+### "Cloudflare R2 setup failed"
 
-The operator CLI will:
-1. Create the baseline `~/.sanctum` directory structure
-2. Copy the checked-in `instance.yaml.example` into `~/.sanctum/instance.yaml`
-3. Derive a `.node_id` from the example topology
-4. Check the canonical render/sync surfaces with `render --check`
-5. Run the audited verification wall with `doctor` or `verify`
+The R2 wizard opens browser tabs for the steps that need your input (account creation, API token generation, bucket creation). If a browser tab didn't open or you cancelled it partway, re-run:
 
-After installation, visit the [First Run](/getting-started/first-run/) guide to verify everything is working.
+```bash
+sanctum cloud setup r2
+```
+
+The wizard is idempotent — it picks up where you left off. If R2 is being slow to provision (rare but real), wait a few minutes and try `sanctum doctor` again.
+
+### "Permission denied (publickey)"
+
+This shows up if you ran `sanctum onboard` while signed into a different Mac account, or with `sudo` (don't). Sanctum stores its credentials in your user-level Keychain. Make sure you're running as your normal user, not root.
+
+### "The brew tap failed to clone"
+
+If `brew install ogilthorp3/sanctum/sanctum-cli` errors with something about Git LFS or a cloning failure, your global Git hooks may be blocking the clone. Check:
+
+```bash
+git config --global core.hookspath
+```
+
+If that returns a custom path, the hooks in that directory need to soft-fail when their tools aren't found. See [`sanctum-runtime` post-checkout hook](https://github.com/Ogilthorp3/sanctum-runtime) for the canonical pattern.
+
+### "Permissions prompts every time I run `sanctum`"
+
+If you keep seeing macOS permission dialogs ("node would like to access X"), the canonical fix lives in [`runbooks/node-tcc-stop-the-prompts.md`](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md). Short version: install the Node.js Foundation `.pkg` from `nodejs.org/dist/`, migrate sanctum services to `/usr/local/bin/node`, and grant Full Disk Access once. The runbook has the script that automates all 13 grants.
+
+## What's next
+
+If everything looks green:
+
+- Read the [First Run](./first-run/) page for the verification checklist (it's the same sanity-check the daily LaunchAgent runs, on demand)
+- Read [What Is Sanctum?](./what-is-sanctum/) if you want context on the why
+- Browse the architecture pages if you want to know how it works under the hood
+- For sharing the haus with family members, see [Family Pass installation](./installation-family-pass/) (v1.0 is in active implementation — the operator path works today)
+
+If something is failing:
+
+- `sanctum doctor` and read the output carefully
+- Audit log at `~/.sanctum/logs/` for the failing service
+- [Troubleshooting](./troubleshooting/) page has copy-pastable fixes for the top 10 issues
+- Open an issue on the relevant GitHub repo
 
 ---
 
-## Manual Installation
+## Appendix — Operator-grade install (running from source)
 
-If you prefer to set things up by hand — because you read man pages for fun, or because you have trust issues, or both — follow the steps below. Make sure you have completed all the [Requirements](/getting-started/requirements/) first.
-
-## Create the Sanctum Haus Directory
-
-<Steps>
-
-1. **Create the directory structure.**
-
-   Sanctum stores all configuration, templates, and runtime data under `~/.sanctum`. A hidden directory for a hidden infrastructure. Poetic.
-
-   ```bash
-   mkdir -p ~/.sanctum/{templates/launchagents,tests,lib,scripts}
-   ```
-
-2. **Copy the example configuration.**
-
-   The example file is an annotated template that documents every available option. It is the most lovingly commented YAML file you will ever read.
-
-   ```bash
-   cp ~/Projects/sanctum/sanctum/instance.yaml.example ~/.sanctum/instance.yaml
-   ```
-
-   <Aside type="tip">
-     The checked-in example now lives in the Sanctum repository at `sanctum/instance.yaml.example`.
-   </Aside>
-
-3. **Set your node identity.**
-
-   Each node needs a single-line identity file that tells the system which node it is. This is the machine learning who it is, which — depending on your philosophical leanings — is either beautiful or terrifying.
-
-   ```bash
-   echo "your-haus-name" > ~/.sanctum/.node_id
-   ```
-
-   Use a short, lowercase slug. This value must match a key under the `nodes` section of your `instance.yaml`.
-
-</Steps>
-
-## Configure instance.yaml
-
-Open `~/.sanctum/instance.yaml` in your editor. The file is organized into these top-level sections:
-
-```yaml
-# Instance identity
-instance:
-  name: "Your Haus Name"
-  slug: "your-haus-name"
-
-# Node topology
-nodes:
-  your-haus-name:
-    type: hub
-    host: 192.168.1.10
-    # ...
-
-# Services and their ports
-services:
-  gateway:
-    enabled: true
-    port: 1977
-  homeassistant:
-    enabled: true
-    port: 8123
-  # ...
-
-# VM configuration
-vm:
-  ip: 10.10.10.10
-  bridge_ip: 10.10.10.1
-  ssh_user: ubuntu
-  # ...
-
-# Secret management
-secrets:
-  backend: keychain  # "keychain" on Mac, "sops" on VM
-  rotation_day: 1    # Day of month for auto-rotation
-```
-
-<Aside type="danger">
-  Do not put actual secrets (API keys, tokens, passwords) in `instance.yaml`. We know the temptation is strong. The config file references secret names that are resolved at runtime from macOS Keychain or SOPS-encrypted files. See the [Secrets Management](/guides/secrets/) guide for details. Your future self will thank your present self for not hardcoding a production API key into a git-tracked YAML file.
-</Aside>
-
-### Key Sections to Edit
-
-At minimum, configure the following for your environment:
-
-| Section | What to Set |
-|---------|-------------|
-| `instance.name` | Human-readable name for your haus |
-| `instance.slug` | URL-safe lowercase slug |
-| `nodes` | At least one hub node with its LAN IP |
-| `services` | Enable or disable services based on what you need |
-| `vm.ip` | Your VM's static IP (default: `10.10.10.10`) |
-
-## Install the Shell Library
-
-The shell library provides helper functions used by scripts and LaunchAgents. It is the connective tissue of the system — unglamorous, essential, and the first thing to check when something stops working.
-
-<Steps>
-
-1. **Source the library in your shell profile.**
-
-   Add this line to your `~/.zshrc` (or `~/.bashrc`):
-
-   ```bash
-   source ~/.sanctum/lib/config.sh
-   ```
-
-2. **Reload your shell.**
-
-   ```bash
-   source ~/.zshrc
-   ```
-
-3. **Verify the library is loaded.**
-
-   ```bash
-   sanctum_get instance.slug
-   ```
-
-   This should print your instance slug. If it does, the config library is working. If it prints nothing, stare at the cursor for a moment, then check that `instance.yaml` exists and is valid YAML.
-
-</Steps>
-
-The shell library provides these functions:
-
-| Function | Purpose |
-|----------|---------|
-| `sanctum_get <key>` | Read a value from instance.yaml |
-| `sanctum_slug` | Shortcut for the instance slug |
-| `sanctum_home` | Returns the Sanctum haus directory path |
-| `sanctum_vm_ssh <command>` | Run a command on the VM via SSH |
-| `sanctum_enabled <service>` | Check if a service is enabled |
-| `sanctum_expand <template>` | Expand `{{PLACEHOLDER}}` variables in a template |
-
-## Generate LaunchAgents
-
-Sanctum uses macOS LaunchAgents to manage services. Rather than maintaining individual plist files by hand — an activity that has driven better engineers than you to drink — you generate them from templates.
-
-<Steps>
-
-1. **Review the templates.**
-
-   Templates live in `~/.sanctum/templates/launchagents/`. Each template uses `{{PLACEHOLDER}}` syntax for values pulled from `instance.yaml` and macOS Keychain.
-
-2. **Run the generator.**
-
-   ```bash
-   # Preview what will be generated (no files written)
-   bash ~/.sanctum/generate-plists.sh --dry-run
-
-   # Generate for real
-   bash ~/.sanctum/generate-plists.sh
-   ```
-
-   The generator does the following:
-   - Reads each template from `~/.sanctum/templates/launchagents/`
-   - Expands placeholders with values from `instance.yaml`
-   - Pulls tokens from macOS Keychain where referenced
-   - Skips templates for disabled services
-   - Writes rendered plists to `~/Library/LaunchAgents/`
-
-3. **Load the generated agents.**
-
-   ```bash
-   # Load all Sanctum LaunchAgents
-   for plist in ~/Library/LaunchAgents/com.sanctum.*.plist; do
-     launchctl load "$plist"
-   done
-   ```
-
-</Steps>
+If you're an operator running Sanctum from the source tree rather than the published binary — typically because you're hacking on it — there's a separate flow that installs the full audit-wall toolchain and the checked-in renderers.
 
 <Aside type="tip">
-  Always run with `--dry-run` first to verify the output before writing plists. The dry run prints each rendered plist to stdout without touching the filesystem. In this haus, we look before we leap. Usually.
+You almost certainly do not want this if you're just trying Sanctum out. The brew install path above gives you the full beta-tester experience. The source-install path is for active contributors.
 </Aside>
 
-## Set Up the Dashboard
+The legacy `sanctumctl` operator CLI is what older docs reference. It still exists, but its consumers are mostly the daily audit-wall and the release-discipline gate (`tools/sanctum-release.sh`), not new users. If you're maintaining a fork or building from a tag, that's the path:
 
-The dashboard is a web interface that displays the status of all services, nodes, and agents. It is the face of Sanctum — the thing you show people when they ask "So what does this Mac Mini actually do?"
+```bash
+# From inside the checked-in workspace
+python3 tools/sanctumctl.py bootstrap --write   # writes the ~/.sanctum scaffold
+python3 tools/sanctumctl.py doctor              # runs the audited verification wall
+```
 
-<Steps>
+That flow creates the `~/.sanctum` scaffold, drops in the annotated `instance.yaml.example`, writes a node identity file, and runs the audited verification wall. Inspect-before-write is `bootstrap` without `--write`.
 
-1. **Install dependencies.**
-
-   ```bash
-   cd ~/.sanctum/dashboard
-   brew install pnpm
-   pnpm install
-   ```
-
-2. **Build and start.**
-
-   <Tabs>
-     <TabItem label="Development">
-       ```bash
-       pnpm dev
-       ```
-       The dashboard will be available at `http://localhost:1111`.
-     </TabItem>
-     <TabItem label="Production">
-       ```bash
-       pnpm build
-       npm start
-       ```
-       In production, the dashboard LaunchAgent handles startup automatically. The generator creates the appropriate plist if the dashboard service is enabled in `instance.yaml`.
-     </TabItem>
-   </Tabs>
-
-3. **Verify the config endpoint.**
-
-   The dashboard serves instance configuration (with secrets excluded) at its API endpoint:
-
-   ```bash
-   curl -s http://localhost:1111/api/config | python3 -m json.tool
-   ```
-
-   You should see your instance configuration as JSON. If you see an error, welcome to your first Sanctum debugging session. There will be others.
-
-</Steps>
-
-## Set Up the VM
-
-If you plan to run VM workloads (agent orchestration, knowledge graph), set up the Ubuntu VM. This is where the system goes from "neat haus automation project" to "wait, you're running a knowledge graph in a virtual machine inside a Mac Mini?"
-
-<Steps>
-
-1. **Create the VM with QEMU.**
-
-   Use the settings from the [Requirements](/getting-started/requirements/) page. Install Ubuntu 24.04 LTS with SSH enabled.
-
-2. **Configure networking.**
-
-   The Mac needs to set the bridge IP each time the VM starts. This is handled by the VM autostart LaunchAgent, which runs:
-
-   ```bash
-   sudo ifconfig bridge100 10.10.10.1/24
-   ```
-
-   A sudoers entry at `/etc/sudoers.d/vmnet-bridge` allows this without a password prompt.
-
-3. **Set the VM's static IP.**
-
-   Inside the VM, configure a static IP of `10.10.10.10` on the vmnet interface using netplan or your preferred method.
-
-4. **Test connectivity.**
-
-   ```bash
-   # From Mac
-   ssh ubuntu@10.10.10.10
-
-   # From VM
-   ping 10.10.10.1
-   ```
-
-</Steps>
-
-<Aside type="caution">
-  The VM uses Host Only networking and cannot reach the internet directly. All package installation and updates must be done through the Mac (via apt proxy, pre-downloaded packages, or rsync). This means every `apt install` requires planning. Think of it as enforced mindfulness for your package management.
-</Aside>
-
-## Next Steps
-
-With the base installation complete, proceed to [First Run](/getting-started/first-run/) to verify everything is working and complete initial setup. This is the moment of truth. Deep breath.
+The manual section that used to live here (`mkdir`, `cp`, hand-editing `instance.yaml`, generating LaunchAgents one by one) is preserved in git history if you need it for a deep-debugging scenario, but the canonical operator path is `sanctumctl bootstrap --write` followed by `sanctumctl doctor`. The same `instance.yaml` schema, the same `~/.sanctum` layout — just driven by the audit-wall renderer instead of by hand.
