@@ -191,6 +191,7 @@ export default defineConfig({
 						{ label: 'Pressure Valve', slug: 'operations/pressure-valve' },
 						{ label: 'mTLS Migration', slug: 'operations/mtls-migration' },
 						{ label: 'Troubleshooting', slug: 'operations/troubleshooting' },
+						{ label: 'Report a Problem', link: 'https://github.com/Ogilthorp3/sanctum-cli/issues/new/choose', attrs: { target: '_blank' } },
 						{ label: 'Service Troubleshooting', slug: 'operations/service-troubleshooting' },
 						{ label: 'Signal Troubleshooting', slug: 'operations/signal-troubleshooting' },
 						{ label: 'Security', slug: 'operations/security' },
