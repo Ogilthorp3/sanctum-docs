@@ -1,0 +1,78 @@
+---
+title: The Controller, Quiet
+description: The autoresearch ladder now has a watcher — a tiny script that reads last night's eval and tomorrow's options and decides which rungs to skip. By default, it writes down what it would have done and changes nothing.
+date: 2026-05-23
+---
+
+Autoresearch had a picker. The picker walked a ladder of training configurations and tried them in order. Every night. Forever. The order was decided by a human, once, in a Python list.
+
+The ladder is twelve rungs now. Two of them — `recipe-real-only` and `recipe-replay-boost` — vary the *training data* instead of the hyperparameters (Stage 1, yesterday). The picker still walks in order. It does not know that one rung's recipe scored 0.860 last night and another's scored 0.612 the night before. It just walks.
+
+The controller is the picker's quiet roommate. It runs once, before the picker, every night. It reads `results.tsv` for the last hundred runs. It reads `eval_results_full.json` for every adapter that has one. It groups by recipe, finds the weakest tier in the most recent measurement, identifies which recipe historically lifted that tier most, and decides which ladder rungs to suppress so the picker walks to the rungs that match.
+
+Then, by default, it writes that decision into a log file and exits 0. The picker walks the full ladder, as if the controller did not exist. The training proceeds. The controller, quiet.
+
+## A first transcript
+
+Tonight, against real data, the controller produced this:
+
+```json
+{
+  "mode": "shadow",
+  "skip": ["champion-replay", "champion-converge", "long-seq", "rank-64",
+           "higher-lr", "rank-128", "safe-baseline", "more-iters-400",
+           "rank-32", "rank-32-iters", "recipe-real-only"],
+  "rationale": "eps-greedy (exploit, e=0.1): targeted: weakest tier=extended, best recipe by mean overall=replay-boost (0.860); keeping 1 rungs, skipping 11",
+  "history_rows": 81,
+  "evals_present": ["exp-20260522-220232", "exp-20260522-214052", "exp-20260512-170902"]
+}
+```
+
+A single JSON line in `logs/controller-shadow-20260523.log`. Eleven rungs the controller would have suppressed; one — `recipe-replay-boost` — the controller would have kept. No rung was actually suppressed. The shadow log is the entire mechanism: a daily transcript of what the autonomy would have done if it had been allowed to act.
+
+## The transition
+
+Shadow → active is one shell command:
+
+```bash
+touch ~/.sanctum/autoresearch-controller-active
+```
+
+Kill switch is one shell command:
+
+```bash
+rm ~/.sanctum/autoresearch-controller-active
+```
+
+Both are deliberate. Neither requires a code change, a plist edit, or a deploy. The controller reads the sentinel state once at the top of its run; toggling the file mid-night cannot flip the decision halfway through.
+
+## The cardinal rule
+
+A controller failure can never crash the nightly. The entrypoint is wrapped in a `try/except Exception` that logs the traceback to a separate error file and exits 0 regardless. The orchestrator's invocation appends `|| true` for belt-and-suspenders. Five failure-isolation tests — *missing results.tsv*, *malformed results.tsv*, *malformed eval JSON*, *strategy raises*, *sentinel state read only once at start* — were the Jedi Council's explicit condition for approval, and the cardinal rule held on every one of them.
+
+A fragile feedback layer is more dangerous than no feedback layer. The closed loop must fail invisibly; the autoresearch nightly that has been running unattended since April must keep running unattended whether the controller is healthy, sick, or absent.
+
+## The strategy
+
+The choice of *ε-greedy targeted* as the v1 default came from the Council. Pure exploit (no exploration) would lock in on the first apparent winner, and the recipe library is small enough that early lock-in is the realistic failure mode. So the default rule is: exploit ninety percent of the time, explore ten percent. ε is one env var away from being something else.
+
+The strategy is pluggable. The interface is one abstract method —
+
+```python
+def decide(history, evals, ladder) -> tuple[list[str], str]:
+    """Return (rung_ids to skip, human-readable rationale)."""
+```
+
+UCB and Thompson sampling are designed-for, not built. When the recipe library grows enough that sample-size confidence matters, the swap is a single subclass.
+
+## The library is the rate-limiter now
+
+The controller has three recipes to choose among, two of which produce essentially the same dataset. The real Phase 2 question — *does varying the data improve held-out generalization?* — needs recipes that actually vary the data. That work is operator-side: more real-session captures, more category packs, real `data/raw/replay.jsonl`.
+
+The controller will be waiting when the library catches up.
+
+For now: the loop is closed. The picker has a roommate. The roommate is quiet.
+
+---
+
+*Phase 2 Stage 2 shipped 2026-05-23 (`council-autoresearch` merge `8718452`). Spec at `docs/superpowers/specs/2026-05-23-autoresearch-closed-loop-design.md`. Default state: shadow. Activation: deliberate.*
