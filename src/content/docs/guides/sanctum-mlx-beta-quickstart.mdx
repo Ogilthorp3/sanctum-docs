@@ -1,0 +1,112 @@
+---
+title: sanctum-mlx Beta Quickstart
+description: A self-hosted LLM inference server in Rust, running a 35B mixture-of-experts on Apple Silicon. mTLS-only, OpenAI-compatible, one request at a time. Here is how to make it answer you.
+---
+
+import { Steps, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![A pencil sketch on dark background of a vintage brass switchboard with a single illuminated plug labeled 1337 routing a glowing cable arc into a distant Mac Mini silhouette, with a teal halo around the plug and a small nameplate reading MLX](./images/hero-sanctum-mlx-beta-quickstart.png)
+
+`sanctum-mlx` is the Council's brain — a Rust HTTP server that loads a 35-billion-parameter mixture-of-experts model on a single Mac Mini and serves it over an OpenAI-compatible API. It is the thing every Jedi in the haus talks to when they need to think out loud. You have been handed a beta key. Please be gentle with it.
+
+This page is the shortest path from "I have a cert envelope" to "I have a streamed response." If you want the why, the [Smart Router](/architecture/dynamic-model-routing/) and the [Living Force](/architecture/living-force/) pages explain how this fits into the rest of the haus.
+
+## What you are talking to
+
+| Field | Value |
+|---|---|
+| Endpoint | `https://<host>:1337/v1/chat/completions` |
+| Auxiliary | `https://<host>:1337/v1/models` |
+| Model ID | `qwen3.6-35b-a3b-4bit` |
+| Auth | mutual TLS (no bearer, no API key) |
+| Transport | HTTP/1.1 over TLS 1.3; SSE for streams |
+| Concurrency | one in-flight request, GPU-dispatch mutex |
+
+The model is Qwen3.6-35B-A3B-4bit — a sparse MoE with about three billion active parameters per token, LoRA-tuned for the Council's domain (refusal posture, in-character voice, our specific tool-calling shapes). The base is competent at general reasoning; the adapter is what makes it sound like itself.
+
+## Step 1 — get a cert envelope
+
+The operator issues your client cert. Ask Bert; you will get back three PEM files and a host to dial. Cert issuance is not self-serve in beta.
+
+```text
+client.crt    your client certificate, signed by the cathedral CA
+client.key    your private key — keep this how you keep your ssh keys
+sanctum-ca.crt    the CA cert your client will pin against the server
+```
+
+Store them somewhere your shell can find. The Mac convention is `~/.sanctum-mlx-beta/` with `chmod 600` on the key. Anything readable by another user is anything readable by another user.
+
+<Aside type="caution">
+Plain HTTP is refused at the door — the server runs with `--no-plain`, which means a request with no client cert returns a TLS handshake failure, not a 401. If you see "alert bad certificate," you forgot one of the three files or you are dialing the wrong port. There is no fallback to "just send a token."
+</Aside>
+
+## Step 2 — first request
+
+```bash
+curl --cert ~/.sanctum-mlx-beta/client.crt \
+     --key  ~/.sanctum-mlx-beta/client.key \
+     --cacert ~/.sanctum-mlx-beta/sanctum-ca.crt \
+     -H "Content-Type: application/json" \
+     -d '{
+       "model": "qwen3.6-35b-a3b-4bit",
+       "messages": [{"role":"user","content":"In one sentence: what is a mixture of experts?"}],
+       "max_tokens": 256
+     }' \
+     https://<host>:1337/v1/chat/completions
+```
+
+A correct response is a normal OpenAI chat-completion JSON: `choices[0].message.content` holds the text, `usage.prompt_tokens` / `completion_tokens` are filled in, `model` echoes `qwen3.6-35b-a3b-4bit`. If you get one of those back, you are done with onboarding.
+
+## Step 3 — streaming
+
+Add `"stream": true` and consume the response as Server-Sent Events. The format matches OpenAI's: one `data:` line per chunk, `[DONE]` to close.
+
+```bash
+curl -N --cert ... --key ... --cacert ... \
+     -H "Content-Type: application/json" \
+     -d '{"model":"qwen3.6-35b-a3b-4bit","stream":true,"messages":[...]}' \
+     https://<host>:1337/v1/chat/completions
+```
+
+The `-N` is not optional. Without it `curl` buffers the stream until the connection closes, which defeats the entire point.
+
+## What "one request at a time" actually means
+
+The server holds a GPU-dispatch mutex around every inference call. That is deliberate — it root-caused a class of MLX races that crashed the binary under concurrent vision and language dispatch. The shipped contract is: any second request you send while one is in flight will wait its turn at the door, not get a 503.
+
+What this costs you, in practice:
+
+| Prompt size | Prefill, isolated | Prefill, under load |
+|---|---|---|
+| 4K tokens | seconds | seconds-plus-queue |
+| 16K tokens | ~1-2 min | ~3-4 min |
+| 32K tokens | ~7 min | ~15 min |
+
+Decode is the same fast it always is once prefill finishes — about 25-30 tokens per second. The cost is paid up front, in silence, before the first token comes back. Plan your `read_timeout` accordingly. The default in most HTTP clients will hang you out to dry well before a 32K prefill finishes.
+
+## Limits and one weekly window
+
+- **Prompt cap: ~32,000 tokens.** Anything above returns HTTP 413 with a body that names both the operational cap and the model's theoretical 262,144-token context. The cap is empirical — the harness measured what the host can reliably serve, and that is the line. The model can technically take more; this server cannot.
+- **Sundays, 02:00 to roughly 03:00 local.** The cathedral runs an internal long-context monitor in that window. Expect your requests to be slower or briefly queued. Nothing breaks; it is just busy looking at itself.
+
+## Errors you will actually see
+
+| Status | What it means | What to do |
+|---|---|---|
+| `413` | prompt exceeded the 32K cap | shorten the prompt; the body tells you by how much |
+| `503` | cathedral momentarily down | wait about 40 seconds, retry; auto-restart is on |
+| connection closed mid-request | same as above, mid-flight | wait about 40 seconds, retry |
+| `200` with empty body | a regression of an old long-context bug | **report it immediately** |
+
+The empty-body case deserves its own line. Above roughly 25,540 tokens, the server used to return HTTP 200 with no content — a head-dim-256 Metal OOM in the unfused SDPA path. It was fixed in `sanctum-rs` `5731769` (chunked-prefill SDPA). If you see it again, that is a regression of a shipped fix and we need to know on the same day.
+
+## How to report something
+
+The server logs every request with a line like `request_id=N prompt_tokens=X latency_ms=Y`. If you can capture a `request_id` from response headers (look for it; we may or may not surface it on your build), include it. If not, send what you have:
+
+- The request you sent — at minimum, prompt size and a representative sample of the content.
+- The wall-clock timestamp, with timezone if you remember.
+- What came back — status code, headers if interesting, body if non-empty.
+- The `request_id` if you saw one.
+
+That is enough for the operator to find your request in the cathedral's log and tell you what it looked like from the other side. Email Bert; he is the second log line.
