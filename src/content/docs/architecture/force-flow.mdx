@@ -63,6 +63,34 @@ Non-critical notifications are capped at 10 per hour. When a service is flapping
 
 Critical bypasses the rate limit. If something genuinely urgent fires 15 times, you hear about it 15 times. That is a feature, not a bug.
 
+## Screen Time
+
+The same Python process that decides whether to wake you at 3 AM about a raccoon is also the one that, at 22:00, tells the Firewalla to pause the first-floor Apple TV's streaming services while leaving its HomeKit hub traffic alive. **Force Flow co-hosts the haus's curfew enforcement — the network-level parental controls the family interacts with every day.**
+
+This co-hosting is deliberate. Force Flow already owns the haus's notification rhythm — quiet hours, daily digest, deduplication. Screen Time needs exactly those primitives: the wind-down warnings, the morning unblock, the parent-only override flow. One process, one config, one log, one sqlite database, one service to restart.
+
+```
+                       /notify        /screen/*       /pwa/*
+                          │              │              │
+                          └──────────────┼──────────────┘
+                                         │
+                              ┌──────────▼──────────┐
+                              │  Force Flow :4077    │
+                              │                      │
+                              │  notify hub          │  ← above
+                              │  screen_time.py      │  ← this section
+                              └──────────┬───────────┘
+                                         │
+                                Firewalla :1984 bridge
+                                (MAC-pause + service-DNS)
+```
+
+Daily-driver endpoints live under `/screen/*` — `/screen/status`, `/screen/override`, `/screen/homework`, `/screen/credit`. The family PWA lives at `/pwa/`. Full engine, tier model, schedule logic, and resilience layers are documented in [Screen Time](/architecture/screen-time/).
+
+<Aside type="tip">
+This is the feature most haus members touch every day. The notification fabric is invisible when it works. The screen-time rules are the thing that makes the 12-year-old actually go to bed.
+</Aside>
+
 ## API
 
 ```bash
