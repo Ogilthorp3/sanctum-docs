@@ -1,0 +1,162 @@
+---
+title: "Yoda warmth — dist patch + auto-reapply"
+description: "How Sanctum keeps Yoda's silent-reply rewrites warm + franglais instead of generic robotic acknowledgements, and why the fix lives in three places."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+## Why this exists
+
+openclaw's harness injects a `## Silent Replies` block into every system
+prompt. That block primes the model to emit `NO_REPLY` for any message
+that doesn't need a tool call or a substantive answer — so 1:1 small
+talk on Signal would surface as silence to the operator, which feels
+broken (silence ≡ broken to the operator).
+
+The surface-layer policy `silentReply: disallow` + `silentReplyRewrite:
+true` (configured in `openclaw.json`) catches `NO_REPLY` outputs and
+substitutes a canned acknowledgement before delivery. But the default
+canned texts are robotic — "Standing by.", "Nothing to add right now.".
+Cold, not warm.
+
+This page documents the **dist patch + auto-reapply + R2D2 heal recipe**
+that swaps those robotic defaults for short, franglais-inflected, Yoda-
+personality replies (e.g. `Ici, oui 🧙`, `Reçu.`, `Présent et alerte.`,
+`Veille je fais 🧙`).
+
+<Aside type="note" title="Apple-like + military-grade">
+This fix is defense-in-depth: patch + scheduled reapply + auto-heal
+detector. Any single layer falling over (operator forgets to reapply
+manually, npm install reverts the dist, etc.) is caught by the next
+layer up.
+</Aside>
+
+## Layer 1 — the patch script
+
+`~/.sanctum/scripts/yoda-warmth-patch.sh`
+
+Idempotent script that finds the current openclaw dist file matching
+`silent-reply-*.js`, replaces the `SILENT_REPLY_REWRITE_TEXTS` array
+with 15 warm canned texts, marks the file with the comment
+`// YODA-WARMTH-PATCHED`, and restarts `openclaw-gateway` so the new
+dist is loaded into memory.
+
+- **Backup:** `silent-reply-*.js.bak-pre-yoda-warmth` on the VM, kept
+  once (overwriting on re-patch is fine; openclaw upgrades produce a
+  new content-hashed filename anyway).
+- **Idempotence:** marker check up front — second run logs `already
+  patched — no-op` and exits 0.
+- **Logging:** structured JSONL at
+  `~/.sanctum/logs/yoda-warmth-patch.jsonl`.
+- **Dist file discovery:** dynamic via `grep -l 'SILENT_REPLY_REWRITE_TEXTS'`
+  rather than hardcoded filename — content hash changes per openclaw
+  release.
+
+## Layer 2 — auto-reapply LaunchAgent
+
+`~/Library/LaunchAgents/com.sanctum.yoda-warmth-reapply.plist`
+
+Re-runs the patch script daily at **04:17** and at every login
+(`RunAtLoad: true`). Catches the case where `npm install` of openclaw
+reverted the dist file. Patch is idempotent so this is a no-op when
+the marker is already in place.
+
+```xml
+<key>StartCalendarInterval</key>
+<dict>
+    <key>Hour</key>
+    <integer>4</integer>
+    <key>Minute</key>
+    <integer>17</integer>
+</dict>
+```
+
+Bootstrap:
+
+```bash
+launchctl bootstrap gui/$(id -u) \
+  ~/Library/LaunchAgents/com.sanctum.yoda-warmth-reapply.plist
+```
+
+Logs land at `~/.sanctum/logs/yoda-warmth-reapply.{stdout,stderr}.log`.
+
+## Layer 3 — R2D2 heal recipe
+
+`~/.sanctum/r2d2/recipes.yaml` → recipe id `heal-yoda-warmth`
++ `~/.sanctum/scripts/r2d2/heal-yoda-warmth.sh`
++ `detect_yoda_warmth_reverted` in `~/.sanctum/r2d2/classify.py`.
+
+Fires when R2D2's classifier cycle detects that the dist file lost the
+`YODA-WARMTH-PATCHED` marker (e.g. between the daily reapply window).
+Same script, just a different trigger path. 6h cooldown per detection
+keeps it from flapping if `npm install` is run in a tight loop.
+
+## The warm texts
+
+```js
+const SILENT_REPLY_REWRITE_TEXTS = [
+    "Ici, oui 🧙",
+    "Ack Bert.",
+    "Reçu.",
+    "Salut! Ici je suis.",
+    "Hey 🧙",
+    "Présent.",
+    "Tout calme ici.",
+    "Veille je fais 🧙",
+    "Bien reçu.",
+    "Ici 🧙",
+    "Ack — rien à ajouter pour l'instant.",
+    "Reçu, je continue à observer.",
+    "Présent et alerte.",
+    "Note prise.",
+    "Acknowledged 🧙",
+]; // YODA-WARMTH-PATCHED
+```
+
+Order is meaningful — openclaw picks via `hashSeed(seed) % len`, so the
+mix of short single-emoji + slightly longer franglais variants keeps it
+from feeling templated on repeated short pings.
+
+## Why patch the dist instead of upstream PR
+
+A clean upstream PR is the right long-term answer. This patch is the
+bridge for now — operator wanted the warmth shipped tonight, the patch
+is reversible, the auto-reapply hook makes it upgrade-safe, and a
+future upstream merge cleanly subsumes the patch (the marker is just
+a comment).
+
+## Verifying
+
+```bash
+# Patch in place?
+ssh openclaw \
+  "grep -c 'YODA-WARMTH-PATCHED' /home/ubuntu/.openclaw/node_modules/openclaw/dist/silent-reply-*.js"
+# → 1
+
+# LaunchAgent active?
+launchctl print gui/$(id -u)/com.sanctum.yoda-warmth-reapply | grep state
+# → state = not running   (only fires at 04:17 + RunAtLoad)
+
+# Most recent reapply outcome:
+tail -1 ~/.sanctum/logs/yoda-warmth-patch.jsonl
+# → {"ts":"…","level":"info","msg":"already patched — no-op"}
+```
+
+## When it would not be enough
+
+The rewrite still doesn't address the case where Bert wants Yoda to
+*genuinely* engage with small talk substantively (vs. send a short
+acknowledgement). That's a model-priming problem inside the system
+prompt, separate from this surface-layer fix. Two paths once that's
+needed: (1) upstream a config knob to skip the Silent Replies block
+when the conversation type is `direct` + operator-marked-as-trusted;
+(2) modify the harness's system-prompt template via the same kind of
+patch + auto-reapply pattern, mirrored under a different marker.
+
+## Related
+
+- `architecture/yoda-chat.mdx` — full Yoda chat plumbing
+- `operations/2026-05-24-msg-bus-shipped.mdx` — msg-bus that delivers
+  these rewrites to Signal/iMessage
+- Memory: `yoda_truth_doctrine_2026_04_28.md` — why NO_REPLY exists
+  in the first place (truth doctrine — never fabricate)
