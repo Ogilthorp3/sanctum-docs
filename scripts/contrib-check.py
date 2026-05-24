@@ -307,6 +307,211 @@ def check_mdx_tag_chars(path, rel, body, body_line_offset, report):
             )
 
 
+# ASCII-art box-drawing characters used for diagrams.
+# Used by check_ascii_art_alignment to detect "is this code block actually a diagram?"
+BOX_DRAWING_CHARS = frozenset('─│┌┐└┘├┤┬┴┼═║╔╗╚╝╠╣╦╩╬')
+
+# Junction characters: when these appear between ┌ and ┐ on a top border,
+# the row is a flow-diagram node (branching, joining), not a simple box top.
+# Such layouts are too varied to reliably validate from a regex — for those,
+# use SVG instead of ASCII art (see CONTRIBUTING.md "Diagrams").
+CONNECTOR_CHARS = frozenset('┼┬┴├┤')
+
+# Pages that ship with ASCII-art misalignment surfaced 2026-05-24 (when the
+# alignment check first ran). Each entry is technical debt: fix the diagram
+# in ASCII (most are off-by-1 border widths) or convert to SVG, then remove
+# from this set. When the set is empty, the apple-grade lock is total.
+#
+# Annotations point at the kind of fix the page needs:
+ASCII_ART_KNOWN_BROKEN = {
+    # 5 errors — deeply nested 3-level diagram. SVG candidate.
+    "src/content/docs/architecture/sanctum-gateway.mdx",
+    # 2 nested-box diagrams, 4 errors total. SVG candidate.
+    "src/content/docs/guides/home-assistant.mdx",
+    # 16 errors in one big box — interior content 1 col wider than border.
+    # ASCII fix: widen top/bottom borders by 1 ─, add 1 sp to lines 38, 43.
+    "src/content/docs/guides/autoresearch.mdx",
+    # 9 errors in one box — same off-by-1. ASCII fix: trim 1 trailing sp
+    # from the 9 affected lines, or widen border by 1.
+    "src/content/docs/guides/memory-vault.mdx",
+    # 2 errors in one box. ASCII fix: line 195 add 2 sp, line 196 trim 1.
+    "src/content/docs/architecture/kitchen-loop.mdx",
+    # 3 errors in one box — interior lines short by 1 col (the emoji rows).
+    # ASCII fix: add 1 sp before the closing │ on lines 178–180.
+    "src/content/docs/operations/activity-tracking.mdx",
+}
+
+# Code-fence regex — opening or closing ```, optionally with a language tag,
+# allowing any leading whitespace (indented fenced blocks).
+FENCE_RE = re.compile(r'^\s*```')
+
+
+def _iter_code_blocks(body, body_line_offset):
+    """Yield (first-content-line-num, [body lines]) for each ``` fenced block.
+
+    The line number is 1-indexed in the original file (post-frontmatter
+    offset applied), pointing at the first line INSIDE the fence (not the
+    fence itself). The body lines are stripped of their trailing newline
+    by splitlines() but otherwise preserved verbatim (whitespace intact —
+    column counting matters for alignment checks).
+    """
+    lines = body.splitlines()
+    n = len(lines)
+    i = 0
+    while i < n:
+        if FENCE_RE.match(lines[i]):
+            i += 1  # past opening fence
+            block_start = body_line_offset + i
+            block_body = []
+            while i < n and not FENCE_RE.match(lines[i]):
+                block_body.append(lines[i])
+                i += 1
+            yield block_start, block_body
+            if i < n:
+                i += 1  # past closing fence
+        else:
+            i += 1
+
+
+def check_ascii_art_alignment(path, rel, body, body_line_offset, report):
+    """Verify ASCII-art box edges line up. Apple-grade docs: at all times.
+
+    Only validates *simple* single boxes:
+
+    1. One ┌ and one ┐ on the top row.
+    2. No connector chars (┼┬┴├┤) between ┌ and ┐ on the top row.
+    3. One └ and one ┘ on the matching bottom row.
+    4. No intermediate ┌ row between the matched top and bottom.
+
+    For each simple box: top ┌ col == bottom └ col, top ┐ col == bottom
+    ┘ col, and every interior line has │ at both edge columns (anything
+    beyond the right │ — annotations like "← above" — is fine).
+
+    Complex layouts — junctions, branching trees, side-by-side boxes —
+    are deliberately skipped: too varied to reliably parse from a regex
+    without false positives. For those, use SVG instead of ASCII art
+    (see CONTRIBUTING.md "Diagrams").
+
+    Catches the 2026-05-24 force-flow.mdx Screen Time diagram bug where
+    the content interior was 22 chars but the border interior was 21
+    (off-by-one). In fixed-width code blocks every column matters.
+
+    Whitespace-only interior lines are allowed (intentional blank rows).
+    Lines without │ but with other content (internal divider rows) are
+    skipped — only edge alignment is enforced, not interior structure.
+    Tabs in any box-drawing line are flagged separately.
+
+    Pages in ASCII_ART_KNOWN_BROKEN are skipped with a warning — they're
+    debt to be paid down (ASCII fix or SVG conversion).
+    """
+    if str(rel) in ASCII_ART_KNOWN_BROKEN:
+        report.warn(
+            rel, body_line_offset, "ascii-art-deferred",
+            "page is on ASCII_ART_KNOWN_BROKEN — alignment check skipped. "
+            "Fix the misalignment in ASCII or convert to SVG, then remove "
+            "from the set in contrib-check.py.",
+        )
+        return
+    for block_start, block_body in _iter_code_blocks(body, body_line_offset):
+        # Skip non-diagram blocks — no box characters anywhere.
+        if not any(c in BOX_DRAWING_CHARS for line in block_body for c in line):
+            continue
+
+        # Flag tabs in any box-drawing line — they break column counting.
+        for k, line in enumerate(block_body):
+            if '\t' in line and any(c in BOX_DRAWING_CHARS for c in line):
+                report.err(
+                    rel, block_start + k, "ascii-art",
+                    "tab character in a box-drawing line — use spaces only "
+                    "(tabs render at variable widths and destroy alignment)",
+                )
+
+        # Walk lines, pairing each ┌...┐ top-border with the next └...┘.
+        n = len(block_body)
+        i = 0
+        while i < n:
+            line = block_body[i]
+            if '┌' in line and '┐' in line:
+                # Skip multi-box rows — side-by-side boxes can't be paired
+                # reliably without a full diagram parser; SVG territory.
+                if line.count('┌') > 1 or line.count('┐') > 1:
+                    i += 1
+                    continue
+                top_l = line.index('┌')
+                top_r = line.index('┐')
+                if top_r <= top_l:
+                    i += 1
+                    continue
+                # Skip junction tops — ┌...┐ with ┼┬┴├┤ between corners
+                # is a flow-diagram node (branching, joining), not a box.
+                if any(c in CONNECTOR_CHARS for c in line[top_l + 1:top_r]):
+                    i += 1
+                    continue
+
+                # Find the matching bottom border. If another ┌ appears
+                # first, this top is part of a nested/branching layout —
+                # skip; let any inner box be checked on its own pass.
+                bot_idx = None
+                for j in range(i + 1, n):
+                    if '┌' in block_body[j]:
+                        break
+                    if '└' in block_body[j] and '┘' in block_body[j]:
+                        bot_idx = j
+                        break
+                if bot_idx is None:
+                    i += 1
+                    continue
+
+                bot_line = block_body[bot_idx]
+                # Skip multi-box bottoms too — same rationale as the top.
+                if bot_line.count('└') > 1 or bot_line.count('┘') > 1:
+                    i += 1
+                    continue
+                bot_l = bot_line.index('└')
+                bot_r = bot_line.index('┘')
+
+                if bot_l != top_l:
+                    report.err(
+                        rel, block_start + bot_idx, "ascii-art",
+                        f"box bottom '└' at col {bot_l + 1} but top '┌' at "
+                        f"col {top_l + 1} — misaligned left edge",
+                    )
+                if bot_r != top_r:
+                    report.err(
+                        rel, block_start + bot_idx, "ascii-art",
+                        f"box bottom '┘' at col {bot_r + 1} but top '┐' at "
+                        f"col {top_r + 1} — misaligned right edge",
+                    )
+
+                # Interior edge checks.
+                for k in range(i + 1, bot_idx):
+                    mid = block_body[k]
+                    if mid.strip() == "":
+                        continue  # blank row inside box — allowed
+                    if '│' not in mid:
+                        continue  # connector / divider line — not edge-relevant
+                    # Allow ├ at the left edge (and ┤ at the right) — those
+                    # are valid tee characters for a divider row inside a box.
+                    actual_l = mid[top_l] if top_l < len(mid) else '(EOL)'
+                    if actual_l not in ('│', '├'):
+                        report.err(
+                            rel, block_start + k, "ascii-art",
+                            f"box left edge expects '│' or '├' at col "
+                            f"{top_l + 1}, got '{actual_l}'",
+                        )
+                    actual_r = mid[top_r] if top_r < len(mid) else '(EOL)'
+                    if actual_r not in ('│', '┤'):
+                        report.err(
+                            rel, block_start + k, "ascii-art",
+                            f"box right edge expects '│' or '┤' at col "
+                            f"{top_r + 1}, got '{actual_r}'",
+                        )
+
+                i = bot_idx + 1
+            else:
+                i += 1
+
+
 def collect_all_heroes():
     """Walk every .mdx under docs/ and return (page_rel_path, hero_abs_path) tuples.
 
@@ -470,6 +675,7 @@ def check_page(path, report):
     check_placeholders(path, rel, body, body_line_offset, report)
     check_no_leak(path, rel, body, body_line_offset, report)
     check_mdx_tag_chars(path, rel, body, body_line_offset, report)
+    check_ascii_art_alignment(path, rel, body, body_line_offset, report)
     check_length(path, rel, body, body_line_offset, report)
 
 
