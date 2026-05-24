@@ -52,24 +52,21 @@ every rejection is captured by the audit middleware before it leaves.
                             ▼
    ┌────────────────────────────────────────────────────┐
    │         Sanctum Gateway (FastAPI, :8443)           │
-   │                                                    │
-   │   ┌──────── AuditMiddleware ─────────┐             │
-   │   │                                  │             │
-   │   │  RateLimitMiddleware (per CFid)  │             │
-   │   │   │                              │             │
-   │   │  CfAccessJwtMiddleware (JWKS)    │             │
-   │   │   │                              │             │
-   │   │  HMACAuthMiddleware (size + sig) │             │
-   │   │   │                              │             │
-   │   │   └──► /sharepoint/upload  ──► Graph           │
-   │   │       /sharepoint/folder       ↓               │
-   │   │       /slack/post           Triptyq            │
-   │   │       /_health  /_manifest /_diagnostic        │
-   │   │       /_metrics  /mcp/                         │
-   │   │                                  │             │
-   │   └──────────────────────────────────┘             │
-   │                                                    │
-   │   secrets.yaml (SOPS+age)  audit.jsonl (newsyslog) │
+   ├────────────────────────────────────────────────────┤
+   │  Middleware stack (top → bottom):                  │
+   │    AuditMiddleware                                 │
+   │    RateLimitMiddleware (per CFid)                  │
+   │    CfAccessJwtMiddleware (JWKS)                    │
+   │    HMACAuthMiddleware (size + sig)                 │
+   ├────────────────────────────────────────────────────┤
+   │  Routes:                                           │
+   │    /sharepoint/upload  ──► Graph                   │
+   │    /sharepoint/folder  ──► Graph                   │
+   │    /slack/post  ──► Triptyq                        │
+   │    /_health  /_manifest  /_diagnostic              │
+   │    /_metrics  /mcp/                                │
+   ├────────────────────────────────────────────────────┤
+   │  secrets.yaml (SOPS+age)  audit.jsonl (newsyslog)  │
    └────────────────────────────────────────────────────┘
 ```
 
@@ -110,7 +107,7 @@ Tunable via `SANCTUM_RATE_LIMIT_RPS` / `SANCTUM_RATE_LIMIT_BURST`.
 CF Access signs a JWT for every authenticated request, even service
 tokens, and forwards it in `Cf-Access-Jwt-Assertion`. The middleware
 verifies the signature against
-`https://manoir-nepveu.cloudflareaccess.com/cdn-cgi/access/certs`
+`https://sanctum.cloudflareaccess.com/cdn-cgi/access/certs`
 (JWKS, cached by PyJWT) and the `aud` claim against the gateway's app
 AUD. Closes the gap where a future tunnel misconfig — or a second
 cloudflared on the same token — could let an attacker present
