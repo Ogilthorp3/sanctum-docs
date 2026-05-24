@@ -1,0 +1,83 @@
+---
+title: sanctum-msg-bus
+description: "Persistent queue + ack-tracked + multi-transport message bus. iMessage primary, HA-push secondary, Signal tertiary. No silent drops — alerts either reach the operator or fire a separate alert that says delivery failed."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A notification fabric that doesn't lie.
+
+## The bug class it solves
+
+For eight days in May 2026, `signal-cli` on the Mini was dead. Every `Force Flow` call to `send_signal(...)` returned without raising, the operator's daily P2 digest was silently dropped, and the only outward signal was a 30-min-cooldown `signal-health` sentinel that fired an HA-push alert about *signal* being down — the irony fully intentional in retrospect, fully invisible at the time.
+
+The deeper failure was structural, not incidental:
+
+- **Zero message persistence.** Every `/notify` was a fire-and-forget HTTP call. If the channel returned 500, the alert was lost.
+- **Zero delivery acknowledgment.** Force Flow recorded `iphone_critical` as "sent" because `resp.status == 200`. Transport-layer success ≠ delivery success.
+- **Channels fired in parallel, not in failover.** P0 = `[iphone_critical, yoda_call, dashboard]` — all three at once. If the one the operator was watching failed, the message was lost despite "three channels".
+
+Adding more channels was making the noise worse without making the system reliable. The architectural answer was a single bus that owns the failover.
+
+## The architecture
+
+```
+         /notify            /enqueue
+sources ─────────► Force Flow ────────► sanctum-msg-bus
+                                              │
+                                  ┌───────────┼───────────┐
+                                  ▼           ▼           ▼
+                              iMessage     HA-push     Signal     SMS
+                              (primary)    (fail-2)    (fail-3)   (fail-4)
+                                  │           │           │           │
+                                  ▼           ▼           ▼           ▼
+                              chat.db     HA REST     signal-cli   voip.ms
+                              ack-poll    200=ok      delivered    DLR
+```
+
+- **Daemon**: Python, aiohttp on `127.0.0.1:4076`. Lives at `~/.sanctum/msg-bus/`. Launchd-managed as `com.sanctum.msg-bus`.
+- **Queue**: sqlite WAL at `~/.sanctum/msg-bus/queue.db`. Tables: `messages` (one row per enqueue), `attempts` (one row per send attempt + ack). State machine: `pending` → `in_flight` → `delivered | failed`. Survives daemon restart.
+- **Dispatch policy**: per-severity failover lists in `config.yaml`. P0 cascades through all four transports; P1 stops at HA-push; P2 is iMessage-only (quiet hours: held for the morning digest).
+- **Transports**: pluggable. Each implements `send → SendReceipt`, `poll_ack → AckState`, `healthz → HealthState`. The bus dispatcher iterates the failover plan, waits for ack within the per-step timeout, escalates on no-ack.
+- **API** (three endpoints, all on `127.0.0.1:4076`):
+  - `POST /enqueue` — body: `{audience, severity, title, body}` → returns `{msg_id}`
+  - `GET /msg/{id}` — full lifecycle (every attempt + ack + final state)
+  - `GET /healthz` — queue depth + per-transport last-success + last-error
+
+## The iMessage transport, in detail
+
+The iMessage transport is the one that exists because the operator wanted *apple-like*. It sends via `osascript` to `Messages.app` and polls `~/Library/Messages/chat.db` for delivery + read receipts. Two interesting bits surfaced during the first hour of live operation:
+
+**chat.db stores multi-line / emoji / rich bodies in `attributedBody` (NSKeyedArchive blob), not `text`.** The first version of `_find_sent_rowid` searched `WHERE text = ?` and missed every non-trivial message. The fix: snapshot the highest is_from_me=1 rowid for the recipient *before* the osascript send, then poll for any new rowid > snapshot. Text-agnostic, attributedBody-agnostic, works for everything Messages.app accepts.
+
+**FDA-graceful degradation.** If `~/Library/Messages/chat.db` is unreadable (the launchd-spawned daemon hasn't been granted Full Disk Access), the post-send rowid lookup raises. The naïve handler would mark the attempt failed and the bus would failover to HA-push — and the operator would get two notifications for every alert. The graceful handler treats `osascript`-send-success as evidence Messages.app accepted the dispatch, returns `SendReceipt(handle="no-fda")`, and `poll_ack` short-circuits to `delivered` with an audit note. Degraded ack-confidence (no `delivered/read` receipts) in exchange for transport stability. Grant FDA when convenient and the same code-path upgrades to true delivery-tracked iMessage.
+
+The TCC layer that makes the FDA-or-no-FDA decision durable is documented separately under [TCC Identity Anchors](/architecture/tcc-identity-anchors/).
+
+## What "ack-tracked" buys you in practice
+
+The first live failover happened within twelve minutes of cutover. A P1 enqueue attempted iMessage, hit a TCC permission gap (osascript without Apple-Events grant under launchctl spawn context), returned an error in ~7 s, and the dispatcher moved to HA-push, which delivered in 0.8 s. The operator got their phone notification. The `/msg/2` lifecycle JSON recorded both attempts, with timestamps and the specific failure mode. Total operator-visible disruption: zero.
+
+The same alert under the old fire-and-forget routing would have logged `iphone_critical sent OK` and disappeared into the void.
+
+## What's deliberately not in the bus
+
+- **Dashboard, Sonos TTS, macOS Notification Center, plain logs.** These are broadcast-only — no per-message ack semantics. Force Flow fires them directly. The bus only owns the channels where delivery confirmation actually matters.
+- **Voice (yoda_call) end-to-end audio.** That's a LiveKit workstream. The bus enqueues an intent; the LiveKit pipeline runs the call.
+- **Bert ↔ Yoda inbound chat.** Coming in Phase 3 as `sanctum-msg-bridge` — a chat.db poller that watches the operator's self-chat and routes new messages to Yoda for processing. Same chat.db pattern as the iMessage transport, in the reverse direction.
+
+## Operating notes
+
+- **Look at the queue first**: `curl -s http://127.0.0.1:4076/healthz | jq` shows queue depth and per-transport health. Queue depth > 50 sustained means a transport is degraded.
+- **Read a message's lifecycle**: `curl -s http://127.0.0.1:4076/msg/<id> | jq` for the full attempt log. Useful when an alert didn't arrive — you can see whether iMessage was even tried or whether the dispatcher failed over silently.
+- **Logs**: `~/.sanctum/logs/msg-bus.{stdout,stderr}.log`. Restart: `launchctl kickstart -k gui/$(id -u)/com.sanctum.msg-bus`.
+- **Retire**: `launchctl bootout gui/$(id -u)/com.sanctum.msg-bus` + rename the plist `.retired-YYYY-MM-DD`. Force Flow falls back to direct per-channel dispatch (the legacy code path) within the next request.
+
+## Spec + plan
+
+- Spec: `docs/superpowers/specs/2026-05-23-sanctum-msg-reliability-design.md` in the workspace
+- Implementation plan (Phase 1+2 task-level, Phase 3-5 sketched): `docs/superpowers/plans/2026-05-23-sanctum-msg-bus.md`
+
+<Aside type="note">
+**Doctrine alignment.** This is the *Apple-like + military-grade* doctrine made operational: closed-loop (per-message ack), honest (probes over vibes, attempt-log over claims), bounded (queue depth + escalation timeouts), defense-in-depth (four transports + failover). Background reading: [Engineering Discipline](/architecture/engineering-discipline/), [TCC Identity Anchors](/architecture/tcc-identity-anchors/).
+</Aside>
