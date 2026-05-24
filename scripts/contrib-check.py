@@ -317,29 +317,12 @@ BOX_DRAWING_CHARS = frozenset('─│┌┐└┘├┤┬┴┼═║╔╗╚�
 # use SVG instead of ASCII art (see CONTRIBUTING.md "Diagrams").
 CONNECTOR_CHARS = frozenset('┼┬┴├┤')
 
-# Pages that ship with ASCII-art misalignment surfaced 2026-05-24 (when the
-# alignment check first ran). Each entry is technical debt: fix the diagram
-# in ASCII (most are off-by-1 border widths) or convert to SVG, then remove
-# from this set. When the set is empty, the apple-grade lock is total.
-#
-# Annotations point at the kind of fix the page needs:
-ASCII_ART_KNOWN_BROKEN = {
-    # 5 errors — deeply nested 3-level diagram. SVG candidate.
-    "src/content/docs/architecture/sanctum-gateway.mdx",
-    # 2 nested-box diagrams, 4 errors total. SVG candidate.
-    "src/content/docs/guides/home-assistant.mdx",
-    # 16 errors in one big box — interior content 1 col wider than border.
-    # ASCII fix: widen top/bottom borders by 1 ─, add 1 sp to lines 38, 43.
-    "src/content/docs/guides/autoresearch.mdx",
-    # 9 errors in one box — same off-by-1. ASCII fix: trim 1 trailing sp
-    # from the 9 affected lines, or widen border by 1.
-    "src/content/docs/guides/memory-vault.mdx",
-    # 2 errors in one box. ASCII fix: line 195 add 2 sp, line 196 trim 1.
-    "src/content/docs/architecture/kitchen-loop.mdx",
-    # 3 errors in one box — interior lines short by 1 col (the emoji rows).
-    # ASCII fix: add 1 sp before the closing │ on lines 178–180.
-    "src/content/docs/operations/activity-tracking.mdx",
-}
+# Pages allowed to ship with ASCII-art misalignment (debt). Each entry is
+# documented technical debt: fix the diagram in ASCII (most are off-by-1
+# border widths) or convert to SVG, then remove from this set. The set is
+# currently empty — every diagram in the tree aligns. Adding to it is the
+# escape hatch when a diagram is genuinely too varied to ASCII-align.
+ASCII_ART_KNOWN_BROKEN = set()
 
 # Code-fence regex — opening or closing ```, optionally with a language tag,
 # allowing any leading whitespace (indented fenced blocks).
