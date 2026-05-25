@@ -136,6 +136,7 @@ export default defineConfig({
 						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
 						{ label: 'Screen Time', slug: 'architecture/screen-time' },
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
+						{ label: 'R2D2 — Auto-Fix Supervisor', slug: 'architecture/r2d2' },
 					],
 				},
 				{
