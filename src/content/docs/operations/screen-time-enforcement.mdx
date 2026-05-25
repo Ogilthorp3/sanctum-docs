@@ -163,11 +163,36 @@ starts. The child's `personal_devices` (iPhone, iPad) are
 intentionally NOT blocked by the daemon — Apple Screen Time
 already enforces those, and double-blocking would create
 diagnosis ambiguity. For every other screen the kid uses to
-not-study (PC, Apple TVs, Nintendo Switch), mirror the same
-`study_mode` block at `screens.<name>.schedule.study_mode` so
-each fires at the same boundary. Apple TVs in legacy
+not-study (PC, Apple TVs, Nintendo Switch, Steam Deck), mirror
+the same `study_mode` block at `screens.<name>.schedule.study_mode`
+so each fires at the same boundary. Apple TVs in legacy
 flat-curfew format need to be migrated to the nested `schedule:`
 dict before `study_mode` can attach.
+
+## Editing from the Holocron app
+
+As of 2026-05-25 the operator can edit every screen-time setting
+from the Holocron parent app — no more direct `devices.yaml`
+editing required for routine changes. Three new sub-components in
+`ScreenTimePanel.tsx` call three matching Force Flow write
+endpoints:
+
+| UI | Endpoint | Body |
+|---|---|---|
+| Mode étude card | `POST /screen/study-mode/<child>` | `{enabled, curfew, wake, until, screens?}` |
+| Schedule editor | `POST /screen/schedule/<target>` | `{layer, curfew, wake}` |
+| MAC editor | `POST /screen/screens/<screen>/macs` | `{add\|remove\|set: [mac]}` |
+
+Every write goes through `_apply_devices_yaml_change()` in
+`force_flow.py` which: snapshots `devices.yaml.bak-<op>-<ts>`
+beside the file, validates the parsed result via `ruamel.yaml`
+round-trip (preserves comments + quoting), atomic-writes via
+tmpfile rename, audits to `~/.sanctum/logs/devices-yaml-changes.jsonl`,
+then threaded-kickstarts Force Flow with a 500 ms delay so the
+HTTP response flushes before the daemon respawns. Validation
+failures (bad MAC format, unknown target, bad HH:MM) return 400
+without snapshotting or kickstarting. The op log is the audit
+trail; the snapshot is the rollback path.
 
 ## Rollback
 
