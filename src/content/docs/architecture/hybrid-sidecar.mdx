@@ -21,7 +21,7 @@ The system operates across two planes with a strict division of labor.
 
 **The Host Plane (macOS Native)** is the Hardware Abstraction Layer. It manages the Apple Neural Engine via the MLX framework, handles the macOS networking stack (firewall, DNS), runs the user-facing GUI/CLI interfaces, and provides the [Sanctum Proxy](/architecture/proxy/) as a loopback gateway into the container. Everything that needs Metal API access or native macOS TTY registration lives here.
 
-**The Container Plane (Docker/Colima)** is the Logic Execution Engine. It houses the OpenClaw core, the `claw-gateway` daemon, and a lightweight MLX client that offloads heavy inference back to the host. It operates as a sidecar — it doesn't replace the host, it augments it.
+**The Container Plane (Docker via OrbStack)** is the Logic Execution Engine. It houses the OpenClaw core, the `claw-gateway` daemon, and a lightweight MLX client that offloads heavy inference back to the host. It operates as a sidecar — it doesn't replace the host, it augments it. (Colima ran this plane through 2026-04-27; OrbStack replaced it for native networking and no `bridge100` contention.)
 
 The two planes communicate exclusively via Unix Domain Sockets (for low-latency IPC) and Loopback TCP (for proxying). The container never touches physical network interfaces or hardware accelerators directly. It asks politely, through sanctioned gateways, and the host decides whether to comply.
 
@@ -32,10 +32,11 @@ The Council decreed strict segregation of duties. Here's where everything lives.
 | Component | Plane | Port | Interface | Notes |
 |-----------|-------|------|-----------|-------|
 | Signal CLI | Host | 8080 | `127.0.0.1` | Native — containerization breaks TTY registration and device pairing |
-| LM Studio | Host | 1234 | `127.0.0.1` | Native — requires direct Metal API for GPU acceleration |
-| Sanctum Proxy | Host | 4040 | `127.0.0.1` | Go/Rust daemon — traffic cop between external connections and container |
-| MLX Runtime | Host | 1337 | `127.0.0.1` | High-performance inference path via ANE. See [Dynamic Model Routing](/architecture/dynamic-model-routing/) |
-| Docker Engine | Host | — | — | Colima runtime for the container plane |
+| Coder Plain Bridge | Host | 1234 | `127.0.0.1` | `socat` plain HTTP → `sanctum-mlx-coder` mTLS `:1338`. Was LM Studio pre-2026-05-11. |
+| Sanctum Proxy (`proxyd`) | Host | 4040 | `127.0.0.1` | Rust daemon — traffic cop between external connections and container |
+| MLX Runtime (`sanctum-mlx`) | Host | 1337 (mTLS) | `127.0.0.1` + Tailscale | High-performance inference path via Metal. See [Dynamic Model Routing](/architecture/dynamic-model-routing/) |
+| Coder MLX (`sanctum-mlx-coder`) | Host | 1338 (mTLS) | `127.0.0.1` + Tailscale | Qwen2.5-Coder-14B; same pure-Rust binary family as `sanctum-mlx` |
+| Docker Engine (OrbStack) | Host | — | — | Native macOS container runtime for the container plane |
 | OpenClaw Core | Container | 1977 | `0.0.0.0` (internal) | **Not** exposed to host network — accessed only via `claw-gateway` or proxy |
 | claw-gateway | Container | Unix socket | `/var/run/claw/gateway.sock` | Internal nervous system — receives host commands via TLV protocol |
 | MLX Client | Container | — | `host.docker.internal:1337` | Lightweight client that offloads inference to the host's MLX service |
@@ -59,10 +60,10 @@ services:
     environment:
       - SIGNAL_CLI_HOST=host.docker.internal
       - SIGNAL_CLI_PORT=8080
-      - LM_STUDIO_HOST=host.docker.internal
-      - LM_STUDIO_PORT=1234
+      - CODER_BRIDGE_HOST=host.docker.internal
+      - CODER_BRIDGE_PORT=1234   # socat → sanctum-mlx-coder mTLS :1338
       - MLX_HOST=host.docker.internal
-      - MLX_PORT=1337
+      - MLX_PORT=1337            # sanctum-mlx, mTLS
       - GATEWAY_SOCKET=/var/run/claw/gateway.sock
 
     volumes:

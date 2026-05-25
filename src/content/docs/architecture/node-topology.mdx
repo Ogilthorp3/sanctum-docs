@@ -70,8 +70,9 @@ nodes:
       - home_assistant
       - dashboard
       - voice_agent
-      - lm_studio
+      - mlx_coder
       - council_mlx
+      - sanctum_server
       - firewalla_bridge
       - cloudflare_tunnel
       - watchdog
@@ -112,7 +113,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 - Runs the full AI agent cluster (6 agents on the VM)
 - Hosts the command center dashboard
 - Manages the Cloudflare tunnel for external access
-- Runs inference servers (LM Studio, Council MLX, Sanctum TTS)
+- Runs inference servers (`sanctum-mlx`, `sanctum-mlx-coder`, Sanctum TTS) and the `sanctum-server` router that fronts them
 - Acts as the Git and rsync origin for skill updates
 - Stores the canonical copy of `instance.yaml`
 
@@ -122,8 +123,8 @@ These services only run on the hub and are not deployed to satellites:
 
 | Service | Reason |
 |---------|--------|
-| Council MLX | Requires Apple Silicon with sufficient memory |
-| LM Studio | Large model inference, hub-only hardware |
+| Council MLX (`sanctum-mlx`) | Qwen3.6-35B-A3B-4bit needs ≥ 40 GB unified memory + a Metal-class GPU |
+| Coder MLX (`sanctum-mlx-coder`) | Qwen2.5-Coder-14B-Instruct-4bit, mTLS on `:1338` with the plain `:1234` bridge for legacy callers |
 | Firewalla Bridge | Direct LAN access to the primary router |
 | Cloudflare Tunnel | Single ingress point for the instance |
 | Orbi Bridge | Direct LAN access to the access point |
@@ -132,40 +133,29 @@ These services only run on the hub and are not deployed to satellites:
 
 ## Hub Network — The Bridge
 
-The Mac Mini hub runs two virtual machines: the Ubuntu VM (QEMU) and the Docker VM (Colima). Both need network access, but only one needs a bridge to the 10.10.10.0/24 subnet.
+The Mac Mini hub runs one virtual machine — the Ubuntu agent VM on Lima `vmType=vz` — plus an OrbStack container runtime for the few persistent containers (Home Assistant, Outline). The bridge from the Mac host to the VM is `bridge100` on `10.10.10.0/24`: the Mac is 10.10.10.1, the VM is 10.10.10.10. OrbStack runs on its own private network and does not contest `bridge100`.
 
-### The Single Bridge Rule
+### One bridge, one VM
 
-QEMU (via socket_vmnet) creates a macOS vmnet bridge (`bridge100`) for the Ubuntu VM. This bridge carries all agent traffic, SSH tunnels, and inter-node communication on the 10.10.10.0/24 subnet. The Mac host is 10.10.10.1, the VM is 10.10.10.10.
+The agent VM was migrated from QEMU/HVF to Lima `vmType=vz` on 2026-05-10 to end the 370% idle-spin the QEMU/HVF bind was burning ([field note](/operations/2026-05-10-the-vision-probe-lied/)). The container runtime was migrated from Colima to OrbStack on 2026-04-27 ([Colima→OrbStack field note](/operations/2026-04-27-colima-to-orbstack/)) — OrbStack uses native networking with no vmnet contention, so the dual-bridge race that haunted the QEMU+Colima era is structurally impossible now. The Colima LaunchAgent was retired in the same cleanup on 2026-05-16.
 
-Colima (Docker) uses user-mode networking with port forwarding. It does **not** need vmnet. Its `network.address` setting is `false` in `~/.colima/default/colima.yaml`. This is deliberate: if Colima creates a vmnet bridge, it races QEMU for `bridge100` and the VM ends up on `bridge102` — a different bridge with a different host IP (10.10.10.2), which breaks every socat proxy, SSH tunnel, and service health check that expects 10.10.10.1.
-
-This was learned the hard way on March 29, 2026, when a dual-bridge conflict caused half the test suite to fail. The fix: one vmnet user (QEMU), one bridge (bridge100), one subnet.
-
-<Aside type="caution">
-If Colima ever needs vmnet re-enabled (e.g., for direct container-to-VM communication), change `network.address: true` in the Colima config. But ensure QEMU's LaunchAgent starts **before** Colima's, or QEMU will get `bridge102` and nothing will work. The current naming (`com.sanctum.openclaw.colima` sorts after `com.sanctum.vm-autostart`) was not sufficient — Colima still won the race. Disabling vmnet entirely was the only reliable fix.
+<Aside type="note">
+Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `socket_vmnet` and bridge order mattered. The whole class of bug is gone now. If you find a doc or script still referencing `~/.colima/default/colima.yaml`, file an issue — it's stale.
 </Aside>
 
 ### Boot Sequence
 
-The Mac Mini starts every service — including the VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. Two LaunchDaemons handle everything:
+The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of LaunchDaemons (six P0 services in `/Library/LaunchDaemons/`) and the usual user LaunchAgents:
 
-**`com.sanctum.vmnet`** (root) creates the 10.10.10.x network:
-```
-/opt/homebrew/opt/socket_vmnet/bin/socket_vmnet \
-    --vmnet-mode host --vmnet-gateway 10.10.10.1 \
-    /opt/homebrew/var/run/socket_vmnet_sanctum
-```
+1. **Phase 1: Containers** — OrbStack starts headlessly via its hidden-autostart LaunchAgent, Docker socket ready, Home Assistant + Outline containers up.
+2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit), `sanctum-mlx-coder` (`:1338`, mTLS, Qwen2.5-Coder-14B-Instruct-4bit), and the `socat` plain-HTTP bridge for `:1234` legacy callers all load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them.
+3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; host IP is pinned to `10.10.10.1`; the boot path waits for VM SSH before declaring success.
+4. **Phase 4: SSH + bridges** — `apple-post-boot.sh` loads SSH keys from Keychain via `ssh-add --apple-load-keychain`; socat proxies stitch VM-side requests to Mac-side services (Firewalla, MLX coder, SanctumBridge).
 
-**`com.sanctum.bootstrap`** (operator) starts all services in four phases:
-
-1. **Phase 1: Docker** — Colima starts (user-mode networking, no vmnet), Docker socket ready, HA container up
-2. **Phase 2: Headless services** — Voice Agent, Sonos Bridge, Sanctum TTS, Dashboard, Cloudflared, plus a Qui-Gon triage pair. (Force Flow, Sanctum Proxy, Watchdog, Living Force, HA Gateway, Firewalla Bridge, and Council MLX have all moved to dedicated LaunchDaemons in `system/` since W6/W7/W9 — bootstrap no longer manages their lifecycle.)
-3. **Phase 3: VM** — QEMU starts via `socket_vmnet_client` (passes vmnet as fd=3, no Apple Dev ID signing required, no GUI needed), bridge detected, host IP set to 10.10.10.1, waits for VM SSH
-4. **Phase 4: SSH + proxies** — Loads SSH keys from Keychain, starts socat proxies for VM-to-Mac service access
+The six P0 services (`force-flow`, `proxyd`, `watchdog`, `mlx`, `ha-gateway`, `firewalla`) were promoted from user LaunchAgents to system LaunchDaemons in 2026-05-07/08 ([field note](/operations/2026-05-07-the-reboot-reveals/)). They survive any reboot pattern, including a missing `/etc/kcpassword`.
 
 <Aside type="note">
-The VM runs via bare QEMU with `socket_vmnet_client`, not UTM (which has been removed). UTM required a GUI session (Aqua domain) which doesn't exist until someone logs in. `socket_vmnet` provides the vmnet.framework networking that QEMU needs, running as a root LaunchDaemon. The QEMU binary only needs the `com.apple.security.hypervisor` entitlement (which Homebrew's build already has). No Apple Developer ID signing required.
+The VM runs via Lima `vmType=vz` (Apple Virtualization framework), not bare QEMU. The QEMU/HVF era ended on 2026-05-10 — the 370% idle-spin that bind was burning is gone. `socket_vmnet` still provides the vmnet.framework bridge; Lima just drives the hypervisor differently. No Apple Developer ID signing required.
 </Aside>
 
 ```bash
@@ -194,8 +184,8 @@ Think of it as a field office. It can operate independently, make local decision
 1. Install macOS on the satellite Mac and join it to Tailscale.
 2. Copy the install bundle (synced via iCloud) and run the setup scripts.
 3. Set the `.node_id` file to the satellite's name (e.g., `satellite`).
-4. Install Docker Desktop and deploy Home Assistant.
-5. Install a local model in LM Studio (e.g., Qwen 3.5 3B 4-bit for limited hardware).
+4. Install OrbStack and deploy Home Assistant.
+5. Install a local model on the satellite's MLX runtime (e.g., Qwen 3.5 3B 4-bit for limited hardware via `sanctum-mlx`, or route the satellite to the hub's `:1338` coder if the link is reliable).
 6. Configure on-site integrations (cameras, sensors, smart devices).
 7. Update the satellite's `host` field in `instance.yaml` on the hub.
 </Steps>
@@ -285,11 +275,12 @@ const satelliteIp = nodeGet('satellite', 'tailscale_ip'); // "100.0.0.30"
     100.0.0.20                100.0.0.30               100.0.0.40
          |                             |                          |
     [Mac Mini M4 Pro]            [Mac Mini M1]           [MacBook Pro M4 Max]
-    +-- Ubuntu VM                +-- Gateway                    (no services)
-    +-- 6 AI Agents              +-- Home Assistant
-    +-- Full service catalog     +-- Local LLM (3B)
+    +-- Lima vz VM (Ubuntu)      +-- Gateway              (guardrail daemons)
+    +-- 6 AI Agents              +-- Home Assistant       +-- admit/valve
+    +-- Full service catalog     +-- Local LLM (3B)       +-- claude-max-proxy
     +-- Home Assistant
-    +-- Inference servers
+    +-- sanctum-mlx + coder
+    +-- sanctum-server router
 ```
 
 Three machines. Two hauses. One tailnet. Zero regrets. Well. Few regrets.

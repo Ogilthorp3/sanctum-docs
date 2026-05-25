@@ -1,6 +1,6 @@
 ---
 title: Sanctum-MLX
-description: A pure Rust inference server that talks directly to Apple Silicon Metal — zero Python, one fused kernel, and an irrational level of commitment to eliminating overhead.
+description: A pure Rust inference server that talks directly to Apple Silicon Metal — zero Python, fused kernels, mTLS, signed weight manifests, and an irrational level of commitment to eliminating overhead.
 ---
 
 import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -9,27 +9,74 @@ import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/compone
 
 There was a time when the Council's local inference ran through `mlx_lm.server` — a Python process that loaded a model, accepted HTTP requests, and generated tokens. It worked. It was fine. And then we looked at the profiler and realized 40% of the wall clock was spent in Python overhead, garbage collection, and the seven layers of abstraction between "give me a token" and the actual GPU computation.
 
-So we did what any reasonable person would do: we rewrote the entire inference stack in Rust, implemented a GatedDeltaNet state-space model from scratch, wrote a custom Metal GPU kernel, and shipped it as a single binary that starts in 3 seconds and decodes at 13 tokens per second.
+So we did what any reasonable person would do: we rewrote the entire inference stack in Rust, implemented a GatedDeltaNet state-space model from scratch, wrote custom Metal GPU kernels, and shipped it as a pair of binaries that start in 3 seconds and decode at 36–48 tokens per second.
 
-This is sanctum-mlx v0.2.0. It has no Python dependency. It has no regrets.
+This is sanctum-mlx, **cathedral fork**, on Apple Silicon Metal. It has no Python dependency. It has no regrets.
 
-## Architecture
+<Aside type="note" title="Current as of 2026-05-24">
+This page accumulated through eight months of incremental rewrites. The narrative below is mostly intact but the cathedral fork has changed several load-bearing facts since the v0.2.0 cutover. Read the **Cathedral fork — current state** section first; the rest of the page is the path that got us here, preserved because the bugs and the fixes are still instructive.
+</Aside>
+
+## Cathedral fork — current state
+
+The active inference layer is the **cathedral fork** at `~/Projects/sanctum-rs-cathedral/services/sanctum-mlx/`. The original `sanctum-rs/services/sanctum-mlx/` tree is deprecated and kept only for archival reference. Production drives:
+
+| Binary | Port | Model | Role |
+|--------|------|-------|------|
+| `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
+| `sanctum-mlx-coder` | mTLS `:1338` (+ plain `:1234` via socat) | Qwen2.5-Coder-14B-Instruct-4bit (model_type `qwen2`) | Coder seat + Qui-Gon's code path |
+
+Both run under user LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-coder`) with KeepAlive and 30 s ThrottleInterval. Both load weights from `~/.cache/huggingface/hub/`, gate the listen socket on a signed manifest (`ed25519` over `shasum -a 256`), and bind only to loopback + Tailscale + bridge100 — never `0.0.0.0`. LM Studio retirement (2026-05-11) removed the last Python dependency from the inference path.
+
+The `sanctum-server` smart router on `:8900` ([Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and routes requests with five tiers of defense — breaker, budget, latency EMA, quality detectors.
+
+### Recent shipped work (Phase 1A/1B and the view-aliasing fix)
+
+| Feature | Status | Effect |
+|---------|--------|--------|
+| **Phase 1A — FusedQKVProj** | Shipped 2026-05-13 (commit `8da9d33`, branch `feat/cathedral-fused-qkv`) | 24.1 → 36.3 tok/s freeform on coder, after fixing a `split_sections` view-aliasing bug — split returns non-contiguous views with non-zero offsets, downstream reshape→RoPE silently reads wrong bytes. `+ zero` makes the contiguous copy. |
+| **Phase 1B — FusedGateUpProj** | Merged 2026-05-14 (PR #16, commit `f92d44e`) | Coder essay throughput reached ~48 tok/s. Same `+ zero` discipline carried forward; `mlx_contiguous` / `mlx_copy` are NOT substitutes. |
+| **Phase 2 — Fused RoPE Metal kernel** | Designed, not shipped (branch `feat/cathedral-phase2-fused-rope @ 6378408`) | MSL kernel is correct in isolation but MLX's lazy graph doesn't auto-track custom-kernel outputs; the eval barrier costs more than the two saved launches. Waiting on upstream MLX fix. |
+| **Per-MoE-expert fusion (planned for 35B)** | Pending | Carry-forward of Phase 1A/1B onto `qwen3_5_moe`. Per-expert MLP fusion instead of monolithic gate+up. |
+
+### LCP cache reuse + T_q ≥ 2 invariant
+
+Cross-request prompt-cache reuse via longest-common-prefix matching is on. The cathedral caps the LCP at `len - 2` so the suffix is always `T_q ≥ 2` — MLX's decode-kernel vs prefill-kernel SDPA diverge across requests when the suffix is exactly 1 token, producing byte-different responses to byte-identical prompts. The two-token margin makes the cache byte-identical (commit `0123773`).
+
+### Prompt-Lookup Decoding (PLD) as a self-speculation art piece
+
+The cathedral runs PLD by default on both binaries (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Branch `feat/cathedral-pld` started this; the path is now mainline.
+
+### Architecture coverage
+
+`sanctum-mlx` dispatches its loader on the checkpoint's `model_type`:
+
+| `model_type` | Status | Notes |
+|--------------|--------|-------|
+| `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
+| `qwen2` | Production | Qwen2.5-Coder-14B-Instruct-4bit on `:1338`. With YaRN factor=4 RoPE scaling for long context. |
+| `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not currently the production champion. |
+| Mistral / Mixtral | **Not yet supported** | The loader will refuse the checkpoint. Add a `MistralModel` arm to the loader dispatch when needed. |
+
+### Architecture
 
 ```
-[Client] → 127.0.0.1:11337
+[Client] → mTLS handshake → 127.0.0.1:1337 (or :1338)
     ↓
 [sanctum-mlx (Rust/axum)]
-  ├─ Direct model loading: Qwen3.5 safetensors → mlx-rs Model
-  ├─ 4-bit quantized inference: QuantizedLinear with group_size=64
-  ├─ Fused Metal kernel: GatedDeltaNet SSM scan in one GPU dispatch
-  ├─ Zero-copy GQA: kernel handles head expansion internally
-  ├─ SSE streaming: token-by-token via axum Sse + tokio mpsc
-  ├─ Non-streaming: block_in_place for GPU compute
-  ├─ EOS tokens: [248046, 248044]
-  └─ system_fingerprint: sanctum-mlx-0.2.0-native-arm64
+  ├─ Manifest gate: ed25519 sig + SHA-256 verify before bind
+  ├─ Loader dispatch by model_type → Qwen3.5MoE / Qwen2 / Qwen3.5
+  ├─ 4-bit quantized inference: QuantizedLinear group_size=64
+  ├─ Fused Metal kernels: SDPA-dequant-V, Phase 1A QKV, Phase 1B Gate+Up
+  ├─ Prompt cache pool with LCP matching (T_q ≥ 2 invariant)
+  ├─ PLD self-speculation (cascading ngram lookup in prompt)
+  ├─ Zero-copy GQA in the SDPA kernel
+  ├─ Multimodal: vision tower for Qwen3.5-VL canary
+  ├─ SSE streaming + non-streaming completions
+  └─ /metrics (Prometheus), bearer auth on plain, cert auth on mTLS
 ```
 
-The server is an axum HTTP service that exposes an OpenAI-compatible `/v1/chat/completions` endpoint. It supports multi-model loading with LoRA adapter hot-swapping -- the adapter pipeline dequantizes the base weights, merges the LoRA deltas, and requantizes the result back to 4-bit for inference. Models load directly from safetensors files into mlx-rs arrays, and the full model graph runs on the Metal GPU without ever touching Python, NumPy, or the existential dread of `pip install`. The portable Metal build system compiles on any Apple Silicon Mac without external dependencies.
+The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint. It supports LoRA adapter hot-swap (covers quantized + batched-quantized + 3-D `switch_mlp` layers — needed for the MoE expert grids). Models load directly from safetensors files into mlx-rs arrays. The full model graph runs on the Metal GPU without ever touching Python, NumPy, or the existential dread of `pip install`.
 
 ## The Model: Qwen3.5-27B-4bit (and others)
 
@@ -557,15 +604,22 @@ All four a-minus → A+ items landed. Observable (Prometheus), survivable (HA), 
 
 ## File Map
 
+All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedral/`. The original `~/Projects/sanctum-rs/services/sanctum-mlx/` tree is deprecated and kept for archival only — anything new lands in the cathedral.
+
 | File | Description |
 |------|-------------|
-| `sanctum-rs/services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup, manifest gate before Metal load |
-| `sanctum-rs/services/sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, ChatML prompt formatting, `StopSeqBuffer`, `sampling_params_from_request` |
-| `sanctum-rs/services/sanctum-mlx/src/sampling.rs` | Full sampling pipeline: `SamplingParams`, `RecentTokens` ring buffer, `apply_repetition_penalty`, `apply_top_p`, `sample`, and the callback-based `decode` loop that replaces `qwen3_5::Generate` |
-| `sanctum-rs/services/sanctum-mlx/src/lora.rs` | LoRA adapter load + dequantize-merge-requantize pipeline |
-| `sanctum-rs/services/sanctum-mlx/src/manifest.rs` | Coreutils-format SHA-256 weight manifest verify, rayon-parallel; refuses to serve on mismatch |
-| `sanctum-rs/services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift + weight manifest; canonical copies for drift check |
-| `sanctum-rs/scripts/deploy-sanctum-mlx.sh` | install / upgrade / rollback / status / verify wrapper |
-| `sanctum-rs/vendor/mlx-rs/mlx-lm/src/models/qwen3_5.rs` | Full Qwen3.5 model: `LinearAttention` (GatedDeltaNet) with `forward_with_cache`, `LinearAttentionState`, VL config flattening, `FullAttention` (gated Q), quantized loading |
-| `sanctum-rs/vendor/mlx-rs/mlx-lm/src/metal_kernels.rs` | Fused Metal GPU kernel + safe FFI wrappers |
-| `sanctum-rs/services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | 34-test e2e suite, 10 phases |
+| `services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup, manifest gate before Metal load |
+| `services/sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, ChatML prompt formatting, `StopSeqBuffer`, `sampling_params_from_request` |
+| `services/sanctum-mlx/src/loaded_model.rs` | Loader dispatch by `model_type` (qwen3_5_moe / qwen2 / qwen3_5); PLD orchestration; LCP cache reuse |
+| `services/sanctum-mlx/src/sampling.rs` | Full sampling pipeline: `SamplingParams`, `RecentTokens` ring buffer, `apply_repetition_penalty`, `apply_top_p`, `sample`, callback-based `decode` |
+| `services/sanctum-mlx/src/lora.rs` | LoRA adapter merge (quantized + batched-quantized + 3-D `switch_mlp` for MoE experts) |
+| `services/sanctum-mlx/src/manifest.rs` | Ed25519-signed SHA-256 weight manifest verify, rayon-parallel; refuses to bind on mismatch |
+| `services/sanctum-mlx/src/turboquant/` | 4-bit value cache + fused Metal `sdpa_dequant_v` kernel (Slice 4a-final: plain K + fused V) |
+| `services/sanctum-mlx/src/multimodal/` and `src/vision/` | Vision tower for Qwen3.5-VL multimodal canary |
+| `services/sanctum-mlx/src/mtls.rs` | rustls server + per-client cert auth, CA at `~/.sanctum/certs/ca.crt` |
+| `services/sanctum-mlx/src/metrics.rs` | Prometheus recorder, RED metrics, inference token counters |
+| `services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift agents; canonical copies for drift check |
+| `services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | End-to-end mTLS canary battery |
+| `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config (`SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, signed manifest paths) |
+| `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | Coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs) |
+| `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | `socat` plain-HTTP `:1234` → mTLS `:1338` for legacy callers |
