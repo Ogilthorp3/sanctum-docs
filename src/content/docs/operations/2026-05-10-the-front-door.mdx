@@ -32,7 +32,7 @@ The interesting part wasn't the new site — that was an Astro scaffold and twen
 Initial state:
 
 ```
-sanctum.haus  → CNAME → manoir-nepveu cfargotunnel
+sanctum.haus  → CNAME → <MINI> cfargotunnel
                           → http://localhost:3100  (Outline wiki)
                           ← Cloudflare Access gate (Bert only)
 ```
@@ -42,7 +42,7 @@ Target state:
 ```
 sanctum.haus       → CNAME → sanctum-haus.pages.dev  (marketing site, public)
 www.sanctum.haus   → CNAME → sanctum-haus.pages.dev  (marketing site, public)
-wiki.sanctum.haus  → CNAME → manoir-nepveu cfargotunnel
+wiki.sanctum.haus  → CNAME → <MINI> cfargotunnel
                               → http://localhost:3100  (Outline wiki, unchanged)
                               ← Cloudflare Access gate (Bert only, unchanged)
 ```
@@ -66,7 +66,7 @@ Steps 1–7 went exactly as planned. Step 8 produced a 302 redirect to a Cloudfl
 
 The Cloudflare Access app named "Sanctum Wiki" was attached to hostname `sanctum.haus`, not to the tunnel itself. When the apex DNS flipped, the hostname-to-Access-app binding stayed in place. The marketing-site request from a stranger was hitting the Access challenge meant for Bert opening the wiki.
 
-The fix was to delete the app, then recreate it on `wiki.sanctum.haus` (the API token had DELETE+POST permission on Access apps but not PATCH — different scopes, same outcome). The new app has a single explicit "allow" policy: emails matching `bert@triptyq.vc` or `bertrand@nepveu.name`. The wiki is gated again, the marketing site is public, and the front door doesn't ask strangers for a token.
+The fix was to delete the app, then recreate it on `wiki.sanctum.haus` (the API token had DELETE+POST permission on Access apps but not PATCH — different scopes, same outcome). The new app has a single explicit "allow" policy: emails matching `neo@<HOST>` or `neo@<HOST>`. The wiki is gated again, the marketing site is public, and the front door doesn't ask strangers for a token.
 
 <Aside type="caution" title="Lesson: Cloudflare Access binds to hostname, not DNS">
 When you flip a DNS record at the apex, anything Cloudflare-edge-aware that was attached to that hostname — Access, WAF rules, Page Rules, Workers routes — comes along for the ride and applies to the new origin. If the old hostname was protected and the new content shouldn't be, that's a security regression dressed up as a redirect. Probe with `curl -skI https://<apex>` before declaring the migration done; the response code tells the truth.
