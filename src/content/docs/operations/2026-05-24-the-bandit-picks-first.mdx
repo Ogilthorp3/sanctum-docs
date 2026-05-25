@@ -1,0 +1,90 @@
+---
+title: "2026-05-24 (evening): the bandit picks first"
+description: "Stage 4 of the autoresearch champion-plateau fix shipped six hours after Stage 3 — recipe library expansion, UCB1 bandit selection, automated heuristic recipe authoring, atomic cathedral symlink swap. Opus whole-branch review caught two critical issues (TTL retiring brand-new yamls, approval-flag check living in a dead-code path) before merge. The bandit's cold-start ordering surprised the design intent in a good way."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Six hours after Stage 3 shipped + merged + deployed, Stage 4 followed the same brainstorm-spec-plan-implement-review-merge cadence and landed end-to-end. Twelve council decisions, thirteen TDD tasks, two critical issues caught by opus whole-branch review and fixed inline, fifteen commits, three hundred twenty-one tests passing, one cutover to main. The cathedral was still serving the same overfit champion adapter the whole time, and tonight at 01:00 it gets a fresh chance to find a better one — but the surprise is which rungs the bandit picks first.
+
+## Five themes, one push
+
+Stage 4 ships five sub-themes in a single feat branch (Council Decision 12β):
+
+- **4-A** closes the four Important issues that Stage 3 deferred to ship-notes: tier-metric routing through `eval_results_full.json` content instead of the (non-existent) tier columns in `results.tsv` (I-3), a dedicated `recipe-synthetic-augmented.yaml` with approval-flag enforcement at the recipe load boundary (I-1 + I-2), single-pass PII regex collection with longest-match-wins overlap resolution and absolute offsets (I-4).
+- **4-B** adds five new recipes on the *data composition* axis. The four anti-overfit rungs from Stage 3 vary hyperparameters at fixed data; the new five vary data weighting at fixed hyperparameters. `replay-heavy`, `synthetic-heavy`, `balanced`, `reasoning-focused`, and `synthetic-augmented` slot in at LADDER positions four through eight. LADDER grows from sixteen rungs to twenty-one.
+- **4-C** replaces the default strategy with UCB1. Reward is pass-rate of the 4+1 gate (Council Decision 7α). Cold-start gives untried arms an infinite exploration bonus. Operators can env-revert to the Stage 2 strategy via `AUTORESEARCH_STRATEGY=EpsilonGreedyTargeted` if UCB1 misbehaves.
+- **4-D** introduces automated recipe authoring as a heuristic generator (no LLM — Windu mandate eliminates the prompt-injection surface). Three guardrails: max-recipes hard stop (default 50), TTL retirement (default 14 days), and a K-nights-without-PASS trigger (default 7). The heuristic looks at the controller's identified weakest tier and emits a recipe yaml targeting it. Strict input sanitization (kebab-case recipe-name regex, source-key allowlist, weight numeric range) raises `SanitizationError` before any file write.
+- **4-E** swaps the cathedral champion adapter via atomic symlink rename instead of editing the cathedral plist. Council Decision 11γ. Zero plist edits, zero Yoda blip during the swap itself; the operator restarts cathedral once after the first symlink-swap promotion to pick up the new weights.
+
+## Opus caught two criticals
+
+Whole-branch review by opus after all thirteen tasks landed found two issues that would have broken Day 1 if shipped:
+
+**The TTL sweep would have retired all five brand-new Stage 4 recipes on the first nightly post-merge.** The auto-author script iterates `recipe-*.yaml`, looks each one up in `seen_recently` (recipes measured in `results.tsv` within the last `ttl_days`), and retires any that aren't in the set. Brand-new yamls have zero measurements — they aren't in `seen_recently` — they would have been moved to `recipes/.retired/` immediately, and the next morning's controller would point at non-existent paths. The fix added a grace period: any yaml whose `stat().st_mtime` is younger than the cutoff is skipped entirely. One conditional, one test, one critical issue closed.
+
+**The approval-flag check was dead code in production.** Task 3 added `recipe.materialize_recipe()` with the flag check, but the production path calls `prepare.materialize_recipe()` — a different function in a different module that never delegated to the new one. The test passed because it called the new function directly; the live nightly would have skipped the check entirely. The fix wired `recipe.materialize_recipe()` into `recipe.load_recipe()` at the load boundary so every loaded recipe is filtered before reaching the loader, regardless of which downstream call path is in use. Five lines, one integration test, one dead-code path resurrected.
+
+The pattern repeats from Stage 3's opus review (which caught the `train_phase1.sh` → `train.py` rename not being propagated to `triple_train.sh` plus the `EARLY_STOP_VAL_PATH` env var never being set): plan-level integration points are exactly where opus finds gaps, because the implementer subagents work from local task text and don't see the cross-task wiring the way a whole-branch reviewer does. The discipline is worth the cost.
+
+## The bandit picks first — and not the rungs I expected
+
+Opus's IMP-1 prediction was that UCB1 cold-start would tie-break to LADDER insertion order, putting the four anti-overfit rungs (positions 0–3) at the top of the keep-list and leaving the five new recipe-axis rungs untried for several nights. Concrete dry-run output post-merge:
+
+```
+[controller] shadow: skip=17 rationale=
+  "UCB1: keep top 4/21 arms;
+   top3=[+inf: ['recipe-synthetic-augmented',
+                'recipe-replay-heavy',
+                'recipe-synthetic-heavy']];
+   total_n=88; cold-start arms have inf bonus"
+```
+
+The bandit kept the five new recipe-axis rungs and skipped seventeen others — including all four anti-overfit rungs. Why? UCB1 scores per-recipe, not per-rung. The four anti-overfit rungs all use `recipe: base` — the same recipe field as `champion-replay`, `safe-baseline`, and most legacy rungs. Eighty-eight historical attempts have been made against the `base` recipe across all those rungs. The five new recipes (`synthetic-augmented`, `replay-heavy`, `synthetic-heavy`, `balanced`, `reasoning-focused`) each have unique `recipe` field values with zero attempts each — so they each get infinite cold-start bonus and rank above the well-explored `base` arm.
+
+This is the bandit doing exactly the work the bandit is supposed to do: prefer arms with unknown reward over arms with measured reward (when measured reward is below the threshold of caring). The unintended side effect is that Stage 4 exercises its new recipes on the very first night, not after five nights of legacy-rung warmup. Whether that's good depends on whether the new recipes can clear the gate vs base — but at least we'll find out tomorrow morning, not next week.
+
+## What ships tonight
+
+Cathedral plist on Mini still serves the pre-Stage-3 prod-champion adapter (unchanged across both stages today — the state file was removed earlier this evening per Council verdict, but the cathedral runtime keeps serving the last-loaded adapter until the next reload). The autoresearch nightly fires at 01:00 with main at `454eb2a`:
+
+1. UCB1 controller decides which arms to keep based on cold-start + history.
+2. Picker walks the curated rung set.
+3. Phase 1–3 train + screen + full-eval + 4+1 gate (vs base; cond #4 is the anti-overfit lock).
+4. Phase 2c triple-train if any screen-score clears 0.881.
+5. Phase 3 promote if 4+1 gate passes; atomic symlink swap on success.
+6. Phase 3.5 auto-author check (TTL sweep with grace period, K-nights trigger if no PASS in seven days).
+7. Phase 4 prune (Stage 3 mechanic, unchanged).
+
+If a candidate clears the gate tonight, the symlink swap happens automatically; the operator restarts cathedral once when convenient. If nothing clears, UCB1 accumulates per-recipe pass-rate data for tomorrow's selection. After seven nights without a PASS, the auto-author starts emitting recipe variants targeting the weakest tier.
+
+The cardinal rule held across both stages today: every new component — UCB1, auto-author, symlink swap, Phase 3.5 — wraps in `try/except` or `|| true`. The nightly cannot crash from Stage 4 even if every operator-deferred item is left unset.
+
+## Five operator-deferred items
+
+Same pattern as Stage 3. Scripts ship + tests pass; execution requires explicit operator command:
+
+```bash
+# 1. Approve synthetic seed (recipe-synthetic-augmented otherwise drops the source silently):
+touch ~/.sanctum/state/synthetic-seed-v1-approved.flag
+
+# 2. Setup cathedral symlink on Mini (one-time):
+ssh bert@manoir.tail7c6d11.ts.net 'bash /Users/bert/Projects/council-autoresearch/tools/setup-champion-symlink.sh'
+
+# 3. Cathedral restart on Mini after first symlink-swap promotion (one-time per promotion):
+ssh bert@manoir.tail7c6d11.ts.net 'launchctl kickstart -k gui/$(id -u)/com.sanctum.mlx'
+
+# 4. Strategy override if UCB1 misbehaves:
+launchctl setenv AUTORESEARCH_STRATEGY EpsilonGreedyTargeted
+
+# 5. Auto-author env tuning:
+launchctl setenv K_NIGHTS_WITHOUT_CHAMPION 14    # less aggressive
+launchctl setenv MAX_RECIPES 30                  # smaller library cap
+launchctl setenv TTL_DAYS 21                     # longer retention
+```
+
+Two stages in a day, one merge cascade, one runtime change at the cathedral that won't take effect until the operator chooses. The loop is now what we wanted it to be: enough materials, enough mechanism, enough automation to find a non-overfit champion if one is findable in the recipe space we know how to express. Tonight is the first night of that search with the full machinery in place.
+
+---
+
+*Stage 4 spec: `docs/superpowers/specs/2026-05-24-stage-4-recipe-bandits-runtime-design.md`. Plan: `docs/superpowers/plans/2026-05-24-stage-4-recipe-bandits-runtime.md`. Operator runbook: `docs/operations/stage-4-operator-runbook.md`. Merge: `454eb2a` (main) ← `feat/autoresearch-stage-4` (15 commits). Council BLESSED twelve design decisions; opus whole-branch review caught two critical issues fixed inline. All branches pushed to origin.*
