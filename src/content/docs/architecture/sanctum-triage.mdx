@@ -35,7 +35,7 @@ The daemon quietly terminates non-essential Apple background services (Hydra, Si
 ### Level 2: Heavy Model Unload
 **Trigger:** Free RAM < 20% OR Swap > 20GB
 
-The daemon interacts with the LM Studio HTTP API to aggressively unload massive local models (35B+ parameters). It also terminates lower-priority Sanctum services to reclaim memory.
+The daemon coordinates with `sanctum-admit` (the capacity-doctrine controller) to evict the heavy 35B model from `sanctum-mlx`. The pressure valve handles the SIGSTOP / SIGCONT side; sanctum-triage is the "ask first" path that respects the admission protocol. Pre-2026-05-11 this also talked to the LM Studio HTTP API to unload models — LM Studio is now retired and the path is gone.
 
 ### Level 3: Emergency Purge
 **Trigger:** Free RAM < 10% OR Swap > 30GB
@@ -49,11 +49,9 @@ In earlier versions, the emergency purge included `killall Mail`. This caused un
 
 ## The MLX Idle Manager
 
-The most significant performance gain in the Rust rewrite was embedding the idle manager directly into the daemon as an asynchronous TCP proxy.
+The idle-manager pattern (an async TCP proxy that spawns the inference process on demand, kills it after N seconds of socket silence) was the original Rust-rewrite design. Production has since superseded it with the **cathedral fork's KeepAlive model**: `sanctum-mlx` and `sanctum-mlx-coder` stay resident behind mTLS endpoints (`:1337`, `:1338`), Metal-cache caps bound their resident set, and the pressure valve handles real OOM pressure with SIGSTOP-then-resume — never SIGKILL on the inference servers, because SIGKILL would corrupt the KV cache.
 
-Instead of keeping the massive `Gemma-4-31B` model loaded in RAM 24/7, the Rust proxy binds to `10.10.10.1:1337`. When the Council initiates a connection, the daemon instantly spawns the `mlx_lm.server` process, proxies the bytes transparently to an internal port, and monitors the traffic.
-
-If the socket sees no data for 300 seconds, `sanctum-triage` issues a `SIGKILL` to the MLX server, instantly returning ~20GB of Unified Memory back to the OS.
+The idle-spawn-and-kill flow remains in `sanctum-idle` (vendored in `sanctum-rs/services/sanctum-idle/`) as a reference implementation for future low-traffic models. For the current production workload, paying the ~60 s Metal-cold-start tax on every cold inference dwarfs the memory savings.
 
 ## Why Rust?
 

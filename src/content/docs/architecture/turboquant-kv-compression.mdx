@@ -11,7 +11,7 @@ import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/compone
   The shipping `CompressedKVCache` does **not** compress keys. After measuring, the Lloyd-Max + FWHT + QJL key path turned out to be both the throughput tax (CPU round-trip every step) and a negligible memory win at our context lengths (~80 MB across 40 attention layers at T=2048). Keys now live as a plain on-device Array; values stay 4-bit group-affine compressed; a custom Metal kernel (`sdpa_dequant_v`) fuses dequant + attention so V never materializes as a full tensor. Throughput recovered to within ~5% of the no-TurboQuant baseline. The Slice 1 algorithm and protocol below remain accurate as the *measurement-discipline scaffolding* that got us here, but the production storage model has changed. See [Slice 4 Scoping](/architecture/turboquant-slice-4-scoping/) for the pivot.
 </Aside>
 
-The KV cache is where long conversations go to eat memory. Every token a language model generates leaves behind a pair of tensors — the keys and values from every attention head in every layer. For a 27B model at 256-dim heads, that's hundreds of megabytes per thousand tokens. On a Mac Mini that also runs LM Studio and a dozen other services, the KV cache is the thing that decides whether you get to have a conversation at all.
+The KV cache is where long conversations go to eat memory. Every token a language model generates leaves behind a pair of tensors — the keys and values from every attention head in every layer. For a 27B model at 256-dim heads, that's hundreds of megabytes per thousand tokens. On a Mac Mini that also runs `sanctum-mlx-coder`, Home Assistant, Sanctum TTS, and a dozen other services, the KV cache is the thing that decides whether you get to have a conversation at all.
 
 **TurboQuant** is how we make it smaller. The idea is not ours — it comes from [Google's ICLR 2026 paper (arXiv 2504.19874)](https://arxiv.org/abs/2504.19874), layered on top of [KVQuant](https://arxiv.org/abs/2401.18079) and [QJL](https://arxiv.org/abs/2310.19536). Our job is to implement it cleanly inside `sanctum-mlx`, wire it into Apple's MLX runtime, and — most importantly — prove the quality doesn't collapse when we turn the bits down.
 
@@ -194,7 +194,7 @@ Metal memory ceilings (orthogonal to TurboQuant, but relevant to the *why*):
 
 | Flag | Env | Effect |
 |------|-----|--------|
-| `--metal-cache-limit-mb` | `SANCTUM_MLX_CACHE_LIMIT_MB` | Cap MLX's reusable buffer cache. Stops sanctum-mlx from fighting LM Studio for the Metal heap. |
+| `--metal-cache-limit-mb` | `SANCTUM_MLX_CACHE_LIMIT_MB` | Cap MLX's reusable buffer cache. Stops `sanctum-mlx` from fighting `sanctum-mlx-coder` for the Metal heap. |
 | `--metal-memory-limit-mb` | `SANCTUM_MLX_MEMORY_LIMIT_MB` | Hard cap total MLX device memory. |
 | `--metal-wired-limit-mb` | `SANCTUM_MLX_WIRED_LIMIT_MB` | Cap non-swappable memory — keep hot tensors resident without starving the rest of the system. |
 

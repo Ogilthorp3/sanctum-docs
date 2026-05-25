@@ -107,12 +107,15 @@ The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step p
 
 ```yaml
 services:
-  lm_studio:
+  mlx_coder:
     enabled: true
-    port: 1234
+    port: 1338                         # mTLS
+    model_path: ~/.cache/huggingface/hub/models--mlx-community--Qwen2.5-Coder-14B-Instruct-4bit
   council_mlx:
     enabled: true
-    port: 1337
+    port: 1337                         # mTLS
+    model_path: ~/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-4bit
+    adapter_path: ~/.sanctum/adapters/production-champion
   voice_agent:
     enabled: true
     port: 1138
@@ -123,6 +126,10 @@ services:
     enabled: true
     port: 4040
 ```
+
+<Aside type="note">
+The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights). The `:1234` socket is still reachable — it's now a plain-HTTP `socat` bridge to `sanctum-mlx-coder` on `:1338` for callers that haven't moved to mTLS yet.
+</Aside>
 
 ## Network Services
 
@@ -185,7 +192,7 @@ Eight background agents and three supporting services, zero ports for most of th
 | Secret Rotation | -- | `com.sanctum.rotate-secrets` | Runs on the 1st of each month at 3:30 AM. Rotates gateway tokens and updates Keychain entries. |
 | iCloud Filer | -- | `com.sanctum.icloud-filer` | Auto-filing daemon. Organizes documents from iCloud Drive into structured folders. KeepAlive enabled. |
 | iCloud Backup | -- | `com.sanctum.icloud-backup` | Periodic backup of Sanctum configuration and data to iCloud Drive. |
-| VM Autostart (QEMU headless) | -- | `com.sanctum.vm-autostart` | Launches QEMU headless on login, starts the Ubuntu VM, restores the bridge100 interface IP, and re-establishes the VM-facing LM Studio bridge on 10.10.10.1:1234. |
+| VM Autostart (QEMU headless) | -- | `com.sanctum.vm-autostart` | Launches QEMU headless on login, starts the Ubuntu VM, restores the bridge100 interface IP, and re-establishes the VM-facing `sanctum-mlx-coder` plain-HTTP bridge on 10.10.10.1:1234 via `socat` (the mTLS surface lives on `:1338`). |
 | Music Cleanup | -- | `com.sanctum.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
 | Kiwix | 8888 | `com.sanctum.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
 | Outline | 3100 | Docker container | Self-hosted wiki and documentation service. Provides a collaborative knowledge base for haushold documentation. |

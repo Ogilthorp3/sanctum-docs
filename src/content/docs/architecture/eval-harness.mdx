@@ -135,27 +135,36 @@ The `extract_turns()` loader ships with a placeholder schema — point `--log-di
 
 ## Authenticating against the Tailscale-exposed council
 
-`sanctum-mlx` enforces Bearer-token auth on every peer that isn't `127.0.0.1`. Any eval pointed at `http://100.0.0.25:1337/v1` (or the `manoir.tailnet` hostname) must send `Authorization: Bearer <token>`.
+The cathedral fork serves `:1337` and `:1338` over **mTLS-only** in production. Every eval pointed at `https://100.0.0.25:1337/v1` (or `manoir.tail7c6d11.ts.net`) must present a client cert signed by the Sanctum CA.
 
-The token lives at `~/.sanctum/secrets/council-mlx.token` on manoir (mode 600). Two convenience flows:
+The PKI lives at `~/.sanctum/certs/` on every Sanctum machine. Per-client cert and key pairs are issued for each named consumer (guardian, canary, drift, sanctum-server, parity-smoke, etc.). Two convenience flows:
 
 ```bash
-# One-off: export into the current shell
-export COUNCIL_API_KEY=$(ssh neo@100.0.0.25 'cat ~/.sanctum/secrets/council-mlx.token')
+# One-off curl probe with the sanctum-server client identity
+curl --cacert ~/.sanctum/certs/ca.crt \
+     --cert ~/.sanctum/certs/clients/sanctum-server.crt \
+     --key  ~/.sanctum/certs/clients/sanctum-server.key \
+     https://100.0.0.25:1337/v1/models
 
 # Pass through to the eval
 .venv/bin/python scripts/carmack_eval_http.py \
-  --url http://100.0.0.25:1337/v1 \
-  --model 45797d2985a12c55e6473686e9ea91b95e959553 \
+  --url https://100.0.0.25:1337/v1 \
+  --model mlx-community/Qwen3.6-35B-A3B-4bit \
   --label council-remote \
-  --api-key-env COUNCIL_API_KEY \
+  --ca-cert ~/.sanctum/certs/ca.crt \
+  --client-cert ~/.sanctum/certs/clients/parity-smoke.crt \
+  --client-key  ~/.sanctum/certs/clients/parity-smoke.key \
   --output eval/council-remote.json
 ```
 
-`scripts/test_eval_harness.sh` auto-discovers the token: if `COUNCIL_API_KEY` isn't set, it non-interactively ssh-fetches from manoir (`BatchMode=yes`, 4s timeout) and proceeds. Localhost probes (e.g. the council-guardian running on the Mini itself) bypass auth via the `sanctum-mlx` loopback rule — no token needed there.
+`scripts/test_eval_harness.sh` auto-discovers the cert paths in the same `~/.sanctum/certs/` tree. Localhost probes (the council-guardian running on the Mini itself) connect to the same mTLS endpoint; loopback presents its own client cert from the local PKI — there is no plain-HTTP loopback bypass on the cathedral fork.
 
 <Aside type="caution">
-The Rust `sanctum-mlx` backend returns its model ID as a raw snapshot hash (`45797d2985a12c55...`) rather than the friendly `mlx-community/Qwen3.5-27B-4bit` that the Python `mlx_lm.server` returned. The harness's model-ID parser handles both, but if you're scripting around `/v1/models` directly, don't assume the friendly name.
+The Rust `sanctum-mlx` backend returns its model ID as a raw snapshot hash (e.g. `38740b847e4cb78f...`) rather than the friendly `mlx-community/Qwen3.6-35B-A3B-4bit`. The harness's model-ID parser handles both, but if you're scripting around `/v1/models` directly, don't assume the friendly name.
+</Aside>
+
+<Aside type="note">
+Bearer-token auth (the P5 mechanism) survives on the plain `:1337` listener for migration purposes only; production binds `--no-plain` and refuses the plain socket entirely. Any eval still using `COUNCIL_API_KEY` is targeting a non-canonical path.
 </Aside>
 
 ## Weekend workflow

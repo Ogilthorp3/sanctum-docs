@@ -51,7 +51,7 @@ router:
       client_cert_path: ~/.sanctum/certs/clients/sanctum-server.crt
       client_key_path:  ~/.sanctum/certs/clients/sanctum-server.key
     coder:
-      url: http://127.0.0.1:1234/v1          # LM Studio
+      url: http://127.0.0.1:1234/v1          # socat → sanctum-mlx-coder mTLS :1338
       models: [coder, code-*, "*coder*", quigon, ahsoka]
       description: "Qwen2.5-Coder-14B - pure code + Qui-Gon + Ahsoka (chalet 16 GB)"
     cloud:
@@ -75,12 +75,12 @@ This table reflects the **post-2026-04-28 routing**, when the Council went heter
 |---|---|---|---|
 | **Yoda** | **cloud — Claude Opus 4.7** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
 | **Mundi** | **cloud — Claude Opus 4.7** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
-| **Qui-Gon** | **coder — Qwen2.5-Coder-14B** (LM Studio `<MINI>:1234`) | council-secure | Dense code gen, infrastructure pragmatism; 22 tok/s on the Mini |
+| **Qui-Gon** | **coder — Qwen2.5-Coder-14B** (`sanctum-mlx-coder` mTLS `<MINI>:1338`, with socat plain bridge on `:1234`) | council-secure | Dense code gen, infrastructure pragmatism; ~48 tok/s on the Mini post Phase 1B fusion |
 | **Windu** | **spatial — Gemini 3.1 Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
 | **Cilghal** | **council-secure — Qwen3.6-35B-A3B** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
 | **Mothma** | council-secure — Qwen3.6-35B-A3B | council-secure | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — local-only by mandate |
 | **Jocasta** | council-secure — Qwen3.6-35B-A3B | council-secure | Email / CRM; privacy-first |
-| **Ahsoka** | coder — Qwen2.5-Coder-14B (chalet LM Studio) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit |
+| **Ahsoka** | coder — Qwen2.5-Coder-14B (chalet `sanctum-mlx-coder`) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit |
 
 Cloud Opus runs through the Claude Max subscription bridge at `<MINI>:3456`, not the metered Anthropic API. Routine Council questions consume zero API credits. Bring-out-the-good-china reasoning happens for the price of the monthly subscription, not per-token.
 
@@ -120,7 +120,7 @@ The `models` arrays are glob patterns. The `intent_keywords` are plain strings m
 
 The router is a new Rust module in `sanctum-server/src/router.rs`. The `HttpProxyBackend` in `backend.rs` handles the actual proxying to any OpenAI-compatible endpoint, with automatic detection of streaming (SSE) vs non-streaming (JSON) responses.
 
-Non-quantized and quantized backends both work. The proxy handles think-tag stripping (`strip_thinking` flag) regardless of which backend processes the request. The router doesn't care what the backend is running — MLX, LM Studio, a cloud API behind a cost-capped proxy — as long as it speaks OpenAI-compatible HTTP. This is the correct amount of opinion for a routing layer to have.
+Non-quantized and quantized backends both work. The proxy handles think-tag stripping (`strip_thinking` flag) regardless of which backend processes the request. The router doesn't care what the backend is running — `sanctum-mlx`, the legacy `socat` plain bridge, a cloud API behind a cost-capped proxy — as long as it speaks OpenAI-compatible HTTP. This is the correct amount of opinion for a routing layer to have.
 
 <Aside type="tip">
 The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure which brain is answering. Because at some point you will be staring at a response and thinking "this doesn't sound like Yoda" and you'll want to know whether the problem is the model or the route.
