@@ -1,162 +1,155 @@
 ---
-title: "Yoda warmth — dist patch + auto-reapply"
-description: "How Sanctum keeps Yoda's silent-reply rewrites warm + franglais instead of generic robotic acknowledgements, and why the fix lives in three places."
+title: "Yoda warmth — three-layer fix history"
+description: "How Yoda gives real replies on Signal — from the v1 dist-patch dead-end to the consumer-side wrapper to the proxy-stringification root cause."
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-## Why this exists
+![Yoda warmth — a four-handed lighthouse keeper passing a wax-sealed letter between openclaw, gateway, proxyd, and the Claude CLI; the third hand drops it into a shadow labelled object-Object until a teal halo gear catches it back.](./images/hero-yoda-warmth.png)
 
-openclaw's harness injects a `## Silent Replies` block into every system
-prompt. That block primes the model to emit `NO_REPLY` for any message
-that doesn't need a tool call or a substantive answer — so 1:1 small
-talk on Signal would surface as silence to the operator, which feels
-broken (silence ≡ broken to the operator).
-
-The surface-layer policy `silentReply: disallow` + `silentReplyRewrite:
-true` (configured in `openclaw.json`) catches `NO_REPLY` outputs and
-substitutes a canned acknowledgement before delivery. But the default
-canned texts are robotic — "Standing by.", "Nothing to add right now.".
-Cold, not warm.
-
-This page documents the **dist patch + auto-reapply + R2D2 heal recipe**
-that swaps those robotic defaults for short, franglais-inflected, Yoda-
-personality replies (e.g. `Ici, oui 🧙`, `Reçu.`, `Présent et alerte.`,
-`Veille je fais 🧙`).
+Yoda is the Haus assistant Bert texts on Signal at his fictional-block
+demo number (real number redacted; pretend it is `+15555550100`). The
+chain from operator to LLM and back is openclaw, then a yoda-chat
+consumer, then the openclaw gateway, then the council-tiered proxyd,
+then claude-max-api-proxy, then the Claude CLI subprocess, then back
+out through signal-cli. Six hops, three independent silent-failure
+classes, one bug that masked another for ten hours. This page is the
+incident record + the three-layer defense that came out of it.
 
 <Aside type="note" title="Apple-like + military-grade">
-This fix is defense-in-depth: patch + scheduled reapply + auto-heal
-detector. Any single layer falling over (operator forgets to reapply
-manually, npm install reverts the dist, etc.) is caught by the next
-layer up.
+Every layer here was shipped because a previous attempt failed at the
+boundary it owned. Read top-to-bottom for the chronology, or skip to
+"Layer 3" for the actual root-cause fix.
 </Aside>
 
-## Layer 1 — the patch script
+## The symptom
 
-`~/.sanctum/scripts/yoda-warmth-patch.sh`
+Every text Bert sent to Yoda came back as one of three patterns,
+depending on which layer you blamed at the time:
 
-Idempotent script that finds the current openclaw dist file matching
-`silent-reply-*.js`, replaces the `SILENT_REPLY_REWRITE_TEXTS` array
-with 15 warm canned texts, marks the file with the comment
-`// YODA-WARMTH-PATCHED`, and restarts `openclaw-gateway` so the new
-dist is loaded into memory.
+1. **Silence.** The default openclaw harness emits `NO_REPLY` for any
+   message that doesn't need a tool call. Signal showed nothing back.
+2. **A canned acknowledgement.** Once a wrapper trapped `NO_REPLY` and
+   substituted a warm canned text, the reply landed but felt scripted
+   (`ack`, `present`, `received`).
+3. **The model insisting your message was corrupted.** "Your message
+   came through as `[object Object]` — what did you mean to send?"
+   Even though `finalPromptText` in the JSON dump showed the operator
+   text intact.
 
-- **Backup:** `silent-reply-*.js.bak-pre-yoda-warmth` on the VM, kept
-  once (overwriting on re-patch is fine; openclaw upgrades produce a
-  new content-hashed filename anyway).
-- **Idempotence:** marker check up front — second run logs `already
-  patched — no-op` and exits 0.
-- **Logging:** structured JSONL at
-  `~/.sanctum/logs/yoda-warmth-patch.jsonl`.
-- **Dist file discovery:** dynamic via `grep -l 'SILENT_REPLY_REWRITE_TEXTS'`
-  rather than hardcoded filename — content hash changes per openclaw
-  release.
+The fix turned out to need three independent layers. Each layer is
+worth keeping, even now, because each layer's failure mode is
+different.
 
-## Layer 2 — auto-reapply LaunchAgent
+## Layer 1 (retired) — patch openclaw's silent-reply rewrite array
 
-`~/Library/LaunchAgents/com.sanctum.yoda-warmth-reapply.plist`
+openclaw 2026.5.24 shipped a `silentReplyRewrite` feature that
+substituted a canned text for any agent reply of `NO_REPLY`. The
+default canned texts were robotic (`Standing by.`, `Nothing to add
+right now.`). The first attempt patched that dist file with warm
+franglais entries.
 
-Re-runs the patch script daily at **04:17** and at every login
-(`RunAtLoad: true`). Catches the case where `npm install` of openclaw
-reverted the dist file. Patch is idempotent so this is a no-op when
-the marker is already in place.
+This approach died when openclaw was pinned to 2026.5.20 — that
+version doesn't have the rewrite feature at all. Lesson: patching a
+vendor's `node_modules/<pkg>/dist/` works until the next pin or update
+rewrites the path it lives at. **Retired 2026-05-24** — the
+`heal-yoda-warmth` recipe is gone from `r2d2/recipes.yaml`; the patch
+script lives at `~/.sanctum/scripts/yoda-warmth-patch.sh.retired-*`
+for reference.
 
-```xml
-<key>StartCalendarInterval</key>
-<dict>
-    <key>Hour</key>
-    <integer>4</integer>
-    <key>Minute</key>
-    <integer>17</integer>
-</dict>
-```
+## Layer 2 — consumer-side wrapper in our repo
 
-Bootstrap:
+`yoda_chat/agent.py` (in our repo at
+`sanctum/yoda-chat/yoda_chat/agent.py`) now owns delivery. It calls
+openclaw with `--json` and no `--deliver`, parses the agent's reply,
+substitutes a warm canned text via `warmth.pick_warm()` if the reply
+is `NO_REPLY` or empty, and sends the final text via the signal-cli
+JSON-RPC `send` method itself.
 
-```bash
-launchctl bootstrap gui/$(id -u) \
-  ~/Library/LaunchAgents/com.sanctum.yoda-warmth-reapply.plist
-```
+The wrapper is version-agnostic — it only uses openclaw's public
+`--json` flag and signal-cli's documented JSON-RPC API. Any openclaw
+pin, bump, or downgrade leaves it intact. The R2D2 recipe
+`heal-yoda-warmth-wrapper` redeploys `warmth.py` + `agent.py` from
+the repo if the VM copy ever goes missing.
 
-Logs land at `~/.sanctum/logs/yoda-warmth-reapply.{stdout,stderr}.log`.
+Three relevant files:
 
-## Layer 3 — R2D2 heal recipe
+| Path | Purpose |
+|---|---|
+| `sanctum/yoda-chat/yoda_chat/warmth.py` | `WARM_TEXTS` array + `pick_warm(seed)` deterministic picker + `is_silent_reply(text)` |
+| `sanctum/yoda-chat/yoda_chat/agent.py` | `dispatch_signal_reply()` — owns the openclaw call, the parse, the substitution, the signal-cli send |
+| `sanctum/yoda-chat/tests/test_warmth.py` | 7 unit tests — determinism, distribution, silent-reply detection |
 
-`~/.sanctum/r2d2/recipes.yaml` → recipe id `heal-yoda-warmth`
-+ `~/.sanctum/scripts/r2d2/heal-yoda-warmth.sh`
-+ `detect_yoda_warmth_reverted` in `~/.sanctum/r2d2/classify.py`.
+This layer was good — but operator feedback was that he wanted real
+LLM-generated answers, not canned acknowledgements. The canned path
+should be the Zeroth Rule floor, not the everyday case. Which led to
+Layer 3.
 
-Fires when R2D2's classifier cycle detects that the dist file lost the
-`YODA-WARMTH-PATCHED` marker (e.g. between the daily reapply window).
-Same script, just a different trigger path. 6h cooldown per detection
-keeps it from flapping if `npm install` is run in a tight loop.
+## Layer 3 — the actual root cause
 
-## The warm texts
+Even with Layer 2 in place, every Yoda turn returned `NO_REPLY` from
+openclaw, so the canned text fired every time. Direct openclaw calls
+bypassing Layer 2 also returned text like `Your message came through
+as [object Object]`. The bug had to be upstream of openclaw.
 
-```js
-const SILENT_REPLY_REWRITE_TEXTS = [
-    "Ici, oui 🧙",
-    "Ack Bert.",
-    "Reçu.",
-    "Salut! Ici je suis.",
-    "Hey 🧙",
-    "Présent.",
-    "Tout calme ici.",
-    "Veille je fais 🧙",
-    "Bien reçu.",
-    "Ici 🧙",
-    "Ack — rien à ajouter pour l'instant.",
-    "Reçu, je continue à observer.",
-    "Présent et alerte.",
-    "Note prise.",
-    "Acknowledged 🧙",
-]; // YODA-WARMTH-PATCHED
-```
+A sub-agent traced the request path one hop at a time and found it in
+`~/Library/pnpm/global/5/node_modules/claude-max-api-proxy/dist/adapter/openai-to-cli.js`,
+function `messagesToPrompt()`. The function used template literals on
+`msg.content` directly. openclaw sends content in OpenAI multimodal
+form, an array of `{type:"text", text:"..."}` blocks. JavaScript
+stringifies arrays of objects via the default `toString()` to
+`[object Object]`. The Claude CLI subprocess then received that
+literal string. The LLM dutifully described the corruption it saw.
 
-Order is meaningful — openclaw picks via `hashSeed(seed) % len`, so the
-mix of short single-emoji + slightly longer franglais variants keeps it
-from feeling templated on repeated short pings.
+**Fix**: add a `flattenContent()` helper that returns the joined text
+of array blocks, then use it in all three role branches (system,
+user, assistant). Marker `// content-flatten patch v1` for
+idempotence and R2D2 detection.
 
-## Why patch the dist instead of upstream PR
+Three defenses (defense-in-depth, all in repo):
 
-A clean upstream PR is the right long-term answer. This patch is the
-bridge for now — operator wanted the warmth shipped tonight, the patch
-is reversible, the auto-reapply hook makes it upgrade-safe, and a
-future upstream merge cleanly subsumes the patch (the marker is just
-a comment).
+| Layer | Path | Trigger |
+|---|---|---|
+| Patch script | `sanctum/scripts/patch-claude-max-proxy-content-flatten.sh` | Manual / on-demand |
+| Reapply LaunchAgent | `sanctum/launchagents/com.sanctum.claude-max-proxy-content-flatten.plist` | Daily 04:13 + RunAtLoad |
+| R2D2 heal recipe | `sanctum/scripts/r2d2/heal-claude-max-proxy-content-flatten.sh` + `recipes.yaml` | Marker missing on R2D2 poll, 1h cooldown, severity high |
 
 ## Verifying
 
+Three independent probes, easiest first:
+
 ```bash
-# Patch in place?
-ssh openclaw \
-  "grep -c 'YODA-WARMTH-PATCHED' /home/ubuntu/.openclaw/node_modules/openclaw/dist/silent-reply-*.js"
-# → 1
+# 1. Marker present in the proxy adapter?
+grep -c '// content-flatten patch v1' \
+  ~/Library/pnpm/global/5/node_modules/claude-max-api-proxy/dist/adapter/openai-to-cli.js
+# → 2
 
-# LaunchAgent active?
-launchctl print gui/$(id -u)/com.sanctum.yoda-warmth-reapply | grep state
-# → state = not running   (only fires at 04:17 + RunAtLoad)
+# 2. API probe at the proxy (skips openclaw + signal-cli)
+curl -s -X POST http://127.0.0.1:3456/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"opus","messages":[{"role":"user","content":[{"type":"text","text":"what is 2+2?"}]}]}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["choices"][0]["message"]["content"])'
+# → 4   (or similar; the proof is the absence of "[object Object]")
 
-# Most recent reapply outcome:
-tail -1 ~/.sanctum/logs/yoda-warmth-patch.jsonl
-# → {"ts":"…","level":"info","msg":"already patched — no-op"}
+# 3. End-to-end honor probe (sends one real Signal message to operator)
+~/.sanctum/scripts/yoda-honor-probe.sh --timeout 120 --message "morning probe"
+# → PASS, delivered=True, was_warmed=False, text=<a real LLM reply>
 ```
 
-## When it would not be enough
+## What the wrapper is for, now
 
-The rewrite still doesn't address the case where Bert wants Yoda to
-*genuinely* engage with small talk substantively (vs. send a short
-acknowledgement). That's a model-priming problem inside the system
-prompt, separate from this surface-layer fix. Two paths once that's
-needed: (1) upstream a config knob to skip the Silent Replies block
-when the conversation type is `direct` + operator-marked-as-trusted;
-(2) modify the harness's system-prompt template via the same kind of
-patch + auto-reapply pattern, mirrored under a different marker.
+With Layer 3 in place, most operator texts get real LLM replies and
+the wrapper's `pick_warm()` rarely fires. The wrapper is the floor:
+when the LLM genuinely has nothing to say (no tool grounded, no
+opinion) the Zeroth Rule (`never silent to Bert`) still needs to
+emit something. `LAST_RESORT_TEXTS` is a 3-entry array, sized to be
+the absolute minimum.
 
 ## Related
 
-- `architecture/yoda-chat.mdx` — full Yoda chat plumbing
-- `operations/2026-05-24-msg-bus-shipped.mdx` — msg-bus that delivers
-  these rewrites to Signal/iMessage
-- Memory: `yoda_truth_doctrine_2026_04_28.md` — why NO_REPLY exists
-  in the first place (truth doctrine — never fabricate)
+- `architecture/yoda-chat.mdx` — the full Yoda chat plumbing
+- `operations/2026-05-24-msg-bus-shipped.mdx` — the msg-bus that
+  delivers operator-facing alerts via iMessage primary
+- Memory: `claude_max_proxy_object_object_2026_05_24.md` (in
+  Claude_Code repo) — the post-mortem, including the four dead ends
+  burned before the proxy-side fix landed.
