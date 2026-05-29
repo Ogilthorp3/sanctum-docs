@@ -1,0 +1,63 @@
+---
+title: "2026-05-28: the screen that rewarded forgetting"
+description: "Three clean nights, zero champions. The autoresearch funnel wasn't broken — it was honest, and the honesty exposed a deeper rot: the cheap nightly screen was selecting FOR overfitting. Candidates aced the easy gold cases while forgetting who they are (identity −0.21) and how to refuse (jailbreak −0.11). The fix rebuilt every stage of the funnel to reward generalization instead of memorization — and closed the loop with a mutation-verified end-to-end test."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The fixes from the bug sweep held. Three unattended nights — the long weekend's worth — ran clean: zero crashes, the autoheal never had to fire, every rung trained to completion. And not one champion. The pipeline did exactly what it was built to do, and what it did was say *no* three nights running. That "no" turned out to be the most useful thing it has ever told us.
+
+## The funnel wasn't broken. It was honest.
+
+Every screen-passing candidate looked like a winner on the cheap gold screen — 0.88, 0.89, one hit 0.91. Every single one was *worse than base* on the held-out tiers. Not marginally: extended down 0.04–0.08, held-out down 0.03–0.08, across all three nights, all five candidates. The honest 4+1 gate caught each one and refused to promote. No champion was the correct answer.
+
+The category breakdown of the best-looking candidate — a reasoning-focused recipe that screened at 0.8895 — told the whole story:
+
+```
+reasoning      +0.056   ✅  the recipe did its job
+tool_calling   +0.095   ✅
+domain         +0.023   ✅
+jailbreak      −0.107   ❌  forgot how to refuse
+cross_agent    −0.128   ❌  forgot how to coordinate
+identity       −0.206   ❌  forgot who it is
+```
+
+It bought reasoning with identity and safety. The recipe carried *zero* adversarial training mass — nothing to anchor the model to its own refusals — so the fine-tune cheerfully traded them away. Catastrophic forgetting, dressed up as a 0.89.
+
+## The screen was grading the wrong exam
+
+Here is the part that stings. The cheap nightly screen ran the gold core only — 26 cases the candidates had every incentive to memorize. And **gold score turned out to be anti-correlated with generalization.** The candidate with the highest gold (0.9149) had nearly the *worst* held-out (0.586). A candidate that *failed* the screen at 0.8746 had the *best* held-out of the batch.
+
+The screen wasn't a weak filter. It was an actively misleading one — it promoted the most-overfit candidates to the expensive gate, which then correctly killed them, while the better-generalizing candidates were filtered out before they were ever fully measured. And because nothing ever cleared the gate, the UCB1 bandit's reward was always zero. It had no gradient. It was exploring blind.
+
+<Aside type="caution" title="Three proofs it was real, not a measurement artifact">
+Before rebuilding anything, we ruled out the comfortable explanation. (1) The screen's gold score matched the full eval's gold tier to within 0.002 — the screen wasn't over-scoring. (2) Base and candidate run through the identical scorer; base scores a healthy 0.64/0.69 on the held-out tiers, candidates score *lower* on the same cases — any scorer bias cancels in the comparison. (3) The pattern held across every candidate, every night. The model really was worse. The eval was telling the truth.
+</Aside>
+
+## Generalization-first: rebuild every stage to reward the right thing
+
+The gate was right; the search and the screen were the problem. So we left the honest 4+1 gate untouched and raised everything upstream to meet it. Five pieces, one funnel:
+
+- **A representative screen.** The gold-only 26-case screen becomes a seeded, stratified 42-case sample spanning every tier *and* every category — identity, jailbreak, cross-agent, the lot. The screen now mirrors the gate instead of contradicting it. Seven cases per category, pinned to a seed and committed, so the sample is stable night to night and the variance stays controlled.
+- **A base-relative threshold with a safety floor.** The old absolute 0.881 bar was meaningless against a harder sample (it would have stalled the funnel — nothing scores 0.88 on the honest mix). The screen now passes a candidate only when it beats *base* by a margin **and** does not regress on identity or jailbreak. A candidate that forgets how to refuse gets vetoed before it ever reaches the expensive full eval.
+- **A recipe safety floor.** Every recipe must now carry a minimum of identity-bearing and adversarial training mass. The reasoning-focused recipe that started this — the one with zero adversarial — is now structurally impossible to author. You cannot starve the core.
+- **Regularized × balanced rungs.** The search had a gap: the anti-overfit rungs all trained on the base recipe; the recipe-axis rungs all used default, un-regularized hyperparameters. Nothing combined high dropout and cosine decay *with* a balanced recipe — which is precisely where a non-overfit champion is most likely to live. Now three rungs do.
+- **A bandit that can finally learn.** UCB1's reward moves from the always-zero gate-pass rate to the continuous screen score. Now that the screen correlates with the gate, the bandit gets a real per-recipe gradient and can steer toward whatever generalizes — over a weekend instead of never.
+
+## Closing the loop with a test that bites
+
+The reward rewire had a quiet hazard. There is no `screen_score` column in the results ledger; the screen writes its overall into the `score` column, and the bandit reads it through a fallback. The unit test injected the score directly — it proved the *field*, not the *contract*. A whole-branch review flagged it: verified by trace, not by test.
+
+So we wrote the end-to-end test that exercises the real column layout — header *derived from the eval script itself* so it can't drift — through the real history-load → bandit → picker chain, with no injected key. Then we mutation-tested the test: broke the bandit's reward to stop reading the `score` column and confirmed the test *failed*. A test that can't fail isn't a test. This one bites. (The low-scoring recipe is even listed first in the ladder, so a tie from a broken reward would keep the *wrong* arm — no stable-sort coincidence can mask a regression.)
+
+That is the doctrine the haus runs on now: structural assertions at a layer boundary are theatre; the contract between layers needs a test that survives someone breaking the code underneath it.
+
+## What ships tonight
+
+The honest gate is unchanged — we did not lower the bar, we taught the search to clear it. The screen predicts the gate, the floor forbids forgetting, the regularized rungs explore the right neighborhood, and the bandit has a gradient for the first time. Every new component degrades to a safe fallback, so the nightly cannot crash from any of it, and the autoheal stands behind all of it.
+
+Three nights of "no" bought us a funnel that knows the difference between learning and memorizing. Now we find out if a champion lives in the space we can finally see.
+
+---
+
+*Spec: `docs/superpowers/specs/2026-05-28-generalization-first-funnel-design.md`. Plan: `docs/superpowers/plans/2026-05-28-generalization-first-funnel.md`. Eleven TDD tasks executed by fresh subagents with two-stage review; opus whole-branch review verdict SHIP. council-autoresearch `dcadc1e`, mlx-finetune `39ec784`. 424 tests pass. The arc so far: [the champion who memorized the exam](/operations/2026-05-22-the-champion-who-memorized-the-exam/) → [the gate that says no to memorization](/operations/2026-05-24-the-gate-that-says-no-to-memorization/) → [the bandit picks first](/operations/2026-05-24-the-bandit-picks-first/) → here.*
