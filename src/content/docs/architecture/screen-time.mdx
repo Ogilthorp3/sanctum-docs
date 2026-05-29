@@ -118,6 +118,20 @@ Every enforcement tick checks: if it's daytime and a device should be unblocked,
 The bridge endpoint `POST /host/:mac/unrules` batch-removes all DNS block rules scoped to a MAC with SSH fallback. One call cleans up 30+ wind-down rules in seconds. The alternative — individual API deletes with per-PID SSH fallback — would take minutes.
 </Aside>
 
+### 4. Closed-Loop Reconciler + Conf-Gen Sentinel
+
+The first three layers handle API failures. They do not handle the case where the API returns 200, the policy lands in Redis, and yet Firewalla's `firemain` quietly fails to translate it into a dnsmasq `policy_N.conf` on disk. That happened on 2026-05-29 at 8 PM. The Apple TV in the living room had a curfew block recorded everywhere except the one place that actually drops DNS packets, and a kid stayed up watching Netflix.
+
+The fix is a fourth layer that treats enforcement as a control loop, not a one-shot command.
+
+Every 30 seconds the **reconciler** walks the intended state and asks the box: for each device that should be in services-mode block, is the corresponding `policy_*.conf` actually present and naming this MAC and a domain we intended to block? The check is tri-state — `True` (blocked), `False` (positively absent), `None` (SSH transport error, treat as unknown and skip). If `False` persists past a 20-minute grace, the reconciler **fails closed**: it escalates the device from services-mode (HomeKit-safe DNS block) to full pause (MAC-level iptables drop, independent of the conf-gen pipeline). HomeKit gets sacrificed; the kid does not stay up.
+
+The **conf-gen sentinel** is the watchdog that catches this class of wedge before the reconciler has to. Every 20 minutes it runs a canary through the bridge: create a short-lived netflix block scoped to a **fresh, locally-administered MAC**, then poll the Firewalla for a `policy_*.conf` referencing that MAC. Two independent guards prevent the false-HEALTHY mode that hid the original incident: the MAC is new each cycle (no stale conf from a prior cycle can possibly match), and the SSH probe uses `find -newermt @<create_ts>` (only confs written after our create timestamp count). If the canary conf doesn't land within 40 seconds, the sentinel restarts `firemain` (cooldown 30 minutes); if the bridge itself is unreachable, it defers to the bridge watchdog rather than restarting firemain blindly.
+
+<Aside type="caution">
+A canary that reuses the same MAC every cycle is worse than no canary. A leftover conf from a prior lying-unrules will satisfy the grep, the sentinel reports HEALTHY, and the wedge ships through. Fresh MAC plus mtime guard is the whole defense — anything less is theatre.
+</Aside>
+
 ### Migration Export
 
 `GET /export` on the bridge (port 1984) dumps the full Firewalla configuration: all hosts, active policies, custom DNS records, and service domain mappings. Combined with the `firewalla-export.sh` and `firewalla-import.sh` scripts, the entire enforcement state can be backed up and restored on a new Firewalla box (hello, Gold Pro) without reconfiguring anything by hand.
