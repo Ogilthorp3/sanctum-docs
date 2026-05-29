@@ -1,0 +1,70 @@
+---
+title: The Castellan
+description: A Rust LaunchDaemon that programs macOS's own memory arbiter — jetsam priority bands plus wired pins — so the kernel itself protects the Temple's kyber when the haus gets crowded. Codename Gollum.
+---
+
+![A pencil-sketch dark-slate composition. In the foreground a hooded keeper — the Castellan — holds a ring of iron keys and a marked ledger before an iron-bound oak strongroom whose lock glows teal. Off to one side, crouched on a parapet in deep shadow, a small Gollum-silhouette watches the strongroom with a single amber halo around its head.](./images/the-castellan.png)
+
+The Temple holds the kyber. The Council reaches for it through five Jedi. But somebody has to keep the building — open its doors, ring its bell, and decide who eats first when the larder runs low. That officer is the **Castellan**.
+
+His launchd label is `com.sanctum.castellan`. His codename — used in the spec, the commits, and the lore — is **Gollum**, because he counts the precious memory all day and assigns it to its rightful keeper. The codename matters. Gollum the character is a warning about the precious: he had it, it consumed him, he could not put it down. The Castellan is the deliberate inversion. He has no authority his death can revoke and no information his death can lose. He was built so the precious cannot consume him.
+
+## Why the haus hired him
+
+A 64 GB Mac Mini hosts the Temple's kyber — Cilghal, the 35-billion-parameter MoE, 21 GB resident at idle and 41 GB at peak under a full 32K-token context. It also hosts an on-call code seat — Codestral 22B, 13 GB when she's serving and effectively zero when she's idle. Plus a QEMU VM, OrbStack containers, and the apps the operator actually uses. The arithmetic doesn't work unless somebody keeps watch.
+
+For four months that watch was a trio — `sanctum-admit`, `sanctum-pressure-valve`, and `ram-sentinel`. They all measured the wrong metric. RSS reported Cilghal as 45 megabytes. They argued with each other. The pressure-valve shed; the admit-controller admitted; the sentinel restarted a desktop app because it had the highest RSS in the table. None of them could see what was actually using the box.
+
+The Castellan was hired to replace all three with one keeper who measures the real thing.
+
+## The metric the kernel actually uses
+
+macOS exposes the truth through `libproc.proc_pid_rusage(RUSAGE_INFO_V6).ri_phys_footprint` — the same number jetsam itself consults when it decides what to terminate. RSS is a lie for any process whose memory lives in GPU or wired pages, which is to say every MLX process. The Castellan reads `phys_footprint` once every two seconds and on every memory-pressure event the kernel signals through libdispatch.
+
+| Process | RSS | `phys_footprint` |
+|---|---|---|
+| Cilghal (sanctum-mlx, 35B-A3B-4bit) | 45 MB | 21 GB current, 41 GB lifetime peak |
+| Codestral (sanctum-mlx-codestral, 22B-4bit) | 17 MB | 13 GB current |
+| QEMU VM (openclaw) | 2.4 GB | 2.4 GB |
+| OrbStack | 1.9 GB | 1.9 GB |
+
+## What he does — and what he does not
+
+He does NOT arbitrate memory. The kernel already has an arbiter — compression plus jetsam priority bands plus wired pages — and it is correct, efficient, and impossible to outperform from user space. The Castellan's job is to **program the kernel's arbiter**: tell it which processes are critical, which are evictable, and which pages to pin. Once that policy is set, the OOM decision lives in the kernel and stays there.
+
+He uses two unprivileged levers:
+
+- **`memorystatus_control`** sets per-PID jetsam priority bands. Cilghal goes to `CRITICAL` (190); Codestral to `IDLE` (band 0, first to die); QEMU to `HOME`; the Castellan himself to `CRITICAL` so the keeper of the Temple cannot be the first thing the kernel kills.
+- **`metal-wired-limit-mb`** at each seat's launch — Cilghal's 18 GB of weights are wired and unswappable; Codestral's 2 GB are wired with the rest pageable, so her pages yield first under pressure.
+
+He then runs a quiet two-second loop: re-measure, consider idle-bootouts of the on-call seat, write a heartbeat that another small process will read in a moment.
+
+## The three doctrines
+
+1. **Kernel-as-arbiter.** He never decides who dies. The kernel does. He only configures policy. The active loop does only what the kernel cannot do declaratively — load, unload, and refuse.
+2. **Static Cilghal peak-reserve.** He always reserves Cilghal's peak (41 GB), not her current 21 GB. Codestral lives only in the slack above that reserve. A code request that would push past the reserve queues, falls through to a cloud upstream, or refuses — never evicts Cilghal.
+3. **Deadman-timed everything.** Every SIGSTOP he sends gets a tombstone file under `/var/run/castellan/stopped/` named for the PID. A companion process — `castellan-deadman`, a separate launchd job — watches his heartbeat at `/var/run/castellan/heartbeat`. If the heartbeat goes stale for more than sixty seconds, the companion SIGCONTs every process the Castellan left stopped and clears the tombstones.
+
+## When the Castellan dies
+
+The protection lives in *kernel state*, not in his RAM. Jetsam bands set by `memorystatus_control` persist until reboot or explicit change. Wired Metal limits persist until the seat process exits. If the Castellan crashes, gets killed, or wedges, the bands hold, the wired pages hold, jetsam continues to shelter Cilghal and shed Codestral correctly without him. `launchd` restarts him on `KeepAlive` and he rebuilds his view from `phys_footprint` on boot. He carries no state worth saving.
+
+Two hard rules make this real. First, the Cathedral's critical path never goes through him — Cilghal does not call him, proxyd's council-mlx route does not call him, and only the optional `council-code` ensure-loaded hook does, and on a non-200 it falls through to the next upstream rather than wedging the request. Second, every SIGSTOP is deadman-timed: a stopped process the Castellan never SIGCONTs is undone within ninety seconds — by the companion — without him.
+
+This is what "military-grade fail-OPEN" means in this haus.
+
+## What he replaced
+
+| Retired daemon | Metric it watched | Where it failed |
+|---|---|---|
+| `sanctum-admit` (port 2189) | RSS plus static capacity budget | RSS-blind to Metal pages — could not see the models it was supposed to gate |
+| `sanctum-pressure-valve` | swap usage | reacted only after swap began — too late to prevent pressure |
+| `ram-sentinel` | top-RSS offender | restarted the wrong process — a desktop app instead of the model actually consuming Metal |
+
+The Castellan inherits port 2189 with a drop-in API surface — `/status`, `/services`, `/load/{svc}`, `/release/{svc}` — plus the new `/ensure-loaded/{svc}` endpoint the proxyd code-seat hook calls. The trio's plists are renamed `.retired-YYYYMMDD` by the cutover script; backups live under `~/.sanctum/backups/castellan-cutover-YYYYMMDD-HHMMSS/`. Rollback is a manual rename and three `launchctl bootstrap` calls.
+
+## Where to read the wiring
+
+The design spec lives in the operator's workspace at `docs/superpowers/specs/2026-05-29-gollum-memory-manager-design.md` and the implementation plan in `docs/superpowers/plans/2026-05-29-gollum-memory-manager.md` — twenty-eight TDD tasks across thirteen phases, brainstormed via the Council and built behind a fresh subagent per task with two-stage review. The crate is `services/sanctum-castellan/` in [`sanctum-rs`](https://github.com/Ogilthorp3/sanctum-rs).
+
+He is quiet on green. When the Cathedral is alive, the Castellan is the reason. *Codename: Gollum.*
