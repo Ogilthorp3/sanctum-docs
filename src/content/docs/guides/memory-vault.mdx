@@ -7,7 +7,7 @@ import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ![The memory vault — where knowledge goes to be preserved, indexed, and occasionally forgotten on purpose](./images/memory-vault-door.png)
 
-The Memory Vault is Sanctum's shared knowledge base, inspired by how human memory works — which is to say, it forgets things on purpose and considers this a feature. It uses a three-layer architecture — working memory, short-term, and long-term — with a daily consolidation process that acts like sleep: distilling raw observations into lasting knowledge.
+The Memory Vault is Sanctum's shared knowledge base, inspired by how human memory works — which is to say, it forgets things on purpose and considers this a feature. It uses a three-tier *temporal* architecture (working / short-term / long-term) sitting on top of a four-system *backend* stack (described below), with a daily consolidation process that acts like sleep: distilling raw observations into lasting knowledge.
 
 At some point during development, we realized we'd built a system that remembers where you left your SSH keys, forgets trivial session data, and dreams at 4 AM. The horror movie writes itself.
 
@@ -23,7 +23,7 @@ Sanctum runs a four-layer memory stack. Each layer does one thing well. Together
 |-------|------|---------|------|
 | **Mem0** | Primary cross-agent semantic memory | [mem0.ai](https://mem0.ai) via sanctum-memory API (port 42069) | **Free** |
 | **Memory Vault** | Git-native versioned source of truth | [sanctum-memory](https://github.com/Ogilthorp3/sanctum-memory) repo | Free |
-| **Neo4j / Graphiti** | Entity relationships & graph queries | Local, port 31416 | Free (self-hosted) |
+| **Neo4j / Graphiti** | Entity relationships & graph queries | Reached via SSH tunnel on local port 31416 (graph runs on the VM, not the host) | Free (self-hosted) |
 | **sanctum-memory** | Legacy cross-LLM bridge (secondary) | sanctum-memory.ai MCP | Connected but secondary |
 
 <Aside type="tip">
@@ -130,7 +130,7 @@ The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory
 3. **Classify** and move to the appropriate long-term directory
 4. **Recompute** importance scores for all active notes
 5. **Expire** notes that have exceeded their TTL
-6. **Push to Mem0** — consolidated knowledge synced to Mem0 for cross-agent access
+6. **Push to Mem0** *(planned — not yet implemented in `consolidate.py` as of 2026-05-29; see [the gap below](#known-gaps))*
 7. **Clean archive** — delete archived notes older than 90 days
 8. **Generate report** in `meta/consolidation-log.md`
 </Steps>
@@ -143,10 +143,12 @@ To prevent bloat, each layer has a maximum note count. Without limits, a system 
 
 | Layer | Max Notes | Action at Cap |
 |-------|-----------|---------------|
-| Inbox | 300 | Emergency consolidation |
-| Knowledge | 1000 | Merge related notes |
-| Events | 500 | Summarize old episodes |
-| Procedures | 200 | Merge similar runbooks |
+| Inbox | 300 | Bounded archive-eviction, ≤50/run |
+| Knowledge | 1000 | Bounded archive-eviction, ≤20/run |
+| Events | 500 | Bounded archive-eviction, ≤100/run |
+| Procedures | 200 | Bounded archive-eviction, ≤10/run |
+
+Eviction sorts candidates by `(importance ascending, created ascending)` and skips anything with `importance > 0.8` — permanent knowledge survives cap pressure. Each run is rate-limited so a layer at 6× cap converges over many nightly cycles rather than collapsing in one massacre. Archived notes are retained for 90 days via `ARCHIVE_RETAIN_DAYS` before deletion — eviction is reversible during that window.
 
 ## MCP Tools (8 total)
 
@@ -191,7 +193,7 @@ Mem0 is the **primary cross-agent memory layer**, accessed via sanctum-memory AP
 
 | Tool | Vault Access | Mem0 Access |
 |------|-------------|-------------|
-| Claude Code | MCP stdio (port 42069) | Via sanctum-memory API |
+| Claude Code | MCP via the `sanctum-memory-vault` server on `localhost:42069` | Via sanctum-memory API |
 | Gemini CLI | MCP stdio | Via sanctum-memory API |
 | OpenClaw agents | SSH skill (`vault.sh`) | Via API |
 | Sanctum automations | GitHub tools | Direct REST API (port 42069) |
@@ -200,6 +202,13 @@ Mem0 is the **primary cross-agent memory layer**, accessed via sanctum-memory AP
 <Aside type="tip">
   Opening the memory directory in Obsidian gives you a graph view of your haus's knowledge. The wikilinks render as connections. It's beautiful, informative, and a little like reading someone's diary — except the someone is your haus infrastructure.
 </Aside>
+
+## Known Gaps
+
+The doc above describes the system as it is meant to be. Two pieces are not there yet.
+
+- **Mem0 push during consolidation (step 6)** — the consolidator currently performs steps 1–5, 7, and 8; step 6 is documented intent, not running code. Until it ships, Mem0 is populated by direct agent writes, not by nightly distillation of the vault. Surfaced honestly here so nobody assumes a sync that is not happening.
+- **Procedures layer is empty.** The directory exists and is wired into the cap + consolidation logic, but zero notes have been written to it. Procedural memory (runbooks, how-tos) is still living in `sanctum-docs/operations/` and individual repo READMEs. Either the layer earns its keep or it should be retired from the design.
 
 ## Anti-Bloat Rules
 
