@@ -106,6 +106,26 @@ Every row in that table represents a class of problem that existed, was measured
 The 51 GB of stale adapters were 11 directories from previous training experiments. Only 2 are active (Qwen V3 production + Gemma 4 candidate). The rest were archived or deleted. Your SSD thanks you.
 </Aside>
 
+## Container Doctrine
+
+Most of Sanctum runs natively — Rust binaries, Python services, Node sidecars, all under launchd. When we do reach for a container, it is for software we did not write (Home Assistant, Outline, Postgres, Redis) and which we cannot meaningfully shrink. Those upstream images are 2.67 GB and 1.23 GB respectively, and they stay that way.
+
+For our own containers the default is **Chainguard `wolfi-base` plus a multi-stage build**. Build the artifact in a stage with the full toolchain, then copy just the binary and its runtime deps into a `wolfi-base` final stage. The popular guidance — `node:22-slim` → `node:22-alpine` → `gcr.io/distroless/nodejs22-debian12` — is the right direction, but it stops one tier short. `wolfi-base` is built rolling with Wolfi packages, ships with `glibc` (not `musl`, no surprise `libpython` symbol mismatches), and carries a smaller CVE surface than distroless because the apk package graph is curated for image-only use.
+
+| Layer | Default |
+|-------|---------|
+| **Build stage** | `cgr.dev/chainguard/wolfi-base:latest` + `apk add --no-cache <toolchain>` |
+| **Runtime stage** | `cgr.dev/chainguard/wolfi-base:latest` + only the runtime libs |
+| **`.dockerignore`** | Required — never copy `node_modules`, `__pycache__`, `.venv`, tests, dev configs |
+| **User** | `useradd -u 1000 -r appuser` and `USER appuser` — never root |
+| **Healthcheck** | One process check; do not curl an internal HTTP endpoint that depends on the network stack being up |
+
+Shannon (`~/Projects/shannon/Dockerfile`) is the canonical precedent in this workspace — wolfi-base builder and runtime, multi-stage, no apt-cache leftovers. Use it as the reference when adding any new custom container.
+
+<Aside type="caution">
+The trade-off is real: native modules with `glibc` symbol requirements (Pillow, libsndfile, certain `node-gyp` builds) need a runtime stage that installs the matching `wolfi-base` packages, not just the binary. Test before claiming a build is finished — a container that runs fine in CI and then segfaults at first inference on production is the failure mode the article in the inbox didn't cover.
+</Aside>
+
 ## Cloud Proxy Hardening
 
 The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and OpenRouter. It exists because giving six AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
