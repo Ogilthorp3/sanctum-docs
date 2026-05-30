@@ -17,20 +17,17 @@ At some point during development, we realized we'd built a system that remembers
 
 ## Memory Stack
 
-Sanctum runs a four-layer memory stack. Each layer does one thing well. Together they give the haus a memory system more sophisticated than most startups' data architecture.
+Sanctum runs a two-layer memory stack today, with a third layer (entity graph) running on the VM. The doc once described a four-layer design that included a [mem0.ai](https://mem0.ai) cloud tier; that integration was never wired up, and the **privacy posture** decided on 2026-05-16 (vault GitHub mirror archived, "the haus does not sync its thoughts to the cloud") makes wiring it now an explicit policy violation. Honesty over aspiration.
 
 | Layer | Role | Backend | Cost |
 |-------|------|---------|------|
-| **Mem0** | Primary cross-agent semantic memory | [mem0.ai](https://mem0.ai) via sanctum-memory API (port 42069) | **Free** |
-| **Memory Vault** | Git-native versioned source of truth | Local-only git repo at `~/.sanctum/memory/` (GitHub mirror archived 2026-05-16 as part of the privacy scrub; the haus does not sync its thoughts to the cloud) | Free |
+| **Memory Vault** | Git-native versioned source of truth, primary cross-agent semantic memory | Local-only git repo at `~/.sanctum/memory/` (GitHub mirror archived 2026-05-16 as part of the privacy scrub; the haus does not sync its thoughts to the cloud) | Free |
 | **Neo4j / Graphiti** | Entity relationships & graph queries | Reached via SSH tunnel on local port 31416 (graph runs on the VM, not the host) | Free (self-hosted) |
-| **sanctum-memory** | Legacy cross-LLM bridge (secondary) | sanctum-memory.ai MCP | Connected but secondary |
+| **`sanctum-memory-vault` MCP** | Tool surface — how Claude Code / Gemini CLI talk to the vault | Local binary on `localhost:42069`, serving the 8 `memory_*` MCP tools below | Free |
 
 <Aside type="tip">
-  **Mem0 is the primary memory layer.** It's free, supports structured filtering (by user, agent, project, metadata), and is served locally via sanctum-memory on port 42069. Project: `sanctum-memory`, user: `Ogilthorp3`. Every recipe that needs context about the haus queries Mem0 first.
+  **The vault is the source of truth.** All cross-agent semantic memory lives in `~/.sanctum/memory/` and is served by `sanctum-memory-vault` on `localhost:42069`. When the vault and the graph disagree, someone has a long night ahead of them. This has happened twice.
 </Aside>
-
-When Mem0 and the vault disagree, the vault wins — because Git has receipts. When the vault and the graph disagree, someone has a long night ahead of them. This has happened twice.
 
 ## Architecture
 
@@ -39,15 +36,11 @@ When Mem0 and the vault disagree, the vault wins — because Git has receipts. W
 │  LAYER 1: WORKING MEMORY (per-session, ephemeral)   │
 │  Agent's context window. Dies when session ends.    │
 ├─────────────────────────────────────────────────────┤
-│  LAYER 2: MEM0 (cross-agent, persistent, free)      │
-│  Semantic search + structured queries via local API.│
-│  project: sanctum-memory / user: Ogilthorp3         │
-├─────────────────────────────────────────────────────┤
-│  LAYER 3: SHORT-TERM MEMORY (inbox/, days-weeks)    │
+│  LAYER 2: SHORT-TERM MEMORY (inbox/, days-weeks)    │
 │  inbox/{agent}/ — raw observations, session notes   │
 │  TTL: 7-30 days. Consolidated or discarded daily.   │
 ├─────────────────────────────────────────────────────┤
-│  LAYER 4: LONG-TERM MEMORY (consolidated, permanent)│
+│  LAYER 3: LONG-TERM MEMORY (consolidated, permanent)│
 │  knowledge/{topic}/ — semantic facts (timeless)     │
 │  events/YYYY/MM/    — significant episodes          │
 │  procedures/        — how-to, runbooks              │
@@ -130,7 +123,7 @@ The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory
 3. **Classify** and move to the appropriate long-term directory
 4. **Recompute** importance scores for all active notes
 5. **Expire** notes that have exceeded their TTL
-6. **Push to Mem0** *(planned — not yet implemented in `consolidate.py` as of 2026-05-29; see [the gap below](#known-gaps))*
+6. **Enforce caps** via bounded archive-eviction (see *Hard Caps* below)
 7. **Clean archive** — delete archived notes older than 90 days
 8. **Generate report** in `meta/consolidation-log.md`
 </Steps>
@@ -163,41 +156,22 @@ Eviction sorts candidates by `(importance ascending, created ascending)` and ski
 | `memory_consolidate` | Trigger consolidation (dry-run by default) |
 | `memory_health` | Vault health metrics dashboard |
 
-## Mem0 Integration
+## On Mem0 (historical aside)
 
-Mem0 is the **primary cross-agent memory layer**, accessed via sanctum-memory API (port 42069). It's free, and every recipe and automation that needs Sanctum context queries it first.
+Earlier versions of this doc described a [mem0.ai](https://mem0.ai) cloud tier as the primary cross-agent memory layer, with a planned set of `MEM0_*` cloud tools and a "push to Mem0" step in nightly consolidation. **None of that integration was ever wired up** — there's no mem0 client in the repo, no API key, and no `mem0.ai` traffic from the host.
 
-| Setting | Value |
-|---------|-------|
-| Provider | [mem0.ai](https://mem0.ai) |
-| Access | sanctum-memory REST API (port 42069) |
-| Project | `sanctum-memory` |
-| User ID | `Ogilthorp3` |
-| Cost | Free |
-
-### Mem0 Tools (via sanctum-memory API)
-
-| Tool | Description |
-|------|-------------|
-| `MEM0_ADD_NEW_MEMORY_RECORDS` | Store new memories with user/project scope |
-| `MEM0_PERFORM_SEMANTIC_SEARCH_ON_MEMORIES` | Natural language search across all memories |
-| `MEM0_RETRIEVE_MEMORY_LIST` | List memories with pagination and filters |
-| `MEM0_SEARCH_MEMORIES_WITH_QUERY_FILTERS` | Structured search with metadata filters |
-| `MEM0_UPDATE_MEMORY_DETAILS_BY_ID` | Update existing memory content |
-
-<Aside type="note">
-  The consolidation engine (step 6) pushes summarized knowledge to Mem0 after each nightly run. This keeps Mem0 current without requiring every agent to write to both systems. The vault is the source of truth. Mem0 is the fast lookup.
-</Aside>
+When the privacy posture was decided on 2026-05-16 (vault GitHub mirror archived, "the haus does not sync its thoughts to the cloud"), Mem0-as-cloud-tier became incompatible with explicit policy. The architecture quietly converged on the local-only model documented above; the doc just hadn't caught up. This section exists so anyone reading old commit messages or older drafts knows what happened: the cloud tier is **not coming back** absent a deliberate privacy-posture reversal.
 
 ## Tool Integration
 
-| Tool | Vault Access | Mem0 Access |
-|------|-------------|-------------|
-| Claude Code | MCP via the `sanctum-memory-vault` server on `localhost:42069` | Via sanctum-memory API |
-| Gemini CLI | MCP stdio | Via sanctum-memory API |
-| OpenClaw agents | SSH skill (`vault.sh`) | Via API |
-| Sanctum automations | GitHub tools | Direct REST API (port 42069) |
-| Obsidian | File system (`~/.sanctum/memory/`) | N/A |
+| Tool | Vault Access |
+|------|-------------|
+| Claude Code | MCP via the `sanctum-memory-vault` server on `localhost:42069` |
+| Gemini CLI | MCP stdio |
+| OpenClaw agents | SSH skill (`vault.sh`) |
+| Sanctum automations | GitHub tools |
+| Obsidian | File system (`~/.sanctum/memory/`) |
+| Holocron | `HausBrainPanel` reads `/vault/brain` from Force Flow + subscribes to `/vault/stream` WebSocket for real-time new-note particles |
 
 <Aside type="tip">
   Opening the memory directory in Obsidian gives you a graph view of your haus's knowledge. The wikilinks render as connections. It's beautiful, informative, and a little like reading someone's diary — except the someone is your haus infrastructure.
@@ -205,11 +179,11 @@ Mem0 is the **primary cross-agent memory layer**, accessed via sanctum-memory AP
 
 ## Known Gaps
 
-The doc above describes the system as it is meant to be. One piece is not there yet.
-
-- **Mem0 push during consolidation (step 6)** — the consolidator currently performs steps 1–5, 7, and 8; step 6 is documented intent, not running code. Until it ships, Mem0 is populated by direct agent writes, not by nightly distillation of the vault. Surfaced honestly here so nobody assumes a sync that is not happening.
+After tonight's reconciliation pass (2026-05-29), there are **no open implementation gaps**. The vault behaves exactly as documented above: short-term inbox + long-term knowledge/events/procedures, nightly consolidation with bounded archive-eviction, 90-day reversibility, MCP tool surface on `localhost:42069`.
 
 The procedures layer was empty for months and is now seeded — 4 high-signal runbooks grounded in recent incidents live under `procedures/{troubleshooting,maintenance,automation}/`. The layer grows organically from there as incidents teach the haus new procedures worth remembering.
+
+The only architectural decision left open is whether to ever re-introduce a cloud-sync tier (see *On Mem0* above). That is a privacy-posture decision, not an engineering gap.
 
 ## Anti-Bloat Rules
 
