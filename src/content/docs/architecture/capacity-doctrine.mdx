@@ -18,10 +18,10 @@ The Capacity Doctrine is the immune-system answer: refuse bad loads up front ins
     Every heavyweight service has a `ram_budget_mb` number in `~/.sanctum/capacity.yaml`. No budget, no admission. The number is measured with `vmmap --summary` at peak inference, then rounded up. A false refuse is strictly cheaper than an OOM freeze.
   </Card>
   <Card title="Rule 2: Admission controller gates every load" icon="approve-check">
-    `sanctum-admit` on port 2189 computes `free = pool − Σ(loaded.budget)` from a live `ps` scan. Loading a service is admitted only if `new.budget ≤ free` AND none of its `exclusive_with` neighbours are currently loaded. Refusals return HTTP 409 with the blocking service name and the remedy command.
+    `castellan` on port 2189 computes `free = pool − Σ(loaded.peak_reserve)` from `phys_footprint` (the same metric jetsam uses), not RSS. Loading a service is admitted only if `new.budget ≤ free` AND none of its `exclusive_with` neighbours are currently loaded. Refusals return HTTP 409 with the blocking service name and the remedy command.
   </Card>
   <Card title="Rule 3: Nothing critical gets suspended" icon="shield">
-    qemu, sanctumd, sanctum-mlx, signal-cli, WindowServer are in the sentinel safelist. A watcher loop in `sanctum-admit` scans `ps stat` every ten seconds; any critical process in state `T` gets `kill -CONT` within a single interval, plus a notification to the dashboard and (if severe enough) Signal.
+    qemu, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
   </Card>
 </CardGrid>
 
@@ -56,25 +56,26 @@ Exclusion is symmetric and enforced at admission. The higher-priority service wi
 Exclusion isn't about RAM arithmetic alone — two 20 GB services could technically coexist on a 48 GB pool. It's about Metal allocation churn, KV-cache fragmentation, and compressor thrashing. Some services just don't play well together, and the doctrine lets us say so explicitly rather than discover it by catastrophic failure.
 </Aside>
 
-## Three Layers Of Defense
+## Four Layers Of Defense
 
 | Layer | Purpose | When |
 |---|---|---|
+| **Kernel-as-arbiter** | Program jetsam priority bands per-PID so the kernel itself shelters Cilghal and sheds Codestral | Every 2s via `memorystatus_control`; birth-floor via plist `JetsamPriority` |
 | **Admission** | Refuse loads that exceed headroom | Before anything allocates |
-| **Monitor** | Catch half-loaded states and signal-stopped processes | Every 10s (state T), every 60s (inference probe) |
-| **Recovery** | Unstick what slipped through | `kill -CONT` on T; `unload_cmd + load_cmd` after 3 probe failures |
+| **Monitor** | Catch half-loaded states and signal-stopped processes | Every 2s tick; every 60s inference probe |
+| **Recovery** | Unstick what slipped through | `kill -CONT` on T; `unload_cmd + load_cmd` after 3 probe failures; deadman SIGCONT if the keeper himself dies |
 
-The layers are independent. Admission control alone would miss a runaway allocation that grew after load. Monitoring alone would miss the load that never should have started. Recovery alone is the old watchdog — it reacts too late. Together they form a control loop where every pathway back to a known-good state is explicit.
+The layers are independent. The kernel arbitration alone would miss admission cases where everything fits but the wrong thing got loaded. Admission alone would miss a runaway allocation that grew after load. Monitoring alone would miss the load that never should have started. Recovery alone is the old watchdog — it reacts too late. Together they form a control loop where every pathway back to a known-good state is explicit. The Castellan implements all four — see [The Castellan](./the-castellan.mdx) for the daemon's anatomy.
 
 ## The CLI Is The Contract
 
 The canonical way to load a heavy service is never `lms load …` or `launchctl kickstart …` directly. It is:
 
 ```sh
-sanctum-admit load <service-name>
+castellan load <service-name>
 ```
 
-The CLI posts to `/admit`, and only if the HTTP response is 200 does it execute the service's `load_cmd`. A refused load exits with code 2 and the remedy printed to stderr. Direct calls bypass admission — they're permitted but discouraged, and the sentinel will still catch obvious misuse downstream.
+The CLI posts to `/load/{svc}`, and only if the HTTP response is 200/202 does the daemon execute the service's `load_cmd`. A refused load exits non-zero with the remedy printed to stderr. Direct calls bypass admission — they're permitted but discouraged, and the kernel-band layer will still steer jetsam toward the right victim if pressure crests.
 
 ## Host Budget Math
 
@@ -82,11 +83,12 @@ Each host declares three numbers. The pool is derived:
 
 ```yaml
 hosts:
-  manoir:
-    ram_physical_mb: 65536    # Mac Mini M4 Pro, 64 GiB unified
-    ram_reserved_mb: 12288    # macOS + WindowServer + user apps
-    ram_safety_mb: 4096       # hard floor — never fill below
-    # pool_mb = 65536 − 12288 − 4096 = 49152 MB
+  cabane:                        # slug for the home-server role
+    hostname: manoir.lan         # the actual machine on that slug
+    ram_physical_mb: 65536       # Mac Mini M4 Pro, 64 GiB unified
+    ram_reserved_mb: 10240       # macOS + WindowServer + user apps
+    ram_safety_mb: 4096          # hard floor — never fill below
+    # pool_mb = 65536 − 10240 − 4096 = 51200 MB
 ```
 
 The safety margin is non-negotiable. We don't allocate into it even if admission math says we could — it's the buffer that keeps the kernel's own memory-pressure machinery working. Hit the safety margin and you're in the territory where jetsam starts SIGSTOPping random processes, which is where the 2026-04-24 incident came from.
@@ -101,7 +103,8 @@ The system no longer discovers the ceiling by hitting it.
 
 ## See Also
 
-- `sanctum-admit` crate: `~/Projects/sanctum-rs/services/sanctum-admit/`
+- [The Castellan](./the-castellan.mdx) — the in-haus keeper that implements this doctrine plus the kernel-as-arbiter layer
+- `sanctum-castellan` crate: `~/Projects/sanctum-rs/services/sanctum-castellan/`
 - Capacity config: `~/.sanctum/capacity.yaml`
-- Sentinel log: `~/.openclaw/logs/sanctum-admit-sentinel.log`
+- Castellan log: `/var/log/sanctum/castellan.log` (system LaunchDaemon)
 - Chaos soak test: `~/Projects/openclaw-skills/chaos-forge/scenarios/memory-pressure-soak.sh`
