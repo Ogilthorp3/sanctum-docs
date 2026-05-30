@@ -1,0 +1,64 @@
+---
+title: Sanctum Firewalla
+description: The Rust port of the Node Firewalla bridge — HTTP + SSH owned by Rust, the encipher SDK isolated in a tiny Node sidecar Rust drives over line-protocol JSON.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+For three years the haus's screen-time enforcement leaned on a 1,361-line Node.js bridge — `~/.openclaw/firewalla-bridge.js` — that wrapped Firewalla's encipher WebSocket SDK and exposed an HTTP surface on port 1984. It worked, defensively (96 try/catch/retry occurrences in 1.3k LOC), but two production incidents in 2026-05 — the bridge-500 socket-stale episode and the 2026-05-30 partial-pause Connection-Reset that left Albert's Apple TV reachable for 2.5 hours past curfew — exposed the cost of having that much load-bearing logic in single-process JavaScript with zero test coverage. The Rust port lives in the `sanctum-firewalla` crate of the `sanctum-rs` workspace and ships behind a feature branch.
+
+## Why not "just rewrite it in Rust"
+
+The Firewalla encipher SDK is JavaScript-only, undocumented at the protocol level, and reverse-engineering its WebSocket handshake into a Rust crate is a research project of its own. The realistic shape is therefore **Rust HTTP+SSH bridge with a Node sidecar for the SDK**: Rust owns ~95% of the logic (HTTP serving, bearer auth, SSH executor, discovery, persistent state, metrics, retry policy, request multiplexing), Node owns the ~5% that has to touch the SDK (a ~190-LOC sidecar process Rust spawns + drives over line-protocol JSON on stdin/stdout). The wire contract is in `services/sanctum-firewalla/docs/SIDECAR_IPC.md` — replaceable: when a Rust crate for encipher appears, the sidecar gets deleted and the `sdk` module dispatches calls directly.
+
+## The 24-endpoint contract
+
+The Rust bridge is **byte-compatible** with the Node bridge on every endpoint screen-time and the sentinels call. The contract lives at `services/sanctum-firewalla/docs/API_CONTRACT.md` and is the load-bearing spec for the cutover. Highlights:
+
+- `/health` and `/ping` are publicly accessible; everything else requires bearer auth (`Authorization: Bearer <token>`, token resolved at boot from `$FIREWALLA_BRIDGE_TOKEN` env then macOS keychain).
+- 24 endpoints total: host inventory + state, policy management, MAC pause, feature toggles, DNS, alarms, stats, flows, speedtest, export.
+- One critical *intentional* contract change versus the Node bridge: **`Policy already exists` returns HTTP 200 with `{success: true, alreadyExists: true}` instead of HTTP 500**. The Node bridge treated Firewalla's "this rule is already in place" reply as an error; every caller was already retry-looping over it; ~355 false-error log lines per day were the cost. The Rust port normalises this to a success-with-flag.
+
+## The five-module decomposition (and the swarm that built it)
+
+| Module | Owns | Tests |
+|---|---|---|
+| `auth` | bearer-token resolution (env → keychain), `require_bearer` axum middleware with constant-time compare | 7 |
+| `http` | axum Router with all 24 endpoints, parameter extractors, success envelope, `IntoResponse` mapping | 7 + 4 full-stack |
+| `sdk` | spawns + supervises the Node sidecar, multiplexes requests by `request_id`, restarts on 3 `sdk_disconnect` within 60s | 2 (incl. the multiplexer-with-out-of-order-responses test) |
+| `ssh` | russh executor (single persistent session), iptables-rule builder, tri-state dnsmasq conf inspector | 15 (incl. the 2026-05-18 `--RESIDUAL--` sentinel preserved) |
+| `discovery` | TCP probe + mDNS + topology cache + rediscover state machine, populates `/health` | 6 |
+| `state` | `AppState` + atomic-rename persistence at `~/.openclaw/firewalla/state.json` + the 3-strike supervisor signal | 10 |
+
+The five modules were built in parallel by five isolated-worktree sub-agents in a single working session — apple-way + military-grade: each agent had `API_CONTRACT.md` + `SIDECAR_IPC.md` + its own module skeleton + tight definition-of-done; collisions were impossible (each owned one file), and the integration glue (lib.rs re-exports, sidecar handle wiring) was the only sequential work left for the integrator. 47 lib tests + 14 integration tests, zero ignored.
+
+<Aside type="tip">
+The full-stack tests use a deterministic sidecar mock at `services/sanctum-firewalla/sidecar/firewalla-sdk-sidecar-mock.js` — canned responses keyed by SDK `item`. The 2026-05-30 canary (`policy:create` → `policy_already_exists` → HTTP 200 + `alreadyExists:true`) runs at *three* layers: pure `IntoResponse`, structural assertion, and full router-through-mock-sidecar end-to-end. Any future regression at any layer trips the test.
+</Aside>
+
+## Resilience contract
+
+Every endpoint upholds the same four guards:
+
+1. **Discovery** — on SDK init failure, the bridge re-discovers Firewalla IP via topology cache → mDNS service browse → mDNS hostnames → TCP probe of common gateway IPs (`192.168.1.1`, `192.168.2.1`).
+2. **SSH fallback** — every `policy:delete` and `policy:create` tries the SDK path first, then SSH iptables fallback if the SDK returns non-success. Mirrors the Node bridge's ladder exactly.
+3. **SDK socket supervision** — the `state` module counts consecutive `sdk_disconnect` events; the `sdk` module's supervisor restarts the sidecar process after 3 within 60s.
+4. **Bounded timeouts** — 12s outer on SDK calls, 8s on SSH commands. Exceeding either returns 504, not a hang.
+
+## The cutover (Phase 4)
+
+Where the port stands on the day of writing:
+
+| Step | State |
+|---|---|
+| 1. Sidecar mock + full-stack tests | ✅ shipped |
+| 2. Shadow run — Rust on `:1985`, Node on `:1984`, screen-time smoke harness diffs responses | ⏸ operator-gated |
+| 3. Swap — Rust takes `:1984`, Node demoted to `:1985` as the fall-back | ⏸ pending step 2 |
+| 4. Seven-day soak; retire the Node bridge on clean operation | ⏸ pending step 3 |
+
+The live `~/.openclaw/firewalla-bridge.js` is untouched and stays so until step 3.
+
+## Versioning
+
+- **v0.1.0** — initial port. Endpoint-identical to Node bridge except the `Policy already exists` normalisation.
+- **v1.0.0** — Node bridge retired.

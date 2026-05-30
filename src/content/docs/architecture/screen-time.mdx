@@ -132,6 +132,18 @@ The **conf-gen sentinel** is the watchdog that catches this class of wedge befor
 A canary that reuses the same MAC every cycle is worse than no canary. A leftover conf from a prior lying-unrules will satisfy the grep, the sentinel reports HEALTHY, and the wedge ships through. Fresh MAC plus mtime guard is the whole defense — anything less is theatre.
 </Aside>
 
+### 5. The 2026-05-30 hardening pass
+
+Layer 4 fired correctly the night after it shipped — and then failed in a way only a real curfew could expose. The fail-closed escalation tried to pause Albert's Apple TV's three iCloud-Private-Address MACs at 21:23:59; two succeeded, one got `Connection reset by peer`, and the reconciler set its `escalated=True` flag *unconditionally* — never retrying the failed MAC. The Apple TV's MAC rotation landed on the unpaused address. The kid watched Netflix for 2.5 hours. Five symmetric gaps closed in the postmortem, all of them representative of a class:
+
+- **Partial success ≠ full success.** The reconciler now only marks `escalated=True` when *every* MAC in the device group pauses; on partial failure it logs `FAIL-CLOSED PARTIAL`, sends a critical alert, and keeps the flag `False` so the next tick re-attempts the failed MACs.
+- **Observation must see every blocking path.** Services-mode observation was DNS-conf-only — a MAC that was correctly paused (via the iptables fall-back) kept reporting `observed=False`, generating endless false-drift alerts. Now `acl=False` counts as `observed_blocked=True` *in addition* to conf-present. The original anti-overpause guard still holds — `acl=True` still doesn't manufacture drift on a DNS-blocked HomeKit hub, only the conf does.
+- **Drift state persists across restarts.** `_drift_state` used to be in-memory only, so a force-flow restart mid-curfew reset the grace timer to zero, granting another 20 minutes before fail-closed could re-fire. Now persisted at `~/.sanctum/force-flow/drift_state.json` with atomic write; the timer resumes where it left off.
+- **Wake-verify retries per MAC.** The morning safety-net `wake (verify)` used to lock out the whole device for the day after one retry. Now keyed per MAC: failed MACs keep retrying every tick until they succeed or the day rolls over.
+- **Unknown devices joining mid-curfew get auto-paused.** Per operator decision the same week: if an unknown MAC joins the network during an active child curfew, the bridge auto-pauses it (iptables MAC drop, payload-agnostic — survives Private Relay), tracked with `auto_paused_curfew=True`, and auto-unpaused at wake. A friend who slept over is online at 07:00 with zero operator action; a curfew-bypass attempt via a new device is closed.
+
+The corresponding runbook lives in the vault at `~/.sanctum/memory/procedures/troubleshooting/firewalla-confgen-wedge.md` — including the iCloud Private Address multi-MAC trap that was the *reason* a single partial-pause failure was lethal. The Rust port of the bridge (see [Sanctum Firewalla](/architecture/sanctum-firewalla/)) closes the upstream class of bug by making the `Connection reset by peer` retry behaviour first-class instead of best-effort.
+
 ### Migration Export
 
 `GET /export` on the bridge (port 1984) dumps the full Firewalla configuration: all hosts, active policies, custom DNS records, and service domain mappings. Combined with the `firewalla-export.sh` and `firewalla-import.sh` scripts, the entire enforcement state can be backed up and restored on a new Firewalla box (hello, Gold Pro) without reconfiguring anything by hand.

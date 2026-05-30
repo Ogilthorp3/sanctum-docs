@@ -106,6 +106,7 @@ export default defineConfig({
 						{ label: '(Neuro)diversity is Paramount', slug: 'architecture/neurodiversity-doctrine' },
 						{ label: 'Chitti — The Fascial Layer', slug: 'architecture/chitti' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
+							{ label: 'Sanctum Firewalla', slug: 'architecture/sanctum-firewalla' },
 						{ label: 'Council Router', slug: 'architecture/council-router' },
 						{ label: 'Agents Architecture', slug: 'architecture/agents' },
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
