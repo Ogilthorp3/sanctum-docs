@@ -32,10 +32,12 @@ macOS exposes the truth through `libproc.proc_pid_rusage(RUSAGE_INFO_V6).ri_phys
 
 He does NOT arbitrate memory. The kernel already has an arbiter — compression plus jetsam priority bands plus wired pages — and it is correct, efficient, and impossible to outperform from user space. The Castellan's job is to **program the kernel's arbiter**: tell it which processes are critical, which are evictable, and which pages to pin. Once that policy is set, the OOM decision lives in the kernel and stays there.
 
-He uses two unprivileged levers:
+He runs as a root LaunchDaemon — `/Library/LaunchDaemons/com.sanctum.castellan.plist` — because programmatic cross-process jetsam adjustment is a privileged operation on macOS. From that vantage he uses two kernel-mediated levers:
 
 - **`memorystatus_control`** sets per-PID jetsam priority bands. Cilghal goes to `CRITICAL` (190); Codestral to `IDLE` (band 0, first to die); QEMU to `HOME`; the Castellan himself to `CRITICAL` so the keeper of the Temple cannot be the first thing the kernel kills.
 - **`metal-wired-limit-mb`** at each seat's launch — Cilghal's 18 GB of weights are wired and unswappable; Codestral's 2 GB are wired with the rest pageable, so her pages yield first under pressure.
+
+Each seat's plist also carries a `JetsamPriority` integer — Cilghal `190`, Codestral `0` — so the band is correct from the moment `launchd` spawns the process, before the Castellan's first loop tick. The active loop re-asserts it every two seconds; the plist value is the birth floor.
 
 He then runs a quiet two-second loop: re-measure, consider idle-bootouts of the on-call seat, write a heartbeat that another small process will read in a moment.
 
@@ -43,7 +45,7 @@ He then runs a quiet two-second loop: re-measure, consider idle-bootouts of the 
 
 1. **Kernel-as-arbiter.** He never decides who dies. The kernel does. He only configures policy. The active loop does only what the kernel cannot do declaratively — load, unload, and refuse.
 2. **Static Cilghal peak-reserve.** He always reserves Cilghal's peak (41 GB), not her current 21 GB. Codestral lives only in the slack above that reserve. A code request that would push past the reserve queues, falls through to a cloud upstream, or refuses — never evicts Cilghal.
-3. **Deadman-timed everything.** Every SIGSTOP he sends gets a tombstone file under `/var/run/castellan/stopped/` named for the PID. A companion process — `castellan-deadman`, a separate launchd job — watches his heartbeat at `/var/run/castellan/heartbeat`. If the heartbeat goes stale for more than sixty seconds, the companion SIGCONTs every process the Castellan left stopped and clears the tombstones.
+3. **Deadman-timed everything.** Every SIGSTOP he sends gets a tombstone file under `/Library/Application Support/Sanctum/Castellan/run/stopped/` named for the PID. A companion process — `castellan-deadman`, a separate root LaunchDaemon — watches his heartbeat at `/Library/Application Support/Sanctum/Castellan/run/heartbeat`. If the heartbeat goes stale for more than sixty seconds, the companion SIGCONTs every process the Castellan left stopped and clears the tombstones.
 
 ## When the Castellan dies
 
@@ -61,7 +63,7 @@ This is what "military-grade fail-OPEN" means in this haus.
 | `sanctum-pressure-valve` | swap usage | reacted only after swap began — too late to prevent pressure |
 | `ram-sentinel` | top-RSS offender | restarted the wrong process — a desktop app instead of the model actually consuming Metal |
 
-The Castellan inherits port 2189 with a drop-in API surface — `/status`, `/services`, `/load/{svc}`, `/release/{svc}` — plus the new `/ensure-loaded/{svc}` endpoint the proxyd code-seat hook calls. The trio's plists are renamed `.retired-YYYYMMDD` by the cutover script; backups live under `~/.sanctum/backups/castellan-cutover-YYYYMMDD-HHMMSS/`. Rollback is a manual rename and three `launchctl bootstrap` calls.
+The Castellan inherits port 2189 with a drop-in API surface — `/status`, `/services`, `/load/{svc}`, `/release/{svc}` — plus the new `/ensure-loaded/{svc}` endpoint the proxyd code-seat hook calls. The trio's user-domain plists are renamed `.retired-YYYYMMDD` by the cutover script; backups live under `~/.sanctum/backups/castellan-cutover-YYYYMMDD-HHMMSS/`. Rollback is a `sudo launchctl bootout` of the system pair, a manual rename of the trio's `.retired-YYYYMMDD` files, and three `launchctl bootstrap` calls back into the user domain.
 
 ## Where to read the wiring
 
