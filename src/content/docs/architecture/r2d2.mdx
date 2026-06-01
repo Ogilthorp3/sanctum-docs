@@ -37,7 +37,7 @@ Every detection — whether from a deterministic detector or from Hermes — pas
 | 7 | **Recipe-id validation** | If Hermes proposes a `recipe_id` not in the registry, the decision is coerced to `escalate` and the hallucination is audit-logged. |
 | 8 | **Cycle bookends** | Each cycle emits `cycle_start` + `cycle_end` rows with a UUID and `duration_s`. Any 10-minute sweep is bisectable without ambiguity. |
 | 9 | **Chitti heartbeat** | Cycle end POSTs to chitti's samskara endpoint so peer agents can see R2D2 alive (`{attempts, success_rate, last_seen}`). |
-| 10 | **Force Flow critical escalation** | `detector_error`, `missing_detector`, and `decision=exec_error` rows fire a `severity=critical` Force Flow notify in addition to the audit row. Silent failures are prohibited by doctrine. |
+| 10 | **Proportional Force Flow escalation** | `detector_error`, `missing_detector`, and `decision=exec_error` rows escalate to Force Flow — but at a severity that reflects *what* failed, so P0/P1 stays crucial, not R2D2's own health. A config/code hiccup (missing detector, detector raised, contract violation) lands at `warn`; only a recipe heal that ran and FAILED on a `high`/`critical` recipe escalates at `error`/`critical` (the thing it guards may be down). A **self-ingest guard** also drops `source=r2d2` lines from the Force Flow tail, so R2D2 never re-classifies its own escalations into a feedback loop. Silent failures are still prohibited — they're just no longer all paged as P0. |
 | 11 | **Bounded audit log** | `~/.sanctum/logs/r2d2-audit.jsonl` rotates to `.jsonl.1` above 50 MB. Unbounded resources are not bounded. |
 
 <Aside type="note">
@@ -46,7 +46,7 @@ Eleven layers between a detection and a deletion. The cost of any single false-p
 
 ## The Recipe Registry
 
-Nine recipes ship at v0.5, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding a tenth is a YAML entry plus a shell script — no code change to the classifier, no privilege escalation surface. The description's first line is what Hermes sees during LLM classification; keep it a one-sentence "fires when X" trigger condition.
+A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding one more is a YAML entry plus a shell script — no code change to the classifier, no privilege escalation surface. The description's first line is what Hermes sees during LLM classification; keep it a one-sentence "fires when X" trigger condition.
 
 | id | severity | Fires when | Action |
 |---|---|---|---|
@@ -59,6 +59,10 @@ Nine recipes ship at v0.5, each a four-tuple of (detector, script, dry-run polic
 | `heal-yoda-warmth-wrapper` | medium | `yoda-chat-consumer` is running but the consumer-side warmth wrapper is missing, empty, or no longer imported | Re-deploy from the in-repo mirror at `Claude_Code/sanctum/yoda-chat/` + restart consumer |
 | `heal-openclaw-gateway-config-crashloop` | high | openclaw-gateway is in a sustained crashloop (≥3 restarts in 5 min) due to a Zod schema validation failure on `openclaw.json` | Restore the most recent `.bak-pre-*` / `.bak-broken-*` backup, preserve the broken file, restart, assert active |
 | `heal-sanctum-server-secret-leak` | high | A sanctum-managed launchd plist has hardcoded provider secrets (`sk-or-v1-`, `sk-ant-`, `AIzaSy`, `ghp_`, `xoxb-`) in `EnvironmentVariables` | Backup plist, `plutil -remove` the offending env var (only if a `~/.sanctum/secrets/<name>` counterpart exists), `bootout` + `bootstrap`, verify |
+| `heal-sanctum-mlx-codestral-down` | high | `sanctum-mlx-codestral` in a sustained crash-loop (3+ in 5 min) or its log shows repeated model-load / mTLS / Metal failures | Bootout codestral, preserve the broken plist (`.failed` + timestamp), bootstrap `sanctum-mlx-coder` as the Qui-Gon fallback; vault-announces critical |
+| `heal-claude-max-proxy-content-flatten` | high | `claude-max-api-proxy`'s dist lost the `content-flatten patch v1` marker (a `pnpm update` regression), so every Yoda reply becomes the literal "[object Object]" | Re-run the idempotent patch script + restart `com.sanctum.claude-max-proxy` |
+| `heal-force-flow-bridge` | high | Force Flow's screen-time reconciler gets HTTP 401 from the Mac Firewalla bridge (`127.0.0.1:1984`) — a Lima VM shadowing the port, or token drift | Wrap `force-flow-bridge-sentinel.py --force`: add the lima 1984-ignore guard and drop the guest listener, or rewrite the canonical token from the live bridge |
+| `reload-stuck-launchd-service` | medium | The launchd-health-sentinel flags a `com.sanctum/jocasta/openclaw` KeepAlive service as actively crash-looping (running pid, alive under 10 min, non-zero exit) after its intentional-non-zero allowlist | `launchctl kickstart -k` the wedged service + verify a live pid or clean exit. Crash-loops only — never "stuck" timer jobs (they re-run on schedule); heavy/dedicated-healer services (mlx/codestral/gateway/claude-max) excluded |
 
 The registry is the safety surface. Hermes can never invent a new recipe at runtime — if a notice doesn't match anything in the registry, it gets the `escalate` path. Recipe descriptions are tuned with the classifier in mind: the first line is what the LLM sees.
 
@@ -162,4 +166,4 @@ R2D2 is generative help, not load-bearing. If the plist crashes, nothing breaks 
 - Scripts: `~/.sanctum/scripts/r2d2/`
 - Audit log: `~/.sanctum/logs/r2d2-audit.jsonl`
 - LaunchAgent: `~/Library/LaunchAgents/com.sanctum.r2d2.plist` (RunAtLoad, StartInterval=600s)
-- Field notes: [2026-05-16 — R2D2 Found Eight Things](/operations/2026-05-16-r2d2-found-eight-things/), [2026-05-19 — R2D2 Got Honest](/operations/2026-05-19-r2d2-got-honest/), [2026-05-21 — R2D2 Got Courage](/operations/2026-05-21-r2d2-got-courage/)
+- Field notes: [2026-05-16 — R2D2 Found Eight Things](/operations/2026-05-16-r2d2-found-eight-things/), [2026-05-19 — R2D2 Got Honest](/operations/2026-05-19-r2d2-got-honest/), [2026-05-21 — R2D2 Got Courage](/operations/2026-05-21-r2d2-got-courage/), [2026-06-01 — R2D2 Stops Paging Itself](/operations/2026-06-01-r2d2-stops-paging-itself/)
