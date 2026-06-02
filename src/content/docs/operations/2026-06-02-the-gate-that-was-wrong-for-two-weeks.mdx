@@ -1,0 +1,58 @@
+---
+title: "2026-06-02: The Gate That Was Wrong For Two Weeks"
+description: "The promotion threshold every autoresearch nightly has been compared against for the last fourteen nights was set by a yardstick we threw out two weeks ago. Tonight we noticed, built the calibrator, hardened it through two code-quality fix rounds, and then the council told us to wait until morning before running it for real."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark background of two old brass measuring rules clamped together at one end, fanning open at the other end so they reach to different points on a stone wall; a glowing teal halo wraps the gap between their endpoints.](./images/2026-06-02-the-gate-that-was-wrong-for-two-weeks.png)
+
+A nightly autoresearch run scores LoRA adapters against a hundred-and-nine evaluation cases, and a script called `promote_champion.sh` checks the best score against a static gate of `0.881`. Anything above the gate gets rsync'd to the Mini, the cathedral plist gets patched with a fresh `--adapter-path`, a four-case smoke probe fires, and a new champion is live before breakfast. Anything below the gate gets a `NO-OP` breadcrumb and the previous champion keeps its job. This has been the pipeline for weeks.
+
+Tonight, while staring at the 0.69 overall scores coming out of a dropout dose-response sweep that was supposed to give us our first non-overfit champion, the obvious question landed for the first time: **where did `0.881` come from?**
+
+## The yardstick we threw out
+
+The `0.881` number was set on 2026-05-16, the night the production champion was promoted, from its score against the *then-current* evaluation set of twenty-six gold-tier cases. On 2026-05-22 we rebuilt the evaluation set to a hundred-and-nine cases across six tiers — the rebuild that explicitly caught that same champion as overfit. We changed the yardstick and never re-measured the wall.
+
+Every promotion check since 2026-05-22 has been a candidate's hundred-and-nine-case score compared against an old champion's twenty-six-case score. Two scales. The gate has been a phantom for fourteen nights.
+
+Every other piece of infrastructure produced a breadcrumb for the decision. `promote-no-op-20260601-194545.md`, `promote-no-op-20260602-004618.md` — the audit trail is there. It just doesn't catch this kind of error. The audit says "candidate scored 0.69, did not beat 0.881, NO-OP" and the reader never gets prompted to ask whether `0.881` is the right number to compare against.
+
+## What "honest gate" means and why it's small
+
+The fix is small. Write a script that runs `carmack_eval.py --tier full --adapter-path <production-champion> --seed 42` against the current evaluation set, take whatever `overall` falls out, subtract a `0.005` promotion margin, floor at `0.70` to prevent a catastrophic eval-framework error from accidentally approving every adapter, and write the result back to `~/.sanctum/state/production-champion.json` as a `calibrated_gate` field. Then patch `promote_champion.sh` to read `calibrated_gate` if present, falling back to the legacy `GATE_SCORE` env var if not.
+
+Two files modified, one new script, seven tests. The infrastructure was already there. The only heroic act would have been noticing two weeks ago.
+
+## The two code-quality fix rounds
+
+The Phase 4b-1 plan was thirteen tasks across six commits, executed by a chain of dispatched subagents — implementer plus spec-compliance reviewer plus code-quality reviewer per task. The implementers shipped what the spec asked for. The spec reviewers verified that. The code-quality reviewers caught what neither of the others were looking at, and what `promote_champion.sh` would have silently miscalibrated on the first real fire:
+
+`--print-effective-gate` was a query-only flag that ran `mkdir -p` as a side effect of the script's startup sequence. In a hermetic test environment with a read-only `$HOME`, the query would have died at `mkdir` before it could print anything. Worse, the flag wouldn't honor the `SANCTUM_STATE_DIR` env override used by the bats tests for hermeticity; the mkdir created `~/.sanctum/state`, not the test's temp dir. Reviewer's fix: hoist the flag's short-circuit *above* `mkdir`.
+
+`isinstance(g, (int, float))` accepted `True`/`False` (booleans are an int subclass in Python) and `0` (a positive number requirement was nowhere). A `calibrated_gate: 0` from a corrupt state file would have silently approved every promotion. Reviewer's fix: `isinstance(g, (int, float)) and not isinstance(g, bool) and g > 0`.
+
+`$STATE_FILE` was interpolated into a Python `-c` single-quoted string literal. A path with an apostrophe in it would have broken the literal. Reviewer's fix: heredoc with no interpolation, value passed via env var, `with open()` for deterministic filehandle close.
+
+`subprocess.run(carmack_eval, ...)` had no timeout. A wedged GPU dispatch — and we've had several of those this past month — would have hung the calibrator forever. Reviewer's fix: `timeout=3600`, raise `TimeoutExpired`, exit 2 with stderr captured.
+
+`sys.executable` resolved to the system Python `python3.14`, which **does not have `mlx.core` installed**. The script would have died at import on the very first real run. The pattern was already in `promote_champion.sh` — `VENV_PY=~/Projects/mlx-finetune/.venv/bin/python` — but the new script didn't pick it up. Reviewer's fix: `CALIBRATE_GATE_PYTHON` env, default to the mlx-finetune venv, fall back to `sys.executable` only if that path doesn't exist.
+
+`atomic_write_json` did the temp-file + `os.rename` dance correctly, but never called `fsync` before the rename. A kernel crash between rename and disk commit could have left a zero-byte gate file — recoverable, since the script reruns, but on a thing that gates production promotions, the answer is to actually `fsync`. Reviewer's fix: `fh.flush(); os.fsync(fh.fileno())` inside the `with` block before rename.
+
+None of these were what the spec said to write. All of them were what the script needed to be. The two-stage review — spec compliance, then quality — caught them in a single pass.
+
+## The council said wait
+
+The infrastructure was green at six commits. The plan said `Task 5: real-run calibration on May-12 champion`. The natural next step was to run the script.
+
+Three operational facts surfaced at that moment that the spec hadn't accounted for. `carmack_eval.py` lives only on the MBP. The production-champion adapter symlink resolves only on the Mini. The MBP GPU was at that moment fully loaded by tonight's autoresearch nightly, mid-eval on its own adapter. And `~/.sanctum/state/production-champion.json` didn't exist anywhere — the file the calibrator needs to read in order to write doesn't exist yet, which means tonight's run would have had to bootstrap it manually, which means tonight's run would have been racing whatever the nightly's Phase 3 promotion writes if it found a winner.
+
+A five-master council convened on the timing. Cilghal: a measurement taken under racing conditions is just a prettier phantom than the one you already distrust. Windu: I will not starve the council's own inference path so a non-urgent job can win one bounded night. Mundi: a bounded stale-gate night costs hours of delay, not days. Qui-Gon dissented to *defer-thirty-minutes* — wait for the nightly to finish, rsync the adapter, run it clean — but agreed the racy options were out. Yoda ranked the four paths and ruled DEFER\_TOMORROW with one binding instruction: tonight, push the six reviewed commits to GitHub and leave the state file un-bootstrapped, so Phase 3 has nothing to clobber. Tomorrow with a human present and an idle machine, run it watched.
+
+So that's where we are. The calibrator exists. It has fsync and a venv-aware subprocess invocation and an assertion that the floor is above zero and a body-not-status canary for the quality of its own output. It will run tomorrow against a state file we'll bootstrap by hand. Whatever the May-12 champion's hundred-and-nine-case score turns out to be — and the bet is somewhere in the `0.70 – 0.78` range — that minus `0.005` is the gate the rest of Phase 4 will aim at.
+
+<Aside type="note">
+Two lessons. A yardstick change without a re-measurement is a silent regression — every audit log produced afterward is consistent, complete, and meaningless. The cost of noticing is small; the cost of not noticing is one wrong NO-OP per night, compounding as long as the audit-reader asks "why no promotion" instead of "why this threshold." And: spec-compliance and code-quality are two different reviews. Spec-compliance asks whether the code does what was specified. Code-quality asks whether the code does that *well enough to survive 3am*. Tonight's fixes — fsync, venv-aware Python, floor assertion, `isinstance` boolean handling, query-flag side effects, subprocess timeout, path-with-apostrophe — were all changes the spec didn't ask for and production was going to need. The council's last word made the same shape of argument about Task 5: ship the substrate tonight, pull the trigger tomorrow when the GPU is quiet and the human is awake.
+</Aside>
