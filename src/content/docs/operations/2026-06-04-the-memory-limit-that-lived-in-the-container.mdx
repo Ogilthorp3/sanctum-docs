@@ -1,0 +1,88 @@
+---
+title: "2026-06-04: The Memory Limit That Lived in the Container"
+description: "Home Assistant was down for three days because of a 64 MB hard limit set on the homeassistant container months ago, surfaced the moment OrbStack came back. The vault attributed it to the OrbStack restart. The real cause was orthogonal — and Castellan v1 had no way to see it. Castellan v2 ships the audit that does."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark charcoal background of a small ornate brass shipping container with the lid slightly ajar; inside, a tiny etched number 64 glows in a single teal halo, the rest of the interior in deep shadow.](./images/2026-06-04-the-memory-limit-that-lived-in-the-container.png)
+
+The vault message at 14:02 on June 4 read like a confident root-cause: "HA down since June 1; correlated with OrbStack kill during cathedral relief on 06-01 18:30; pressure-relief code path executed correctly, but never re-armed HA. v1 doesn't rescue, only relieves." The mental model held for three days. The fix would have been a service-rescue daemon — Castellan v2 — and the spec had been queued for exactly that purpose.
+
+Then, mid-afternoon on the fourth, I ran `docker inspect homeassistant` for an unrelated reason and the screen returned:
+
+```
+"Memory": 67108864,
+"OOMKilled": true,
+```
+
+`67108864` is `64 * 1024 * 1024`. The homeassistant container had a 64 MB hard memory limit; HA needs about 600 MB to start. OrbStack had not been the perpetrator; OrbStack had been the *witness*. Every time HA tried to start after the restart, the Docker OOM-killer killed it inside twelve seconds. Three days of downtime attributed to the wrong cause — a configuration crash wearing a service crash's clothes.
+
+The 64 MB limit was set months earlier, most likely from a long-forgotten `docker update --memory 64m homeassistant` in a different debugging session, and survived every container recreation since. It was invisible while OrbStack was down because there was no HA to OOM. The moment OrbStack came back, the limit started firing, and the failure surfaced inside the *symptom-window* of a different incident. Two failures, one timestamp, one wrong arrow drawn in the vault.
+
+## The shape of the gap
+
+Castellan v1 — the kernel-as-arbiter memory daemon that ships pressure relief by killing the lowest-priority resident hog when system memory pressure crosses threshold — could not have caught this. v1 watches one number: *physical memory pressure*. The bytes-served-versus-bytes-reserved curve is its entire mandate. A 64 MB hard limit on a single container is *config drift* the way a missing semicolon is *config drift* — invisible to anything that doesn't read the config.
+
+The v1 doctrine traced a clean line between *acute* (memory pressure: relieve) and *chronic* (the rest). That doctrine is right for what v1 owns. But it left two gaps the HA incident made literal:
+
+1. **Pressure relief without rescue.** When castellan kills a service to relieve pressure, no daemon remembers it was operator-marked critical and re-starts it. HA stayed dead from June 1 to June 4 not because v1 failed at relief, but because relief was the only mechanism the doctrine spoke about.
+
+2. **Container-config drift.** A misconfigured `HostConfig.Memory` invisible to `top` and invisible to physical-memory pressure is invisible to v1 by construction. The only place the misconfiguration surfaces is `docker inspect`, which nothing was reading.
+
+
+## What Castellan v2 ships
+
+The spec, written this afternoon at `docs/superpowers/specs/2026-06-04-castellan-v2-service-rescue.md` and now implemented as five modules behind sanctum-rs `31b5344`, treats v2 as an *audit* layer that observes — never owns — services. The runtime owners stay launchd and Docker. v2 reads a pinned-services manifest, probes each entry once per cycle, and routes failures into one of two paths.
+
+The manifest is plain YAML, operator-managed:
+
+```yaml
+schema_version: castellan-pinned-v1
+pinned_services:
+  - id: homeassistant
+    kind: docker_container
+    container_name: homeassistant
+    expected_memory_min_bytes: 524288000   # 500 MB
+    rescue_command: "~/.orbstack/bin/docker restart homeassistant"
+    severity_on_down: P1
+    cooldown_seconds: 300
+
+  - id: cathedral
+    kind: launchd
+    label: com.sanctum.mlx
+    expected_memory_min_bytes: 14000000000  # 14 GB
+    rescue_command: "launchctl kickstart -k gui/501/com.sanctum.mlx"
+    severity_on_down: P0
+    cooldown_seconds: 60
+```
+
+The first path is **rescue**: a service down for at least `cooldown_seconds`, system pressure below `0.8 × relief threshold`, no rescue attempted for that service in the last 30 minutes, exponential backoff after two failed rescues in an hour. None of the gates are novel — the discipline is the *combination*, and the audit trail that records every decision regardless of outcome.
+
+The second path is **drift**, the actually load-bearing piece. Every cycle, for every docker-container entry in the manifest, v2 runs `docker inspect <name>` and checks `HostConfig.Memory`. If the limit is set, positive, and *below* the entry's `expected_memory_min_bytes`, v2 fires a Force Flow alert at the entry's configured severity. The alert names the discrepancy in bytes and prints the exact `docker update` command to fix it. Each alert has its own 24-hour cooldown so the operator does not get paged forever, but the alert recurs daily until the configuration matches the contract.
+
+If Castellan v2 had been running on June 1, the very first cycle after OrbStack came back would have produced this line in `~/.sanctum/state/castellan-pinned-status.jsonl`:
+
+```json
+{"ts":"2026-06-01T18:30:12Z","service":"homeassistant","probe":"config_drift","action":"alert_fired","detail":"Memory 67108864 < 500000000"}
+```
+
+…and a Force Flow page would have landed in the iMessage feed within seconds: *"Container homeassistant has Memory limit 64 MB, expected ≥ 500 MB. Docker OOM-kill probable on next allocation above 64 MB. Fix: `docker update --memory 2g --memory-swap 4g homeassistant`."*
+
+Total downtime: under a day, not four.
+
+## What v2 deliberately doesn't do
+
+The non-goals matter as much as the goals. v2 does not become a service supervisor — launchd and Docker remain the runtime owners; v2 only observes. It does not auto-fix container configs — it surfaces drift and prints the fix, but the human applies it, because the fix-decision needs the human's judgment about whether the misconfig was wrong or load-bearing. It does not persist policy across reboots — the manifest is operator-loaded every boot, on the same logic as `/etc/fstab`. It does not detect launchd plist drift — that's Phase C; v2 covers Docker-config-drift only, because the load-bearing case this week was a Docker container, and YAGNI applies to the audit layer too.
+
+It also does not change v1. v2 lives in the same binary as a *second pass* that runs each tick alongside v1, gated on an environment variable. With the env knob unset, v2 is dormant; v1's behavior is byte-identical to what it was yesterday. Setting the knob makes the audit live; unsetting it puts the audit back to sleep. No migration, no schema versioning, no irreversible cutover.
+
+## The doctrine the incident sharpens
+
+If the v1 doctrine was *castellan owns memory pressure, full stop*, the v2 doctrine adds *castellan also owns the contract between the operator's intent and the runtime's configuration, but only as an auditor — never as an enforcer*. The line stays clean: v1 is acute, v1 acts; v2 is chronic, v2 reports. The auditor pattern matters because the failure modes for an auditor are loud (a missed alert is recoverable; a wrong rescue is not), while the failure modes for an enforcer are silent (a wrong shutdown looks the same as a correct shutdown until someone notices the service is gone).
+
+The most uncomfortable lesson from the week is not technical. The vault attribution at 14:02 — confident, three-day-old, wrong — was a *Verify before attribute* failure: the call went out before any evidence was gathered from inside the container itself. The same vault message after a single `docker inspect` would have read differently. v2's JSONL audit trail names what the inside of the container looked like at every probe, so a future attribution has to land on top of evidence the trail already wrote.
+
+<Aside type="note">
+v2 is staged on the Mini as of June 4 evening — binary rebuilt at `~/Projects/sanctum-rs/target/release/castellan`, manifest at `~/.sanctum/state/castellan-pinned.yaml`, plist + activate/rollback scripts in `~/.sanctum/state/castellan-v2-staging/`. Activation is one sudo command and is operator-pending; the live LaunchDaemon plist still lacks the v2 environment variables, so the daemon currently runs v1-only with v2 logic resident-but-dormant. The first cycle after activation will write three healthy status rows for HA, cathedral, and codestral (HA's memory limit is back to 2 GB; no drift to detect). The smoke that proves v2 works is the inverse: re-running `docker update --memory 64m homeassistant` should fire the same drift alert the spec describes, exactly the alert that would have shortened this week by three days. The container won't tell you what it forgot. The audit will.
+</Aside>
