@@ -1,0 +1,62 @@
+---
+title: "Backup Dead-Man's-Switch"
+description: "A backup that can fail silently is the bug. The fix is an off-box watcher on GitHub that treats the absence of a heartbeat as the alarm, so it fires even when the haus is dead."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A lighthouse on an offshore rock sweeps its beam toward a darkened sleeping haus across the water, keeping watch from a place the dark cannot reach — the dead-man's-switch made visible.](./images/hero-backup-deadman.png)
+
+The manoir backup is healthy: two restic repos (the T9 drive and an offsite), both fresh daily, both proven restorable by a weekly drill. None of that is the interesting part. The interesting part is that a *different* backup — the cross-machine snapshot onto the satellite — stopped running and went nearly seven weeks before anyone noticed. It did not fail loudly. It simply went quiet, and the silence looked exactly like success.
+
+That is the real bug. A backup you cannot trust to *tell you it broke* is not a backup; it is a hope.
+
+## Why every on-box guard is blind
+
+The backup already alerts on failure — it notifies Force Flow when a run errors or times out. The weekly canary already restores a probe file and checks its hash. Both are good. Both share one fatal property: **they run on the same Mac they protect.**
+
+When launchd silently drops a timer (which it did, fleet-wide, for weeks), the job never runs, so there is no failure to alert on. When the host sleeps, crashes, or is carried off, every watcher on it sleeps too. When Force Flow itself is down, the alert falls into a hole. The guard and the thing it guards die together. The seven-week silence was not one bug — it was every on-box guard failing in the same breath.
+
+## The absence is the signal
+
+The fix is a watcher that cannot die with the haus. It lives on GitHub:
+
+```
+backup succeeds  ->  sanctum deadman beat backup-fresh
+canary passes    ->  sanctum deadman beat restore-drill
+                        |
+                        v   writes heartbeats.json on GitHub (Ogilthorp3/sanctum-backup-deadman)
+
+hourly GitHub Action reads heartbeats.json:
+   any heartbeat older than its budget?
+      yes  ->  open a GitHub issue (which emails the owner); the run goes red
+      no   ->  close the issue (the backup recovered)
+```
+
+Note the inversion. The backup does not report *failure* — it reports *success*, by writing a fresh timestamp. The watcher alarms on the **absence** of that timestamp. Failure, didn't-run, host-dead, and network-cut all collapse into the same observable: no fresh heartbeat. There is no failure mode the watcher can sleep through, because it is not watching the Mac at all — it watches a file on GitHub's infrastructure and asks one question every hour: is it stale?
+
+## The beat
+
+A host reports success with one command:
+
+```
+sanctum deadman beat backup-fresh     # the daily restic backup, on success
+sanctum deadman beat restore-drill    # the weekly restore canary, on a passing drill
+```
+
+`beat` writes the heartbeat through the GitHub Contents API using the host's existing `gh` token — no clone, no SSH agent, no new secret. That matters: the backup runs as a background LaunchAgent, where an interactive SSH agent may not be reachable, but a token read from a file always is. The beat is best-effort from the backup's point of view — a failed beat warns but never fails the backup, because the off-box Action catches the resulting missing heartbeat anyway.
+
+Each check carries its own staleness budget, stored next to its timestamp: `backup-fresh` is overdue after 26 hours (a daily job plus slack), `restore-drill` after 192 hours (eight days). The watcher needs no configuration of its own — the heartbeat file tells it everything.
+
+## Proven, not asserted
+
+The happy path is easy to believe. The alarm path is the one that has to work the day everything else has failed, so it was exercised for real, not stubbed:
+
+- A heartbeat was forced 100 hours stale. The hourly Action ran, went **red**, and opened the issue. The email arrived.
+- A real `beat` refreshed the heartbeat. The next run went **green** and auto-closed the issue.
+
+<Aside type="tip" title="The one rule">
+A backup must prove three things, continuously: that it is **fresh**, that it is **restorable**, and that its proof is **visible from somewhere it cannot silence.** The first two were already true on manoir. The third is what made the silence possible — and what this closes.
+</Aside>
+
+A backup that goes quiet now has exactly one place left to hide, and it is a place the haus does not control. That was the entire point.
