@@ -1,0 +1,55 @@
+---
+title: "2026-06-06: The Gate Came Down to 0.7000"
+description: "A watcher armed yesterday afternoon waited two hours for the nightly autoresearch to release the GPU, then ran the full 109-case calibration on the May-12 champion. The result re-stated the promotion gate from a phantom 0.881 down to a measured 0.7000 — an 18-point reduction. The same run wrote the per-master sidecar that Stone 1's floor vetos have been waiting on. The autoresearch loop wakes up this morning with a gate that's both lower and harder to clear."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark charcoal background of an ornate brass apothecary balance scale; the topmost weight on the left pan rendered translucent and ghost-like as if being lifted off, the right pan carrying a single smaller weight with a teal halo, the balance arm tilting toward the right.](./images/2026-06-06-the-gate-came-down.png)
+
+The calibration retry watcher (PID 12463, armed Friday at 19:12 EDT) polled every five minutes for a clean GPU. The nightly autoresearch ran a `carmack_eval` cycle that started at 21:45 and finished a hair before 23:00, releasing the Metal queue. The watcher caught the gap at 22:57:39, kicked `calibrate_gate.py`, and the calibration ran a full 109-case sweep on `production-champion` (the May-12 champion adapter on Qwen3.6-35B-A3B-4bit) from 22:57 to 00:00 — sixty-three minutes for the whole tier. By 00:00:11 the per-master sidecar had been backfilled and the watcher had exited clean.
+
+The headline number is the gate. The phantom that the promotion pipeline had been comparing against for the last fourteen-plus nights was `0.881`, derived from the original 26-case screen tier that produced the May-12 champion. The honest 109-case full-tier rescore on the same champion adapter returned `overall = 0.7033`, and the calibrator wrote `calibrated_gate = 0.7000` into `~/.sanctum/state/production-champion.json`. The `promote_champion.sh --print-effective-gate` invocation now returns `effective_gate=0.7 source=calibrated_gate` instead of `effective_gate=0.881 source=env_GATE_SCORE`. Eighteen points of imaginary ceiling came off.
+
+## Why the phantom was high
+
+The 26-case screen tier was easier than the 109-case full tier. The screen was the gold core — short questions with single-master answers, no cross-agent routing complexity, no real-world reasoning under partial information. The May-12 champion scored `0.881` on that subset because the subset rewarded exactly what the May-12 champion was good at, and the full tier evaluates the champion against the dimensions the screen never tested. The drop from `0.881` to `0.7033` is not a regression; it's the same model passing through a harder lens.
+
+The autoresearch pipeline, however, was comparing nightly candidates' full-tier scores against the screen-tier ceiling. Every candidate had to clear `0.881` on the harder tier to promote. The phantom rejected a population of legitimately-better adapters silently for two weeks. The [June 2 post](./2026-06-02-the-gate-that-was-wrong-for-two-weeks/) built the calibrator that closed this gap; the June 5 wait was the GPU lock; the calibrator finally fired in the small hours of the sixth.
+
+## The per-master cells
+
+The same calibration run wrote the [Stone 1 floor's](./2026-06-04-the-aggregate-hid-two-weak-masters/) missing baseline. Eight masters, each scored individually:
+
+| master | n_cases | raw | shrunk | perfect/n |
+|---|---|---|---|---|
+| **ahsoka** | 19 | **0.611** | **0.631** | 6/19 |
+| **mundi** | 13 | **0.656** | **0.669** | 3/13 |
+| quigon | 11 | 0.674 | 0.683 | 5/11 |
+| mothma | 10 | 0.667 | 0.673 | 5/10 |
+| cilghal | 16 | 0.726 | 0.720 | 5/16 |
+| yoda | 10 | 0.755 | 0.738 | 5/10 |
+| jocasta | 14 | 0.758 | 0.744 | 5/14 |
+| windu | 16 | 0.789 | 0.769 | 8/16 |
+
+The aggregate `0.7033` is the arithmetic mean of the eight cells. The variance across the cells is 17.8 points between Windu's `0.789` and Ahsoka's `0.611`. The per-master floor is now `max(0.50, master_baseline − 0.10)`. So a future candidate must clear `0.531` on Ahsoka, `0.556` on Mundi, `0.583` on Quigon, `0.567` on Mothma — and `0.689` on Windu, `0.658` on Jocasta. The strong-master cells require strong-candidate performance to match. A candidate can no longer ride a high Windu score to mask a collapsed Ahsoka score.
+
+The Stone 1 sidecar is the rule that prevents an aggregate from carrying a weak cell across the gate. Tonight's nightly autoresearch will be the first run where the rule actually fires on promotion checks.
+
+## What changes for the autoresearch loop tonight
+
+Two things shift, and they shift in opposite directions.
+
+First, more candidates pass the absolute number. A nightly that produced a candidate at `0.715` would have been rejected against the phantom; against the honest `0.7000` it is promotion-eligible on the aggregate. The pipeline has been silently throwing away winners for the entire run length of the phantom.
+
+Second, more candidates fail the per-master cells. A candidate at `0.715` aggregate that dropped Ahsoka to `0.500` — because dropout-tuning hurt the family-secondary surface, say — would have promoted against an aggregate-only gate but now stalls at `per_master_floor_veto: ahsoka floor=0.531 got=0.500`. The breadcrumb names the cell that killed the promotion.
+
+Net effect: the gate is more permissive on the easy direction (the absolute number drops 18 points) and stricter on the hard direction (every cell must clear its own floor). The new gate's surface is shaped like the actual eight-dimension behavior the council needs, not the one-number summary that hid Ahsoka and Mundi.
+
+## The watcher pattern, briefly
+
+The retry-watcher v2 (`/tmp/calibration-retry-watcher-v2.sh`, armed on the MBP at 19:12 with a 4-hour subprocess timeout) was the simplest of the things that made this work. Five-minute poll, two probes (`carmack_eval` and `mlx_lm.lora --train`), break-and-fire on a clean read. The 5-minute interval added at most five minutes of delay to a 63-minute calibration; the entire chain — wait, fire, score, sidecar, state update — completed in under three hours of wall clock from the moment the watcher armed. No supervisor, no daemon, no plist; just a bash script and a five-minute sleep. The autoresearch nightly never noticed; calibration never noticed; the per-master backfill ran immediately on success. The boring tool worked at exactly the boundary it was designed for.
+
+<Aside type="note">
+The promotion ledger is now compared against a calibrated number that came from the same eval framework, the same model snapshot, and the same scoring temperature as the autoresearch nightly's candidates. The screen-vs-full mismatch that produced the phantom is gone. The autoresearch loop wakes up this morning to a gate that reflects what the champion actually delivers on the harder evaluation surface, plus the per-master cells that say *which* cells a future candidate has to clear and which cells it cannot under-deliver on. The first promotion that lands against the new gate will be the proof that the calibrator's value compounded over the next several nights of nightly runs — what the phantom rejected silently, this gate will accept honestly, and what the aggregate hid, this gate will name explicitly. The boring tool finally fired.
+</Aside>
