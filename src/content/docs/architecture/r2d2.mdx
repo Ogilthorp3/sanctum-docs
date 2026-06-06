@@ -8,23 +8,23 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 ![R2D2 — a small repair droid wheels between three server racks; a teal beam fixes a glowing fault on the middle rack.](./images/hero-r2d2.png)
 
-R2D2 sits between the four purpose-built autohealers (OpenRouter key rotation, mlx-drift bootout, SOPS sync, mgmt-key failover) and the human escalation path. Each of those autohealers solves exactly one problem. R2D2 is the generalized dispatcher for the long tail — anything novel-but-bounded that an operator would otherwise repair by hand at 11pm.
+R2D2 sits between the four purpose-built autohealers (OpenRouter key rotation, mlx-drift bootout, SOPS sync, mgmt-key failover) — each solving exactly one problem — and the human escalation path. It is the generalized dispatcher for the long tail: anything novel-but-bounded an operator would otherwise repair by hand at 11pm.
 
-The shape is deliberate: **deterministic detectors + LLM-classified notices** feed a small curated registry of named recipes; an eleven-layer safety stack guards every fire; the agent's only mutation surface is a hard-allowlisted set of shell scripts under `~/.sanctum/scripts/r2d2/`. The LLM never gets a shell. It gets a classification head and a recipe pointer.
+The shape is deliberate: **deterministic detectors + LLM-classified notices** feed a small curated registry of named recipes; an eleven-layer safety stack guards every fire; the agent's only mutation surface is a hard-allowlisted set of shell scripts under `~/.sanctum/scripts/r2d2/`. The LLM never gets a shell — only a classification head and a recipe pointer.
 
 ## Why R2D2 Exists
 
-Three latent problems surfaced in a single day (2026-05-16) that would all have been caught by a generalized auto-fix loop:
+Three latent problems surfaced in a single day (2026-05-16), all catchable by a generalized auto-fix loop:
 
-1. A Colima LaunchAgent respawned a dead VM for **19 days** after the OrbStack migration retired the workload but not the plist.
-2. A merged cathedral binary ran for **30 hours** in production because no one ran `bootout` / `bootstrap` after the build.
-3. The vault FTS5 index held **11 rows** for a vault of **2,032 markdown files** — auto-reindex was gated on `count == 0`, never fired.
+1. A Colima LaunchAgent respawned a dead VM for **19 days** after the OrbStack migration retired the workload, not the plist.
+2. A merged cathedral binary ran for **30 hours** in production because no one ran `bootout`/`bootstrap` after the build.
+3. The vault FTS5 index held **11 rows** for **2,032 markdown files** — auto-reindex was gated on `count == 0`, never fired.
 
-All three are detectable with one-line probes, safe to fix automatically, and invisible until someone happens to look. The four shipped autohealers each solve one problem; what was missing was a *generalized* dispatcher with a registry of named cures.
+All three are detectable with one-line probes, safe to fix automatically, and invisible until someone happens to look — the case for a *generalized* dispatcher with a registry of named cures.
 
 ## The Eleven-Layer Safety Stack
 
-Every detection — whether from a deterministic detector or from Hermes — passes through the stack below, in order. Any layer can short-circuit to "audit-only" without firing the recipe.
+Every detection — deterministic or Hermes — passes through the stack below, in order. Any layer can short-circuit to "audit-only" without firing the recipe.
 
 | # | Layer | Mechanism |
 |---|---|---|
@@ -41,12 +41,12 @@ Every detection — whether from a deterministic detector or from Hermes — pas
 | 11 | **Bounded audit log** | `~/.sanctum/logs/r2d2-audit.jsonl` rotates to `.jsonl.1` above 50 MB. Unbounded resources are not bounded. |
 
 <Aside type="note">
-Eleven layers between a detection and a deletion. The cost of any single false-positive is at most the cost of moving a file aside or renaming a plist — both reversible. The cost of *not* firing, multiplied across days of stale binaries, drifted Keychain entries, and orphan LaunchAgents, is the slow accumulation that broke unattended operation for years before this drone existed.
+Eleven layers between a detection and a deletion. Any single false-positive costs at most a renamed file — reversible. The cost of *not* firing, multiplied across days of stale binaries, drifted Keychain entries, and orphan LaunchAgents, is the slow accumulation that broke unattended operation for years before this drone existed.
 </Aside>
 
 ## The Recipe Registry
 
-A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding one more is a YAML entry plus a shell script — no code change to the classifier, no privilege escalation surface. The description's first line is what Hermes sees during LLM classification; keep it a one-sentence "fires when X" trigger condition.
+A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding one more is a YAML entry plus a shell script — no code change, no privilege escalation surface. The description's first line is what Hermes sees during classification; keep it a one-sentence "fires when X" trigger.
 
 | id | severity | Fires when | Action |
 |---|---|---|---|
@@ -64,9 +64,9 @@ A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, co
 | `heal-force-flow-bridge` | high | Force Flow's screen-time reconciler gets HTTP 401 from the Mac Firewalla bridge (`127.0.0.1:1984`) — a Lima VM shadowing the port, or token drift | Wrap `force-flow-bridge-sentinel.py --force`: add the lima 1984-ignore guard and drop the guest listener, or rewrite the canonical token from the live bridge |
 | `reload-stuck-launchd-service` | medium | The launchd-health-sentinel flags a `com.sanctum/jocasta/openclaw` KeepAlive service as actively crash-looping (running pid, alive under 10 min, non-zero exit) after its intentional-non-zero allowlist | `launchctl kickstart -k` the wedged service + verify a live pid or clean exit. Crash-loops only — never "stuck" timer jobs (they re-run on schedule); heavy/dedicated-healer services (mlx/codestral/gateway/claude-max) excluded |
 
-The registry is the safety surface. Hermes can never invent a new recipe at runtime — if a notice doesn't match anything in the registry, it gets the `escalate` path. Recipe descriptions are tuned with the classifier in mind: the first line is what the LLM sees.
+The registry is the safety surface. Hermes can never invent a new recipe at runtime — if a notice doesn't match anything in the registry, it gets the `escalate` path.
 
-## Two Ingest Paths
+## Ingest Paths
 
 ```
         ┌──────────────┐
@@ -107,36 +107,46 @@ The registry is the safety surface. Hermes can never invent a new recipe at runt
 └────────┘          └──────────┘
 ```
 
-- **Path one** — deterministic detectors. One Python function per recipe, returning zero or more `Detection` dataclasses. Cheap, exact, no model spend. Hits the safety stack and either fires the recipe or audit-only-logs the would-fire.
-- **Path two** — Hermes ingest. Tails Force Flow log and chitti samskara past a bookmark file, classifies each new line with `nousresearch/hermes-3-llama-3.1-70b` via OpenRouter. Hermes returns one of `{auto:<recipe-id>, escalate:<reason>, info}`. Per-cycle budget capped at 5 classifications × ~$0.0001 ≈ $0.07/day max under full load.
+- **Path one** — deterministic detectors. One Python function per recipe, returning `Detection` dataclasses. Cheap, exact, no model spend.
+- **Path two** — Hermes ingest. Tails Force Flow log and chitti samskara past a bookmark, classifies each new line with `nousresearch/hermes-3-llama-3.1-70b` via OpenRouter, returning `{auto:<recipe-id>, escalate:<reason>, info}`. Capped at 5/cycle × ~$0.0001 ≈ $0.07/day under full load.
 
-Hermes is optional. Without `R2D2_HERMES=1` in the launchd plist, the LLM ingest layer is skipped entirely and only the four deterministic detectors run.
+Hermes is optional. Without `R2D2_HERMES=1` in the plist, the LLM layer is skipped and only the deterministic detectors run.
+
+## The Vault Path (v0.4)
+
+A third path reads the Memory Vault inbox — the cross-session, cross-agent message bus. It is R2D2's **lowest-trust input**, gated hardest accordingly: roughly ten agents write it, `from:` is self-asserted, bodies are free text that can steer an LLM, and the corpus is dominated by status broadcasts (`STONE 2 ROOT-FIXED`) that read like action requests.
+
+Eligibility is **default-deny**: a message is read only if it carries a `priority: P0|P1|P2` field AND a `to:` addressed to `r2d2`. (`priority:` is new; do not conflate it with the existing `importance:` float relevance score.) A `to: all` broadcast may escalate but never auto-fire. A **new directory reader** scans the inbox and tracks a seen-message-id bookmark — the vault is per-message files, so the byte-offset tailer the Force Flow path uses could not be reused; a message is classified at most once.
+
+Three guards sit before the model. A **vault self-ingest guard** drops R2D2's own posts (`from`/`source` of `r2d2`) before classification — the Force Flow `source=r2d2` guard does not match vault frontmatter, so without this new guard R2D2 would rebuild the self-paging loop the 2026-06-01 note closed. An **injection tripwire** routes any body with imperative-injection markers (`ignore previous`, `fire recipe`, `system:`) straight to escalate with no LLM call. And the action target, when the fire path is later armed, comes only from a machine `resource:` field (`daemon:`/`repo:`/`file:`/`svc:`) confirmed by a deterministic detector — never from prose.
+
+v1 is **escalate-only**: a vault notice is classified by Hermes and escalated, never fired. Vault priority relays one tier down — P0 to Force Flow `p1` (iMessage), P1 to `p2` (signal), P2 to audit-only — so the vault cannot reach the P0 phone-call tier. Two independent gates, both off by default: `R2D2_VAULT=1` (plist env) arms read and escalate; a separate `r2d2-vault-autofire-armed` touch-file is additionally required before any vault-sourced fire (v2), and only for recipes flagged `vault_fireable: true` — a low/medium, reversible, local-only sub-allowlist. High and critical recipes (gateway, mlx, codestral, secret-leak) are escalate-only from the vault forever. The kill-switch and classifier-only files override both. v1 sets `vault_fireable` on zero recipes.
 
 ## Adding A Recipe
 
 Three files, in order:
 
-1. **Detector** — add a `Detection`-returning function to `~/.sanctum/r2d2/classify.py`, then register it in the `DETECTORS` map at the bottom of the file. Skip this step if the signal is unstructured text — Hermes handles those via the registry's `description` field. Detectors must never raise; on any internal error, return an empty list and let the cycle continue.
+1. **Detector** — add a `Detection`-returning function to `~/.sanctum/r2d2/classify.py` and register it in the `DETECTORS` map. Skip this step if the signal is unstructured text — Hermes handles those via the registry's `description` field. Detectors must never raise; on any internal error, return an empty list and let the cycle continue.
 
-2. **Script** — add a shell script under `~/.sanctum/scripts/r2d2/`. The first argument is the recipe's `target`; the second argument is `--dry-run` (optional). The script MUST support `--dry-run` cleanly if the recipe sets `dry_run_required: true` — Layer 5 will pass it on the first detection and trust the exit code.
+2. **Script** — add a shell script under `~/.sanctum/scripts/r2d2/`. Argument one is the recipe's `target`; argument two is `--dry-run` (optional). The script MUST support `--dry-run` cleanly if the recipe sets `dry_run_required: true` — Layer 5 passes it on the first detection and trusts the exit code.
 
-3. **YAML entry** — add a recipe to `~/.sanctum/r2d2/recipes.yaml` with `id`, `description`, `detector`, `script`, `dry_run_required`, `cooldown_hours`, `reversible`, and `severity`. The `description`'s first line is what Hermes sees during classification; keep it a one-sentence "fires when X" trigger condition.
+3. **YAML entry** — add a recipe to `~/.sanctum/r2d2/recipes.yaml` with `id`, `description`, `detector`, `script`, `dry_run_required`, `cooldown_hours`, `reversible`, and `severity`. The `description`'s first line is what Hermes sees during classification; keep it a one-sentence "fires when X" trigger.
 
-Run `python3 ~/.sanctum/r2d2/classify.py` manually to verify the detector finds what you expect; run the script with `--dry-run` directly to verify the action.
+Run `python3 ~/.sanctum/r2d2/classify.py` to verify the detector, and the script with `--dry-run` to verify the action.
 
 ## Forensic Artifacts
 
-Every recipe leaves enough behind to reverse what it did, by hand or by script:
+Every recipe leaves enough behind to reverse what it did:
 
-- **`.bak-broken-r2d2-<ts>`** — `heal-openclaw-gateway-config-crashloop` preserves the failing config file before restoring the prior backup. The bad file is renamed, not deleted, so a post-mortem can compare both states.
-- **`.bak-pre-*` and `.bak-broken-*`** — openclaw itself writes these on config-rotation; R2D2 reads the most recent one when restoring after a crashloop. The chain is operator-visible at `~/.openclaw/`.
-- **`~/.sanctum/firewalla-rescue/<ts>-r2d2-<group>/backup.txt`** — `heal-stale-firewalla-dnsmasq` dumps the redis `policy:N` payload + the on-disk `policy_N.conf` content + the SSH command journal before any deletion. Full reversal is `cat backup.txt | bash`.
-- **`~/.sanctum/retired/<label>.plist.bak-r2d2-secret-leak-<ts>`** — `heal-sanctum-server-secret-leak` backs up the offending plist before `plutil -remove` strips the secret env var.
-- **`<plist>.retired-YYYY-MM-DD`** — `retire-orphan-launchagent` renames, never deletes. Two-click recovery if the orphan turns out to have been intentional.
-- **`<vault>.vault.db.stale-YYYY-MM-DD`** — `reindex-stale-fts` moves the old index aside. The next memory-vault-mcp invocation rebuilds from scratch (Rust binary auto-reindexes on `count == 0`).
-- **`~/.sanctum/logs/r2d2-audit.jsonl`** — one row per detection, classification, decision, exec result. Includes the captured-old-value for `repair-keychain-secret-drift` so the prior Keychain entry can be restored verbatim. Rotates at 50 MB.
-- **`~/.sanctum/state/r2d2-promotions.json`** — Layer 5's two-cycle promotion ledger. An entry shows that a target has a clean dry-run within the 24-hour window and is eligible for a real fire on the next detection.
-- **`~/.openclaw/logs/r2d2.log`** — launchd stdout. One JSON cycle summary per 10-minute cycle: `{kill_switch, classifier_only, cycle_id, detections, fired, skipped, duration_s}`.
+- **`.bak-broken-r2d2-<ts>`** — `heal-openclaw-gateway-config-crashloop` preserves the failing config (renamed, not deleted) before restoring the prior backup, so a post-mortem can compare both.
+- **`.bak-pre-*` and `.bak-broken-*`** — openclaw writes these on config-rotation; R2D2 reads the most recent when restoring after a crashloop.
+- **`~/.sanctum/firewalla-rescue/<ts>-r2d2-<group>/backup.txt`** — `heal-stale-firewalla-dnsmasq` dumps the redis `policy:N` payload, the `policy_N.conf`, and the SSH journal before any deletion. Full reversal is `cat backup.txt | bash`.
+- **`~/.sanctum/retired/<label>.plist.bak-r2d2-secret-leak-<ts>`** — `heal-sanctum-server-secret-leak` backs up the plist before `plutil -remove` strips the secret env var.
+- **`<plist>.retired-YYYY-MM-DD`** — `retire-orphan-launchagent` renames, never deletes; reversible if the orphan was intentional.
+- **`<vault>.vault.db.stale-YYYY-MM-DD`** — `reindex-stale-fts` moves the old index aside; the next memory-vault-mcp invocation rebuilds it (Rust binary auto-reindexes on `count == 0`).
+- **`~/.sanctum/logs/r2d2-audit.jsonl`** — one row per detection, classification, decision, exec result. Includes the captured-old-value for `repair-keychain-secret-drift` so the prior entry restores verbatim. Rotates at 50 MB.
+- **`~/.sanctum/state/r2d2-promotions.json`** — Layer 5's two-cycle promotion ledger: a target with a clean dry-run inside the 24-hour window is eligible for a real fire on the next detection.
+- **`~/.openclaw/logs/r2d2.log`** — launchd stdout. One JSON summary per cycle: `{kill_switch, classifier_only, cycle_id, detections, fired, skipped, duration_s}`.
 
 ## Operating
 
@@ -156,9 +166,14 @@ touch ~/.sanctum/state/r2d2-classifier-only
 
 # Hard kill — every detection short-circuits to a no-op-with-audit-row
 touch ~/.sanctum/state/r2d2-disabled
+
+# Vault gate 1 — set R2D2_VAULT=1 in the plist to arm vault read + escalate (v1)
+#   plutil -insert EnvironmentVariables.R2D2_VAULT -string 1 ~/Library/LaunchAgents/com.sanctum.r2d2.plist
+# Vault gate 2 — additionally permits a vault-sourced fire of a vault_fireable recipe (v2)
+touch ~/.sanctum/state/r2d2-vault-autofire-armed
 ```
 
-R2D2 is generative help, not load-bearing. If the plist crashes, nothing breaks — notices keep flowing to Force Flow and chitti exactly as before. Failure mode is "less helpful," not "broken."
+R2D2 is generative help, not load-bearing. If the plist crashes, notices keep flowing to Force Flow and chitti exactly as before — the failure mode is "less helpful," not "broken."
 
 ## See Also
 
@@ -166,4 +181,5 @@ R2D2 is generative help, not load-bearing. If the plist crashes, nothing breaks 
 - Scripts: `~/.sanctum/scripts/r2d2/`
 - Audit log: `~/.sanctum/logs/r2d2-audit.jsonl`
 - LaunchAgent: `~/Library/LaunchAgents/com.sanctum.r2d2.plist` (RunAtLoad, StartInterval=600s)
-- Field notes: [2026-05-16 — R2D2 Found Eight Things](/operations/2026-05-16-r2d2-found-eight-things/), [2026-05-19 — R2D2 Got Honest](/operations/2026-05-19-r2d2-got-honest/), [2026-05-21 — R2D2 Got Courage](/operations/2026-05-21-r2d2-got-courage/), [2026-06-01 — R2D2 Stops Paging Itself](/operations/2026-06-01-r2d2-stops-paging-itself/)
+- Field notes: [2026-05-16 — R2D2 Found Eight Things](/operations/2026-05-16-r2d2-found-eight-things/), [2026-05-19 — R2D2 Got Honest](/operations/2026-05-19-r2d2-got-honest/), [2026-05-21 — R2D2 Got Courage](/operations/2026-05-21-r2d2-got-courage/), [2026-06-01 — R2D2 Stops Paging Itself](/operations/2026-06-01-r2d2-stops-paging-itself/), [2026-06-06 — R2D2 Reads the Vault](/operations/2026-06-06-r2d2-reads-the-vault/)
+- Design: `sanctum-config/docs/specs/2026-06-05-r2d2-vault-pstar-design.md` (council-blessed, 5 lenses, unanimous SHIP-WITH-FIXES, approach A-then-B)
