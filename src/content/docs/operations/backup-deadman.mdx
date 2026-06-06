@@ -29,11 +29,11 @@ canary passes    ->  sanctum deadman beat restore-drill
 
 hourly GitHub Action reads heartbeats.json:
    any heartbeat older than its budget?
-      yes  ->  open a GitHub issue (which emails the owner); the run goes red
+      yes  ->  open a GitHub issue (which emails the owner); the run stays green
       no   ->  close the issue (the backup recovered)
 ```
 
-Note the inversion. The backup does not report *failure* — it reports *success*, by writing a fresh timestamp. The watcher alarms on the **absence** of that timestamp. Failure, didn't-run, host-dead, and network-cut all collapse into the same observable: no fresh heartbeat. There is no failure mode the watcher can sleep through, because it is not watching the Mac at all — it watches a file on GitHub's infrastructure and asks one question every hour: is it stale?
+Note the inversion. The backup does not report *failure* — it reports *success*, by writing a fresh timestamp. The watcher alarms on the **absence** of that timestamp. Failure, didn't-run, host-dead, and network-cut all collapse into the same observable: no fresh heartbeat. There is no failure mode the watcher can sleep through, because it is not watching the Mac at all — it watches a file on GitHub's infrastructure and asks one question every hour: is it stale? The run's own colour reflects the *watcher's* health, not the backup's — a stale backup is reported by the issue, and the build goes red only if the watcher itself cannot post.
 
 ## The beat
 
@@ -52,8 +52,8 @@ Each check carries its own staleness budget, stored next to its timestamp: `back
 
 The happy path is easy to believe. The alarm path is the one that has to work the day everything else has failed, so it was exercised for real, not stubbed:
 
-- A heartbeat was forced 100 hours stale. The hourly Action ran, went **red**, and opened the issue. The email arrived.
-- A real `beat` refreshed the heartbeat. The next run went **green** and auto-closed the issue.
+- A heartbeat was forced 100 hours stale. The Action opened the issue (the email arrived) and stayed **green** — a stale backup is an alert, not a broken build.
+- A real `beat` refreshed the heartbeat. The next run closed the issue.
 
 <Aside type="tip" title="The one rule">
 A backup must prove three things, continuously: that it is **fresh**, that it is **restorable**, and that its proof is **visible from somewhere it cannot silence.** The first two were already true on manoir. The third is what made the silence possible — and what this closes.
