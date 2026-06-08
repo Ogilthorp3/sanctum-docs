@@ -28,7 +28,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 
 | Service | Port | LaunchAgent / Unit | Description |
 |---------|------|--------------------|-------------|
-| DenchClaw Gateway | 1977 | `com.sanctum.gateway` | Mac-side agent gateway. Runs Jocasta (the Archivist — CRM data and communications) and exposes the agent API. |
+| DenchClaw Gateway | 1977 | `com.sanctum.gateway` (retired) | Mac-side agent gateway, RETIRED. It ran Jocasta (the Archivist — CRM data and communications) and exposed the agent API. The :1977 gateway now lives inside the VM (see [VM Services](#vm-services)); the Mac-side unit is no longer loaded. |
 | Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
 | Command Center | 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. |
 | Health Center | 2222 | `com.sanctum.health-center` | Digital twin portal — health, wellness, and haushold telemetry. Twin twos for the twin. |
@@ -107,10 +107,10 @@ The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step p
 
 ```yaml
 services:
-  mlx_coder:
+  mlx_codestral:
     enabled: true
-    port: 1338                         # mTLS
-    model_path: ~/.cache/huggingface/hub/models--mlx-community--Qwen2.5-Coder-14B-Instruct-4bit
+    port: 3301                         # CODER role — replaced mlx_coder :1338 (retired 2026-06-07)
+    model_path: ~/.cache/huggingface/hub/models--mlx-community--Codestral-22B-v0.1-4bit
   council_mlx:
     enabled: true
     port: 1337                         # mTLS
@@ -128,7 +128,7 @@ services:
 ```
 
 <Aside type="note">
-The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights). The `:1234` socket is still reachable — it's now a plain-HTTP `socat` bridge to `sanctum-mlx-coder` on `:1338` for callers that haven't moved to mTLS yet.
+The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and for a while `:1234` survived as a plain-HTTP `socat` bridge to `sanctum-mlx-coder` on `:1338` for callers that hadn't moved to mTLS. As of 2026-06-07 all of that is gone: LM Studio is fully decommissioned (no `:1234`, no bridge/guardian), the `sanctum-mlx-coder` `:1338` seat is retired, and native MLX seats serve every model — the CODER role is now Codestral-22B on `:3301`.
 </Aside>
 
 ## Network Services
@@ -226,7 +226,7 @@ services:
 
 ## VM Services
 
-On the other side of bridge100, in a QEMU-emulated box with no internet access, lives an entirely separate operating system running its own init system with its own opinions about how services should start. A whole different world. Twelve gigabytes of RAM. Eight CPU cores. Five personalities. Zero contact with the outside world unless the Mac says so.
+On the other side of bridge100, in a Lima/vz virtual machine (Ubuntu 24.04, migrated off QEMU/HVF on 2026-05-30) with no internet access, lives an entirely separate operating system running its own init system with its own opinions about how services should start. A whole different world. Twelve gigabytes of RAM. Eight CPU cores. Five personalities. Zero contact with the outside world unless the Mac says so.
 
 The VM is, in the most literal sense, a brain in a jar. An air-gapped brain in a jar that runs your haushold security agent. We thought about this. We thought about this a lot. The architecture diagram made it look intentional.
 

@@ -21,7 +21,7 @@ The Capacity Doctrine is the immune-system answer: refuse bad loads up front ins
     `castellan` on port 2189 computes `free = pool − Σ(loaded.peak_reserve)` from `phys_footprint` (the same metric jetsam uses), not RSS. Loading a service is admitted only if `new.budget ≤ free` AND none of its `exclusive_with` neighbours are currently loaded. Refusals return HTTP 409 with the blocking service name and the remedy command.
   </Card>
   <Card title="Rule 3: Nothing critical gets suspended" icon="shield">
-    qemu, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
+    the Lima/vz VM, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
   </Card>
 </CardGrid>
 
@@ -40,12 +40,12 @@ Some services cannot coexist on a ~64 GB host. `capacity.yaml` names these expli
 
 ```yaml
 sanctum-mlx:
-  ram_budget_mb: 45000         # Qwen3.6-35B-A3B-4bit
-  exclusive_with: [lmstudio-coder-14b]
+  ram_budget_mb: 45000         # Qwen3.6-35B-A3B-4bit, :1337
+  exclusive_with: [sanctum-mlx-codestral]
   priority: 100
 
-lmstudio-coder-14b:
-  ram_budget_mb: 12000
+sanctum-mlx-codestral:
+  ram_budget_mb: 14000         # Codestral-22B-v0.1-4bit, :3301
   exclusive_with: [sanctum-mlx]
   priority: 50
 ```
@@ -69,7 +69,7 @@ The layers are independent. The kernel arbitration alone would miss admission ca
 
 ## The CLI Is The Contract
 
-The canonical way to load a heavy service is never `lms load …` or `launchctl kickstart …` directly. It is:
+The canonical way to load a heavy service is never `launchctl kickstart …` directly. It is:
 
 ```sh
 castellan load <service-name>

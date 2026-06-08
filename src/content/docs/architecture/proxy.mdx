@@ -119,7 +119,7 @@ providers:
   gemini:
     base_url: "https://generativelanguage.googleapis.com"
   local:
-    base_url: "http://localhost:1234"
+    base_url: "http://localhost:1337"
 
 models:
   claude-opus-4-7:
@@ -150,7 +150,7 @@ budget:
 
 Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
 
-The important practical split is this: `council-brain` (Opus 4.7 cloud) is the default brain, but it's smart-routed — security and tool sessions stay on Opus 4.7, code drops to the local Coder-14B (`council-code`), general chat drops to the local Qwen 3.5 35B (`council-mlx`) so nothing small-talk-shaped leaves the haus, brainy questions (reasoning verbs or long-form prose) are promoted to Opus 4.7 with `--effort max` via the Claude Team CLI bridge (`council-max-thinking` on `:2001`), and images go to Gemini 3.1 Pro. The current `council-brain` cross-provider fallback chain is GLM 5.1 → Qwen 3.6 Plus. `council-secure` (Gemma4+LoRA local) handles Cilghal and Mundi's domain-specific work. The proxy does the triage. Every decision is visible in config and in `usage.jsonl` instead of buried in agent prompt folklore.
+The important practical split is this: `council-brain` (Opus 4.7 cloud) is the default brain, but it's smart-routed — security and tool sessions stay on Opus 4.7, code drops to the local Codestral-22B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B on `:1337` (`council-mlx`) so nothing small-talk-shaped leaves the haus, brainy questions (reasoning verbs or long-form prose) are promoted to Opus 4.7 with `--effort max` via the Claude Team CLI bridge (`claude-max-proxy` on `:3456`), and images go to Gemini 3.1 Pro. The current `council-brain` cross-provider fallback chain is GLM 5.1 → Qwen 3.6 Plus. `council-secure` (Gemma4+LoRA local) handles Cilghal and Mundi's domain-specific work. The proxy does the triage. Every decision is visible in config and in `usage.jsonl` instead of buried in agent prompt folklore.
 
 ## Claude Code Startup Preflight
 
@@ -194,7 +194,7 @@ That test swaps Anthropic out for a local `file://` auth page and a fake `setup-
 
 ## Test Coverage
 
-The coverage now sits beside live checks for the `sanctum-mlx` and `sanctum-mlx-coder` mTLS reachability, the `socat` plain bridge on `:1234`, fallback resilience, Claude Code OAuth passthrough, and the local Claude Max auth-recovery harness. Because if your local tiers are part of the promise, they belong in the test count and in the blame when they break.
+The coverage now sits beside live checks for the `sanctum-mlx` (`:1337`) and `sanctum-mlx-codestral` (`:3301`) native-MLX seat reachability, fallback resilience, Claude Code OAuth passthrough, and the local Claude Max auth-recovery harness. Because if your local tiers are part of the promise, they belong in the test count and in the blame when they break.
 
 The tests live in the service-doctor skill because the proxy is a service and the doctor makes haus calls. It's also the only medical professional in the system that doesn't charge by the token.
 

@@ -32,10 +32,10 @@ The Council decreed strict segregation of duties. Here's where everything lives.
 | Component | Plane | Port | Interface | Notes |
 |-----------|-------|------|-----------|-------|
 | Signal CLI | Host | 8080 | `127.0.0.1` | Native — containerization breaks TTY registration and device pairing |
-| Coder Plain Bridge | Host | 1234 | `127.0.0.1` | `socat` plain HTTP → `sanctum-mlx-coder` mTLS `:1338`. Was LM Studio pre-2026-05-11. |
+| Coder MLX (`sanctum-mlx-codestral`) | Host | 3301 (mTLS) | `127.0.0.1` + Tailscale | Codestral-22B-v0.1-4bit, the CODER role. Was a `socat` plain-HTTP bridge on `:1234` to `sanctum-mlx-coder` `:1338` (retired 2026-06-07); LM Studio pre-2026-05-11. |
 | Sanctum Proxy (`proxyd`) | Host | 4040 | `127.0.0.1` | Rust daemon — traffic cop between external connections and container |
 | MLX Runtime (`sanctum-mlx`) | Host | 1337 (mTLS) | `127.0.0.1` + Tailscale | High-performance inference path via Metal. See [Dynamic Model Routing](/architecture/dynamic-model-routing/) |
-| Coder MLX (`sanctum-mlx-coder`) | Host | 1338 (mTLS) | `127.0.0.1` + Tailscale | Qwen2.5-Coder-14B; same pure-Rust binary family as `sanctum-mlx` |
+| ~~Coder MLX (`sanctum-mlx-coder`)~~ | Host | ~~1338~~ | — | Retired 2026-06-07. Was Qwen2.5-Coder-14B; CODER role now served by `sanctum-mlx-codestral` on `:3301` (see row above) |
 | Docker Engine (OrbStack) | Host | — | — | Native macOS container runtime for the container plane |
 | OpenClaw Core | Container | 1977 | `0.0.0.0` (internal) | **Not** exposed to host network — accessed only via `claw-gateway` or proxy |
 | claw-gateway | Container | Unix socket | `/var/run/claw/gateway.sock` | Internal nervous system — receives host commands via TLV protocol |
@@ -61,7 +61,7 @@ services:
       - SIGNAL_CLI_HOST=host.docker.internal
       - SIGNAL_CLI_PORT=8080
       - CODER_BRIDGE_HOST=host.docker.internal
-      - CODER_BRIDGE_PORT=1234   # socat → sanctum-mlx-coder mTLS :1338
+      - CODER_BRIDGE_PORT=3301   # sanctum-mlx-codestral, mTLS (was socat→:1338, retired 2026-06-07)
       - MLX_HOST=host.docker.internal
       - MLX_PORT=1337            # sanctum-mlx, mTLS
       - GATEWAY_SOCKET=/var/run/claw/gateway.sock
