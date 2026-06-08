@@ -113,7 +113,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 - Runs the full AI agent cluster (6 agents on the VM)
 - Hosts the command center dashboard
 - Manages the Cloudflare tunnel for external access
-- Runs inference servers (`sanctum-mlx`, `sanctum-mlx-coder`, Sanctum TTS) and the `sanctum-server` router that fronts them
+- Runs inference servers (`sanctum-mlx`, `sanctum-mlx-codestral`, Sanctum TTS) and the `sanctum-server` router that fronts them
 - Acts as the Git and rsync origin for skill updates
 - Stores the canonical copy of `instance.yaml`
 
@@ -124,7 +124,7 @@ These services only run on the hub and are not deployed to satellites:
 | Service | Reason |
 |---------|--------|
 | Council MLX (`sanctum-mlx`) | Qwen3.6-35B-A3B-4bit needs ≥ 40 GB unified memory + a Metal-class GPU |
-| Coder MLX (`sanctum-mlx-coder`) | Qwen2.5-Coder-14B-Instruct-4bit, mTLS on `:1338` with the plain `:1234` bridge for legacy callers |
+| Codestral MLX (`sanctum-mlx-codestral`) | Codestral-22B-v0.1-4bit on `:3301`. (Superseded the Qwen2.5-Coder-14B coder seat on `:1338`, retired 2026-06-07 along with the LM Studio `:1234` bridge.) |
 | Firewalla Bridge | Direct LAN access to the primary router |
 | Cloudflare Tunnel | Single ingress point for the instance |
 | Orbi Bridge | Direct LAN access to the access point |
@@ -148,7 +148,7 @@ Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `s
 The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of LaunchDaemons (six P0 services in `/Library/LaunchDaemons/`) and the usual user LaunchAgents:
 
 1. **Phase 1: Containers** — OrbStack starts headlessly via its hidden-autostart LaunchAgent, Docker socket ready, Home Assistant + Outline containers up.
-2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit), `sanctum-mlx-coder` (`:1338`, mTLS, Qwen2.5-Coder-14B-Instruct-4bit), and the `socat` plain-HTTP bridge for `:1234` legacy callers all load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them.
+2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit) and `sanctum-mlx-codestral` (`:3301`, Codestral-22B-v0.1-4bit, the coder seat since the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them.
 3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; host IP is pinned to `10.10.10.1`; the boot path waits for VM SSH before declaring success.
 4. **Phase 4: SSH + bridges** — `apple-post-boot.sh` loads SSH keys from Keychain via `ssh-add --apple-load-keychain`; socat proxies stitch VM-side requests to Mac-side services (Firewalla, MLX coder, SanctumBridge).
 
@@ -185,7 +185,7 @@ Think of it as a field office. It can operate independently, make local decision
 2. Copy the install bundle (synced via iCloud) and run the setup scripts.
 3. Set the `.node_id` file to the satellite's name (e.g., `satellite`).
 4. Install OrbStack and deploy Home Assistant.
-5. Install a local model on the satellite's MLX runtime (e.g., Qwen 3.5 3B 4-bit for limited hardware via `sanctum-mlx`, or route the satellite to the hub's `:1338` coder if the link is reliable).
+5. Install a local model on the satellite's MLX runtime (e.g., Qwen 3.5 3B 4-bit for limited hardware via `sanctum-mlx`, or route the satellite to the hub's `:3301` Codestral coder seat if the link is reliable).
 6. Configure on-site integrations (cameras, sensors, smart devices).
 7. Update the satellite's `host` field in `instance.yaml` on the hub.
 </Steps>
@@ -234,13 +234,13 @@ Three Sanctum daemons run on **both** the hub and the mobile node. They are deli
 
 | Daemon | Hub (Mac Mini) | Mobile (MacBook Pro) | Role |
 |--------|----------------|----------------------|------|
-| `com.sanctum.admit` | `:2189` | `:2189` | RAM-pool admission control. Per-host doctrine. |
+| `com.sanctum.castellan` (Gollum) | `:2189` | `:2189` | RAM-pool admission + capacity governor (Rust root LaunchDaemon, superseded `sanctum-admit` 2026-05-30). Per-host doctrine. |
 | `com.sanctum.pressure-valve` | `:N/A` (no listener) | `:N/A` (no listener) | Sheds and freezes offenders before the kernel does. Per-host. |
 | `com.sanctum.claude-max-proxy` | `:3456` | `:3456` | OpenAI-compatible HTTP wrapper around the local `claude` CLI. Each host has its own Claude Max OAuth session; no cross-machine routing required. |
 
 The Claude proxy was unified on 2026-04-27 — before that the hub ran a per-request CLI-spawn proxy on `:2001` (`com.sanctum.claude-cli-proxy`), while the mobile ran the persistent `claude-max-api-proxy` npm package. Both hosts now run the same npm package via a tiny wrapper at `/Users/neo/.sanctum/bin/claude-max-api-tailscale.js`. Smart-router cloud-backend fallback is symmetric: either host can serve the other's escalations if the primary is down.
 
-Per-host symmetry by design: each machine answers for its own air supply (capacity doctrine, 2026-04-24). User-facing and stateful daemons (watchdog, chitti, livekit-server, lmstudio-bridge, home-assistant, outline) remain hub-only — the mobile is a dev and validation surface and doesn't carry production state.
+Per-host symmetry by design: each machine answers for its own air supply (capacity doctrine, 2026-04-24). User-facing and stateful daemons (watchdog, chitti, livekit-server, sanctum-mlx, home-assistant, outline) remain hub-only — the mobile is a dev and validation surface and doesn't carry production state.
 
 ## Querying the Topology
 
@@ -279,7 +279,7 @@ const satelliteIp = nodeGet('satellite', 'tailscale_ip'); // "100.0.0.30"
     +-- 6 AI Agents              +-- Home Assistant       +-- admit/valve
     +-- Full service catalog     +-- Local LLM (3B)       +-- claude-max-proxy
     +-- Home Assistant
-    +-- sanctum-mlx + coder
+    +-- sanctum-mlx + codestral
     +-- sanctum-server router
 ```
 
