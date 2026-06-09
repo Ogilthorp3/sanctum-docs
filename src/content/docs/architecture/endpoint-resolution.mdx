@@ -12,7 +12,7 @@ The doctrine is one sentence: **every address a Sanctum service contacts is reso
 ## Why (the incidents that earned this)
 
 - **2026-04-26** — the Firewalla LAN shifted from `192.168.1.x` to a new subnet. Screen-time enforcement contacted a hardcoded gateway and silently went offline for 24+ hours. Nobody noticed until a kid did.
-- **2026-06** — the haus moved to a Gold Pro firewall on `10.0.0.0/24`. Overnight the Mac Mini's LAN IP drifted again (`10.0.0.248` → `10.0.0.10`). Every `192.168.1.x` literal was already wrong; cert SANs asserted addresses the servers no longer bound to; a mDNS proxy was advertising a dead host.
+- **2026-06** — the haus moved to a Gold Pro firewall on `10.0.0.0/24`. Overnight the Mac Mini's LAN IP drifted again (`10.0.0.248` → `10.0.0.10`). Every `192.168.1.x` literal was already wrong; cert SANs asserted addresses the servers no longer bound to; a mDNS proxy was advertising a dead host. {/* ip-allow: historical incident narrative — documented past addresses, not live config */}
 
 In both cases the failure was invisible because the literal was *plausible* — a real IP, just the wrong one. The resolver makes the wrong-but-plausible state impossible.
 
@@ -55,7 +55,7 @@ Commands: `generate` (default), `check` (exit 1 on drift vs live), `get <KEY>`. 
 ```bash
 # shell — source the helper, resolve with a stable-anchor fallback
 source ~/.sanctum/lib/config.sh
-VM=$(sanctum_endpoint SANCTUM_VM_BRIDGE)        # 10.10.10.10
+VM=$(sanctum_endpoint SANCTUM_VM_BRIDGE)        # 10.10.10.10  (ip-allow: doc example output)
 TS=$(sanctum_endpoint SANCTUM_MANOIR_TS)        # 100.x, current
 ```
 
@@ -84,11 +84,11 @@ A justified `ip-allow` (a stable vmnet anchor used as a documented example, a da
 
 Roughly **920 literal sites across the Sanctum repos** were moved onto the resolver in a single pass, dispatched as parallel review-and-fix agents — one per file, each syntax-checked and reverted if it broke. Drift-prone LAN and Tailscale literals became resolver lookups; stable vmnet anchors became lookups-with-fallback or justified `ip-allow`s; dated docs and runbooks were `ip-allow`'d rather than rewritten. No services were restarted during the sweep; the changes take effect the next time each consumer runs.
 
-## Known sharp edges
+## Resolved sharp edges
 
-<Aside type="caution" title="Not yet fully resolved">
-- **mTLS `--tls-host` in plists** still pins the Tailscale IP via `ip-allow`. It works today but will drift on the next re-auth. The real fix is a launch wrapper that binds by the stable MagicDNS name with that name in the cert SAN.
-- **Two sources of truth.** `instance.yaml` and `tailnet/topology.yaml` both claim to be *the* endpoint SoT. One should derive from the other.
+<Aside type="tip" title="Closed 2026-06-08">
+- **mTLS `--tls-host` in plists** no longer pins a literal Tailscale IP. The `com.sanctum.mlx` plist invokes `~/.sanctum/bin/sanctum-mlx-launch`, which resolves an `@SANCTUM_MANOIR_TS@` token to the live Tailscale IP at launch; the server cert SAN now carries the stable `manoir.tail7c6d11.ts.net` MagicDNS name, so remote callers verify by name regardless of IP drift. Proven against a real Gold Pro → Orbi Wi-Fi failover: the device-stable Tailscale IP held, and every bind path (loopback, vmnet bridge, Tailscale IP) plus the MagicDNS-name SAN validated over mTLS. Both cert-gen scripts (`mtls-gen-certs.sh`, `mtls-rebuild.sh`) emit the resolved MagicDNS name as `DNS.5`, so a regeneration can't silently drop it.
+- **Two sources of truth.** `tailnet/topology.yaml` is now marked superseded (no live consumers); `instance.yaml` + the resolver are canonical.
 </Aside>
 
 ## Related
