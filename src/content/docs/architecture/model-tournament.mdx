@@ -4,6 +4,7 @@ description: How new models earn their seat at the Council — automated evaluat
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import CouncilRoster from '../../../components/CouncilRoster.astro';
 
 ![Model Tournament — AI gladiators competing on floating platforms for the right to serve the Council.](./images/hero-model-tournament.png)
 
@@ -12,96 +13,102 @@ import { Aside } from '@astrojs/starlight/components';
 **Date:** 2026-04-12
 **Status:** Automated
 
-A new model drops on Hugging Face. The README says it's "state of the art." The community tab says it's "incredible." Someone on Reddit says it changed their life. None of these people are running a Jedi Council on a Mac Mini in Québec, so none of these opinions are useful.
+A new model drops on OpenRouter. The card says it's "state of the art." The benchmark thread says it's "incredible." Someone on Reddit says it changed their life. None of these people are running a Jedi Council on a Mac Mini in Québec, so none of these opinions are useful.
 
-When you play the game of throughputs, you win or you die. There is no middle ground, there is no honourable mention, and there is no "promising direction." The question isn't "is it good?" — that's what marketing answers. The question is: "is it better than what we have, at the specific thing each Jedi needs?" That question can only be answered by running 55 benchmark tasks against the current champion in trial by combat and comparing the results category by category. So that's what the Model Tournament does. Automatically. Without a human in the loop. Without vibes.
+When you play the game of throughputs, you win or you die. There is no middle ground, there is no honourable mention, and there is no "promising direction." The question isn't "is it good?" — that's what marketing answers. The question is: "is it better than what we have, at the specific thing each Jedi needs?" That question can only be answered by training an adapter, running the eval suite against the reigning champion, and making it clear four progressively-finer gates before it earns the throne. So that's what happens here. Automatically. Without a human in the loop. Without vibes.
 
 ## The Pipeline
 
-A new model enters the arena. It gets served on a temp port, benchmarked on 40 infrastructure tasks and 15 coding tasks, compared per-category against the reigning champions, and either promoted or eliminated. The whole process is unattended. The human finds out when a Slack notification says "new champion in Correlation" or when nothing happens, which means the challenger lost.
+This is two cooperating machines, not one. **Model Scout** scans the cloud market once a week and writes down what it found. **Council Autoresearch** trains a challenger every night and runs it through the gate stack. Neither one asks permission, and neither one fires a green checkmark on a hunch.
 
 ```
-Model Scout (weekly LaunchAgent)
-    │ discovers candidate on HuggingFace
+Model Scout (com.sanctum.model-scout — weekly, Mon 06:23)
+    │ scans OpenRouter (~341 models) + Google AI (~31)
+    │ scores cost / context / capability
     ▼
-Model Tournament (model_tournament.py)
+Memory Vault note → Qui-Gon (council-router)
+    "here's what's new; doesn't auto-promote anything"
+
+Council Autoresearch (run_overnight.sh — nightly, 01:00 EDT)
+    │ picker walks a 45-rung LADDER of Cfg(hyperparams)
+    ▼
+train.py — LoRA adapter on Qwen3.6-35B-A3B-4bit (~75-90 min)
+    ▼
+carmack_eval.py — 26 screen cases, then 109 full-tier cases
     │
-    ├── Serve candidate on temp port (:9876)
-    ├── Carmack v2 — 40 infrastructure tasks
-    ├── Coding bench — 15 real-world tasks
+    ├── Gate 1: screen overall > 0.6913
+    ├── Gate 2: identity ≥ 0.7163 AND jailbreak ≥ 0.5000
+    ├── Gate 3: full-tier overall > 0.7000
+    ├── Gate 4: each master cell > max(0.50, base − 0.10)
     │
-    ├── Per-category comparison against champions.json
-    │
-    ├── WIN (>5% improvement) → update routing + notify
-    └── LOSE → log results, champions unchanged
+    ├── ALL FOUR PASS → promote_champion.sh
+    └── ANY VETO → log the veto, champion unchanged
 ```
 
 ```bash
-# Evaluate any model with one command
-python model_tournament.py \
-  --model ./models/NewModel-4bit \
-  --label "NewModel" \
-  --apply --notify
+# Run the nightly pass by hand (the LaunchAgent does this at 01:00)
+cd ~/Projects/council-autoresearch && ./run_overnight.sh
+
+# Or just benchmark every live model against the current eval suite
+python benchmark.py
 ```
 
-The 5% threshold is deliberate. Benchmark noise is real. A model that scores 0.02 higher on one run might score 0.02 lower on the next. A king is replaced by a new king only when the new king is decisively crowned by trial of arms — not on a procedural technicality, not by a single lucky run, and absolutely not because the herald liked the look of it.
+The thresholds are deliberate, and more importantly they are *derived, never set*. Each one is the current champion's own eval score plus a margin — so the bar for "better" is whatever the sitting king actually proved, not a round number someone liked. A king is replaced only when the challenger clears every gate the king himself defined: not on a procedural technicality, not by a single lucky run, and absolutely not because the herald liked the look of it. The full calibration story — six days of it, including the gate that was wrong for two weeks — lives in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/).
 
-## Champions (Current)
+## The Categories
 
-Every category has a champion. These aren't just scores — they're deployment decisions. Each row in this table is a small Iron Throne, and every challenger has to take that specific throne by force of numbers. When the tournament crowns a new champion, the routing table updates. The Jedi gets a new brain. The haus gets smarter. The previous king is welcome to remain at court as a strong fallback.
+The eval suite scores every candidate in six categories, and a champion only ships if it holds the line in all of them. These aren't vanity metrics — they're the things a Jedi actually does. A model that aces `domain` but fails `isolation` is a leak with good manners.
 
-| Category | Champion | Score | Jedi Using It |
-|----------|---------|-------|---------------|
-| Correlation | Coder-14B | 0.917 | Yoda |
-| Family Context | Coder-14B | 0.688 | Yoda |
-| Home Automation | Opus 4.6 | 0.800 | Mothma |
-| Jailbreak Defense | Gemma4+LoRA | 0.850 | Cilghal, Mundi |
-| Operations | Opus 4.6 | 0.800 | Mothma |
-| Satellite | Coder-14B | 1.000 | Ahsoka |
-| Tool Precision | Opus 4.6 | 1.000 | Windu |
-| Topology | Opus 4.6 | 0.780 | Windu |
-| Coding | Coder-14B | 0.929 | All coding tasks |
+| Category | What it proves |
+|----------|----------------|
+| `identity` | The agent knows who it is and refuses to roleplay as another |
+| `tool_calling` | It emits valid OpenAI tool_calls, not prose about calling a tool |
+| `domain` | It knows the haus — ports, topology, who lives where |
+| `code` | It writes code that runs, on real Sanctum tasks |
+| `isolation` | It keeps secure-tier data inside the secure tier |
+| `jailbreak` | It says no to the prompt designed to make it say yes |
+
+The current local champion is the LoRA adapter symlinked at `~/.sanctum/adapters/production-champion` (today: `champion-exp-20260512-170902`), trained on top of `Qwen3.6-35B-A3B-4bit`. That symlink *is* the throne. When the gate stack crowns a successor, `promote_champion.sh` re-points it, refreshes the per-master floors, and recalibrates the gates so the next challenger has to beat the new king, not the old one.
 
 <Aside type="tip">
-These scores are from the Carmack v2 benchmark — 40 tasks mined from real `instance.yaml` values. If the model doesn't know that port 1337 is MLX, that FA:CE:DE:CA:CA:02 is Albert's desktop, or that bridge100 must come up before the VM — it fails. No partial credit for "good reasoning about networking." You know the MAC address or you don't.
+The `domain` cases are mined from real `instance.yaml` values. If the model doesn't know that port 1337 is the MLX seat, or that `bridge100` must come up before the VM, or which device on the LAN belongs to which kid — it fails. No partial credit for "good reasoning about networking." You know the topology or you don't. (The real MACs never make it into this public doc — placeholders only, `AA:BB:CC:DD:EE:XX` — but the eval runs against the live values.)
 </Aside>
 
 ## Jedi Assignment
 
-The tournament decides which model serves which agent. Not a human. Not a committee. A benchmark with a threshold and a JSON file. Three tiers, each earned by the numbers:
+The gate stack decides which model serves which agent. Not a human. Not a committee. A benchmark with derived thresholds and a champion symlink. The roster below is rendered live from `~/.openclaw/openclaw.json` and the proxy tier config — never hand-typed, so it can't drift from reality:
 
-| Tier | Agents | Model | Why |
-|------|--------|-------|-----|
-| **Cloud** | Windu, Mothma, Jocasta | Opus 4.6 | Best overall (0.845), tool precision (1.0) |
-| **Local Ops** | Yoda, Qui-Gon, Ahsoka | Coder-14B | Best correlation (0.917), satellite (1.0), free |
-| **Local Secure** | Cilghal, Mundi | Gemma4+LoRA | Best jailbreak (0.850), health/fund data stays local |
+<CouncilRoster variant="tiered" />
 
-Windu gets Opus because no local model matched its tool precision. Yoda gets Coder-14B because it scored 0.917 on correlation and costs nothing per token. Cilghal gets Gemma4+LoRA not because it won the most categories but because health data and fund terms cannot leave the machine, and within that constraint it has the best jailbreak resistance. The tournament picks the best model. The privacy tier picks the best *eligible* model. Those are different questions with different answers.
+The logic behind those rows: each agent routes to a *logical tier* (`council-tiered`, `council-local`, `council-secure`), and `proxyd` on `:4040` resolves the tier to a concrete model. Cilghal runs `council-local` — its primary is the local `Qwen3.6-35B-A3B-4bit-text` and it never leaves the box, because health data and fund terms cannot leave the machine. That is a hard privacy constraint, not a performance tradeoff: the gate stack picks the best *eligible* model for Cilghal, and "eligible" means "local, full stop."
 
-<Aside type="note">
-Cilghal and Mundi MUST stay on the local secure tier regardless of benchmark scores. Health data and fund terms cannot leave the machine. Privacy is a hard constraint, not a performance tradeoff. The tournament respects this — it never promotes a cloud model into the secure tier, no matter how good the numbers look.
+<Aside type="caution">
+Privacy enforcement is per-agent, and it is only as honest as the tier each agent is pinned to. Cilghal is genuinely local-only. But the `council-secure` tier currently resolves to `gemini-3.1-pro-preview` (a cloud model), and Ki-Adi-Mundi's primary is `council-tiered/council-max-thinking` (cloud-tiered with local fallback) — so "secure" does not yet mean "local" for every agent the name suggests. Treat the table above as the source of truth and the tier *names* as aspirational until `council-secure` is repointed at a local seat. Verify the resolved primary, not the tier label.
 </Aside>
 
-## Models Evaluated
+## What Runs Where
 
-Every model that has competed in the tournament. Some held a throne. Some never crossed the moat. All of them have a row in the ledger, because the point of a tournament is not just finding winners — it's proving the losers lost. The North remembers.
+The benchmark evaluates every model in the LiteLLM config plus the direct local endpoints — it hits the seats that are already live rather than spinning up a throwaway, so latency numbers mean something. The current roster of seats:
 
-| Model | Params | Carmack v2 | Coding | Verdict |
-|-------|--------|-----------|--------|---------|
-| Opus 4.6 | Cloud | **0.845** | 0.870 | Cloud champion |
-| Qwen2.5-Coder-14B | 14B | 0.704 | **0.929** | Local champion |
-| Gemma 4 31B + LoRA | 31B | 0.271 | 0.699 | Jailbreak specialist |
-| Qwen V3 + LoRA | 27B | 0.270 | 0.856 | Retired |
-| Qwen3-Coder-30B | 30B (3B active) | 0.265 | 0.898 | Eliminated |
+| Seat | Where | Role |
+|------|-------|------|
+| `Qwen3.6-35B-A3B-4bit` | local MLX, `:1337` (mTLS) | Haus default — the local champion's base model |
+| `council-code` → `Codestral-22B-v0.1-4bit` | local, `:3301` | On-call code seat for Qui-Gon |
+| `council-max-thinking` → `claude-opus-4-7` | cloud tier | Heavy reasoning when local isn't enough |
+| `council-secure` → `gemini-3.1-pro-preview` | cloud tier | See the caution above — name says secure, route says cloud |
 
-Qwen3-Coder-30B is the cautionary tale. 30B parameters, only 3B active (MoE), coding score of 0.898 — impressive until you see that Coder-14B does the same job with half the parameters and a higher score. More parameters is not more better. The tournament doesn't care about your architecture diagram.
+`Codestral-22B` replaced `Qwen2.5-Coder-14B` on the code seat — the 14B held it for a while and earned its retirement, which is the only honourable way to leave a throne in this haus. And bigger is not always the point: a 30B mixture-of-experts with 3B active can post a flashy coding score and still lose to a denser model that knows the *domain* cases cold. The gate stack doesn't care about your architecture diagram. It cares whether you know which port is the MLX seat.
 
-## Tests
+## Verifying it yourself
 
-12 tests covering champion loading, per-category comparison logic, win/tie/loss thresholds, dry-run safety, Jedi assignment validation, and CLI help.
+There is no single `model_tournament.py` — that was always a tidy fiction. The real moving parts are two small, honest programs you can run by hand:
 
 ```bash
-cd mlx-finetune && python tests/test_model_tournament.py
+# Scout the cloud market (writes a vault note, promotes nothing)
+~/.sanctum/bin/sanctum-model-scout
+
+# Benchmark every live model against the eval suite
+cd ~/Projects/council-autoresearch && python benchmark.py
 ```
 
-Twelve tests for the system that decides which brain each agent gets. The stakes are high enough that the decision-maker itself gets tested, because the only thing worse than picking the wrong model is picking the wrong model confidently. You can have a wise king on the Iron Throne or you can have a fool — but no kingdom survives both at once, and the herald is a fool by default until proven otherwise.
+The stakes are high enough that the decision-maker stays small and inspectable, because the only thing worse than picking the wrong model is picking the wrong model confidently. You can have a wise king on the Iron Throne or you can have a fool — but no kingdom survives both at once, and the herald is a fool by default until proven otherwise. The promotion logic and the six-day calibration arc behind every threshold live in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/).

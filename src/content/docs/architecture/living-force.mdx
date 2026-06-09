@@ -66,7 +66,7 @@ The third shape is evolution. Every failure becomes part of the next design deci
     The system expands into the biological layer, recognizing neuro-diversity (ADHD, Dyslexia, ASD) as a first-class cognitive profile. Cilghal's genome-mcp analyzes the owner's 23andMe data to suggest optimal working environments and cognitive scaffolding. Biology informs collaboration.
   </Card>
   <Card title="Phase 8: Centralized Calibration" icon="setting">
-    All hardcoded coordinates are eliminated. The Neural Link (Port 1138) and the Sanctum Watchdog (Port 2187 — the daemon `sanctumd` from `sanctum-rs`, label `com.sanctum.watchdog`, which serves the Living Force API) draw their configurations dynamically from a single master `holocron-config.yaml`. The system reads its own DNA to align its ports and paths upon every ignition.
+    Hardcoded coordinates are being eliminated. `holocron-config.yaml` is the declared single source for the Holocron's ports and paths, and `run_sanctum.sh` reads it via `yq` at ignition to calibrate every sector — UI, command center, health, archives, and the Neural Link (Port 1138). The Sanctum Watchdog (Port 2187 — the daemon `sanctumd` from `sanctum-rs`, label `com.sanctum.watchdog`, which serves the Living Force API) is the holdout: it still carries its own coordinates and is next in line to read the master file. The organism is learning to read its own DNA; it just hasn't memorized every gene yet.
   </Card>
 </CardGrid>
 
@@ -80,14 +80,14 @@ Home Assistant manages 55 Tuya smart lights (cloud API), 4 Ecobee sensors (HomeK
 
 The `ha-self-healer` skill at `~/Projects/openclaw-skills/ha-self-healer/` is Phase 2's concrete implementation. It runs a five-stage pipeline:
 
-1. **Diagnose** (`ha-diagnose.sh`) — queries the HA API for every integration, entity, and automation. Assigns a severity: 0 (OK), 1 (warning), 2 (attention), 3 (degraded), 4 (critical).
+1. **Diagnose** (`ha-diagnose.sh`) — queries the HA API for every integration, entity, and automation. Assigns a severity: 0 (healthy), 1 (advisory), 2 (attention), 3 (urgent), 4 (critical).
 2. **API Heal** (`ha-heal-api.sh`) — reloads integrations, restarts the container, re-enables automations that tripped. The kind of fixes you'd do from the settings page, except at 3 AM without waking anyone.
 3. **UI Heal** (`ha-heal-ui.js`) — headless Playwright. For the problems that can only be fixed by clicking through a browser — Tuya OAuth re-authentication being the prime offender.
 4. **Verify** (`ha-verify.sh`) — runs the diagnostic again. If severity dropped, declare victory. If not, escalate.
 5. **Escalate** — pings Yoda. Something is structurally wrong and an agent with higher-tier model access needs to look at it.
 
 <Aside type="note">
-The healer respects cooldowns: 60 minutes between Tuya integration reloads, 2 hours between Playwright sessions. Without these, a flapping integration would trigger an infinite loop of reloads and browser launches. The system learned patience the hard way — which is to say, the operator learned patience the hard way, and then taught the system.
+The healer respects a cooldown: 60 minutes between Tuya integration reloads, tracked by a `tuya-reload-cooldown` timestamp file. A flapping integration would otherwise trigger an infinite loop of reloads. The Playwright re-auth stage gates on `needs_reauth` rather than its own clock — a per-session Playwright cooldown is the next gap to close. The system learned patience the hard way, which is to say the operator learned patience the hard way, and then taught half of it to the system.
 </Aside>
 
 Two incidents illustrate the difference between "monitoring" and "understanding":
@@ -110,7 +110,7 @@ Four incidents that taught the system something the diagrams couldn't. Each one 
 
 **The Enforcement That Said Yes.** On April 18, 2026, Force Flow logged `BLOCKED` seven times in a row while five of seven devices kept streaming Netflix. The Firewalla bridge was returning `{"success": false, "errors": [{}]}` on HTTP 200, and `if result:` is truthy for any non-empty dict — including one that explicitly says the command did not land. The fix was a two-line guard and a new rule: every write to an external control plane is followed by a read, and the two must agree. Commands can lie as fluently as dashboards. [Screen Time enforcement details →](/operations/screen-time-enforcement/)
 
-**The Desktop Sync Healers.** On April 15, 2026, the Living Force extended into user-space: Apple Mail, Messages, WhatsApp, Signal Desktop, and Telegram all depend on local SQLite databases that only sync while the app is running. Watchdog now monitors them via `pgrep` and reopens them with `open -g -a <App>` when they vanish. For Mail specifically, the auto-healer parses crash logs and clears corrupted `Envelope Index` files before restart. The sync pipeline stopped falling behind. The user stopped noticing the app was ever closed.
+**The Apple Mail Healer.** On April 15, 2026, the Living Force extended into user-space. Several desktop apps — Apple Mail among them — keep a local SQLite database that only syncs while the app is running, so an app that quietly dies stops syncing while looking perfectly fine. Mail got the first concrete healer: `check-apple-mail.sh` does a `pgrep -x Mail`, and `heal-apple-mail.sh` parses the last 15 minutes of `Mail-*.ips` crash logs, and on the `NSCalendarDate` signature clears the corrupted `Envelope Index` files before reopening with `open -a Mail`. The sync pipeline stopped falling behind. Generalizing the same pgrep-and-reopen reflex to Messages, WhatsApp, Signal Desktop, and Telegram is the obvious next move — Mail just earned its healer first by crashing first.
 
 ## The Membrane — Chitti
 

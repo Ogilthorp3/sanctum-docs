@@ -1,44 +1,47 @@
 ---
 title: Sanctum Cloud Proxy
-description: The unified 5-layer secure LLM routing proxy, now written entirely in native Rust to eliminate Python overhead.
+description: The unified 5-layer secure LLM routing proxy, ported from Python into the native Rust sanctum-proxy crate.
 ---
 
 import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ![Sanctum Cloud Proxy — A massive glowing secure gateway vault with five reinforced energy barriers protecting a data stream.](./images/hero-sanctum-cloud-proxy.png)
 
-When your haus talks to the cloud, it shouldn't just ask for an API key and hope for the best. Our original `sanctum-cloud-proxy` was a 100-line Python script that implemented "Military-Grade" security checks: fetching keys securely, tracking costs, and managing fallbacks. It was functional, but it kept the Python interpreter chained to our most critical networking path.
+When your haus talks to the cloud, it shouldn't just ask for an API key and hope for the best. The original `sanctum-cloud-proxy` was a ~100-line Python script that did the security checks by hand: fetching keys, tracking spend, managing fallbacks. It worked, but it kept the Python interpreter chained to our most critical networking path — every autonomous action waited on an interpreter start.
 
-We have ported the entire 5-layer hardening suite directly into the existing `sanctum-proxy` Rust crate. The Python proxy is dead; the native Rust daemon on port 4040 now does it all.
+So we folded the whole hardening suite into the existing `sanctum-proxy` Rust crate. The Python proxy is gone; the native daemon (`proxyd`, launchd label `com.sanctum.proxyd`) does it all.
 
 ## How It Works
 
-The `sanctum-proxy` runs on `10.10.10.1:4040`. It intercepts all LLM API requests and subjects them to 5 layers of verification before forwarding them to the external cloud (like Anthropic or OpenRouter) or routing them to local models.
+`proxyd` binds `0.0.0.0:4040` — all interfaces, so it answers on both `127.0.0.1` and the `10.0.0.1` Mac↔VM bridge. It intercepts every LLM API request and runs it through five layers of verification before forwarding to the cloud (Anthropic, OpenRouter, Gemini) or routing it to a local MLX seat.
 
 ![A technical sketch of a five-layer vault shielding a central data node.](./images/inline-sanctum-cloud-proxy.png)
 
 ### The 5 Layers of Hardening
 
 <Steps>
-1. **Key Security** — No API keys exist in source code, `.env` files, or Git. The proxy securely requests credentials at runtime using the native `security-framework` Rust crate to query the macOS Secure Enclave directly. If a key is missing, it dynamically prompts the user via an AppleScript dialog or CLI to securely store it.
-2. **Fallback Chain** — If a cloud provider returns a 429 Rate Limit, a 500 Server Error, or times out, the proxy automatically falls back to local MLX seats (first the `Codestral-22B-v0.1-4bit` coder on `:3301`, then the `Qwen3.6-35B-A3B-4bit` council seat on `:1337`) without the client ever knowing the cloud failed.
-3. **Cost Control (Daily Caps)** — The proxy tracks real-time USD spend in memory. It applies hardcoded daily budgets per agent (`windu=$2.00`, `mothma=$2.00`, `jocasta=$1.50`, `default=$0.50`). If an agent blows their budget, cloud models are silently dropped from their available routes, forcing them onto local inference.
-4. **Audit Trail & Observability** — Every single request is logged into a structured JSONL file (`~/.sanctum/logs/cloud-proxy-audit.jsonl`). Additionally, the proxy natively exposes a live `/stats` HTTP endpoint on port 4040, allowing for real-time visibility into who spent what today, without ever needing to parse logs manually.
-5. **Rate Limiting** — An internal token bucket tracks provider quotas and implements exponential backoff to gracefully handle high traffic spikes.
+1. **Key Security** — No API keys live in source, `.env` files, or Git. At runtime `keychain.rs` reads `<PROVIDER>_API_KEY` from the environment first (the launchd wrapper `proxyd-launch` injects `GEMINI_API_KEY` / `OPENROUTER_API_KEY` from `~/.sanctum/secrets/`), then falls back to the macOS login keychain via the `security-framework` crate (`service=<provider>-api-key, account=sanctum`). A daemon must never block on a consent dialog, so a missing key **fails closed** — it logs once and returns empty, letting the request emit a clean auth error instead of popping an AppleScript prompt in the operator's session at 3 a.m.
+2. **Fallback Chain** — If a provider returns a 429, a 5xx, or times out, `proxyd` walks a per-model fallback chain (the `fallbacks:` map in `config.yaml`) until something healthy answers — the client never learns the first hop failed. The chain bottoms out on local MLX seats: the `Codestral-22B-v0.1-4bit` coder on `:3301` and the council seat (`qwen3.6-35b-a3b-4bit`) on `:1339`. The cloud can be on fire; your `git commit` message still gets written.
+3. **Cost Control (Daily Caps)** — The proxy tracks real-time USD spend in memory with per-agent daily caps baked into `budget.rs` (`windu=$2.00`, `mothma=$2.00`, `jocasta=$1.50`, everyone else `$0.50`). Blow the cap and cloud routes silently drop off your menu, folding you onto local inference. The agent that overspends doesn't get an error — it gets a quieter model.
+4. **Audit Trail & Observability** — Every request appends a structured line to `~/.sanctum/logs/cloud-proxy-audit.jsonl` — agent, model, tokens, cost, latency, running daily total. The `/stats` endpoint on `:4040` serves the live tally as JSON, so "who spent what today" is one `curl` away, not a `grep` through a log.
+5. **Provider Health Gating** — There is no global rate limiter; what `proxyd` actually keeps is a sliding-window health score per provider in `budget.rs` (`ProviderHealth`: success rate + average latency, aged by exponential decay). Cross 30% errors and a provider is marked unhealthy and skipped in favour of the next link in the chain — routing around a flaky upstream instead of hammering it.
 </Steps>
+
+<Aside type="caution" title="No token bucket here">
+An earlier draft of this page claimed Layer 5 was "a token bucket with exponential backoff." It isn't, and never was — the only thing in the binary by that name is the per-agent USD budget in Layer 3, and the only "backoff" is a 250 ms socket-bind retry at startup. The doc now says what the code does: health gating, not rate limiting. If a real per-provider token bucket lands later, this is the section that earns it back.
+</Aside>
 
 ## Why Rust?
 
-LLM routing sits on the critical path for every autonomous action in the Sanctum. The previous Python implementation added measurable latency during HTTP parsing and context switching.
+LLM routing sits on the critical path for every autonomous action in the Sanctum. The Python implementation added measurable latency on every hop — HTTP parsing, interpreter context switches, the `requests` import tax.
 
 By folding the hardening logic into the `sanctum-proxy` Rust binary:
-- We eliminated the Python interpreter and the `requests` library overhead.
-- Memory usage dropped from ~45MB to ~4MB.
-- Concurrency improved massively via the `tokio` async runtime.
-- The entire routing architecture (both smart intent routing and security hardening) is now unified in one repository, `sanctum-rs`.
+- We dropped the Python interpreter and the `requests` library entirely — the resident set is now in the low tens of MB instead of the Python baseline.
+- Concurrency improved sharply under the `tokio` async runtime; SSE streams from many agents share one process without thread-per-request bloat.
+- Smart intent routing and security hardening now live in one repo, `sanctum-rs`, instead of straddling two languages.
 
 ## Configuration & Dynamic Healing
 
-The proxy loads its initial settings from `~/.sanctum/sanctum-proxy/config.yaml`, but the architecture incorporates "Apple-like" intelligence:
-- **Zero-Config Hot Reloading:** Changes made to the `config.yaml` file are picked up instantly via the `notify` crate, seamlessly swapping the new configuration into memory (via `arc-swap`) without ever dropping an active Server-Sent Event (SSE) stream.
-- **Zero Trust Architecture:** The proxy does not trust the agents. It intercepts requests, verifies the agent's identity via headers or endpoint routing, and calculates the cost independently. If an agent tries to hallucinate a cheaper model name to bypass its budget, the proxy will catch it and bill the actual tokens used.
+`proxyd` loads its initial settings from `~/.sanctum/sanctum-proxy/config.yaml`, but the config is live, not load-once:
+- **Hot reloading:** edits to `config.yaml` are caught by the `notify` crate's filesystem watcher and swapped into memory via `arc-swap`, so a new fallback chain or model entry takes effect without dropping an in-flight SSE stream. You retune routing without bouncing the daemon — and without the agent mid-essay noticing.
+- **Independent accounting:** the proxy doesn't trust the agent to report its own model. It resolves identity from headers or endpoint routing and meters the *actual* tokens the upstream returned. An agent that asks for a cheap model to dodge its cap still gets billed for what it really burned.

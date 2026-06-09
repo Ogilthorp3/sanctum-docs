@@ -29,11 +29,11 @@ Four tiers, in order of precedence. The router tries the cheapest match first an
 | Tier | Mechanism | Example | Latency |
 |------|-----------|---------|---------|
 | 1 | Exact model name | `"model": "coder"` → Coder backend | 0ms |
-| 2 | Glob pattern | `"model": "council-heartbeat"` matches `council-*` | 0ms |
-| 3 | Intent keywords | Prompt contains "debug" + "python" → Coder | ~1ms |
+| 2 | Glob pattern | `"model": "code-review"` matches `code-*` → Coder | 0ms |
+| 3 | Intent keywords | `model` omitted or `"auto"`, prompt has "debug" + "python" → Coder | ~1ms |
 | 4 | Default | No match → Council (configurable) | 0ms |
 
-Tier 1 and 2 are pure string matching — zero overhead. Tier 3 scans the prompt for keywords, which sounds expensive until you realize it's checking a dozen strings against a single message. The ~1ms is generous. Tier 4 is the safety net: if nothing matches, send it to Council and let the persona model do what it was trained for.
+Tier 1 and 2 are pure string matching — zero overhead. Tier 3 scans the prompt for keywords, which sounds expensive until you realize it's checking a dozen strings against a single message. The ~1ms is generous. **One gotcha:** Tier 3 only fires when the request omits `model` or sends `model: "auto"`. An explicit name that matches nothing — a typo, a retired alias — does *not* fall through to intent classification; it drops straight to Tier 4. The router trusts you to mean what you typed. Tier 4 is the safety net: if nothing matches, send it to Council and let the persona model do what it was trained for.
 
 ## Configuration
 
@@ -44,20 +44,22 @@ router:
   backends:
     council-secure:
       url: https://127.0.0.1:1337/v1         # mTLS-only
-      models: [yoda, mothma, windu, cilghal, mundi, jocasta, council-*]
+      models: [yoda, mothma, windu, cilghal, mundi, jocasta, quigon,
+               council-secure, council-ops, council]
       description: "Qwen3.6-35B-A3B - haus default (0.957 on Olympics)"
-      fallback_urls: [https://100.0.0.55:8903/v1]
+      fallback_urls: [https://100.0.0.55:8903/v1, http://127.0.0.1:8901/v1]
       ca_cert_path:  ~/.sanctum/certs/ca.crt
       client_cert_path: ~/.sanctum/certs/clients/sanctum-server.crt
       client_key_path:  ~/.sanctum/certs/clients/sanctum-server.key
     coder:
       url: http://127.0.0.1:3301/v1          # sanctum-mlx-codestral, native MLX seat
-      models: [coder, code-*, "*coder*", quigon, ahsoka]
-      description: "Codestral-22B-v0.1-4bit - pure code + Qui-Gon + Ahsoka (chalet 16 GB)"
+      models: [coder, code-*, "*coder*", ahsoka]
+      description: "Codestral-22B-v0.1-4bit - pure code + Ahsoka (chalet 16 GB)"
     cloud:
-      url: https://openrouter.ai/api/v1
-      models: [opus, opus-4.7, claude-*, escalation]
-      description: "Claude Opus 4.7 - Yoda/Mundi escalation (0.887)"
+      url: http://100.0.0.55:3456/v1         # Claude Max bridge (separate Mini)
+      models: [opus, opus-4.7, claude-*, cloud, escalation]
+      description: "Claude Opus 4.7 via Max subscription - Yoda/Mundi escalation (0.887)"
+      fallback_urls: [https://openrouter.ai/api/v1]
       api_key_env: OPENROUTER_API_KEY
     spatial:
       url: https://generativelanguage.googleapis.com/v1beta/openai/v1
@@ -67,20 +69,22 @@ router:
   default: council-secure
 ```
 
+Two things in that block earn a second look. The `cloud` backend's primary `url` is the **Claude Max bridge** — a small proxy on `:3456` that fronts the Max subscription — with metered OpenRouter as the *fallback*, not the other way around. And `quigon` lives under `council-secure`, not `coder`: the `quigon` **model alias** resolves to the local 35B. Qui-Gon-the-*agent* still gets Codestral, but he gets there through the agent layer (`council-code`), not by anyone typing `model: "quigon"`. More on that two-layer split below.
+
 ### Jedi → backend assignments
 
-This table reflects the **post-2026-04-28 routing**, when the Council went heterogeneous. Every Jedi now starts on a different model family by default and falls back to the local Qwen3.6 if the primary path fails. See [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for why we did this and what it bought us.
+This table reflects the **post-2026-04-28 routing**, when the Council went heterogeneous. Every Jedi now starts on a different model family by default and falls back to the local Qwen3.6 if the primary path fails. The **Primary** column is the agent-layer assignment — the model each Jedi *gets* when you talk to them through `openclaw agent` — which is the routing that matters day to day. (The Smart Router's `model`-alias resolution differs for a couple of seats; see the two-layer note below.) See [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for why we did this and what it bought us.
 
 | Jedi | Primary | Fallback | Why |
 |---|---|---|---|
 | **Yoda** | **cloud — Claude Opus 4.7** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
 | **Mundi** | **cloud — Claude Opus 4.7** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
-| **Qui-Gon** | **coder — Codestral-22B-v0.1-4bit** (`sanctum-mlx-codestral` native MLX `<MINI>:3301`) | council-secure | Dense code gen, infrastructure pragmatism. (Was Qwen2.5-Coder-14B on `:1338` until 2026-06-07; that seat — and the LM Studio `:1234` socat bridge — are now retired, weights deleted, and every model is served by a native MLX seat.) |
+| **Qui-Gon** | **coder — Codestral-22B-v0.1-4bit** (`sanctum-mlx-codestral` native MLX `<MINI>:3301`, via the agent-layer `council-code` alias) | council-secure | Dense code gen, infrastructure pragmatism. (Was Qwen2.5-Coder-14B on `:1338` until 2026-06-07; that seat — and the LM Studio `:1234` socat bridge — are now retired, weights deleted, and every model is served by a native MLX seat.) |
 | **Windu** | **spatial — Gemini 3.1 Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
 | **Cilghal** | **council-secure — Qwen3.6-35B-A3B** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
 | **Mothma** | council-secure — Qwen3.6-35B-A3B | council-secure | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — local-only by mandate |
 | **Jocasta** | council-secure — Qwen3.6-35B-A3B | council-secure | Email / CRM; privacy-first |
-| **Ahsoka** | coder — Codestral-22B-v0.1-4bit (chalet `sanctum-mlx-codestral`) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit |
+| **Ahsoka** | coder — Codestral-22B-v0.1-4bit (when reachable on the haus `:3301` seat) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit, and Codestral-22B won't fit there either — the chalet's own local coder is an open decision (last config: Qwen2.5-Coder-14B, offline) |
 
 Cloud Opus runs through the Claude Max subscription bridge at `<MINI>:3456`, not the metered Anthropic API. Routine Council questions consume zero API credits. Bring-out-the-good-china reasoning happens for the price of the monthly subscription, not per-token.
 
@@ -96,6 +100,8 @@ There are now two routers in front of every Council request, and they answer dif
 | **sanctum-server Smart Router** (this page) | `<MINI>:8900` | Model name + glob + intent classification | Direct API callers (eval harness, integrations, anyone hitting `/v1/chat/completions` with an explicit `model:`) |
 
 The agent layer chooses the model from the agent's role. The Smart Router chooses the backend from the model name. They compose: an agent call resolves to a model alias on the agent side, then the Smart Router (or proxyd, the per-tier router) maps that alias to a backend. The flow `openclaw agent --agent main → council-max-thinking → :3456 (Claude Max bridge) → Opus 4.7` is the canonical path for Yoda after 2026-04-28.
+
+This is exactly why Qui-Gon reads two ways depending on the door you knock on. `openclaw agent --agent quigon` resolves to `council-code` and lands on Codestral at `:3301` — the agent layer knows Qui-Gon writes code. But hit the Smart Router with `model: "quigon"` and you get the local 35B on `council-secure`, because there "quigon" is just a persona alias, and personas live with the Council. Same name, two layers, two brains — and knowing which door you used is half of debugging a response that doesn't sound right.
 
 To verify the agent-layer routing is healthy:
 
@@ -128,7 +134,7 @@ The `/v1/backends` endpoint is useful for debugging. Hit it when you're not sure
 
 ## Tests
 
-23 tests total: 18 unit (pattern matching, think-tag stripping) + 5 e2e (mock backends, full binary, pattern routing, intent classification, default fallback).
+48 tests total: 43 unit (pattern matching, think-tag stripping) + 5 e2e covering health and discovery, explicit-model routing, pattern routing, intent classification, and default fallback.
 
 ```bash
 cd sanctum-server && cargo test

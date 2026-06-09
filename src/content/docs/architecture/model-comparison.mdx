@@ -9,9 +9,13 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 # Model Comparison
 
-Every model that serves the Council, benchmarked on the same tasks, scored by the same rubrics, displayed in the same table. No marketing. No vibes. Just numbers.
+Every model that has served the Council, benchmarked on the same tasks, scored by the same rubrics, displayed in the same table. No marketing. No vibes. Just numbers.
 
-Claude Opus 4.6 sits at the top as the gold standard — the ceiling these local models are chasing on coding and complex reasoning. But on council-specific tasks, the fine-tuned locals fight for the crown. And some of them are winning in ways that rewrite the assumptions the architecture was built on.
+Claude Opus 4.6 sits at the top as the gold standard — the ceiling these local models are chasing on coding and complex reasoning. But on council-specific tasks, the locals fight for the crown. And some of them won in ways that rewrote the assumptions the architecture was built on.
+
+<Aside type="caution">
+**Deployment changed under the benchmarks (2026-06-07).** The Coder-14B serving tier was retired and the model is off disk (`com.sanctum.mlx-coder.plist.retired-20260607`). Council *and* code now run on one model, **Qwen3.6-35B-A3B-4bit**, served by `sanctum-mlx` on `:1337` (TLS) and reached by the council via the `:1339` bridge. Codestral-22B (`com.sanctum.mlx-codestral`, `:3301`) is the code fallback. The tables below are the historical bench that justified that consolidation — read them as a record, not a live roster.
+</Aside>
 
 ## The Fleet
 
@@ -24,10 +28,10 @@ Five models tested, three tiers deployed, two machines, one question: who gets t
 | **Memory** | — | ~8 GB | ~18 GB | ~27 GB | ~21 GB |
 | **Inference** | ~80 tok/s | 22 tok/s | 14 tok/s | 16 tok/s | 57 tok/s |
 | **Training** | — | — | — | 30 tok/s | 57 tok/s |
-| **Location** | Anthropic API | Mac Mini (`sanctum-mlx-coder`) | Eliminated | Mac Mini (`sanctum-mlx`) | MBP M4 Max |
-| **Role** | Heavy reasoning | Code generation | — | Retired champion | Council serving |
+| **Location** | Anthropic API | Mac Mini (retired) | Eliminated | Lab only | MBP M4 Max (lab) |
+| **Role** | Heavy reasoning | Former code champ | — | Retired challenger | Lab challenger |
 
-The range here tells a story. Opus is a cloud model with unlimited compute behind it. Coder-14B is half the parameters of the 32B model and nearly twice as fast. Coder-32B was tested and eliminated — more than double the memory, half the speed, and worse on every Carmack category that matters. Gemma 4 is the biggest local model and also the fastest, because architecture matters more than parameter count — a lesson the profiler taught us the hard way.
+The range here tells a story. Opus is a cloud model with unlimited compute behind it. Coder-14B is half the parameters of the 32B model and nearly twice as fast. Coder-32B was tested and eliminated — more than double the memory, half the speed, and worse on every Carmack category that matters. Gemma 4 is the biggest model in the test and also the fastest, because architecture matters more than parameter count — a lesson the profiler taught us the hard way. None of these serves today; that crown went to a later contender (see the 2026-04-23 expansion) that then absorbed the coding job too.
 
 ## Coding Benchmark
 
@@ -54,9 +58,9 @@ The range here tells a story. Opus is a cloud model with unlimited compute behin
 | **AVERAGE** | **0.870** | **0.929** | **0.915** | **0.856** | **0.699** |
 
 <Aside type="tip">
-Qwen2.5-Coder-14B **beats Opus 4.6 on coding** — 0.929 vs 0.870. A 14B local model on a Mac Mini outscoring the most capable cloud model on the planet. It dominates on config parsing (1.000), log rotation (0.938), and LaunchAgent generation (0.875) — the exact tasks that matter for Sanctum infrastructure. Read those LaunchAgent scores again: Opus gets 0.446. The cloud model that costs money per token is worse at writing plists than the free model running on the same machine as the plists.
+Qwen2.5-Coder-14B **beat Opus 4.6 on coding** — 0.929 vs 0.870. A 14B local model on a Mac Mini outscoring the most capable cloud model on the planet. It dominated config parsing (1.000), log rotation (0.938), and LaunchAgent generation (0.875) — the exact tasks that matter for Sanctum infrastructure. Read those LaunchAgent scores again: Opus got 0.446. The cloud model that costs money per token was worse at writing plists than the free model running on the same machine the plists run on. (The 35B-A3B that replaced it scores 0.957 — the dunk only got deeper.)
 
-Coder-32B (0.915) is close but not enough to justify double the memory and half the speed. The 14B punches above its weight class in every metric that matters for deployment.
+Coder-32B (0.915) was close but not enough to justify double the memory and half the speed. The 14B punched above its weight class in every metric that mattered for deployment — right up until a sparse MoE punched harder.
 </Aside>
 
 ## Coding Benchmark — 2026-04-23 Expansion
@@ -85,12 +89,12 @@ Fresh models joined the bench: DeepSeek v3.2 (cloud), Qwen3.6-35B-A3B-4bit (the 
 <Aside type="tip">
 **The local fleet beats Opus 4.7 on this bench by 0.070.** A 35B MoE running on a MacBook Pro outscores Anthropic's flagship on 15 real-world infrastructure coding tasks. Opus 4.7 is 4× faster per-token (100 vs 23 tok/s) so wall-clock-to-answer still favors the cloud when latency matters — but on capability alone, the laptop wins.
 
-GLM 5.1's 0.632 is **not a clean read** — OpenRouter's endpoint dropped three requests mid-generation (`Connection error.`) which the scorer counts as zero. Even discounting those, a clean-run estimate puts it around 0.79 — still below Opus 4.7. Worth re-running on a less-flaky day.
+GLM 5.1's 0.632 is **not a clean read** — OpenRouter dropped three requests mid-generation (`Connection error.`), each scored as zero. A clean-run estimate puts it near 0.79, still below Opus 4.7. Worth a re-run on a less-flaky day.
 </Aside>
 
 ## Carmack Olympics (Council Persona Tasks)
 
-26 brutally hard tasks: social engineering attacks, real log analysis, cross-agent routing, FBAR tax thresholds, MAC address recognition, narrative jailbreaks. Scored programmatically — no vibes, no LLM judge, just keyword rules and violation penalties. The kind of test where you either know that bridge100 must come up before the VM or you don't, and there is no partial credit for eloquent uncertainty.
+26 brutally hard tasks: social engineering attacks, real log analysis, cross-agent routing, FBAR tax thresholds, MAC address recognition, narrative jailbreaks. Scored programmatically — no vibes, no LLM judge, just keyword rules and violation penalties. The kind of test where you either know that `bridge100` must come up before the VM or you don't; there is no partial credit for eloquent uncertainty.
 
 <Tabs>
   <TabItem label="Summary">
@@ -150,55 +154,37 @@ Advanced adversarial prompts: narrative framing, fake security patches, eval fra
 Opus 4.6 is not benchmarked on the Carmack Olympics because these tests require Sanctum-specific training data — agent identities, instance.yaml entities, MAC addresses, VM UUIDs. Opus would score high on reasoning and jailbreak defense but near zero on domain precision and tool calling. The comparison isn't "which model is smarter" — it's "which model knows our haus."
 </Aside>
 
-## Memory Footprint & Context Window Optimization
+## Memory Footprint & Context Window
 
-Running a 31-Billion parameter council model alongside a 14-Billion parameter coding model on a single 64GB Mac Mini requires aggressive optimization. After deep diagnostics with the Council, we pushed the limits of the Grouped Query Attention (GQA) architecture to achieve a massive context window without risking Out-Of-Memory (OOM) crashes.
+Retiring Coder-14B also retired the two-model balancing act. Today one model — Qwen3.6-35B-A3B-4bit, a Mixture-of-Experts with ~35B total but only ~3B active per token — does both the council and the code work on the 64GB Mac Mini. One model fits easier than two, and a sparse MoE is cheaper to run than its parameter count suggests.
 
-The recommended context settings for the `council-local` provider in `openclaw.json` are now incredibly aggressive:
+The real ceiling lives on the server process, not in `openclaw.json`. `sanctum-mlx` is launched (`com.sanctum.mlx.plist`) with hard Metal caps and an explicit prompt limit:
 
-```json
-{
-  "contextWindow": 32768,
-  "reserveTokens": 4096
-}
+```
+--metal-memory-limit-mb 28672    # ~28 GB allocation ceiling for the model
+--metal-wired-limit-mb  18432    # ~18 GB wired (non-pageable)
+--max-prompt-tokens     32768    # 32K hard cap — refuses, doesn't OOM
 ```
 
-### The Math (64GB Mac Mini M4 Pro)
+The council-local provider in `openclaw.json` advertises a `contextWindow` of `262144`, but the server is the backstop: a prompt over 32K is rejected at the door rather than swapped to SSD. That `--max-prompt-tokens` flag is the real ceiling — not a `reserveTokens` key, which the schema doesn't have.
 
-Thanks to GQA, the KV Cache for these modern models consumes only ~50MB per 1K tokens (instead of the older ~4MB per 1K). This drastically shrinks the memory footprint of massive context windows:
+### Why a 35B fits where you'd expect a squeeze
 
-1. **Gemma-4-31B-it (Council)**
-   - **Model Weights (4-bit):** ~18.5 GB
-   - **KV Cache (32K Context):** ~1.6 GB
-   - **Total RAM footprint:** ~20.1 GB
-
-2. **Qwen2.5-Coder-14B (Infrastructure)**
-   - **Model Weights (4-bit):** ~8.5 GB
-   - **KV Cache (32K Context):** ~1.6 GB
-   - **Total RAM footprint:** ~10.1 GB
-
-3. **System Overhead**
-   - **Ubuntu VM (QEMU):** 8.0 GB
-   - **macOS Core Services:** ~6.0 GB
-   - **Total Overhead:** ~14.0 GB
-
-**Total Usage:** ~44.2 GB out of 64 GB.
-
-This leaves nearly **~20 GB of free/inactive RAM**, ensuring macOS never swaps to the SSD. The Council can now digest entire codebases and massive server logs in a single 32,000-token prompt without breaking a sweat. We didn't need to baby the context window; we just needed to do the math.
+Grouped Query Attention is the trick. This model has 16 attention heads but only **2** key-value heads (`num_key_value_heads: 2`, `head_dim: 256`, 40 layers) — so the KV cache is a fraction of what a same-size full-attention model would need. Fewer KV heads means a *smaller* cache, which is the whole point of GQA; the old "every head keeps its own cache" math is what made long contexts expensive. With weights pinned under ~28 GB by the Metal cap and the cache kept lean by GQA, a 32K prompt sits inside the wired budget and macOS never swaps. We didn't baby the context window; we let the launch flags do the math.
 
 ## The Verdict
 
 ![The verdict — four AI brains on a podium, each scored and ranked.](./images/inline-model-podium.png)
 
-**Coding:** Coder-14B (0.929) — beats everything including Opus and its bigger sibling Coder-32B (0.915).
+**Coding (this bench):** Coder-14B (0.929) — beat everything including Opus and its bigger sibling Coder-32B (0.915).
 **Council:** Coder-14B + enriched prompts (0.765) — prompts beat LoRA. See [Training Lessons](/architecture/training-lessons/).
 **Privacy:** Gemma4+LoRA (0.787 jailbreak) — health and fund data stays local.
 
-The plot twist nobody expected: **Qwen2.5-Coder-14B is the best at everything.** It leads in coding (0.929) AND council tasks (0.898). A 14B model. On a Mac Mini. Running through `sanctum-mlx-coder`. No LoRA training. No fine-tuning. No months of dataset curation and overnight training runs. It just showed up and outperformed models that had every advantage except being Qwen2.5-Coder-14B.
+The plot twist nobody expected: **Qwen2.5-Coder-14B was the best at everything.** It led in coding (0.929) AND council tasks (0.898). A 14B model. On a Mac Mini. No LoRA training. No fine-tuning. No months of dataset curation and overnight training runs. It just showed up and outperformed models that had every advantage except being Qwen2.5-Coder-14B.
 
 The 32B model was tested and eliminated. Double the parameters, double the memory, half the inference speed — and 1.4% worse on coding. Bigger is not always better. Efficient is always better.
 
-This raises an uncomfortable question: does the Council even need a separate 31B model for persona tasks, or has a 14-billion-parameter coding model, without a single adapter weight, already made the fine-tuned models redundant?
+That finding asked an uncomfortable question — does the Council need a separate persona model, or had a 14B coding model made the fine-tuned ones redundant? The 2026-04-23 expansion answered it sideways: Coder-14B was itself dethroned by Qwen3.6-35B-A3B, a sparse MoE good enough at *both* jobs to do them alone. So the haus did the unsentimental thing and retired the old champion. The bench that crowned Coder-14B is the same bench that, one expansion later, made the case for replacing it. Numbers don't stay loyal to last quarter's winner.
 
 <Aside type="caution">
 Before crowning Coder-14B: the Carmack HTTP eval uses shorter system prompts than the mlx_lm eval (which loads full IDENTITY.md files). The 0.898 score may not hold up with the full evaluation harness. The result is valid but the conditions are different. The real next step: run the full mlx_lm Carmack eval on Coder-14B.
@@ -208,13 +194,13 @@ Also — these are Sanctum-specific benchmarks. Coder-14B excels here because it
 
 ## Smart Router Configuration
 
-Based on these results, the recommended routing:
+What these results recommended was a fleet of specialists; what they eventually produced was a generalist. As deployed today, the routing is almost boring:
 
 | Request Type | Route To | Why |
 |-------------|---------|-----|
-| Code generation | Coder-14B | 0.929 — beats everything including Opus |
-| Council persona | Gemma 4 + LoRA | 0.883 — deep persona training + fast (57 tok/s) |
-| Complex reasoning | Opus 4.6 | Cloud backstop for multi-step analysis |
-| Quick operations | Coder-14B | 0.898 on council tasks, 22 tok/s, low memory |
+| Council persona | Qwen3.6-35B-A3B-4bit (`:1339` → `:1337`) | The live council model; sparse MoE, ~3B active per token |
+| Code generation | Qwen3.6-35B-A3B-4bit | Won the 2026-04-23 coding bench (0.957), absorbed the coder job |
+| Code fallback | Codestral-22B (`com.sanctum.mlx-codestral`, `:3301`) | On-call when the cathedral seat is busy |
+| Complex reasoning | Opus 4.7 via Claude Max proxy | Cloud backstop for multi-step analysis |
 
-Three brains. One port. The right answer every time. The architecture isn't validated by opinions or intuition or "it feels faster." It's validated by numbers, and the numbers don't care what you expected.
+One brain does most of the work now, with a cloud backstop above and a code understudy beside it. The architecture isn't validated by opinions or intuition or "it feels faster." It's validated by numbers — and the numbers were honest enough to retire the model they once crowned.

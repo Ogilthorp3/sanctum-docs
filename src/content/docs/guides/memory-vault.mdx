@@ -12,21 +12,22 @@ The Memory Vault is Sanctum's shared knowledge base, inspired by how human memor
 At some point during development, we realized we'd built a system that remembers where you left your SSH keys, forgets trivial session data, and dreams at 4 AM. The horror movie writes itself.
 
 <Aside type="note">
-  This documentation is automatically kept in sync with the Memory Vault codebase.
+  This page is reconciled against the live vault by hand — last pass 2026-06-09, after the doc and the code had quietly drifted apart. The vault remembers things automatically; its documentation, it turns out, does not.
 </Aside>
 
 ## Memory Stack
 
-Sanctum runs a two-layer memory stack today, with a third layer (entity graph) running on the VM. The doc once described a four-layer design that included a [mem0.ai](https://mem0.ai) cloud tier; that integration was never wired up, and the **privacy posture** decided on 2026-05-16 (vault GitHub mirror archived, "the haus does not sync its thoughts to the cloud") makes wiring it now an explicit policy violation. Honesty over aspiration.
+Today's stack is the local git vault, fronted by two access surfaces (a Rust REST service and a Python MCP server), plus the entity graph running on the VM. The doc once described a four-layer design that included a [mem0.ai](https://mem0.ai) cloud tier; that integration was never wired up, and the **privacy posture** decided on 2026-05-16 (vault GitHub mirror archived, "the haus does not sync its thoughts to the cloud") makes wiring it now an explicit policy violation. Honesty over aspiration.
 
 | Layer | Role | Backend | Cost |
 |-------|------|---------|------|
 | **Memory Vault** | Git-native versioned source of truth, primary cross-agent semantic memory | Local-only git repo at `~/.sanctum/memory/` (GitHub mirror archived 2026-05-16 as part of the privacy scrub; the haus does not sync its thoughts to the cloud) | Free |
+| **`sanctum-memory` REST** | The read/write data plane over the vault git repo | Rust service on `127.0.0.1:42069`, serving `/health` and `/v1/*` HTTP routes (`search`, `read`, `write`, `recall`, `ingest`, `consolidate`) | Free |
+| **`memory_vault` MCP** | Tool surface — how an agent's tool-call becomes a vault operation | Python server (`python -m memory_vault`) over stdio, exposing the 8 `memory_*` tools below | Free |
 | **Neo4j / Graphiti** | Entity relationships & graph queries | Reached via SSH tunnel on local port 31416 (graph runs on the VM, not the host) | Free (self-hosted) |
-| **`sanctum-memory-vault` MCP** | Tool surface — how Claude Code / Gemini CLI talk to the vault | Local binary on `localhost:42069`, serving the 8 `memory_*` MCP tools below | Free |
 
 <Aside type="tip">
-  **The vault is the source of truth.** All cross-agent semantic memory lives in `~/.sanctum/memory/` and is served by `sanctum-memory-vault` on `localhost:42069`. When the vault and the graph disagree, someone has a long night ahead of them. This has happened twice.
+  **The vault is the source of truth.** All cross-agent semantic memory lives in `~/.sanctum/memory/` — a plain git repo. The Rust service on `127.0.0.1:42069` is the data plane; the `memory_vault` MCP server is the tool surface agents speak through. Two doors into one room. When the vault and the graph disagree, someone has a long night ahead of them. This has happened twice.
 </Aside>
 
 ## Architecture
@@ -166,12 +167,12 @@ When the privacy posture was decided on 2026-05-16 (vault GitHub mirror archived
 
 | Tool | Vault Access |
 |------|-------------|
-| Claude Code | MCP via the `sanctum-memory-vault` server on `localhost:42069` |
-| Gemini CLI | MCP stdio |
+| Gemini CLI | `memory_vault` MCP over stdio (`~/.gemini/settings.json`) |
+| Claude Code | Not currently wired — `mcpServers` is empty; reach the vault via the `:42069` REST API or `vault.sh` until the MCP is added |
 | OpenClaw agents | SSH skill (`vault.sh`) |
-| Sanctum automations | GitHub tools |
+| Sanctum automations | `:42069` REST API (`/v1/write`, `/v1/search`) — the old GitHub path died with the 2026-05-16 archive |
 | Obsidian | File system (`~/.sanctum/memory/`) |
-| Holocron | `HausBrainPanel` reads `/vault/brain` from Force Flow + subscribes to `/vault/stream` WebSocket for real-time new-note particles |
+| Holocron | `HausBrainPanel` polls `/vault/brain` from Force Flow (`:4077`) every 5s; new-note particles fire in real time off an Electron IPC vault-event bridge, not a separate socket |
 
 <Aside type="tip">
   Opening the memory directory in Obsidian gives you a graph view of your haus's knowledge. The wikilinks render as connections. It's beautiful, informative, and a little like reading someone's diary — except the someone is your haus infrastructure.
@@ -179,9 +180,11 @@ When the privacy posture was decided on 2026-05-16 (vault GitHub mirror archived
 
 ## Known Gaps
 
-After tonight's reconciliation pass (2026-05-29), there are **no open implementation gaps**. The vault behaves exactly as documented above: short-term inbox + long-term knowledge/events/procedures, nightly consolidation with bounded archive-eviction, 90-day reversibility, MCP tool surface on `localhost:42069`.
+After tonight's reconciliation pass (2026-05-29), there are **no open implementation gaps** — the machinery does what this page says it does: short-term inbox + long-term knowledge/events/procedures, nightly consolidation with bounded archive-eviction, 90-day reversibility, the `memory_*` tool surface, the `:42069` data plane.
 
-The procedures layer was empty for months and is now seeded — 4 high-signal runbooks grounded in recent incidents live under `procedures/{troubleshooting,maintenance,automation}/`. The layer grows organically from there as incidents teach the haus new procedures worth remembering.
+One thing the caps table doesn't show: the vault is currently *over cap and grinding down*. Events sits at roughly 8× its 500-note cap, and the nightly run evicts 100 events per cycle by design (`MAX_EVICT_PER_RUN`) rather than archiving thousands in one massacre. That's the bounded-eviction design working, not a steady state — a system converging, not a system at rest.
+
+The procedures layer was empty for months and is now seeded — 5 high-signal runbooks grounded in recent incidents live under `procedures/{troubleshooting,maintenance,automation}/`. The layer grows organically from there as incidents teach the haus new procedures worth remembering.
 
 The only architectural decision left open is whether to ever re-introduce a cloud-sync tier (see *On Mem0* above). That is a privacy-posture decision, not an engineering gap.
 

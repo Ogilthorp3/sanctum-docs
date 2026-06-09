@@ -29,7 +29,7 @@ Both traditions converge on the same insight: in a living system under load, the
     Active presence entries — TTL-bounded signals that say "I'm using GPU until 15:30, loading the Codestral-22B coder seat". Mid-flight work, the system's vital flow.
   </Card>
   <Card title="Manomaya — mental body" icon="heart">
-    Mood + posture. Five postures (Poised · Cautious ~ Conserving ⌣ Healing ↺ Alert !) with 30-second hysteresis so the body holds its lean against tick noise.
+    Mood + posture. Six postures (Poised · Cautious ~ Conserving ⌣ Healing ↺ Alert ! Fever ^) with 30-second hysteresis so the body holds its lean against tick noise.
   </Card>
   <Card title="Vijnanamaya — wisdom body" icon="star">
     Samskara — learned grooves. (service, pattern, action, success) records that let future reflexes ride past success rather than re-discover it.
@@ -54,6 +54,9 @@ The watchdog reads `chitti.mood.posture` at the top of each remediation pass and
 | Alert | ! | act narrowly, fast; widen breaker by 2 (don't suspend mid-rescue) |
 | Healing | ↺ | observe, settle; tighten budget by 2 |
 | Conserving | ⌣ | minimum action, defer non-critical |
+| Fever | ^ | body in shock — halt non-high reflexes, breaker and budget both to 1, escalate to the cortex |
+
+**Fever** is the one posture that skips hysteresis. When `pressure_15min ≥ 0.95`, or action density saturates (`≥12` remediations while `pressure_15min ≥ 0.7`), `classify_posture` returns it before any other branch. The watchdog's answer isn't to try harder — it's to stop: breaker and budget both clamp to 1, non-high reflexes halt, and the cortex (a human) is paged. A body that thrashes under saturation digs the hole deeper; this one names the shock and hands back the shovel.
 
 **Direction loops** — once the body enters a posture, it holds it. A different signal must sustain for ≥30s before the body flips. Brief contradictions don't oscillate the system; structural shifts within minutes still register. The body's lean is itself a state, not just a moment.
 
@@ -65,7 +68,7 @@ The watchdog reads `chitti.mood.posture` at the top of each remediation pass and
 2. If a non-primary action has earned itself (≥3 attempts, ≥50% success, beats the primary's observed rate), promote it.
 3. Otherwise, declared order, primary first.
 
-The runtime catalog now declares ordered `actions:` per service. HA and outline have `compose-up` as primary and (today) `orb-restart-then-up` as the fallback. The trace below is the 2026-04-26 deploy when the fallback was still `colima-restart-then-up` — the picker rotated within minutes of deploy:
+The runtime catalog declares ordered `actions:` per service. HA and outline both have `compose-up` as primary and `colima-restart-then-up` as the fallback. That name is a fossil: Colima was retired for OrbStack on 2026-04-27, but the script kept the old key even though it now restarts the right runtime. The picker doesn't care what an action is called — only whether its groove succeeds — so the stale name is cosmetic. The trace below is the 2026-04-26 deploy, the day the picker first rotated within minutes:
 
 ```
 [18:30:35] Action picker: home-assistant/port-closed —
@@ -75,7 +78,7 @@ The runtime catalog now declares ordered `actions:` per service. HA and outline 
 [18:33:11] HA :8123 OPEN
 ```
 
-Wisdom flowed back into reflex. The body chose to switch hands. The Colima→OrbStack migration on 2026-04-27 renamed the action; the picker logic is unchanged.
+Wisdom flowed back into reflex. The body chose to switch hands. The OrbStack migration the next day swapped what the fallback *does*, not what it's *called* — the picker logic and the groove it carved are unchanged.
 
 ## Vajrayogini — visible without ambiguity
 
@@ -93,11 +96,13 @@ The architecture's deepest property is honesty. When outline's `colima-restart-t
 | `POST /attention` | Set focus + optional quiet flag + TTL |
 | `DELETE /attention` | Clear; falls back to clock-default |
 | `GET /samskara?service=&pattern=` | Vijnanamaya — ranked actions for that groove |
+| `POST /samskara/expire` | Drop grooves older than `older_than_days` (default 7) |
 | `POST /action` | Record an outcome (writes vijnanamaya) |
-| `GET /presence` | Pranamaya — implicit via `/fluid` |
 | `POST /presence` | Register TTL-bounded mid-flight work |
 | `DELETE /presence/{id}` | Early release |
 | `GET /health` | Liveness + record counts |
+
+There is no `GET /presence` — pranamaya is read through `/fluid`. Asking directly earns a clean `405`: the body won't serve a door it never built.
 
 ## What's whole
 
@@ -105,7 +110,7 @@ The chapter closes here. The body has all five sheaths and each one carries weig
 
 - **Annamaya** — pressure + thermal. `classify_posture` reads both; a hot chip can move the body to Alert or Conserving on its own, no memory pressure required.
 - **Pranamaya** — TTL-bounded presence. sanctum-tts writes its own entries around `/speak`; sanctum-watchdog writes around an MLX seat load. The body sees what's in flight without anyone teaching it.
-- **Manomaya** — five postures with 30 s hysteresis. The watchdog reads them before every reflex.
+- **Manomaya** — six postures with 30 s hysteresis (Fever skips the wait). The watchdog reads them before every reflex.
 - **Vijnanamaya** — persistent JSONL log at `~/.sanctum/chitti/samskara.jsonl`. The body remembers across restarts. Corrupt lines from a partial-write crash are tolerated; the rest of the memory still loads.
 - **Anandamaya** — explicit POST always wins. When nothing is set, a 30 s poller reads the macOS frontmost app and translates it (Zoom → on-call, Logic Pro → recording, loginwindow → asleep, otherwise `app-<name>`). The body's intent breathes on its own.
 
@@ -114,7 +119,7 @@ The chapter closes here. The body has all five sheaths and each one carries weig
 A handful of cross-system integrations are out of chitti's scope and live in their own future sessions:
 
 - **Jocasta, council-mlx, pressure-valve, jocasta-mcp** are not yet readers of `/attention`. They could quiet themselves without re-deriving quiet hours; today they don't.
-- **LiveKit's voice-agent** could write its own presence entries when a call is active; today the macOS focus poller catches it indirectly through Zoom-class app names but not through the LiveKit phone path.
+- **LiveKit's voice-agent** could write its own presence entries when a call is active; today the macOS focus poller catches Zoom-class app names but not the LiveKit phone path.
 - **Per-axis mood history** for thermal — chitti only EWMA's memory pressure. Thermal is read fresh each tick, not folded into a 15-min average.
 
 These are real gaps, but the body works without them. They're invitations, not blockers.

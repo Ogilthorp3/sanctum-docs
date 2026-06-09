@@ -10,11 +10,15 @@ import { Aside } from '@astrojs/starlight/components';
 # LoRA in Rust
 
 **Date:** 2026-04-08
-**Status:** Implemented, tested, pending lazy-load for 64GB nodes
+**Status:** Shipped. Runs the council in production on the Mac Mini (`com.sanctum.mlx`, port 1337).
 
 Running a 27B model through a Python runtime to serve a Jedi Council felt like asking a padawan to carry the Death Star plans. It technically works. You spend the whole time worrying about when it won't. So we built `sanctum-mlx` — a native Rust inference server on `mlx-rs`. One problem: it couldn't load LoRA adapters.
 
-The adapters are the entire point. Without them, the 27B base model is a generalist that has never heard of Yoda, doesn't know port 1337, and would cheerfully tell you that bridge100 is a card game. The LoRA weights are the difference between a language model and a Council member.
+The adapters are the entire point. Without them, the base model is a generalist that has never heard of Yoda, doesn't know port 1337, and would cheerfully tell you that bridge100 is a card game. The LoRA weights are the difference between a language model and a Council member.
+
+<Aside type="note">
+This page records the original 27B-dense work from April 2026, and the numbers below are that run. The council now serves **Qwen3.6-35B-A3B** — a sparse MoE — and the same `lora.rs` merges its adapters unchanged: the merge logic is parameter-name-based, so it generalized to the MoE checkpoint for free (Phase 4/5, May 2026). Where it matters, the current figure is noted inline.
+</Aside>
 
 Now it can load them. In Rust. Without Python. Without the GIL. Without the 300MB of overhead that comes from asking an interpreted language to do the job of a compiled one.
 
@@ -28,7 +32,7 @@ Instead, we merge at load time:
 W_merged = W_base + (α/r) × scale × (B^T @ A^T)
 ```
 
-For quantized models (which is everything on Apple Silicon, because 27 billion parameters don't fit in memory any other way), the pipeline is:
+For quantized models (which is everything on Apple Silicon, because tens of billions of parameters don't fit in memory any other way), the pipeline is:
 
 ```
 Dequantize (int4 → float32)
@@ -57,14 +61,17 @@ The merge handles prefix stripping (`language_model.` from VL checkpoints) and u
 
 ### V3 Adapter Merge Log
 
+This is the V3 adapter merging into the original 27B-dense base (rank=64, alpha=128, scale=2.0 — the defaults the unit tests still assert against):
+
 ```
 LoRA config loaded       rank=64 alpha=128 scale=2.0 effective_scaling=4.0
 Adapter safetensors loaded  keys=496
 LoRA pairs grouped          pairs=248
-LoRA adapter merge complete merged=0 merged_quantized=248 skipped_missing=0
+LoRA adapter merge complete merged=0 merged_quantized=248 skipped_missing=0 \
+                            skipped_shape_mismatch=0 total_pairs=248
 ```
 
-248 out of 248 quantized pairs. Zero skipped. The log is boring, which is the highest compliment merge code can receive.
+248 out of 248 quantized pairs. Zero skipped. The `skipped_shape_mismatch` field earns its keep on the MoE checkpoint — hybrid `linear_attn.*` projections whose Rust shape disagrees with the trainer's get skipped, not crashed — but on a clean dense adapter it stays at zero. The log is boring, which is the highest compliment merge code can receive.
 
 ## Portable Metal Builds
 
@@ -73,15 +80,16 @@ The binary embeds a hardcoded path to `mlx.metallib` (the compiled Metal shaders
 **Fix:** `build-release.sh` packages the binary with `mlx.metallib` colocated. MLX's runtime searches the binary's directory first (via `dladdr()`), finding the colocated file before falling back to the hardcoded path.
 
 ```bash
-./build-release.sh              # Build for current machine
-./build-release.sh --deploy mm  # Build + deploy to Mac Mini
-./build-release.sh --deploy all # Deploy to all nodes
+./build-release.sh                  # Build for current machine
+./build-release.sh --deploy mm      # Build + deploy to Mac Mini
+./build-release.sh --deploy chalet  # Build + deploy to the chalet node
+./build-release.sh --deploy all     # Deploy to all nodes
 ```
 
-Output: `dist/sanctum-mlx/` containing the binary (17MB) + metallib (122MB). The shader library is seven times larger than the server. Metal has priorities.
+Output: `dist/sanctum-mlx/` containing the binary (30MB) + metallib (158MB). The shader library is five times larger than the server. Metal has priorities.
 
 <Aside type="note">
-The Rust binary OOMs on the 64GB Mac Mini because it loads the full 27B model into memory at once. Python's `mlx_lm.server` uses lazy mmap loading — only touching pages as they're needed. The Mac Mini stays on Python until we implement lazy loading in Rust. The 128GB MBP runs the Rust binary fine, because the answer to most memory problems is "buy more memory," and the answer to the rest is "implement mmap."
+The original 27B-dense binary OOM'd on the 64GB Mac Mini — it loaded the whole model at once, and Python's `mlx_lm.server` got to stay there on lazy mmap. The fix wasn't lazy loading in Rust. It was switching the council to a 35B-A3B MoE (only ~3B params active per token) and bolting on explicit Metal caps: `--metal-memory-limit-mb 28672 --metal-wired-limit-mb 18432`, plus `--turboquant`. The Mac Mini now runs the Rust binary in production on port 1337. Python survives as the small Qwen3.5-9B fallback on `:8901` — kept around for the same reason you keep a spare tire: not because you expect to, but because the day you need it you really need it.
 </Aside>
 
 ## Performance
@@ -94,11 +102,11 @@ The Rust binary OOMs on the 64GB Mac Mini because it loads the full 27B model in
 | LoRA merge time | 5s | N/A (runtime) |
 | Crash recovery | Instant (no GC) | GIL pause risk |
 
-Same tok/s because the Metal GPU is the bottleneck — both runtimes are feeding the same silicon. Rust wins on everything around the inference: startup, memory, determinism. The 250MB of saved overhead doesn't matter much on a 128GB machine, but it matters a great deal on a 64GB machine that's also running `sanctum-mlx-coder`, Home Assistant, Qwen3-TTS, and whatever else decided to be important today.
+Same tok/s because the Metal GPU is the bottleneck — both runtimes are feeding the same silicon. Rust wins on everything around the inference: startup, memory, determinism. The 250MB of saved overhead doesn't matter much on a 128GB machine, but it matters a great deal on the 64GB Mac Mini that's also running `sanctum-mlx-codestral` (the on-call coder seat), the `yoda-tts-worker` on `:8008`, Home Assistant, and whatever else decided to be important today.
 
 ## Tests
 
-27 tests across 3 suites:
+23 tests across 3 suites:
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|

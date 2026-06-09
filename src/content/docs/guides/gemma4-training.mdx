@@ -10,9 +10,13 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 # The Gemma 4 Switchover
 
 **Date:** 2026-04-08
-**Status:** Armed for nightly training
+**Status:** Retired — ran nightly 2026-04-09 to ~04-20, now decommissioned
 
-Qwen3.5-27B served the Council well. But Google dropped Gemma 4 with native MLX support in `mlx_lm` 0.31.2, and it trains at 2x the speed with half the memory. Sometimes loyalty has to yield to benchmarks.
+<Aside type="note">
+Historical writeup. The Gemma 4 nightly pipeline ran for about a week in April, then we let it go: the model dir, the conversion script, the LoRA config, the test suite, and the `com.sanctum.master-pipeline` LaunchAgent are all off disk. The Council's live training base is back to a Qwen — `Qwen3.6-35B-A3B-4bit-text` — and the promotion harness was rebuilt as [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/). The body below is kept as the record of what we built and what we learned; read it in the past tense.
+</Aside>
+
+Qwen3.5-27B served the Council well. But Google dropped Gemma 4 with native MLX support in `mlx_lm` 0.31.2, and it trained at 2x the speed with half the memory. Sometimes loyalty yields to benchmarks. Sometimes, a month later, the benchmarks change their mind — but that's the next chapter.
 
 ## Why Gemma 4
 
@@ -24,13 +28,14 @@ Qwen3.5-27B served the Council well. But Google dropped Gemma 4 with native MLX 
 | Inference tok/s | 57 (Rust) | 57 (Rust) |
 | mlx_lm support | 0.28+ | **0.31.2+** (just landed) |
 
-Same inference speed, but training is twice as fast with half the memory. On a 128GB MBP, that's the difference between "I hope nothing else is running" and "I forgot training was happening."
+Same inference speed, but training twice as fast on half the memory. On a 128GB MBP, that's the difference between "I hope nothing else is running" and "I forgot training was happening." The numbers were honest. They just weren't enough to keep the seat — Qwen3.6 landed a few weeks later and took it back.
 
 ## Data Pipeline
 
-The Council's training data was in Qwen ChatML format — `<|im_start|>`, `<|im_end|>`, `<think>` blocks. Gemma 4 uses `<start_of_turn>` / `<end_of_turn>`. Rather than convert between formats, we stripped everything to clean messages and let `mlx_lm` apply the correct template:
+The Council's training data was in Qwen ChatML format — `<|im_start|>`, `<|im_end|>`, `<think>` blocks. Gemma 4 used `<start_of_turn>` / `<end_of_turn>`. Rather than convert between two model-specific dialects, we stripped everything down to clean role/content messages and let `mlx_lm` apply the correct template — which is exactly why the data outlived the model that prompted the change:
 
 ```bash
+# scripts/convert_data_for_gemma4.py — no longer in-tree
 python scripts/convert_data_for_gemma4.py \
   data/splits-carmack/train.jsonl \
   data/splits-gemma4/train.jsonl
@@ -78,7 +83,9 @@ The enrichment script is deterministic (`random.seed(42)`) so it produces identi
 ## Training Configuration
 
 ```yaml
-# configs/lora-gemma4-31b.yaml
+# configs/lora-gemma4-31b.yaml — archived; every field below still maps
+# 1:1 onto mlx_lm's tuner/utils.py build_schedule(), so it remains a valid
+# LoRA config even though the file itself is gone.
 lora_parameters:
   rank: 64          # Aggressive — only 29GB peak
   alpha: 128
@@ -97,26 +104,26 @@ lr_schedule:
   warmup_init: 1.0e-7
 ```
 
-Peak memory of 29GB means there's 99GB of headroom on the 128GB MBP. The Qwen config used 51GB. Sometimes the new model just fits better.
+Peak memory of 29GB left 99GB of headroom on the 128GB MBP, against the old Qwen config's 51GB. Sometimes the new model just fits better — and you only find out whether "fits better" beats "we already trust it" after a week of nightly runs.
 
 ## Pipeline Integration
 
-`master-pipeline.sh` v1.5 supports model switching:
+`master-pipeline.sh` v1.5 supported model switching via one env var:
 
 ```bash
 # Default: Gemma 4
 SANCTUM_TRAIN_MODEL=gemma4  # or "qwen" to fall back
 
-# The pipeline auto-selects:
+# The pipeline auto-selected:
 #   gemma4 → models/gemma-4-31B-it-4bit + configs/lora-gemma4-31b.yaml + data/splits-gemma4
 #   qwen   → models/Qwen3.5-27B-Claude-Opus-Distilled-v2-4bit + configs/lora-carmack-overnight.yaml + data/splits-carmack
 ```
 
-Triggers at 1:00 AM via `com.sanctum.master-pipeline` LaunchAgent. Trains for ~6 hours, benchmarks, auto-promotes if the candidate beats the champion.
+It triggered nightly at 1:00 AM via the `com.sanctum.master-pipeline` LaunchAgent: train for ~6 hours, benchmark, auto-promote if the candidate beat the champion. That shell script is retired now — the promotion logic was rebuilt around `sanctum-model-scout` + `benchmark.py` after we found it had spent four nights rejecting good candidates on a broken score function. The autopsy is in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/).
 
 ## Tests
 
-21 end-to-end tests covering every component of the pipeline:
+21 end-to-end tests covered every component of the pipeline (the suite is gone with the rest, but the shape is worth keeping):
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|
@@ -129,7 +136,8 @@ Triggers at 1:00 AM via `com.sanctum.master-pipeline` LaunchAgent. Trains for ~6
 | Benchmark | 2 | Carmack eval script exists and loads |
 
 ```bash
+# tests/test_gemma4_pipeline.py — removed with the pipeline
 cd ~/Projects/mlx-finetune && .venv/bin/python tests/test_gemma4_pipeline.py
 ```
 
-Every test that runs at 1 AM was tested at 10 PM. Because the only thing worse than a failed training run is finding out at 9 AM.
+Every test that ran at 1 AM was tested at 10 PM, because the only thing worse than a failed training run is finding out at 9 AM. What the suite couldn't test was whether Gemma 4 would still be the right model a month out. It wasn't — and that's not a bug, that's just the half-life of a frontier model. We trained it, we benchmarked it, we learned the data pipeline should be model-agnostic, and then we put it down. Tommy would understand.

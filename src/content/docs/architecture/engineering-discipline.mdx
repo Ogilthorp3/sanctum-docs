@@ -1,6 +1,6 @@
 ---
 title: Engineering Discipline
-description: 166 tests, zero hardcoded keys, and the paranoia required to run AI agents in your haus.
+description: Every shipping component carries its own suite, zero hardcoded keys, and the paranoia required to run AI agents in your haus.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -14,44 +14,35 @@ import { Aside } from '@astrojs/starlight/components';
 
 Running AI agents in your haus is either professional engineering or professional negligence. There is no middle ground. The same system that controls your kid's screen time also holds your API keys, your health data, and the credentials to your fund's deal flow pipeline. If that sentence doesn't make you want to write tests, nothing will.
 
-This page documents the standards that keep Sanctum from becoming a cautionary tale — the kind that gets forwarded around Hacker News with subject lines like "man lets AI agents manage home, discovers API key on public GitHub three weeks later." Every number below is verified by automated tests. If it's not tested, it doesn't exist.
+This page documents the standards that keep Sanctum from becoming a cautionary tale — the kind forwarded around Hacker News with subject lines like "man lets AI agents manage home, discovers API key on public GitHub three weeks later." The rule is simple: if it's not tested, it doesn't exist. The corollary is the one this page keeps honest — if it's deleted, it doesn't get to claim coverage either.
 
 ## Test Coverage
 
-166 tests across 10 components. No untested code ships. No exceptions. No "we'll add tests later." Later is where bugs go to breed.
+Every shipping component carries its own suite, and every suite runs independently. No untested code ships. No exceptions. No "we'll add tests later." Later is where bugs go to breed.
 
-| Component | Tests | What They Verify |
-|-----------|------:|------------------|
-| Smart Router (Rust) | 23 | Pattern matching, intent classification, mock backend dispatch |
-| LoRA in Rust | 27 | Config parsing, quantize roundtrip, 248-pair merge, weight hash |
-| Sanctum Olympics | 31 | Config loading, task YAML validation, judge parsing, mock e2e |
-| Gemma 4 Pipeline | 21 | Data conversion, enrichment, training config, 2-iter run, memory |
-| Cloud Proxy | 16 | Health, models, daily caps, fallback chain, agent extraction, audit |
-| Carmack Eval v2 | 19 | Task structure, scoring rules, partial scores, HTTP error handling |
-| Key Rotation | 5 | Dry-run, verify, keychain access, mask function |
-| Secret Rotation | 10 | Scan, keychain audit, token patterns, usage display |
-| Docs Quality | 8 | Frontmatter, CSS hygiene, inline styles, image paths, hero uniqueness |
-| Build Release | 6 | Prerequisites, binary, metallib, dist packaging, deploy flags |
-| **Total** | **166** | |
+The components that matter are the ones still on disk. The table below tracks what actually exists and runs today, not the ghosts of training experiments past.
+
+| Component | Suite | What It Verifies |
+|-----------|-------|------------------|
+| Cloud Proxy (`proxyd`) | `services/sanctum-proxy/test_e2e_proxy.sh` | Release build, binary present, `:4040` health responds |
+| Sanctum Olympics | `sanctum-olympics/test_olympics.py` | Config loading, task YAML validation, judge parsing, mock e2e |
+| Secret Rotation | `~/.sanctum/scripts/secret-rotation.sh --full` | 6-phase sweep (see below) |
+| Docs Quality | `scripts/contrib-check.py` | Frontmatter, haus rule, emoji ban, `<digit` escapes, hero presence |
+| Build Release | `tests/test_build_release.sh` | Prerequisites, binary, metallib, dist packaging, deploy flags |
 
 ```bash
-# Run everything
-cd sanctum-rs && cargo test -- --test-threads=1     # 60 Rust tests
-cd sanctum-olympics && python test_olympics.py       # 31 Python tests
-cd mlx-finetune && python tests/test_gemma4_pipeline.py  # 21 pipeline tests
-cd mlx-finetune && python tests/test_carmack_v2.py   # 19 eval tests
-python tests/test_cloud_proxy.py                      # 16 proxy tests
-bash tests/test_sanctum_docs.sh                       # 8 docs tests
-bash ~/.sanctum/tests/test_rotate_openrouter.sh       # 5 rotation tests
-bash ~/.sanctum/tests/test_secret_rotation.sh         # 10 secret tests
-bash tests/test_build_release.sh                      # 6 build tests
+# Run a suite against the thing it actually tests — locally, no SSH
+bash ~/Projects/sanctum-rs/services/sanctum-proxy/test_e2e_proxy.sh   # proxyd e2e
+python3 ~/Projects/sanctum-olympics/test_olympics.py                  # olympics
+bash  ~/.sanctum/scripts/secret-rotation.sh --full                    # secret sweep
+python3 ~/Documents/Claude_Code/sanctum-docs/scripts/contrib-check.py src/content/docs/architecture/engineering-discipline.mdx
 ```
 
-Every test suite runs independently. Every test suite can be run by a human who just woke up and doesn't remember what day it is. This is a design requirement, not an accident.
+Every suite can be run by a human who just woke up and doesn't remember what day it is. That is a design requirement, not an accident — and the same discipline is why the rows that lost their code lost their place in the table.
 
 ## Secret Management
 
-Zero hardcoded API keys. Anywhere. Verified across 31 repos in 2 GitHub organizations. This is the line in the sand that does not move.
+Zero hardcoded API keys. Anywhere. Verified across every repo in both GitHub organizations — Ogilthorp3 and Triptyq-Capital, 57 repos and counting. The count keeps climbing; the invariant does not move. This is the line in the sand.
 
 The API key was hardcoded in a Python file pushed to a public GitHub repo. For three weeks. Nobody noticed. The key had full API access. The bill was... educational. That was the last time a secret touched source control, and the infrastructure that prevents it from ever happening again is aggressive by design.
 
@@ -62,8 +53,8 @@ The API key was hardcoded in a Python file pushed to a public GitHub repo. For t
 | API keys in git history | **Neutralized** (old keys revoked) |
 | OpenRouter key storage | macOS Keychain (both machines) |
 | OpenRouter Management key | macOS Keychain (for programmatic rotation) |
-| Key rotation | Zero-touch via `rotate-openrouter.sh` |
-| Secret scanning | 6-phase sweep via `secret-rotation.sh` |
+| Key rotation | Zero-touch via `tools/secret-rotator/rotate.py` |
+| Secret scanning | 6-phase sweep via `secret-rotation.sh --full` |
 
 <Aside type="tip">
 The secret rotation script runs a 6-phase sweep: git remote scan, remote fix, deep file content scan, keychain audit, loose file check, and SOPS vault status. Run `secret-rotation.sh --full` anytime you're paranoid. Which should be always. Paranoia is not a personality flaw when your API keys are in the same system as your thermostat.
@@ -73,23 +64,26 @@ The secret rotation script runs a 6-phase sweep: git remote scan, remote fix, de
 
 ```
 macOS Keychain
-  ├── openrouter-api-key      → Used by cloud proxy + benchmarks
-  ├── openrouter-mgmt-key     → Used by rotation script (admin-only)
+  ├── openrouter-api-key      → Used by proxyd + benchmarks
+  ├── openrouter-mgmt-key     → Used by rotate.py (admin-only)
   └── anthropic-api-key       → Used by coding-llm-bench
 
-rotate-openrouter.sh:
-  1. Create new key (via Management API)
-  2. Verify new key works (test completion)
-  3. Store in Keychain (both machines)
-  4. Delete old key (via Management API)
+tools/secret-rotator/rotate.py:
+  1. Mint new value     (via provider Management API)
+  2. Validate + verify  (shape check, then a real test call)
+  3. Propagate          (Keychain + SOPS vault, every write backed up)
+  4. Revoke old value   (via provider Management API)
   Zero browser. Zero human. Zero downtime.
 ```
 
-The rotation script doesn't ask for permission. It creates the new key, proves it works, stores it, and kills the old one. The entire cycle takes under ten seconds. If you're still rotating API keys by logging into a dashboard and clicking buttons, you're doing it wrong — and more importantly, you're doing it rarely, which means your keys are old, which means the blast radius when one leaks is measured in months.
+The rotator doesn't ask for permission. It mints the new value, proves it works, propagates it to the Keychain and the SOPS vault, and kills the old one — and because it validates the shape and aborts before propagation if verify fails, a half-rotated secret never reaches a service. If you're still rotating API keys by logging into a dashboard and clicking buttons, you're doing it wrong — and more importantly, you're doing it rarely, which means your keys are old, which means the blast radius when one leaks is measured in months.
 
 ## Infrastructure Quality
 
-| Metric | Before | After |
+This is a dated snapshot of a single cleanup sweep — measured 2026-04-11, not a live invariant. Some of it drifts back on purpose: every `.bak-pre-X` plist is a deliberate rollback point from the safe-edit ritual, so the disabled-file count breathes in and out as services get touched. The zeros below were true the day the broom came out; the discipline is re-running the broom, not pretending the dust never returns.
+
+
+| Metric (2026-04-11 sweep) | Before | After |
 |--------|--------|-------|
 | LaunchAgents: disabled/backup files | 23 | **0** |
 | Shell scripts without `set -euo pipefail` | 13 | **0** |
@@ -117,7 +111,7 @@ For our own containers the default is **Chainguard `wolfi-base` plus a multi-sta
 | **Build stage** | `cgr.dev/chainguard/wolfi-base:latest` + `apk add --no-cache <toolchain>` |
 | **Runtime stage** | `cgr.dev/chainguard/wolfi-base:latest` + only the runtime libs |
 | **`.dockerignore`** | Required — never copy `node_modules`, `__pycache__`, `.venv`, tests, dev configs |
-| **User** | `useradd -u 1000 -r appuser` and `USER appuser` — never root |
+| **User** | A dedicated non-root user, dropped to with `USER <name>` as the last instruction — never root. Shannon uses `adduser -u 1001 -G pentest` then `USER pentest` |
 | **Healthcheck** | One process check; do not curl an internal HTTP endpoint that depends on the network stack being up |
 
 Shannon (`~/Projects/shannon/Dockerfile`) is the canonical precedent in this workspace — wolfi-base builder and runtime, multi-stage, no apt-cache leftovers. Use it as the reference when adding any new custom container.
@@ -128,17 +122,17 @@ The trade-off is real: native modules with `glibc` symbol requirements (Pillow, 
 
 ## Cloud Proxy Hardening
 
-The cloud proxy (`sanctum-cloud-proxy.py`) sits between the Smart Router and OpenRouter. It exists because giving six AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
+The cloud proxy (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sanctum-proxy`, on `:4040`) sits between the council and the upstream providers. It started life as a Python script and is a Rust binary now — the usual Sanctum arc: Python while a thing is feature-organic, Rust once it's load-bearing. It exists because giving six AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
 
 | Layer | What It Does |
 |-------|-------------|
-| **Key security** | API key from macOS Keychain only — never in code, env, or git |
-| **Fallback chain** | Cloud → Coder-14B → Council MLX → error |
-| **Cost control** | Per-agent daily caps ($2/day Windu, $0.50 default) |
-| **Audit trail** | Every cloud call logged: agent, tokens, cost, latency |
-| **Rate limiting** | Circuit breaker on spending caps |
+| **Key security** | `keychain.rs` reads `PROVIDER_API_KEY` from the launchd env first, falls back to the macOS login Keychain — never in code or git |
+| **Fallback chain** | Data-driven, from the `fallbacks:` map in `config.yaml` — not hardcoded |
+| **Cost control** | Per-agent daily USD caps (`budget.rs`): `$2.00` Windu and Mothma, `$0.50` everyone else |
+| **Audit trail** | Every call logged to `~/.sanctum/logs/cloud-proxy-audit.jsonl`: agent, model, tokens, cost, latency |
+| **Rate limiting** | Budget exhaustion trips a 503 before the request ever reaches a provider |
 
-The fallback chain is the interesting part. When Opus is unavailable or the daily cap is hit, the request falls to Coder-14B. When Coder-14B is down, it falls to Council MLX. When everything is down, the system returns an honest error instead of a hallucinated response. Graceful degradation, not graceful lying.
+The fallback chain is the interesting part, and the interesting part is that it's *data*. Each primary model names its understudies in `config.yaml` — `council-brain` falls to `council-code` (the `qwen2.5-coder-14b-instruct` seat on `:1234`), which falls to `council-27b`, and so on down the map. `proxy.rs` walks that chain at request time; no recompile to reorder it. When every link is exhausted, the proxy returns an honest error instead of a hallucinated response. Graceful degradation, not graceful lying.
 
 ## The Standard
 
@@ -152,4 +146,4 @@ Every commit follows the same discipline:
 
 If any step fails, the commit doesn't ship. This is not optional. This is not aspirational. This is how the haus runs.
 
-Because the only thing worse than an AI agent making a mistake is an AI agent making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives. The discipline isn't paranoia. It's the minimum viable responsibility for running this kind of infrastructure in a place where people sleep.
+Because the only thing worse than an AI agent making a mistake is one making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives. The discipline isn't paranoia. It's the minimum viable responsibility for running this kind of infrastructure in a place where people sleep.

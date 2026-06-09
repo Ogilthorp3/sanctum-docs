@@ -58,16 +58,13 @@ The Holocron case is especially useful because it mirrors the actual debugging w
 
 This is the least glamorous use of browser automation in the haus, which is probably why it matters.
 
-Claude Code is configured to talk to the Sanctum Proxy at `http://127.0.0.1:4040`. The proxy, in turn, authenticates Anthropic requests using the `anthropic-api-key` secret in macOS Keychain. When that token expires, Claude Code does not fail with a noble error message explaining the exact repair path. It throws `invalid x-api-key` and waits for someone else to grow up.
+Claude Code is configured to talk to `proxyd` at `http://127.0.0.1:4040`. The proxy, in turn, authenticates Anthropic requests using the `anthropic-api-key` secret in macOS Keychain. When that token expires, Claude Code does not fail with a noble error message explaining the exact repair path. It throws `invalid x-api-key` and waits for someone else to grow up.
 
-That someone is now a split-brain repair path: the default browser for the real login, and `agent-browser` for the hermetic test harness.
+That someone is `tools/refresh_claude_team_token.sh` — a standalone tool you run by hand. It is a split-brain repair path: your default browser for the real login, and `agent-browser` for the hermetic test harness.
 
-The startup wrapper on `~/.local/bin/claude` runs a preflight script before launching the real Claude binary:
+There is also an opt-in wrapper at `~/.local/bin/claude-wrapper` (installed via `tools/install_claude_wrapper.sh`) that runs `tools/claude_session_preflight.sh` ahead of the real binary — but only when you export `CLAUDE_TEAM_AUTO_REFRESH=1`, and the preflight only nudges you through `claude auth login`, not the full token dance. Note that a Claude self-update can clobber the `~/.local/bin/claude` symlink back to the raw binary, so the wrapper is a convenience, never the load-bearing path. The repair below works regardless.
 
-- `tools/claude_session_preflight.sh`
-- `tools/refresh_claude_team_token.sh`
-
-If the Claude Team token is invalid, the refresh script:
+When you run `refresh_claude_team_token.sh --refresh` and the Claude Team token is invalid, it:
 
 1. launches `claude setup-token`
 2. captures the OAuth URL emitted by Claude Code
@@ -76,7 +73,7 @@ If the Claude Team token is invalid, the refresh script:
 5. if you explicitly opt into `CLAUDE_TEAM_BROWSER_MODE=agent-browser`, uses the named session `claude-team-oauth` to exercise the browser side automatically
 6. reads the refreshed token from `~/.openclaw/agents/main/agent/auth-profiles.json`
 7. writes it back into Keychain as `anthropic-api-key`
-8. restarts `com.sanctum.proxy`
+8. restarts the proxy — `launchctl kickstart -k` on `com.sanctum.proxyd`, or, if `CLAUDE_TEAM_PROXY_RESTART_MARKER` is set, drops a marker file and lets a watcher do the bounce
 
 The important design choice is that `agent-browser` is not trying to become an identity provider. It is there to prove the browser half of the flow works when we need deterministic validation, not to pick a fight with Cloudflare in production.
 
@@ -108,11 +105,13 @@ That workflow maps naturally to snapshots, screenshots, and named sessions. It d
 
 ## E2E Validation
 
-The integration is verified by `tests/test-agent-browser-e2e.sh`, which validates:
-- CLI installation and version consistency.
-- Navigation and snapshot density (~18 lines for Google).
+The integration is verified by `tests/test-agent-browser-e2e.sh`, which exercises:
+- CLI installation — fails hard if `agent-browser` is not in `PATH`, then logs the version (currently `0.19.0`).
+- Navigation and snapshot, asserting a real `Search` element shows up and logging the line count as a density proxy (a snapshot runs tens of lines against ~2000+ for raw DOM).
 - Screenshot capture and storage.
-- Named session isolation.
+- Named session isolation — opens Wikipedia in a side session and confirms the URL round-trips.
+
+The version and density lines are reported, not yet asserted; a snapshot that quietly bloats to 400 lines would still pass. Pinning those is on the list.
 
 Claude Team repair adds a second browser-specific harness through `tests/test-claude-team-refresh-e2e.sh`, which validates:
 - fake `claude setup-token` URL capture
@@ -124,5 +123,5 @@ Claude Team repair adds a second browser-specific harness through `tests/test-cl
 Holocron adds a second layer of validation through `tests/holocron-e2e.sh` in the app repo, where `agent-browser` drives the packaged UI path the way a human operator actually would.
 
 <Aside type="tip">
-When elements are tricky or dynamic, use `agent-browser screenshot --annotate` to see a numbered overlay of every interactive element on the page.
+When elements are tricky or dynamic, use `agent-browser screenshot --annotate` to get a numbered overlay of every interactive element on the page. It is the difference between "click the third thing that looks like a button" and `click @e7`.
 </Aside>

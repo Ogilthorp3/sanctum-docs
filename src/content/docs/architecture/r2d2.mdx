@@ -30,32 +30,31 @@ Every detection — deterministic or Hermes — passes through the stack below, 
 |---|---|---|
 | 1 | **Kill-switch** | Presence of `~/.sanctum/state/r2d2-disabled` short-circuits every detection. Operator-facing emergency brake. |
 | 2 | **Allowlist** | Scripts must resolve under `~/.sanctum/scripts/r2d2/`. Path traversal is blocked even if `recipes.yaml` is tampered with. |
-| 3 | **Cooldown** | Same target can't re-fire the same recipe within `cooldown_hours` (1h, 6h, 24h, or 168h depending on blast radius). |
+| 3 | **Cooldown** | Same target can't re-fire the same recipe within its `cooldown_hours` (1h, 2h, 6h, 24h, or 168h, scaled to blast radius — weekly for orphan-plist retirement, hourly for a gateway crashloop). |
 | 4 | **Classifier-only** | Legacy emergency brake at `~/.sanctum/state/r2d2-classifier-only`. Off by default since v0.5. When present, every fire is audit-only. |
 | 5 | **Dry-run promotion** | When `dry_run_required: true`, the first detection fires `--dry-run` and writes a promotion entry. The next detection within a 24h window fires for real. |
 | 6 | **Hermes extra-dry-run** | LLM-classified detections always pass `--dry-run` regardless of recipe-level setting — the model is less trustworthy than a deterministic detector. |
 | 7 | **Recipe-id validation** | If Hermes proposes a `recipe_id` not in the registry, the decision is coerced to `escalate` and the hallucination is audit-logged. |
 | 8 | **Cycle bookends** | Each cycle emits `cycle_start` + `cycle_end` rows with a UUID and `duration_s`. Any 10-minute sweep is bisectable without ambiguity. |
-| 9 | **Chitti heartbeat** | Cycle end POSTs to chitti's samskara endpoint so peer agents can see R2D2 alive (`{attempts, success_rate, last_seen}`). |
+| 9 | **Chitti heartbeat** | Cycle end POSTs to chitti's samskara endpoint (`127.0.0.1:2188/action`) so peer agents see R2D2 alive: `{service: r2d2, pattern: cycle, action: heartbeat, success, evidence}`, where `evidence` carries `cycle=<id> det=<n> fired=<n> hermes=<n> cost_usd=<n> dur=<n>s`. |
 | 10 | **Proportional Force Flow escalation** | `detector_error`, `missing_detector`, and `decision=exec_error` rows escalate to Force Flow — but at a severity that reflects *what* failed, so P0/P1 stays crucial, not R2D2's own health. A config/code hiccup (missing detector, detector raised, contract violation) lands at `warn`; only a recipe heal that ran and FAILED on a `high`/`critical` recipe escalates at `error`/`critical` (the thing it guards may be down). A **self-ingest guard** also drops `source=r2d2` lines from the Force Flow tail, so R2D2 never re-classifies its own escalations into a feedback loop. Silent failures are still prohibited — they're just no longer all paged as P0. |
 | 11 | **Bounded audit log** | `~/.sanctum/logs/r2d2-audit.jsonl` rotates to `.jsonl.1` above 50 MB. Unbounded resources are not bounded. |
 
 <Aside type="note">
-Eleven layers between a detection and a deletion. Any single false-positive costs at most a renamed file — reversible. The cost of *not* firing, multiplied across days of stale binaries, drifted Keychain entries, and orphan LaunchAgents, is the slow accumulation that broke unattended operation for years before this drone existed.
+Eleven layers sounds like paranoia until you price the two outcomes. A false positive costs one renamed file — `git revert` and a shrug. A false *negative*, multiplied across days of stale binaries, drifted Keychain, and orphan LaunchAgents nobody looks at, is the quiet rot that broke unattended operation before this droid showed up. The stack is asymmetric on purpose: it would rather do nothing twice than the wrong thing once.
 </Aside>
 
 ## The Recipe Registry
 
-A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding one more is a YAML entry plus a shell script — no code change, no privilege escalation surface. The description's first line is what Hermes sees during classification; keep it a one-sentence "fires when X" trigger.
+Thirteen recipes ship, each a four-tuple of (detector, script, dry-run policy, cooldown). Adding one more is a YAML entry plus a shell script — no code change, no privilege escalation surface.
 
 | id | severity | Fires when | Action |
 |---|---|---|---|
 | `retire-orphan-launchagent` | low | A `com.sanctum.*` plist's `Program` path no longer exists on disk | `launchctl bootout` + rename plist to `.retired-YYYY-MM-DD` |
-| `reload-service-after-merge` | medium | A launchd-managed `sanctum-rs*` process started before its on-disk binary's mtime | `bootout` + `bootstrap` to pick up the new binary |
+| `reload-service-after-merge` | medium | A launchd-managed `com.sanctum.*` process started more than 60s before its on-disk binary's mtime (merged + rebuilt, never reloaded) | `bootout` + `bootstrap` to pick up the new binary |
 | `reindex-stale-fts` | low | The memory-vault FTS5 index has fewer than 50% of the on-disk markdown file count | Move `.vault.db` aside with `.stale-YYYY-MM-DD` suffix; next consumer auto-reindexes |
 | `repair-keychain-secret-drift` | medium | A `~/.sanctum/secrets/<name>` value differs from the matching macOS Keychain entry | `security add-generic-password -U` from the secrets file (old value captured to audit log first) |
 | `heal-stale-firewalla-dnsmasq` | medium | Force Flow reports a screen-group unblocked but Firewalla's on-disk dnsmasq `policy_*.conf` still NXDOMAINs one of its MACs | Backup → delete redis `policy:N` + zrem `policy_active` + `sudo rm policy_N.conf` → SIGHUP dnsmasq → verify |
-| `heal-yoda-warmth` | low | openclaw's silent-reply dist file lost the `YODA-WARMTH-PATCHED` marker (an `npm install` reverted the customization) | Re-run idempotent `yoda-warmth-patch.sh` + restart openclaw-gateway |
 | `heal-yoda-warmth-wrapper` | medium | `yoda-chat-consumer` is running but the consumer-side warmth wrapper is missing, empty, or no longer imported | Re-deploy from the in-repo mirror at `Claude_Code/sanctum/yoda-chat/` + restart consumer |
 | `heal-openclaw-gateway-config-crashloop` | high | openclaw-gateway is in a sustained crashloop (≥3 restarts in 5 min) due to a Zod schema validation failure on `openclaw.json` | Restore the most recent `.bak-pre-*` / `.bak-broken-*` backup, preserve the broken file, restart, assert active |
 | `heal-sanctum-server-secret-leak` | high | A sanctum-managed launchd plist has hardcoded provider secrets (`sk-or-v1-`, `sk-ant-`, `AIzaSy`, `ghp_`, `xoxb-`) in `EnvironmentVariables` | Backup plist, `plutil -remove` the offending env var (only if a `~/.sanctum/secrets/<name>` counterpart exists), `bootout` + `bootstrap`, verify |
@@ -63,6 +62,7 @@ A dozen recipes ship, each a four-tuple of (detector, script, dry-run policy, co
 | `heal-claude-max-proxy-content-flatten` | high | `claude-max-api-proxy`'s dist lost the `content-flatten patch v1` marker (a `pnpm update` regression), so every Yoda reply becomes the literal "[object Object]" | Re-run the idempotent patch script + restart `com.sanctum.claude-max-proxy` |
 | `heal-force-flow-bridge` | high | Force Flow's screen-time reconciler gets HTTP 401 from the Mac Firewalla bridge (`127.0.0.1:1984`) — a Lima VM shadowing the port, or token drift | Wrap `force-flow-bridge-sentinel.py --force`: add the lima 1984-ignore guard and drop the guest listener, or rewrite the canonical token from the live bridge |
 | `reload-stuck-launchd-service` | medium | The launchd-health-sentinel flags a `com.sanctum/jocasta/openclaw` KeepAlive service as actively crash-looping (running pid, alive under 10 min, non-zero exit) after its intentional-non-zero allowlist | `launchctl kickstart -k` the wedged service + verify a live pid or clean exit. Crash-loops only — never "stuck" timer jobs (they re-run on schedule); heavy/dedicated-healer services (mlx/codestral/gateway/claude-max) excluded |
+| `reconcile-cosmetic-plist-drift` | low | `sanctum-plist classify <label>` returns `cosmetic-drift` — the live prod plist differs from its repo copy but every changed line is provably cosmetic (a `--tls-host` marker, a Tailscale IP matching the live one, a JetsamPriority block) | `sanctum-plist reconcile --yes --cosmetic-only` captures prod back into the repo. Double-gated, fail-closed: a `--model`/`--adapter-path` edit classifies as `drift` and pages the human instead |
 
 The registry is the safety surface. Hermes can never invent a new recipe at runtime — if a notice doesn't match anything in the registry, it gets the `escalate` path.
 
@@ -182,4 +182,4 @@ R2D2 is generative help, not load-bearing. If the plist crashes, notices keep fl
 - Audit log: `~/.sanctum/logs/r2d2-audit.jsonl`
 - LaunchAgent: `~/Library/LaunchAgents/com.sanctum.r2d2.plist` (RunAtLoad, StartInterval=600s)
 - Field notes: [2026-05-16 — R2D2 Found Eight Things](/operations/2026-05-16-r2d2-found-eight-things/), [2026-05-19 — R2D2 Got Honest](/operations/2026-05-19-r2d2-got-honest/), [2026-05-21 — R2D2 Got Courage](/operations/2026-05-21-r2d2-got-courage/), [2026-06-01 — R2D2 Stops Paging Itself](/operations/2026-06-01-r2d2-stops-paging-itself/), [2026-06-06 — R2D2 Reads the Vault](/operations/2026-06-06-r2d2-reads-the-vault/)
-- Design: `sanctum-config/docs/specs/2026-06-05-r2d2-vault-pstar-design.md` (council-blessed, 5 lenses, unanimous SHIP-WITH-FIXES, approach A-then-B)
+- Design: `docs/superpowers/specs/2026-06-05-r2d2-vault-pstar-design.md` (council-blessed, 5 lenses, unanimous SHIP-WITH-FIXES, approach A-then-B)

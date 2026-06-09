@@ -1,6 +1,6 @@
 ---
 title: Sanctum Proxy
-description: The intelligent LLM routing engine — 4.6MB of Rust that replaced a Python stack and learned to think.
+description: The intelligent LLM routing engine — a single Rust binary that replaced a Python stack and learned to think.
 ---
 
 import { Card, CardGrid, Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -9,9 +9,9 @@ import proxyRouting from './images/sanctum-proxy-routing.svg';
 
 ![Tommy working the door at the Sanctum Proxy — six layers of routing, one velvet rope](./images/sanctum-proxy-bouncer.png)
 
-The Sanctum Proxy is a 4.6MB Rust binary that routes every LLM request in the platform. It replaced a Python LiteLLM stack that has since been fully removed from the codebase — every reference, variable name, and config entry scrubbed in March 2026. The Rust proxy does the same job with less RAM, less latency, and zero opinions about garbage collection.
+The Sanctum Proxy is a ~10MB Rust binary that routes every LLM request in the platform. It replaced a Python LiteLLM stack that has since been retired from the live path -- the daemon, the launch wrapper, the config all moved over in March 2026. (A docstring or two still says "LiteLLM" in the model-scout helper; the comment is older than the rewrite.) The Rust proxy does the same job with less RAM, less latency, and zero opinions about garbage collection.
 
-It listens on port 4040. It knows about 20 models across 4 providers. It maintains 16 fallback chains. And it has a budget system that will cut off an agent mid-sentence if the math says so. The proxy does not negotiate. The proxy does not feel bad about it.
+It listens on port 4040. It knows about 28 models across three providers -- Gemini, OpenRouter, and a clutch of local seats on Apple Silicon. It maintains a fallback chain for nearly every one of them. And it has a budget system that will cut off an agent mid-sentence if the math says so. The proxy does not negotiate. The proxy does not feel bad about it.
 
 ## What It Does
 
@@ -19,7 +19,7 @@ Every agent, every Claude Code session, every voice query -- all of it flows thr
 
 The proxy receives an OpenAI-compatible request, decides which provider should handle it, transforms the request to match that provider's format, streams the response back, and tracks every token spent. Think of it as a bouncer, a translator, and an accountant fused into one very small, very fast organism.
 
-Config-driven. One `config.yaml` file declares the models, the fallback chains, the quality tiers, and the budget limits. Change the file, restart the binary, new reality. No database. No state directory. Just a YAML file and convictions.
+Config-driven. One `config.yaml` file declares the models, the fallback chains, the quality tiers, and the budget limits. Edit the file and the binary notices -- it watches `~/.sanctum/sanctum-proxy/config.yaml` and hot-reloads on change, logging `Config reloaded successfully` like a butler clearing his throat. No database. Just a YAML file and convictions.
 
 
 ## Performance Benchmark
@@ -105,52 +105,45 @@ When interesting candidates—such as a new zero-cost tier or a highly capable $
 
 ## Configuration
 
-The proxy reads a single `config.yaml` at startup. No hot-reload. No live patching. No "let me just tweak this one value in production." Change the file, restart the binary, twelve seconds of downtime. The agents will survive. They've been through worse -- see literally every other page in this documentation.
+The proxy reads a single `config.yaml`. The schema is flat and unglamorous: a `host`/`port` pair up top, `models` as a list (each with a `provider`, an `api_model`, and an optional `api_base` for the local seats), a `fallbacks` map, and a `budget` block. No `providers` section -- the provider lives on each model. The binary watches the file and reloads on change, so most edits don't even cost a restart.
 
 ```yaml
 # ~/.sanctum/sanctum-proxy/config.yaml (abbreviated)
-listen: "0.0.0.0:4040"
-
-providers:
-  anthropic:
-    base_url: "https://api.anthropic.com"
-  openrouter:
-    base_url: "https://openrouter.ai/api/v1"
-  gemini:
-    base_url: "https://generativelanguage.googleapis.com"
-  local:
-    base_url: "http://localhost:1337"
+host: 0.0.0.0
+port: 4040
 
 models:
-  claude-opus-4-7:
-    provider: anthropic
-    quality_tier: 0          # never reroute
-    smart_route: false
-  council-brain:
-    provider: anthropic
-    quality_tier: 1
-    smart_route: true
-    fallback: [council-code, council-mlx]
-  council-code:
+  - name: claude-opus-4-7
+    provider: local                 # via the Claude Max bridge on :3456
+    api_model: claude-opus-4-7
+    api_base: http://127.0.0.1:3456
+    quality_tier: 0                  # never reroute
+  - name: council-brain
     provider: local
-    quality_tier: 1
-    smart_route: false
-    fallback: [council-mlx]
-  council-ops:
+    api_model: claude-opus-4-7
+    api_base: http://127.0.0.1:3456
+  - name: council-code
     provider: local
-    quality_tier: 2
-    smart_route: true
-    fallback: [council-mlx]
+    api_model: Codestral-22B-v0.1-4bit
+    api_base: http://127.0.0.1:3301
+  - name: council-secure
+    provider: gemini
+    api_model: gemini-3.1-pro-preview
+    quality_tier: 0
+
+fallbacks:
+  council-brain: [glm-51, qwen36-plus]
+  council-code:  [council-27b, council-27b, qwen35-plus]
 
 budget:
-  daily_limit_per_agent: 500000
-  claude_max_free_daily: 500000
-  circuit_breaker: true
+  daily_token_limit: 500000
+  claude_max_daily_free: 500000
+  alert_threshold_pct: 80
 ```
 
 Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
 
-The important practical split is this: `council-brain` (Opus 4.7 cloud) is the default brain, but it's smart-routed — security and tool sessions stay on Opus 4.7, code drops to the local Codestral-22B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B on `:1337` (`council-mlx`) so nothing small-talk-shaped leaves the haus, brainy questions (reasoning verbs or long-form prose) are promoted to Opus 4.7 with `--effort max` via the Claude Team CLI bridge (`claude-max-proxy` on `:3456`), and images go to Gemini 3.1 Pro. The current `council-brain` cross-provider fallback chain is GLM 5.1 → Qwen 3.6 Plus. `council-secure` (Gemma4+LoRA local) handles Cilghal and Mundi's domain-specific work. The proxy does the triage. Every decision is visible in config and in `usage.jsonl` instead of buried in agent prompt folklore.
+The important practical split is this: `council-brain` is Opus 4.7, served not from a metered Anthropic key but through the Claude Max bridge (`claude-max-proxy` on `:3456`) so the subscription does the paying. It's the default brain, but the router triages: code tasks drop to the local Codestral-22B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B (`council-mlx`) so nothing small-talk-shaped leaves the haus, and vision and security-domain work go to Gemini 3.1 Pro. `council-secure` -- which handles Cilghal and Mundi's domain-specific work -- is a Gemini 3.1 Pro seat pinned to `quality_tier: 0`, so it never gets rerouted out from under them. The current `council-brain` cross-provider fallback chain is GLM 5.1 then Qwen 3.6 Plus. The proxy does the triage. Every decision is visible in config and in the JSONL usage log (`~/.sanctum/metrics/token-usage.jsonl`) instead of buried in agent prompt folklore.
 
 ## Claude Code Startup Preflight
 
@@ -159,7 +152,7 @@ Claude Code is no longer treated as a polite client that will either have valid 
 The moving parts are:
 
 - Claude Code points `ANTHROPIC_BASE_URL` at `http://127.0.0.1:4040`
-- the proxy reads `anthropic-api-key` from macOS Keychain through `~/.sanctum/scripts/proxy-launcher.sh`
+- the proxy runs as the system LaunchDaemon `com.sanctum.proxyd`, launched through `~/.sanctum/bin/proxyd-launch` -- a wrapper that injects the Gemini and OpenRouter keys from `~/.sanctum/secrets/` and pointedly loads *no* Anthropic key (Opus 4.7 arrives via the Claude Max bridge on `:3456`, so the proxy never holds a metered Anthropic credential)
 - the local `claude` command is wrapped by `~/.local/bin/claude-wrapper`
 - that wrapper runs `tools/claude_session_preflight.sh` before executing the real Claude binary
 
@@ -176,7 +169,7 @@ If the token is invalid, it calls `tools/refresh_claude_team_token.sh --refresh`
 - prompts for the returned code in the same terminal session
 - can optionally use `agent-browser` for the hermetic automation path
 - syncs the refreshed token back to Keychain
-- restarts `com.sanctum.proxy`
+- kickstarts the proxy daemon (`com.sanctum.proxyd`) so the new token takes effect
 
 This is not part of the proxy binary itself. That is deliberate. The proxy should route requests, not grow a browser and start roleplaying as an OAuth session manager. The preflight sits at the session boundary, where the repair can happen before the first real request hits the proxy and dies with `invalid x-api-key`.
 
@@ -202,7 +195,9 @@ The tests live in the service-doctor skill because the proxy is a service and th
 # Run the full suite
 bash /Users/neo/Projects/openclaw-skills/service-doctor/tests/test-proxy.sh
 
-# Expected: 66 passed, 0 failed, 4 skipped
+# A healthy run lands around 48 pass / a couple skip; the handful of
+# failures you'll see today are stale fixtures still naming retired
+# models (Coder-14B, the old Gemma seat), not the proxy misbehaving.
 ```
 
 <Aside>

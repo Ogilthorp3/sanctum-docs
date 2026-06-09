@@ -15,6 +15,10 @@ Every TTS engine brings its own Python environment, model format, and cloning qu
 
 `sanctum-tts` is the Rust dispatcher on `:8007`. Callers ask for a voice by name; the daemon hands the request to whichever adapter the registry declares. Python never enters the dispatcher's process — adapters are thin HTTP proxies, kept in their own venvs the way you'd keep two cats in separate rooms.
 
+<Aside type="note" title="Status: built, not yet stood up">
+The dispatcher is written, compiles, and passes its tests — but no release binary is deployed and nothing is listening on `:8007` yet. The launchd label `com.sanctum.tts` is reserved, not loaded. **Today the live voice path is the Python worker on `:8008` directly** (`com.sanctum.yoda-tts-worker`, running the Qwen3-TTS model). The front door is hung; we just haven't moved everyone through it yet.
+</Aside>
+
 ```
            ┌──────────────┐       ┌──────────────┐
 clients ──▶│ sanctum-tts  │──────▶│ qwen3-tts    │
@@ -25,6 +29,8 @@ clients ──▶│ sanctum-tts  │──────▶│ qwen3-tts    │
            │  audits      │
            └──────────────┘
 ```
+
+The `:8009` slot is the *intended* home for the OpenVoice worker — but right now that port belongs to the speech-to-text server (`workers.stt_server`). Standing up OpenVoice means either evicting STT first or picking a free port; the adapter still answers `NotImplemented` either way, so nothing collides until the day we wire it.
 
 ## The Five Layers
 
@@ -110,12 +116,13 @@ Adding Neo as a digital twin once OpenVoice v2 lands becomes two entries — `ne
 - `OpenVoiceAdapter` stub + 5-step wiring checklist in README.
 - All five defense layers, toggle-by-toggle.
 - `sanctum-tts-admin` + `sanctum-tts-verify` CLIs.
-- 35 unit tests.
+- 25 unit tests.
 
 ## Next
 
+- Build the release binary and load `com.sanctum.tts` so the front door on `:8007` actually opens.
 - Record Neo's reference.
-- Stand up `com.sanctum.openvoice-tts` on `:8009`.
+- Stand up the OpenVoice worker — but find it a port first, since `:8009` is currently the STT server.
 - Flip `OpenVoiceAdapter` from `NotImplemented` to real proxy.
 - A/B blind-test Neo-English through Qwen3 vs OpenVoice.
 - Neo-in-French becomes a YAML line.

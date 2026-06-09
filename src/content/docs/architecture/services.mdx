@@ -17,7 +17,7 @@ Every Sanctum service has an `enabled` flag in `instance.yaml`. Disabled service
 There are a lot of them. What started as "I'll just automate the speakers" has become something that requires its own port allocation strategy and a documentation site. This is either a haus automation system or a small government. The line blurred around service number twelve and never came back. Thirty-eight services now — enough to staff two Habs benches on a good night, and they all think they're the centreman. Each with a launchd unit, a port, a plist, and opinions about what should have been done on Tuesday.
 
 <Aside type="note" title="Domain note (post-W6/W7, 2026-05-07/08)">
-Six P0 services — `force-flow`, `proxyd`, `watchdog`, `mlx`, `ha-gateway`, `firewalla` — were promoted from user-domain LaunchAgents (`~/Library/LaunchAgents/`, `gui/501`) to system-domain LaunchDaemons (`/Library/LaunchDaemons/`, `system/`) running as `UserName=bert`. They survive any reboot pattern, including a missing `/etc/kcpassword`. Tables on this page still say "LaunchAgent / Unit" because most services remain user-agents; mentally substitute "system-domain" for those six. Full story in [the 2026-05-07 reboot-reveals field-note](/operations/2026-05-07-the-reboot-reveals/).
+Six P0 services — `force-flow`, `proxyd`, `watchdog`, `mlx`, `ha-gateway`, `firewalla` — were promoted from user-domain LaunchAgents (`~/Library/LaunchAgents/`, `gui/501`) to system-domain LaunchDaemons (`/Library/LaunchDaemons/`, `system/`) running as `UserName=neo`. They survive any reboot pattern, including a missing `/etc/kcpassword`. Tables on this page still say "LaunchAgent / Unit" because most services remain user-agents; mentally substitute "system-domain" for those six. Full story in [the 2026-05-07 reboot-reveals field-note](/operations/2026-05-07-the-reboot-reveals/).
 </Aside>
 
 ## Core Services
@@ -30,9 +30,9 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 |---------|------|--------------------|-------------|
 | DenchClaw Gateway | 1977 | `com.sanctum.gateway` (retired) | Mac-side agent gateway, RETIRED. It ran Jocasta (the Archivist — CRM data and communications) and exposed the agent API. The :1977 gateway now lives inside the VM (see [VM Services](#vm-services)); the Mac-side unit is no longer loaded. |
 | Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
-| Command Center | 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. |
+| Command Center | 3333 / 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. Frontend UI on :3333, backend API on :1111. |
 | Health Center | 2222 | `com.sanctum.health-center` | Digital twin portal — health, wellness, and haushold telemetry. Twin twos for the twin. |
-| Holocron (Dench) | 1977 | `com.sanctum.dench` | Family chat interface. Bound to LAN, token-authenticated. Accessible at `http://holocron/`. |
+| Holocron (Dench) | -- | `com.sanctum.dench` (not loaded) | Family chat interface. Defined in `instance.yaml` (`dench: enabled: true`) but no unit is loaded on any hub node right now — see the disabled note below. Designed to be LAN-bound and token-authenticated, reachable at `http://holocron/`. |
 | Dench Proxy | 80 | `com.sanctum.dench-proxy` | LaunchDaemon (runs as root). Reverse proxy from port 80 to Holocron on port 1977. |
 
 <Aside type="tip">
@@ -40,11 +40,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 </Aside>
 
 <Aside type="note">
-  Dench Proxy is currently disabled. Port 80 routing requires a LaunchDaemon and root privileges -- most access now goes through Cloudflare Tunnel or Tailscale, which need neither.
-</Aside>
-
-<Aside type="note">
-  Holocron is currently disabled. The chat interface remains defined in configuration for future re-enablement but is not running on any hub node at present.
+  Holocron is currently disabled — the chat interface remains defined in configuration for future re-enablement but isn't running on any hub node at present. The Dench Proxy, oddly, *is* still running (LaunchDaemon, root, pid live): a reverse proxy faithfully forwarding `http://holocron/` to a chat UI that isn't there. Port 80 binding requires root, so we left the door-greeter on while the room behind it is empty. It will route the day Holocron comes back.
 </Aside>
 
 ### Config Example
@@ -60,7 +56,8 @@ services:
     homekit_port: 21063
   dashboard:
     enabled: true
-    port: 1111
+    port: 3333          # frontend UI
+    backend_port: 1111  # backend API
 ```
 
 ## AI Services
@@ -71,12 +68,12 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| Coder MLX | `1338` | — | `com.sanctum.mlx-coder` (retired) | RETIRED 2026-06-07. Hosted `Qwen2.5-Coder-14B-Instruct-4bit` (Qui-Gon's primary) on a pure-Rust `sanctum-mlx-coder` server, having replaced the LM Studio app. Retired once Codestral 22B on `:3301` proved a sufficient single coder seat; GGUF archived, weights reclaimed, the `:1234` socat bridge removed. |
+| Coder MLX | `1338` | — | `com.sanctum.mlx-coder` (retired) | RETIRED 2026-06-07. Hosted `Qwen2.5-Coder-14B-Instruct-4bit` on a pure-Rust `sanctum-mlx-coder` server, having replaced the LM Studio app. Retired once Codestral 22B on `:3301` proved a sufficient single coder seat; GGUF archived, weights reclaimed, the `:1338` seat torn down. (A separate LM-Studio-era `:1234` socat bridge is *not* gone — see the note below.) |
 | Council MLX | `1337` | leet — the local workhorse | `com.sanctum.mlx` | Pure-Rust `sanctum-mlx` server. Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. mTLS-only. The 27B-distilled era ended 2026-04-22 when the council moved to the 35B MoE. |
 | TTS Voice | `8008` | BOOB — Yoda's mouth | `com.sanctum.yoda-tts-worker` | Qwen3-TTS via mlx-audio (`workers.tts_server`). XTTS retired 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. |
-| Voice Agent | 1138 | — | `com.sanctum.voice-agent` | Yoda voice interface. Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
-| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.server` | LLM routing proxy on port 4040 (binary: `proxyd`). Single Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. |
-| Memory Vault | `42069` | Nice. | `com.sanctum.memory-vault` | Long-term memory store for agent context. SQLite vault at `~/.sanctum/memory/.vault.db`, consolidates every 6h. SSE transport for MCP clients. |
+| Voice Agent | 1138 | — | `com.sanctum.yoda-agent` | Yoda voice interface (LiveKit agent). Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
+| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxyd` | LLM routing proxy on port 4040 (binary: `proxyd`). System-domain LaunchDaemon — one of the W6/W7 six. Single Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. Not to be confused with `com.sanctum.server`, which serves an MLX model on :8900. |
+| Memory Vault | `42069` | Nice. | `com.sanctum.memory-vault` | Long-term memory store for agent context. SQLite vault at `~/.sanctum/memory/.vault.db`; consolidates nightly at 04:17 via `com.sanctum.memory-consolidate`. SSE transport for MCP clients. |
 | Jina Reranker | `42070` | The Pair Port | `com.sanctum.reranker` | Jina v2 reranking server. Companion to Memory Vault on 42069 — the two travel together by design. Improves RAG precision for long-context memory queries. |
 
 ### Model Routing
@@ -128,23 +125,23 @@ services:
 ```
 
 <Aside type="note">
-The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and for a while `:1234` survived as a plain-HTTP `socat` bridge to `sanctum-mlx-coder` on `:1338` for callers that hadn't moved to mTLS. As of 2026-06-07 all of that is gone: LM Studio is fully decommissioned (no `:1234`, no bridge/guardian), the `sanctum-mlx-coder` `:1338` seat is retired, and native MLX seats serve every model — the CODER role is now Codestral-22B on `:3301`.
+The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and the CODER role is now Codestral-22B on `:3301` — the `sanctum-mlx-coder` `:1338` seat retired 2026-06-07. The clean ending stops just short of clean: `com.sanctum.lmstudio-bridge` is still loaded and a `socat` listener still answers on `:1234` (a plain-HTTP forward across the Mac↔VM bridge), and `com.sanctum.council-guardian` is still loaded too. The retirement is logically done; the plists haven't been booted out yet. A lock nobody holds is still a lock — these two are next.
 </Aside>
 
 ## Network Services
 
 Bridges and tunnels. The unglamorous plumbing that connects a closet-mounted Mac Mini to a router, a mesh access point, a VM with no internet, and the wider world beyond the front door. If the core services are the organs, these are the nervous system -- delicate, invisible when they work, and the first thing you suspect when something goes wrong.
 
-There are nine of them. Two are SSH tunnels. Two are mDNS broadcasters. One talks to the router by first authenticating through a cloud server three thousand miles away. One talks to Sonos speakers because Docker couldn't. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
+Eight of them. One is an SSH tunnel. One is an mDNS broadcaster. One talks to the router by first authenticating through a cloud server three thousand miles away. One talks to Sonos speakers because Docker couldn't. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
 | SanctumBridge | `4078` | The FDA Neighbor | `com.sanctum.bridge` | Read-only HTTP proxy to FDA-protected SQLite databases (iMessage, WhatsApp, Contacts, Calendar). Jocasta-mcp queries through it so the MCP server itself doesn't need Full Disk Access. |
 | Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. |
 | Sonos Bridge | `1969` | — | `com.openclaw.sonos-bridge` | Native Mac SoCo REST API for 10 Sonos speakers. Replaces HA's built-in Sonos integration. Handles TTS via the sanctum-tts dispatcher (Qwen3-TTS backend, port 8008; XTTS retired 2026-04-19), volume control, grouping, and announcements. KeepAlive enabled. |
-| Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (192.168.1.2 ports 80 and 5000). KeepAlive enabled. |
-| Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `sanctum-hub`. Exposes `health.example.net` and `ha.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
-| Network Control | `4007` | 007 — licensed to ping | `com.sanctum.ha-tunnel` | SSH tunnel forwarding port 4007 to the VM for Home Assistant integrations. |
+| Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (`192.0.2.X` ports 80 and 5000). KeepAlive enabled. |
+| Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `manoir-hub`, token-mode (`cloudflared tunnel run`, no local config.yml — the routes live in the Zero Trust dashboard, the token in Keychain as `cloudflare-tunnel-token`). Exposes `health.example.net` and `ha.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
+| Network Control | `4007` | 007 — licensed to ping | Lima port-forward | Forwards `127.0.0.1:4007` to the VM for Home Assistant integrations. Used to be a dedicated SSH-tunnel LaunchAgent (`com.sanctum.ha-tunnel`, retired 2026-05-01); Lima/vz now provides the forward itself, so the agent was retired and never replaced. |
 | Health Ingester | `10101` | binary heartbeat | `com.sanctum.health-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
 | mDNS Alias | -- | `com.sanctum.mdns-docs` | Broadcasts haus aliases (`sanctum-hub.local`, `holocron.local`, etc.) via mDNS for LAN discovery. KeepAlive enabled. Consolidated from the old `mdns-alias` / `mdns-dench` split. |
 
@@ -158,7 +155,7 @@ Two subdomains. Two Cloudflare Zero Trust routes. The entire external attack sur
 | `ha.example.net` | `localhost:8123` | Home Assistant remote access |
 
 <Aside type="caution">
-  The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. Keys are stored at `~/.sanctum/firewalla/keys/`. So yes -- to talk to the router sitting three feet away, we first authenticate through a cloud service. Home networking in 2026.
+  The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. The bridge token lives at `~/.sanctum/secrets/firewalla-bridge-token`. So yes -- to talk to the router sitting three feet away, we first authenticate through a cloud service. Home networking in 2026.
 </Aside>
 
 ### Config Example
@@ -177,29 +174,28 @@ services:
     admin_port: 18085
   cloudflare_tunnel:
     enabled: true
-    tunnel_name: sanctum-hub
+    tunnel_name: manoir-hub
 ```
 
 ## System Services
 
-The immune system. The janitors. The 3 AM shift workers nobody thanks until something rots. These services watch the other services, rotate secrets before they expire, file documents nobody asked them to file, and occasionally reorganize your music library while you sleep. The system watches itself with more dedication than most humans watch their own cholesterol.
+The immune system. The janitors. The 3 AM shift workers nobody thanks until something rots. These services watch the other services, rotate secrets before they expire, file documents nobody asked them to file, and back themselves up to two places at once in case one of the places is having a day. The system watches itself with more dedication than most humans watch their own cholesterol.
 
-Eight background agents and three supporting services, zero ports for most of them, and one that requires you to physically plug in a hard drive like it's 2008. We contain multitudes.
+Background agents and supporting services, zero ports for most of them, and one that requires you to physically plug in a hard drive like it's 2008. We contain multitudes.
 
 | Service | Port | LaunchAgent | Description |
 |---------|------|-------------|-------------|
-| Watchdog | -- | `com.sanctum.watchdog` | Runs every 600 seconds. Checks all enabled services and auto-heals failures via `service-doctor`. |
+| Watchdog | 2187 | `com.sanctum.watchdog-rust` | System-domain LaunchDaemon (binary `sanctumd`). Runs a check loop every 600 seconds, checks all enabled services, and auto-heals failures via `service-doctor`. Exposes a status port on :2187. |
 | Secret Rotation | -- | `com.sanctum.rotate-secrets` | Runs on the 1st of each month at 3:30 AM. Rotates gateway tokens and updates Keychain entries. |
 | iCloud Filer | -- | `com.sanctum.icloud-filer` | Auto-filing daemon. Organizes documents from iCloud Drive into structured folders. KeepAlive enabled. |
-| iCloud Backup | -- | `com.sanctum.icloud-backup` | Periodic backup of Sanctum configuration and data to iCloud Drive. |
-| VM Autostart (Lima/vz) | -- | `com.sanctum.vm-autostart` | Starts the Ubuntu VM via Lima/vz on login (migrated off QEMU/HVF 2026-05-30) and restores the bridge100 interface IP. The old VM-facing `sanctum-mlx-coder` `:1234` socat bridge is gone with the coder seat's 2026-06-07 retirement. |
-| Music Cleanup | -- | `com.sanctum.music-cleanup` | Runs every Sunday at 3:15 AM. Organizes the Apple Music library via `apple-music-organize.sh`. |
+| Backup | -- | `com.sanctum.backup` | restic dual-repo backup of Sanctum configuration and data (local SSD + off-box). Paired with `com.sanctum.backup-canary`, a dead-man's-switch heartbeat — if the backup stops running, the canary stops chirping and Force Flow notices. |
+| VM Autostart (Lima/vz) | -- | `com.sanctum.vm-autostart` | Starts the Ubuntu VM via Lima/vz on login (migrated off QEMU/HVF 2026-05-30) and restores the bridge100 interface IP. Lima also auto-forwards the VM-side ports the Mac needs (`:1977` gateway, `:4007` HA) onto `127.0.0.1`. |
 | Kiwix | 8888 | `com.sanctum.kiwix-serve` | Offline knowledge library. Serves cached reference content. Requires external T9 drive. KeepAlive enabled with 30-second throttle. |
 | Outline | 3100 | Docker container | Self-hosted wiki and documentation service. Provides a collaborative knowledge base for haushold documentation. |
 | Jocasta MCP | CLI | CLI and Stdio RPC | [The unified offline data proxy](/architecture/jocasta-mcp/). Provides the Jedi Council safe, offline read-access to 16 disparate components: Apple Notes, Calendars, Contacts, Unified Logs, Maps, multiple messaging apps, and local file parsing. |
 | Force Flow | `4077` | `com.sanctum.force-flow` | Notification triage and curfew enforcement engine. Mothma's dispatch layer — decides what deserves attention and what gets filed under "haus is fine, stop asking." M\*A\*S\*H 4077th energy: triages the critical from the cosmetic with gallows humor and a functioning still. |
 | SanctumBridge | `4078` | `com.sanctum.bridge` | FDA-privileged HTTP proxy to iMessage, WhatsApp, Contacts, and Calendar SQLite databases. Jocasta-mcp routes reads through this so jocasta-mcp itself doesn't need Full Disk Access granted. |
-| LiveKit Server | `7880` | `com.sanctum.livekit-server` | Private voice server for Yoda. Bound to Tailscale IP (`100.0.0.25`) only — no LAN or WAN exposure. RTC TCP companion on 7881. |
+| LiveKit Server | `7880` | `com.sanctum.livekit-server` | Private voice server for Yoda. Bound to the hub's Tailscale IP (`100.0.0.X`) only — no LAN or WAN exposure. RTC TCP companion on 7881. |
 
 <Aside type="note">
   Kiwix requires an external T9 drive to be connected. If the drive is absent, the service will start, fail, wait 30 seconds, and try again. Forever. KeepAlive is patient. KeepAlive believes in you plugging that drive back in.
@@ -259,13 +255,13 @@ The gateway uses SOPS+age encryption for secrets. The `sops-start.sh` wrapper de
 
 ```bash
 # Restart the VM gateway
-ssh ubuntu@10.10.10.10 'systemctl --user restart openclaw-gateway'
+ssh ubuntu@10.0.0.10 'systemctl --user restart openclaw-gateway'
 
 # Check status
-ssh ubuntu@10.10.10.10 'systemctl --user status openclaw-gateway'
+ssh ubuntu@10.0.0.10 'systemctl --user status openclaw-gateway'
 
 # View logs
-ssh ubuntu@10.10.10.10 'journalctl --user -u openclaw-gateway -f'
+ssh ubuntu@10.0.0.10 'journalctl --user -u openclaw-gateway -f'
 ```
 
 ## Developer Tools
