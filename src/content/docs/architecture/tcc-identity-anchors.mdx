@@ -37,10 +37,10 @@ Apple Root CA
           └─ /Users/neo/Applications/SanctumBridge.app
                ├─ Bundle ID: ai.openclaw.denchclaw  (stable)
                ├─ Mach-O C launcher (Contents/MacOS/SanctumBridge)
-               └─ spawns /usr/local/bin/node as a child
+               └─ posix_spawns /usr/local/bin/node as a child
 ```
 
-A signed `.app` bundle that proxies SQLite reads for iMessage, WhatsApp, Calendar, and Contacts. The 50-line C launcher embedded at `Contents/MacOS/SanctumBridge` is what holds the bundle-level TCC identity — TCC keys to the bundle ID `ai.openclaw.denchclaw` because that's the executable launchd spawns. The launcher then `posix_spawn`s `/usr/local/bin/node` as a child, which runs `Resources/bridge/server.js`.
+A signed `.app` bundle that proxies SQLite reads for iMessage, WhatsApp, Calendar, and Contacts. The small C launcher embedded at `Contents/MacOS/SanctumBridge` (`launcher/main.c`, ~90 lines) is what holds the bundle-level TCC identity — TCC keys to the bundle ID `ai.openclaw.denchclaw` because that's the executable launchd spawns. The launcher then `posix_spawn`s `/usr/local/bin/node` as a child, which runs `Resources/bridge/server.js`.
 
 **Used by**: one service — the FDA-privileged SQLite bridge.
 
@@ -63,7 +63,7 @@ Federating those 9 services under an umbrella bundle would have produced a paren
 SanctumBridge.app is the right shape because its launcher is the interactive (well, launchd-launched-but-bundled) parent that *does* hold the responsible-process identity for its specific child. The other 9 services don't have that shape; they're naked node scripts whose anchor is the node binary itself.
 
 <Aside type="note">
-"Apple-grade" doesn't mean "one identity for everything." It means every identity is stable, signed, and notarized. Microsoft, Slack, and Discord all run multiple separately-signed processes on macOS without prompting users on each cold start. What kills the user experience is *unstable* identities (brew Cellar path churn, ad-hoc-signed binaries with rotating SHAs). What protects it is *stable* identities — however many there are. Sanctum has two. Both are years-stable. Both are upstream of TCC's complaint surface.
+"Apple-grade" doesn't mean "one identity for everything." It means every identity is stable and Developer ID-signed — which is the part TCC actually keys to. (The node `.pkg` is also Apple-notarized; the bridge bundle is signed but not yet stapled, and that's fine — notarization gates Gatekeeper's *first-launch* check, not TCC's permission ledger.) Microsoft, Slack, and Discord all run a fistful of separately-signed processes on macOS and nobody re-clicks Allow on each cold boot. What kills the user experience is *unstable* identities — brew Cellar path churn, ad-hoc-signed binaries with rotating SHAs. What protects it is *stable* ones, however many there are. Sanctum has two. Both are years-stable, both upstream of TCC's complaint surface.
 </Aside>
 
 ## The third-anchor question
@@ -76,6 +76,6 @@ What would NOT be a good third anchor: a wrapper bundle around launchd-spawned d
 
 - `~/.sanctum/scripts/sanctum-grant-tcc.sh` — grants the canonical 13 TCC categories to the `.pkg` node binary. `--verify` for read-only checks; `--uninstall` for clean removal; `--client <path>` for targeting other binaries.
 - `~/Projects/sanctum-bridge/` — source repo for the SanctumBridge launcher. `make build && make install` produces an updated bundle; one `codesign --force --sign "Developer ID Application: Bertrand Nepveu (GJ994MN2YF)"` re-anchors it.
-- `~/Projects/sanctum-runtime/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md` — runbook for diagnosing TCC prompt loops, with the FDA + Automation + bundle-wrapper trade-off explained.
+- `~/Projects/sanctum-runtime/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md` — runbook for diagnosing TCC prompt loops, with the FDA + Automation trade-off worked through step by step. Heads-up: its step-by-step still names the old brew-Cellar node path and leans on `brew pin` — both superseded by the `.pkg` anchor this page documents. The diagnosis logic holds; the path it points you at is one migration behind.
 
 The two-anchor design is recorded here so future operators (or future Claude sessions) don't try to consolidate without understanding why the consolidation wouldn't actually help.

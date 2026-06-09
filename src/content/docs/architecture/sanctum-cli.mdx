@@ -5,10 +5,10 @@ description: One terminal binary that is the unified front door to a Sanctum hos
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Pencil sketch of a single terminal cursor blinking inside an open sanctum gate, twelve small command spokes arrayed around it, one teal halo at the cursor, against a dark void](./images/hero-sanctum-cli.jpg)
+![Pencil sketch of a single terminal cursor blinking inside an open sanctum gate, a ring of small command spokes arrayed around it, one teal halo at the cursor, against a dark void](./images/hero-sanctum-cli.jpg)
 
 <Aside type="tip">
-**Status: shipped — productization-ready.** v0.7.1 on [github.com/Ogilthorp3/sanctum-cli](https://github.com/Ogilthorp3/sanctum-cli) (private). 12 top-level commands, 4 cloud backends, 201 / 201 tests, ruff + mypy --strict clean across 36 source files. The lambda-family demo path — `sanctum onboard --recipe family --yes` — runs in ~3-5 minutes end-to-end on a fresh Mac.
+**Status: shipped — public release.** v0.9.0 on [github.com/Ogilthorp3/sanctum-cli](https://github.com/Ogilthorp3/sanctum-cli) (public), `brew install`-able from a public tap. 24 top-level commands, 4 cloud backends, 356 / 356 tests, mypy --strict clean across 55 source files. The lambda-family demo path — `sanctum onboard --recipe family --yes` — runs in ~3-5 minutes end-to-end on a fresh Mac, by someone who is not the author. That last clause is the whole point.
 </Aside>
 
 ## Mission
@@ -25,7 +25,7 @@ It does three things, all of which used to be scattered across half a dozen scri
 
 The 2026-04-26 backup migration took ~90 minutes of manual click-ops to wire up Google Drive: create Cloud project, enable Drive API, configure OAuth consent screen, create OAuth client, publish app, click through "unverified app" warning, paste credentials into rclone, reconnect, retry. Every one of those steps had a non-obvious failure mode.
 
-If "Sanctum power user" is a real audience — anyone who's not Bertrand running this in their own home — that flow had to collapse from 90 minutes to under 10. The CLI's `cloud setup` wizard exists exactly to wrap each painful click in a step that opens the right URL, validates pasted input live, and recovers from known failures with a clear next action. The R2 wizard does it in ~3 minutes; the GDrive wizard does it in ~10.
+If "Sanctum power user" is a real audience — anyone who's not the author running this in their own haus — that flow had to collapse from 90 minutes to under 10. The CLI's `cloud setup` wizard exists exactly to wrap each painful click in a step that opens the right URL, validates pasted input live, and recovers from known failures with a clear next action. The R2 wizard does it in ~3 minutes; the GDrive wizard does it in ~10.
 
 ## Design doctrine
 
@@ -34,18 +34,19 @@ If "Sanctum power user" is a real audience — anyone who's not Bertrand running
 | **Closed-loop** | Every operation either completes and verifies or rolls back and reports. Every wizard ends with a round-trip canary that proves the wiring works. |
 | **Honest** | Telemetry reflects reality. Provider rate-limited? Says so. Route was overridden? Surfaced. The estimator says "11 GB raw" without claiming dedup will fix it; only the live `--dry-run` reveals the actual stored size. |
 | **Bounded** | Each command has a documented worst-case latency. No surprise cloud charges. |
-| **Defense-in-depth** | Credentials only in macOS Keychain, never on disk. Pre-commit secret scanner refuses to push anything matching 16 well-known credential patterns. Schema validation at every config boundary. |
+| **Defense-in-depth** | Credentials only in macOS Keychain, never on disk. Pre-push secret scanner refuses anything matching 13 content patterns or 9 filename patterns. Schema validation at every config boundary. |
 | **Discovery-first** | No hardcoded IPs, ports, hostnames. Everything via `~/.sanctum/instance.yaml` or runtime discovery. |
 | **Brevity by default** | `sanctum` with no args returns a one-liner. Verbose only when something is wrong or `-v`. |
 | **Python now, Rust later** | Built in Python with full type hints + tests. Dispatcher hot path will be promoted to Rust at v1.0+ (per [language-maturity doctrine](./language-maturity)). |
 
 ## CLI surface
 
-The 12 top-level commands shipped:
+24 top-level commands shipped. The core of it:
 
 ```
 sanctum                              # one-liner status
 sanctum onboard --recipe family      # one-shot first-run wizard
+sanctum self-test [--json]           # canonical "is this install still good?"
 
 sanctum chat "..."                   # router decides; default Claude (Max subscription)
 sanctum code "..."                   # forced Claude
@@ -56,13 +57,19 @@ sanctum backup recipes               # list recipes (family / operator / code)
 sanctum backup estimate <recipe>     # raw size + R2-free-tier compare
 sanctum backup run [--recipe NAME] [--dry-run]
 sanctum backup snapshots / verify / restore
+sanctum deadman [status|...]         # off-box backup dead-man's-switch heartbeat
 
-sanctum doctor [--full|--json]
+sanctum doctor [--full|--json]       # health probes across the constellation
 sanctum agent [list|status|start|stop|restart|logs]
 sanctum proxy [status|restart|logs]
 sanctum keychain [list|test|rotate]
+sanctum module [list|status|install|uninstall|demo]
+sanctum bridge "..."                 # Sanctum Bridge gateway (CF Access + HMAC)
 sanctum config validate
 ```
+
+Plus the operational long tail: `update`, `uninstall`, `logs`, `devices`,
+`schedule`, `soak`, `screen-time`, `keys`. Run `sanctum --help` for the full 24.
 
 ## Cloud backends
 
@@ -82,7 +89,7 @@ A recipe is a named bundle of sources + excludes for an audience:
 | Recipe | Audience | Sources | Typical post-dedup size |
 |---|---|---|---|
 | **family** | Lambda haushold | Documents, Desktop, ssh, dotfiles | ~5 GB (fits R2 free) |
-| **operator** | Sanctum host | `.sanctum`, `.openclaw`, `.claude`, dev projects | ~15 GB+ (T9 + GDrive) |
+| **operator** | Sanctum host | `.sanctum`, `.openclaw`, `.claude`, dev projects | ~15 GB+ (local SSD + GDrive) |
 | **code** | Source-only | `~/Projects` | varies (pairs with GitHub Tier 0) |
 
 User-defined recipes go in `instance.yaml` under `cli.recipes`; built-ins are overridable. iCloud Photos auto-detection adds the exclude pattern automatically when the bundle is present.
@@ -96,20 +103,23 @@ User-defined recipes go in `instance.yaml` under `cli.recipes`; built-ins are ov
 - **v0.5** — R2 wizard with hand-rolled SigV4; **R2 becomes the default backend**
 - **v0.6** — Claude via Max-subscription proxy (default — `sanctum chat -p claude` is now $0 marginal); R2 secondary-slot promotion
 - **v0.7** — backup recipes (family / operator / code); `estimate` with R2-free-tier compare; iCloud Photos auto-detection
-- **v0.7.1** — GitHub Tier 0 backend; `sanctum onboard` super-command; 16-pattern secret scanner
+- **v0.7.1** — GitHub Tier 0 backend; `sanctum onboard` super-command; 13-content + 9-filename secret scanner
+- **v0.8.0** — first brew-installable beta; public Homebrew tap (`ogilthorp3/sanctum`); module-manifest system
+- **v0.9.0** — public release; Phase 2 complete; six-gate ship bar (`sanctum doctor --ship`); tier-aware `self-test`; `deadman` heartbeat; `bridge`; `screen-time`
 
-## What's next — v0.8 (May target)
+## What's next — past v0.9.0
 
-These are packaging and polish, not architecture. The architecture is done.
+The v0.8 "May target" list mostly shipped: the brew formula, the public tap, the
+module manifest, the six-gate ship bar, and the README all landed in v0.8.0 →
+v0.9.0. What remains is the tail — the items that were genuinely hard, or that no
+real user has needed yet.
 
 | Item | Why | Effort |
 |---|---|---|
-| **brew formula + tap** | `brew install sanctum-cli` for the public install path. Tap published from a `homebrew-sanctum` repo. | ~half-day |
-| **Sigstore-signed releases** | Self-update path verifies signatures before swapping the binary. Required before recommending public install. | ~half-day |
-| **Atomic-replace flow for cloud_backup** | Wizard currently refuses if both slots are full. The replace flow walks the operator through retiring an old target + wiring a new one safely. | ~half-day |
+| **Sigstore-signed releases** | Self-update path verifies signatures before swapping the binary. Designed in SPEC, not yet wired — the last gap before recommending the public install without caveats. | ~half-day |
+| **Atomic-replace flow for cloud_backup** | Wizard still refuses if both slots are full. The replace flow walks the operator through retiring an old target + wiring a new one safely. | ~half-day |
 | **Storj / S3 / MinIO / Local-NAS in cloud setup** | R2 covers most users; these are escape hatches for sovereignty-maximalists. Mostly endpoint changes on top of the existing S3-compat code path. | ~day |
 | **TUI dashboard** (`sanctum dashboard`) | Live tail of telemetry + LaunchAgent state. Textual-based; the wow factor for power-user demos. | ~day |
-| **README + demo gif** | Public-facing launch surface. The CLI is the interface with the geeks; the README is the front door. | ~half-day |
 | **Rust dispatcher port** | Per [language-maturity doctrine](./language-maturity), promote the hot path once the surface is stable. v1.0 milestone. | multi-week, deferred |
 
 ## Productization shape

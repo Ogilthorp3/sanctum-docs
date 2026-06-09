@@ -13,7 +13,7 @@ So we did what any reasonable person would do: we rewrote the entire inference s
 
 This is sanctum-mlx, **cathedral fork**, on Apple Silicon Metal. It has no Python dependency. It has no regrets.
 
-<Aside type="note" title="Current as of 2026-06-07">
+<Aside type="note" title="Current as of 2026-06-09">
 This page accumulated through eight months of incremental rewrites. The narrative below is mostly intact but the cathedral fork has changed several load-bearing facts since the v0.2.0 cutover. Read the **Cathedral fork — current state** section first; the rest of the page is the path that got us here, preserved because the bugs and the fixes are still instructive.
 </Aside>
 
@@ -26,7 +26,12 @@ The active inference layer is the **cathedral fork** at `~/Projects/sanctum-rs-c
 | `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
 | `sanctum-mlx-codestral` | `:3301` | Codestral-22B-v0.1-4bit | Coder seat + Qui-Gon's code path |
 
-A 9B Python fallback also stands by on `:8901`. Both MLX binaries run under LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-codestral`) with KeepAlive and 30 s ThrottleInterval, load weights from `~/.cache/huggingface/hub/`, gate the listen socket on a signed manifest (`ed25519` over `shasum -a 256`), and bind only to loopback + Tailscale + bridge100 — never `0.0.0.0`. The earlier coder seat (`sanctum-mlx-coder` / `com.sanctum.mlx-coder` on `:1338`, plain `:1234` via socat, running Qwen2.5-Coder-14B-Instruct-4bit) was retired 2026-06-07 — its GGUF was archived and weights deleted when the role moved to Codestral. LM Studio was fully decommissioned 2026-06-07; there is no LM Studio server and no `:1234` — native MLX seats serve every model now.
+A 9B Python fallback also stands by on `:8901`. Both MLX binaries run under LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-codestral`) with KeepAlive and load weights from disk, and neither ever binds `0.0.0.0`. The two binaries differ in exactly the ways their threat models differ:
+
+- **Council `:1337`** gates the listen socket on an **ed25519-signed** manifest (`ed25519` over `shasum -a 256`) and binds three interfaces — loopback, the Mini's Tailscale IP, and bridge100 (`10.0.0.1`) for the VM path. It is mTLS-only: the plist passes `--no-plain`, so there is no plain-HTTP or bearer path left to bypass.
+- **Codestral `:3301`** gates on a **plain SHA-256** manifest (no `.sig` is shipped for it yet) and binds **loopback only** — `127.0.0.1:3301`, nothing on the Tailnet, nothing on the bridge. The coder seat is local-only by design; the VM and MBP reach it through the council router, not directly.
+
+The earlier coder seat (`sanctum-mlx-coder` / `com.sanctum.mlx-coder` on `:1338`, plain `:1234` via socat, running Qwen2.5-Coder-14B-Instruct-4bit) was retired 2026-06-07 — its GGUF was archived and weights deleted when the role moved to Codestral. LM Studio itself is decommissioned; native MLX seats serve every model now. The one piece of LM Studio plumbing still twitching is `com.sanctum.lmstudio-bridge` — a `socat` shim that still LISTENs on `10.0.0.1:1234` and forwards to a `127.0.0.1:1234` that nothing answers anymore. It is a no-op orphan, not a live LM Studio server, but until the bridge is booted out the `:1234` socket is technically still open.
 
 The `sanctum-server` smart router on `:8900` ([Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and routes requests with five tiers of defense — breaker, budget, latency EMA, quality detectors.
 
@@ -45,7 +50,7 @@ Cross-request prompt-cache reuse via longest-common-prefix matching is on. The c
 
 ### Prompt-Lookup Decoding (PLD) as a self-speculation art piece
 
-The cathedral runs PLD by default on both binaries (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Branch `feat/cathedral-pld` started this; the path is now mainline.
+The cathedral runs PLD by default on the council `:1337` binary, where the plist wires it explicitly (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `SANCTUM_MLX_PLD_NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Codestral's plist doesn't set the PLD env vars, so the coder seat runs on whatever the code default is rather than an explicit, `ps`-visible override. Branch `feat/cathedral-pld` started this; the path is now mainline.
 
 ### Architecture coverage
 
@@ -56,16 +61,17 @@ The cathedral runs PLD by default on both binaries (`SANCTUM_MLX_PLD_MAX_LOOKUP=
 | `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
 | `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
 | `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not currently the production champion. |
-| Mistral / Mixtral | **Not yet supported** | The loader will refuse the checkpoint. Add a `MistralModel` arm to the loader dispatch when needed. |
+| `mistral` | Production | Codestral-22B-v0.1-4bit (Llama-arch dense, text-only) on `:3301`. The loader's `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
+| Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Anything else `model_type` is refused outright with a message that names the four it does load. |
 
 ### Architecture
 
 ```
-[Client] → mTLS handshake → 127.0.0.1:1337 (or :1338)
+[Client] → mTLS handshake → 127.0.0.1:1337  (council, mTLS-only)
     ↓
 [sanctum-mlx (Rust/axum)]
   ├─ Manifest gate: ed25519 sig + SHA-256 verify before bind
-  ├─ Loader dispatch by model_type → Qwen3.5MoE / Qwen2 / Qwen3.5
+  ├─ Loader dispatch by model_type → Qwen3.5MoE / Qwen2 / Qwen3.5 / Mistral
   ├─ 4-bit quantized inference: QuantizedLinear group_size=64
   ├─ Fused Metal kernels: SDPA-dequant-V, Phase 1A QKV, Phase 1B Gate+Up
   ├─ Prompt cache pool with LCP matching (T_q ≥ 2 invariant)
@@ -170,6 +176,10 @@ The Mini was running at 31.7 GB of 32 GB swap with 85 MB free pages — not beca
 - `mlx_clear_cache` was wrapped into `mlx_rs::memory::clear_cache()` and called at the end of both chat handler paths (sync and SSE) so the buffer cache is drained between requests instead of growing forever.
 
 Result: post-restart steady state holds at ~13 GB wired (the actual weights + warm experts), with 1.3 GB free pages. macOS dynamically shrunk the swap file from 32 GB to 9.2 GB once the pressure eased — the clearest signal the fix worked.
+
+<Aside type="note" title="35B-era figures differ">
+The caps above (`40960`/`24576`) and the 13 GB-wired / 9.2 GB-swap steady state are the **27B-era** numbers from this 2026-04-24 push. The live 35B champion runs tighter caps in its plist — `--metal-memory-limit-mb 28672 --metal-wired-limit-mb 18432` (cache limit still `1024`) — and a bigger model means more resident weight and a hotter swap: at the time of writing the Mini sits at ~28.7 GB swap, ~27.5 GB of it used. The bounding logic is the same win; the constants moved with the model.
+</Aside>
 
 ## The April 2026 Cutover
 
@@ -451,7 +461,9 @@ Token lives at `/Users/neo/.sanctum/secrets/council-mlx.token`, 0600, 64 bytes o
 
 ### 2. Bind to loopback + Tailscale — never `0.0.0.0`
 
-`--host` is now repeatable. Default is a single `127.0.0.1`. Production plist adds `100.0.0.25` (the Mini's Tailscale IP). LAN devices at `192.168.1.x` cannot connect to `:1337` directly — the socket doesn't exist on that interface. Bridge100 (`10.10.10.1`) is owned by `sanctum-triage`, a proxy that normalizes VM traffic and forwards to loopback, so the VM path is intact.
+`--host` is now repeatable. Default is a single `127.0.0.1`. Production plist adds the Mini's Tailscale IP (`100.0.0.25`). LAN devices at `192.0.2.x` cannot connect to `:1337` directly — the socket doesn't exist on that interface. Bridge100 (`10.0.0.1`) is owned by `sanctum-triage`, a proxy that normalizes VM traffic and forwards to loopback, so the VM path is intact.
+
+The `--host`/plain-listener detail here is the P5 shape. The council binary has since moved to mTLS-only (`--tls-host` ×3, `--no-plain`); the bind *interfaces* — loopback, Tailscale, bridge100 — are unchanged, only the listener type is.
 
 Non-loopback bind failures are non-fatal. Tailscale can transiently disappear during boot; crashing the server would thrash launchd's KeepAlive. Loopback bind is required — without it, the guardian has nothing to probe and we can't even tell ourselves we're alive.
 
@@ -538,7 +550,7 @@ Four of the six A+ items landed in one push. mTLS deferred — Tailscale already
 - `sanctum_mlx_startup_seconds{phase="manifest_verify"|"model_load"}` — histogram
 - `sanctum_mlx_model_loaded` — gauge (0/1)
 
-`GET /metrics` renders Prometheus text format and goes through the same auth middleware as the rest — loopback bypasses, a cross-machine Prometheus scraper presents the bearer token. Operational detail doesn't leak onto the open Tailnet.
+`GET /metrics` renders Prometheus text format and goes through the same auth middleware as the rest. At the time this shipped that meant loopback-bypass plus a bearer token for cross-machine scrapers. Since the mTLS-only consolidation (see the current-state section), `:1337` has no plain listener: `/metrics` is reachable only over the mTLS socket and a scraper has to present a client cert signed by the Sanctum CA. Operational detail doesn't leak onto the open Tailnet.
 
 ### 2. HA failover in the sanctum-server router
 
@@ -585,14 +597,18 @@ certs/
     └── council-offbox.{crt,key}
 ```
 
-The binary owns two routers now:
+<Aside type="note" title="Superseded — the migration finished">
+What follows is the dual-listener design as it shipped. The gradual rollout it describes is **done**: every client moved to mTLS, the plain `--host` lines came out of the plist, and the second TLS listener folded back onto `:1337`. Live state today is a single mTLS-only listener on `:1337` (`--tls-host` ×3, `--tls-port 1337`, `--no-plain`); there is no plain `:1337` and no `:1338`. Read the rest for the *why*; trust the current-state section for the *what*.
+</Aside>
 
-- **Plain HTTP (`:1337`)** — bearer-auth enforced with loopback bypass. Everything we shipped in P5 still works; guardian/canary/drift/sanctum-server/VM-through-triage on loopback keep functioning without config changes.
+The binary shipped two routers:
+
+- **Plain HTTP (`:1337`)** — bearer-auth enforced with loopback bypass. Everything we shipped in P5 still worked; guardian/canary/drift/sanctum-server/VM-through-triage on loopback kept functioning without config changes.
 - **mTLS (`:1338`)** — no bearer check. The TLS handshake already verified the client's certificate chain against our CA, and doubling up the gate with an HTTP header would just be more surface area to break.
 
 Cross-machine end-to-end verified: `curl --cacert ca.crt --cert clients/sanctum-server.crt --key clients/sanctum-server.key https://100.0.0.25:1338/v1/chat/completions` from MBP returned `"2 + 2 equals"` in 1.84 s. Without a client cert the TLS handshake is rejected at layer-4 with rustls reason 1116.
 
-**Rollout is gradual, no flag day.** Plain listeners stay up alongside TLS; migrate clients one at a time. Once every client has moved to mTLS, drop the plain `--host` lines from the plist and keep only `--tls-host`. The bearer token stays around as a belt-and-suspenders fallback during the transition and can be retired the day the bearer-auth log hits zero non-loopback hits for a week.
+**Rollout was gradual, no flag day.** Plain listeners stayed up alongside TLS while clients migrated one at a time. Once every client had moved, the plain `--host` lines came out of the plist, only `--tls-host` remained, and the mTLS listener moved onto `:1337` — which is where it lives now. The bearer token rode along as a belt-and-suspenders fallback during the transition and has since been retired with the plain listener.
 
 **What mTLS buys you that bearer didn't.** Bearer is a single shared secret — leak the token and every bearer-holder can call the council. mTLS gives per-client cryptographic identity: each client has its own cert, can be revoked individually without re-issuing everyone's credential, and the CN appears in audit logs so "guardian made this call" vs "sanctum-server made this call" is legible without additional middleware. Tailscale already encrypts wire transport, so the confidentiality gain is minor — the identity gain is the point.
 
@@ -610,7 +626,7 @@ All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedra
 |------|-------------|
 | `services/sanctum-mlx/src/main.rs` | CLI (clap), axum routes, server setup, manifest gate before Metal load |
 | `services/sanctum-mlx/src/server.rs` | Inference pipeline, SSE streaming, ChatML prompt formatting, `StopSeqBuffer`, `sampling_params_from_request` |
-| `services/sanctum-mlx/src/loaded_model.rs` | Loader dispatch by `model_type` (qwen3_5_moe / qwen2 / qwen3_5); PLD orchestration; LCP cache reuse |
+| `services/sanctum-mlx/src/loaded_model.rs` | Loader dispatch by `model_type` (qwen3_5_moe / qwen2 / qwen3_5 / mistral); PLD orchestration; LCP cache reuse |
 | `services/sanctum-mlx/src/sampling.rs` | Full sampling pipeline: `SamplingParams`, `RecentTokens` ring buffer, `apply_repetition_penalty`, `apply_top_p`, `sample`, callback-based `decode` |
 | `services/sanctum-mlx/src/lora.rs` | LoRA adapter merge (quantized + batched-quantized + 3-D `switch_mlp` for MoE experts) |
 | `services/sanctum-mlx/src/manifest.rs` | Ed25519-signed SHA-256 weight manifest verify, rayon-parallel; refuses to bind on mismatch |
@@ -620,7 +636,8 @@ All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedra
 | `services/sanctum-mlx/src/metrics.rs` | Prometheus recorder, RED metrics, inference token counters |
 | `services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift agents; canonical copies for drift check |
 | `services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | End-to-end mTLS canary battery |
-| `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config (`SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, signed manifest paths) |
-| `~/Library/LaunchAgents/com.sanctum.mlx-codestral.plist` | Coder `:3301` runtime config (Codestral-22B-v0.1-4bit) |
+| `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
+| `~/Library/LaunchAgents/com.sanctum.mlx-codestral.plist` | Coder `:3301` runtime config (Codestral-22B-v0.1-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
 | `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | RETIRED 2026-06-07 — was the coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs); removed when the coder role moved to Codestral |
 | `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with LM Studio decommission |
+| `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | STILL LOADED (orphan) — `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend). A no-op since LM Studio was decommissioned; boot it out to actually close `:1234` |

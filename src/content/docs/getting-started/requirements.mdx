@@ -19,7 +19,7 @@ You will need a Mac Mini. The whole Mac Mini. Not an old one in a drawer — a c
 |-----------|---------|-------------|
 | Chip | M4 | M4 Pro |
 | RAM | 16 GB | 32 GB+ |
-| Storage | 256 GB internal | 58 GB+ internal |
+| Storage | 256 GB internal | 1 TB+ internal |
 | Network | Gigabit Ethernet | Gigabit Ethernet |
 
 <Aside type="tip">
@@ -44,18 +44,19 @@ Install the following before proceeding to the installation guide. This is the p
   <TabItem label="macOS">
     | Software | Version | Install |
     |----------|---------|---------|
-    | macOS | 15 (Sequoia) or later | System update |
+    | macOS | 26 (Tahoe) — 15 Sequoia minimum | System update |
     | Homebrew | Latest | [brew.sh](https://brew.sh) |
     | Python | 3.12+ | `brew install python` |
     | Node.js | 22+ | `brew install node` or via fnm |
     | Docker Desktop | Latest | [docker.com](https://www.docker.com/products/docker-desktop/) |
-    | QEMU | Latest | `brew install qemu` (includes Apple Hypervisor support on Apple Silicon) |
+    | Lima | Latest | `brew install lima` (runs the Ubuntu VM on Apple Virtualization) |
+    | socket_vmnet | Latest | `brew install socket_vmnet` (host-only Mac↔VM bridge) |
     | Git | Latest | `brew install git` (or Xcode CLI tools) |
   </TabItem>
   <TabItem label="Ubuntu VM">
     | Software | Version | Notes |
     |----------|---------|-------|
-    | Ubuntu | 24.04 LTS | Installed as QEMU VM |
+    | Ubuntu | 24.04 LTS | Installed as a Lima `vz` VM |
     | Docker | Latest | `apt install docker.io` |
     | Node.js | 22+ | Via NodeSource or fnm |
     | SOPS | Latest | `apt install sops` or from GitHub releases |
@@ -65,31 +66,31 @@ Install the following before proceeding to the installation guide. This is the p
 </Tabs>
 
 <Aside type="note">
-  QEMU runs the Ubuntu VM directly with Apple Hypervisor (no UTM GUI needed). Apple Virtualization Framework is not used because it does not support Host Only networking, which Sanctum requires for the Mac-to-VM bridge. Apple's own virtualization framework cannot do the one thing we need it to do. This is fine. Everything is fine.
+  [Lima](https://lima-vm.io) runs the Ubuntu VM on Apple's Virtualization Framework (`vmType: vz`) — no UTM GUI, no QEMU process. The one thing `vz` does not give you natively is host-only networking, so Sanctum backs the bridge interface with `socket_vmnet` running as root. Two tools, one VM, and the host-only network Apple forgot to ship. (Sanctum ran on QEMU/HVF until May 2026, when an idle-spin bug that pinned a core at 100% on a sleeping VM convinced us to switch. The fan thanked us.)
 </Aside>
 
 ### VM Specifications
 
-When creating the Ubuntu VM with QEMU, use these settings:
+When creating the Ubuntu VM with Lima, use these settings:
 
 | Setting | Value |
 |---------|-------|
-| Backend | QEMU with Apple Hypervisor |
+| Backend | Lima (`vmType: vz`, Apple Virtualization) |
 | CPU cores | 4 |
-| Memory | 8 GB (8 GB recommended) |
-| Disk | 34 GB+ |
-| Network | Host Only (vmnet) |
-| QEMU TSO | Enabled |
+| Memory | 8 GB |
+| Disk | 100 GB |
+| Bridge network | Host Only via `socket_vmnet` (vmnet host mode) |
+| Internet | NAT interface, managed by Lima |
 
-The VM will receive a static IP on the `10.10.10.0/24` subnet. The Mac acts as the bridge gateway at `10.10.10.1`, and the VM sits at `10.10.10.10`. Two machines, one private network, no internet access for the VM. It is a Linux box in solitary confinement, and it prefers it that way.
+The VM carries two interfaces. A host-only bridge (`lima0`) puts the Mac at `10.0.0.1` and the VM at `10.0.0.10` — that private wire is how every agent on the VM reaches services on the hub. A second NAT interface gives the VM its own outbound path to the internet for `apt` and `git`. Not solitary confinement, then; more like a studio apartment with one locked door to the haus and one window to the outside world.
 
 ## Optional Components
 
 These are not required for a basic installation but enable additional capabilities. Think of them as side quests.
 
-### Firewalla Purple
+### Firewalla
 
-A [Firewalla Purple](https://firewalla.com) in Router mode provides network-level security, DNS management, and device monitoring. Sanctum includes a bridge service that communicates with Firewalla over its P2P API on port 8833.
+A [Firewalla](https://firewalla.com) in Router mode provides network-level security, DNS management, and device monitoring. The hub runs a Gold Pro, but any Router-mode Firewalla works. Sanctum includes a bridge service that talks to it over its P2P API on port 8833.
 
 If you do not have a Firewalla, Sanctum will still function. Network management features will simply be unavailable, and you will have to monitor your network the old-fashioned way: by not monitoring it at all and hoping for the best.
 
@@ -107,9 +108,9 @@ brew install --cask tailscale
 
 A domain managed through [Cloudflare](https://cloudflare.com) enables secure public access to specific services (such as the Home Assistant dashboard or health endpoints) via Cloudflare Tunnel. The free Zero Trust plan is sufficient.
 
-### LM Studio
+### Local OpenAI-compatible inference (port 1234)
 
-[LM Studio](https://lmstudio.ai) provides a local inference server for large language models. Sanctum uses it as a primary or fallback model provider. Install it as a standard macOS application and configure it to serve on port 1234.
+Sanctum expects a local OpenAI-compatible model server on port 1234, used as a primary or fallback provider. [LM Studio](https://lmstudio.ai) is the easy on-ramp — install the app (or its `lms` CLI) and point it at `:1234`. The running hub currently serves that port with `mlx_lm.server` instead, a workaround for a cathedral bug from May 2026; the provider behind the socket is interchangeable as long as it speaks the OpenAI API on 1234.
 
 ### iPhone Apps
 
@@ -134,16 +135,16 @@ Internet
   |
 Modem / ONT
   |
-Firewalla WAN (optional, Router mode)
+Firewalla WAN (Router mode)
   |
-LAN (192.168.1.0/24)
-  |-- Mac Mini (.10) -- Host Only bridge (10.10.10.0/24) -- Ubuntu VM (.10)
-  |-- Orbi / Wi-Fi AP (.2, AP mode)
+LAN (192.0.2.0/24, gateway .1)
+  |-- Mac Mini (.10) -- Host Only bridge (10.0.0.0/24) -- Ubuntu VM (.10)
+  |-- Orbi / Wi-Fi AP (AP mode)
   \-- Smart devices, speakers, etc.
 ```
 
 <Aside type="caution">
-  The VM uses Host Only networking and has no direct internet access. All external connectivity is routed through the Mac. This is by design and provides an additional layer of network isolation for agent workloads. The VM is an air-gapped intelligence asset living inside your desktop computer. Read that sentence again and appreciate the era you live in.
+  The host-only bridge (`10.0.0.0/24`) is the only path between the VM and hub services — agent workloads on the VM talk to the Mac over that private wire and nowhere else. The VM does keep a separate NAT interface for outbound `apt` and `git`, so it is not air-gapped: it is firewalled by topology, not by amputation. If you want a true air-gap, drop the NAT NIC and proxy package installs through the Mac — but then you own the proxy, forever.
 </Aside>
 
 ## Verification
@@ -166,8 +167,9 @@ node --version
 # Check Docker
 docker --version
 
-# Check QEMU is installed
-which qemu-system-aarch64
+# Check Lima (runs the VM) and socket_vmnet (the host-only bridge)
+limactl --version
+which socket_vmnet
 ```
 
 If all of those commands returned something other than an error, you are ready. If any of them failed, fix it now. The installation guide is patient, but it will not hold your hand through missing dependencies.

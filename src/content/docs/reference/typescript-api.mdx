@@ -36,7 +36,7 @@ import {
   nodeService,
   nodeHub,
   getSatellites,
-} from './lib/config';
+} from './lib/config.js';
 ```
 
 <Aside type="note">
@@ -49,25 +49,28 @@ That's twenty-one named exports for reading config about a haus. There was a tim
 
 ### get()
 
-Read any value from the instance config by dot-notation path.
+Read any value from the instance config by dot-notation path. The optional
+second argument is the fallback returned when the path is missing — so `get`
+hands you a `T`, never an `undefined` you forgot to guard.
 
 ```typescript
-function get(keyPath: string): string | undefined
+function get<T = string>(path: string, fallback?: T): T
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `keyPath` | `string` | Dot-delimited path into the config |
+| `path` | `string` | Dot-delimited path into the config |
+| `fallback` | `T` | Value returned if the path is absent (default `undefined`) |
 
 ```typescript
-const port = get('services.gateway.port');
-// "1977"
+const port = get('services.dashboard.port', 3001);
+// 3333
 
 const vmIp = get('network.vm_ip');
-// "10.10.10.10"
+// "10.0.0.10"
 
 const tz = get('instance.timezone');
-// "America/Montreal"
+// "America/New_York"
 ```
 
 ---
@@ -83,25 +86,28 @@ function getConfig(): SanctumConfig
 ```typescript
 const config = getConfig();
 console.log(config.instance.name);
-// "Manoir Nepveu"
+// "Manoir Neo"
 ```
 
 ---
 
 ### isEnabled()
 
-Check whether a config path evaluates to `true`.
+Check whether `services.<name>.enabled` is `true`. You pass the bare service
+name — `isEnabled` prefixes the `services.` and suffixes the `.enabled` for
+you. Pass the full path and it goes looking for `services.services.x.enabled`,
+finds nothing, and politely returns `false`.
 
 ```typescript
-function isEnabled(keyPath: string): boolean
+function isEnabled(service: string): boolean
 ```
 
 ```typescript
-if (isEnabled('services.gateway.enabled')) {
-  console.log('Gateway is active');
+if (isEnabled('signal_proxy')) {
+  console.log('Signal bridge proxy is active');
 }
 
-if (isEnabled('services.signal_bridge.enabled')) {
+if (isEnabled('voice_agent')) {
   // ...
 }
 ```
@@ -110,15 +116,18 @@ if (isEnabled('services.signal_bridge.enabled')) {
 
 ### expand()
 
-Expand `{{PLACEHOLDER}}` tokens in a template string using config values. The same template engine as the shell side, but in TypeScript, where the curly braces feel more at haus.
+Expand a leading `~` to the configured Mac home directory (`users.mac.home`).
+Just the tilde — no `{{token}}` interpolation, no environment substitution.
+It is the smallest possible path helper, and it knows it. Anything that
+doesn't start with `~` comes back untouched.
 
 ```typescript
-function expand(template: string): string
+function expand(path: string): string
 ```
 
 ```typescript
-const result = expand('SSH to {{network.vm_ip}} as {{users.vm}}');
-// "SSH to 10.10.10.10 as ubuntu"
+const result = expand('~/Projects/openclaw-skills');
+// "/Users/neo/Projects/openclaw-skills"
 ```
 
 ---
@@ -135,7 +144,7 @@ function slug(): string
 
 ```typescript
 slug();
-// "sanctum-hub"
+// "manoir-neo"
 ```
 
 ---
@@ -150,14 +159,16 @@ function name(): string
 
 ```typescript
 name();
-// "Manoir Nepveu"
+// "Manoir Neo"
 ```
 
 ---
 
 ### vmSsh()
 
-Return the SSH alias for the VM connection.
+Return the VM SSH target as `user@ip`, assembled from `users.vm.username` and
+`network.vm_ip`. Not an SSH-config alias — the literal address you can hand to
+`ssh`.
 
 ```typescript
 function vmSsh(): string
@@ -165,7 +176,7 @@ function vmSsh(): string
 
 ```typescript
 vmSsh();
-// "openclaw"
+// "ubuntu@10.0.0.10"
 ```
 
 ---
@@ -180,22 +191,24 @@ function whoami(): string
 
 ```typescript
 whoami();
-// "hub"
+// "manoir"
 ```
 
 ---
 
 ### isNode()
 
-Check if the current machine matches a given node identifier.
+Check if the current machine matches a given node ID — a string compare against
+`whoami()`. Note it takes a node *ID* (`manoir`), not a node *type* (`hub`); the
+two are easy to confuse, and the type system won't save you here.
 
 ```typescript
 function isNode(nodeId: string): boolean
 ```
 
 ```typescript
-if (isNode('hub')) {
-  console.log('Running on the hub');
+if (isNode('manoir')) {
+  console.log('Running on the manoir hub');
 }
 ```
 
@@ -203,10 +216,10 @@ if (isNode('hub')) {
 
 ### myNodeType()
 
-Return the node type of the current machine.
+Return the node type of the current machine — reads `nodes.<whoami>.type`.
 
 ```typescript
-function myNodeType(): 'hub' | 'satellite' | 'mobile' | 'sensor'
+function myNodeType(): string
 ```
 
 ```typescript
@@ -214,7 +227,9 @@ myNodeType();
 // "hub"
 ```
 
-A union type for the kinds of places your haus exists. The type system doesn't judge. It just wants to know.
+A plain `string`, not a sealed union. The convention is `hub`, `satellite`,
+`mobile`, or `sensor` — the kinds of places your haus exists — but the function
+returns whatever the YAML says. The type system doesn't judge. It just relays.
 
 ---
 
@@ -222,110 +237,122 @@ A union type for the kinds of places your haus exists. The type system doesn't j
 
 ### nodeGet()
 
-Read a config value for a specific node.
+Read a field for a specific node — sugar for `get('nodes.<id>.<field>')`, with
+the same optional fallback.
 
 ```typescript
-function nodeGet(nodeId: string, keyPath: string): string | undefined
+function nodeGet<T = string>(nodeId: string, field: string, fallback?: T): T
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `nodeId` | `string` | Node identifier (e.g., `"hub"`, `"satellite"`) |
-| `keyPath` | `string` | Dot-delimited path within the node config |
+| `nodeId` | `string` | Node identifier (e.g., `"manoir"`, `"chalet"`) |
+| `field` | `string` | Dot-delimited path within that node's config |
+| `fallback` | `T` | Value returned if the field is absent |
 
 ```typescript
-nodeGet('hub', 'tailscale_ip');
+nodeGet('manoir', 'tailscale_ip');
 // "100.0.0.20"
 
-nodeGet('satellite', 'type');
+nodeGet('chalet', 'type');
 // "satellite"
 
-nodeGet('hub', 'host');
-// "192.168.1.10"
+nodeGet('manoir', 'host');
+// "192.0.2.10"
 ```
 
 ---
 
 ### getNodes()
 
-Return all node IDs defined in the config.
+Return the full nodes dict, keyed by node ID. For just the IDs, take the keys.
 
 ```typescript
-function getNodes(): string[]
+function getNodes(): Record<string, Record<string, unknown>>
 ```
 
 ```typescript
-getNodes();
-// ["hub", "satellite"]
+Object.keys(getNodes());
+// ["manoir", "chalet", "mbp", "ruview_front",
+//  "ruview_basement", "ruview_garage", "ruview_living"]
 ```
 
 ---
 
 ### getNodesByType()
 
-Return node IDs filtered by type.
+Return nodes filtered by type, each as its full config object with the `id`
+folded back in.
 
 ```typescript
-function getNodesByType(type: string): string[]
+function getNodesByType(type: string): Array<{ id: string } & Record<string, unknown>>
 ```
 
 ```typescript
 getNodesByType('hub');
-// ["hub"]
+// [{ id: "manoir", type: "hub", display_name: "Manoir Neo", ... }]
 
-getNodesByType('satellite');
-// ["satellite"]
+getNodesByType('satellite').map((n) => n.id);
+// ["chalet"]
 ```
 
 ---
 
 ### getSatellites()
 
-Convenience function to return all satellite node IDs.
+Convenience wrapper for `getNodesByType('satellite')` — all satellite nodes as
+config objects.
 
 ```typescript
-function getSatellites(): string[]
+function getSatellites(): Array<{ id: string } & Record<string, unknown>>
 ```
 
 ```typescript
-getSatellites();
-// ["satellite"]
+getSatellites().map((n) => n.id);
+// ["chalet"]
 ```
 
 ---
 
 ### nodeHub()
 
-Return the node ID of the hub node.
+Return the hub node ID that a given satellite syncs with — reads
+`nodes.<id>.sync.hub`. It answers "who does this satellite report home to,"
+not "which node is the hub." Subtle difference, load-bearing in a two-haus
+topology.
 
 ```typescript
-function nodeHub(): string
+function nodeHub(nodeId: string): string
 ```
 
 ```typescript
-nodeHub();
-// "hub"
+nodeHub('chalet');
+// "manoir"
 ```
 
 ---
 
 ### isNodeOnline()
 
-Check if a node is reachable (async, uses ping/Tailscale check).
+Read the static `nodes.<id>.online` flag from config. Synchronous, no Promise,
+no network — it reports what the YAML last declared, not what the wire is doing
+right now.
 
 ```typescript
-async function isNodeOnline(nodeId: string): Promise<boolean>
+function isNodeOnline(nodeId: string): boolean
 ```
 
 ```typescript
-const online = await isNodeOnline('satellite');
-if (online) {
-  console.log('Chalet is reachable');
+if (isNodeOnline('chalet')) {
+  console.log('Chalet is marked online');
 }
 ```
 
 <Aside type="caution">
-This is async because it does a real network check. Don't `await` it in a render loop unless you enjoy watching your dashboard freeze while it pings a cabin in the woods.
+"Online" here means a boolean in a file, not a live probe. If the chalet's power
+went out an hour ago, this still cheerfully says `true` — the YAML hasn't heard
+the news. Trust it for topology, not for liveness; reach for an actual ping when
+you need the truth about the cabin in the woods.
 </Aside>
 
 ---
@@ -339,8 +366,8 @@ function nodeSsh(nodeId: string): string
 ```
 
 ```typescript
-nodeSsh('hub');
-// "operator@192.168.1.10"
+nodeSsh('manoir');
+// "neo@192.0.2.10"
 ```
 
 ---
@@ -354,8 +381,8 @@ function nodeSshTs(nodeId: string): string
 ```
 
 ```typescript
-nodeSshTs('satellite');
-// "operator@100.0.0.30"
+nodeSshTs('chalet');
+// "neo@100.0.0.21"
 ```
 
 ---
@@ -369,8 +396,8 @@ function nodeVmSsh(nodeId: string): string
 ```
 
 ```typescript
-nodeVmSsh('hub');
-// "ubuntu@10.10.10.10"
+nodeVmSsh('manoir');
+// "ubuntu@10.0.0.10"
 ```
 
 ---
@@ -386,10 +413,10 @@ function isNodeServiceEnabled(nodeId: string, service: string): boolean
 ```
 
 ```typescript
-isNodeServiceEnabled('hub', 'gateway');
+isNodeServiceEnabled('chalet', 'home_assistant');
 // true
 
-isNodeServiceEnabled('satellite', 'vm');
+isNodeServiceEnabled('chalet', 'vm');
 // false
 ```
 
@@ -397,15 +424,16 @@ isNodeServiceEnabled('satellite', 'vm');
 
 ### nodeService()
 
-Get a service config value for a node.
+Get a service field for a node — sugar for
+`nodeGet('<id>', 'services.<svc>.<field>')`, fallback param and all.
 
 ```typescript
-function nodeService(nodeId: string, service: string, key: string): string | undefined
+function nodeService<T = string>(nodeId: string, service: string, field: string, fallback?: T): T
 ```
 
 ```typescript
-nodeService('hub', 'gateway', 'port');
-// "1977"
+nodeService('chalet', 'home_assistant', 'port');
+// 8123
 ```
 
 ---
@@ -416,29 +444,32 @@ The command center dashboard serves the instance config (with secrets excluded) 
 
 ```typescript
 // server/index.ts
-import { getConfig, slug } from '../lib/config';
+import { getConfig } from '../lib/config.js';
 
-app.get('/api/config', (req, res) => {
-  const config = getConfig();
-  // Strip secrets section before serving
-  const { secrets, ...safeConfig } = config;
-  res.json(safeConfig);
+app.get('/api/config', (_req, res) => {
+  const cfg = getConfig();
+  // Serve everything except secrets
+  const { secrets: _s, ...safe } = cfg;
+  res.json(safe);
 });
 ```
 
-Both `vite.config.ts` and `server/index.ts` read ports, paths, and SSH targets from the config module rather than using hardcoded values:
+`vite.config.ts` reads its dev-server port (and the proxy targets) from the
+config module rather than hardcoding them — so the dashboard listens where
+`instance.yaml` says, with a sane default if the key is missing:
 
 ```typescript
 // vite.config.ts
-import { get } from './lib/config';
+import { get } from './lib/config.js';
 
-export default defineConfig({
-  server: {
-    port: Number(get('services.dashboard.dev_port')) || 1111,
-  },
-});
+const dashboardPort = get('services.dashboard.port', 3001);
+// ...
+server: { port: dashboardPort };
 ```
 
 <Aside type="tip">
-The `|| 1111` fallback means the dashboard will start even if the config is missing the dev port. Defensive coding for a config file that controls your haus. Belt, suspenders, and a third thing holding up your pants that hasn't been invented yet.
+That second argument to `get` — the `3001` fallback — is the real belt-and-suspenders
+here: the dashboard still boots even if someone fat-fingers the port out of the YAML.
+Every `get()` on this page carries the same quiet insurance. A config file that runs
+your haus should fail soft, not dark.
 </Aside>

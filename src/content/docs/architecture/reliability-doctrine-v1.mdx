@@ -53,13 +53,13 @@ Every always-alive service satisfies all four. A PR introducing a new service mu
     The durable upstream fix. Lives in version control, ships with a regression test that fails before and passes after, gets filed upstream when the bug is upstream. `// works around X` comments without a regression test are debt, not documentation.
   </Card>
   <Card title="Layer 2 — Probe" icon="magnifier">
-    Liveness, cadence, and **a contract assertion**. Cadence is tier-proportional: 30s for haus-critical, 60s for council-critical, 5 min for ops-critical. The contract assertion exercises the actual work surface — does the bridge return hosts, does the model serve tokens, does the gateway round-trip a synthetic event. Endpoints that return 200 because the process exists are not probes; they are theater.
+    Liveness, cadence, and **a contract assertion**. Cadence is tier-proportional: 60s for the haus- and council-critical probes, 5 min for the ops-critical ones, longer for slow canaries that cost real tokens to run. The contract assertion exercises the actual work surface — does the bridge return hosts, does the model serve tokens, does the gateway round-trip a synthetic event. Endpoints that return 200 because the process exists are not probes; they are theater.
   </Card>
   <Card title="Layer 3 — Failsafe" icon="setting">
     The auto-heal action, with bounded retries and closed-loop verification. Three attempts max, exponential backoff, and the same probe must return HEALTHY before any heal counts. Truthy dict ≠ success. Self-healers that detect-and-only-log are a doctrine violation; the haus stayed down for nearly a week behind one of those.
   </Card>
   <Card title="Layer 4 — Runbook" icon="document">
-    Both human-readable and machine-executable. Every runbook is a markdown page in `docs/doctrine/runbooks/` *and* a `tools/runbook/<service>.sh` with `--dry-run` and `--apply` modes. CI lints both forms stay in sync. Every runbook is drilled at least once per quarter; failed drill = doctrine bug, file a fix.
+    Both human-readable and machine-executable. The human form is a markdown page in `docs/doctrine/runbooks/<service>.md`; the doctrine merge gate refuses any new always-alive plist that ships without one. The machine form is the consolidated `tools/sanctum-recover` umbrella — `--list`, `--dry-run`, `--json`, or a bare run to actually fix — which auto-detects and heals the known break-glass scenarios rather than scattering one `.sh` per service. Drill each at least once per quarter; a failed drill is a doctrine bug, not a footnote.
   </Card>
 </CardGrid>
 
@@ -84,9 +84,9 @@ Severity maps to channel by tier, not by service:
 |---|---|---|
 | **P0** | iMessage + Yoda phone call | Minutes |
 | **P1** | iMessage | Tens of minutes |
-| **P2** | Signal (or 07:00 EDT digest if quiet hours) | Hours |
+| **P2** | Signal (held to the log during 23:00–07:00 EDT quiet hours) | Hours |
 
-Heal-then-escalate is multi-stage. P0 services that go FAILED for two minutes get a first heal attempt; for five minutes, a second plus a Signal heads-up; for ten minutes, an iMessage and a phone call. P1 and P2 use longer fuses but the same shape: try to fix it first, escalate when persistence proves the system can't fix itself.
+Heal-then-escalate is the intended shape: try to fix it first, widen the channel only when persistence proves the system can't fix itself. Today that's a single flat fuse — the Force Flow failsafe probes every 60s and, after five consecutive failures (~5 min), fires one P0 iMessage directly, bypassing the very path it's watching. The graduated ladder the doctrine calls for — heal at two minutes, heal again plus a Signal heads-up at five, iMessage and a phone call at ten — is the target, not yet the wiring.
 
 P0 alerts override quiet hours, always. The haus does not wait until morning.
 

@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![LaunchAgent catalog — a brass-and-mahogany card-catalog cabinet with every drawer slightly ajar; a clerk on a rolling ladder pulling one open to reveal a glowing slip of light inside.](./images/hero-launchagents-catalog.png)
 
-This is the per-agent rundown — the bestiary. The parent [LaunchAgents & LaunchDaemons](/reference/launchagents/) page covers the boot chain, plist generation, and the choreography of `launchctl bootstrap`. This page is every agent grouped by role, what it's responsible for, and the specific 3 AM incident that earned each one its paragraph. Twenty-three entries, all of them running right now if everything is working, all of them silent if everything is working. Notice them at your peril.
+This is the per-agent rundown — the bestiary. The parent [LaunchAgents & LaunchDaemons](/reference/launchagents/) page covers the boot chain, plist generation, and the choreography of `launchctl bootstrap`. This page is the load-bearing subset grouped by role — the ones you actually grep for at 3 AM, each with the specific incident that earned it a paragraph. (The full fleet is north of a hundred labels and churns weekly.) Running right now if everything is working, silent if everything is working. Notice them at your peril.
 
 ## Core Infrastructure
 
@@ -23,7 +23,7 @@ These agents stand up the VM, the gateway, and the firewall bridge. Without them
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Runs the startup script that launches QEMU headless, waits for the VM to boot, configures the bridge interface IP via `sudo ifconfig`, and restores the VM-facing Mac service bridges after the network comes back. In the current runtime that specifically includes the LM Studio bridge exposed on `10.10.10.1:1234`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
+Runs the startup script that launches QEMU headless, waits for the VM to boot, configures the bridge interface IP via `sudo ifconfig`, and restores the VM-facing Mac service bridges after the network comes back. In the current runtime that specifically includes the LM Studio bridge exposed on `10.0.0.1:1234`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
 
 The first domino. Everything else assumes the VM is running and the bridge exists. If this one fails, enjoy your very expensive aluminum rectangle doing absolutely nothing useful.
 
@@ -38,48 +38,48 @@ The first domino. Everything else assumes the VM is running and the bridge exist
 | **Required Service** | `vm` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `10.10.10.1:1234` |
+| **Port** | `10.0.0.1:1234` |
 
-This small bridge LaunchAgent forwards the VM-facing `10.10.10.1:1234` listener to the Mac-local LM Studio process bound on `127.0.0.1:1234`. The VM does not need the whole desktop. It needs one reliable door.
+This small bridge LaunchAgent forwards the VM-facing `10.0.0.1:1234` listener to the Mac-local LM Studio process bound on `127.0.0.1:1234`. The VM does not need the whole desktop. It needs one reliable door.
 
 `com.sanctum.vm-autostart` is responsible for ensuring this bridge exists once the bridge network comes back. The bridge itself is launchd-managed so it stays resident after the one-shot VM bootstrap work is finished.
 
 ---
 
-### com.sanctum.gateway
+### com.sanctum.bridge
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.gateway` |
-| **Purpose** | OpenClaw/DenchClaw agent gateway on the Mac side |
-| **Required Service** | `gateway` |
-| **KeepAlive** | No |
+| **Label** | `com.sanctum.bridge` |
+| **Purpose** | SanctumBridge.app — Mac-local data bridge (Messages, WhatsApp, Contacts, Calendar) for the agents |
+| **Required Service** | `sanctum_bridge` |
+| **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `1977` |
+| **Port** | `4078` |
 
-The Mac-side agent gateway. Uses `/opt/homebrew/bin/node` (stable Homebrew symlink, not a versioned Cellar path) because pointing a LaunchAgent at a Cellar path is a time bomb with a `brew upgrade` fuse.
+The agents live on the VM; the Mac owns the iMessage database, the EventKit store, and Contacts. This LaunchAgent runs `~/.sanctum/bin/sanctum-bridge.sh`, which reads the port from `instance.yaml` (`services.sanctum_bridge.port`) and execs `SanctumBridge.app` — the plist never hardcodes the port, which is the whole point of the wrapper.
 
 <Aside type="caution">
-Always restart via `openclaw gateway stop` and `openclaw gateway start`. Never use raw `launchctl` commands for this service — the CLI handles state cleanup. Ignoring this advice results in orphaned port locks and a gateway that thinks it's running when it isn't, which is worse than a gateway that's honestly down.
+The bundle ID is `ai.openclaw.denchclaw` and the TCC/Full-Disk-Access grants are keyed to it. Re-sign or relocate the `.app` and macOS silently revokes them — the bridge comes up, answers health checks, and returns zero contacts. If the bridge is suddenly amnesiac, suspect TCC before you suspect the code.
 </Aside>
 
 ---
 
-### com.sanctum.firewalla
+### com.sanctum.firewalla-bridge-watchdog
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.firewalla` |
-| **Purpose** | Bridge between the Sanctum stack and the Firewalla Purple router via the P2P API |
+| **Label** | `com.sanctum.firewalla-bridge-watchdog` |
+| **Purpose** | Keep `firewalla-bridge.js` (the Firewalla P2P API bridge) alive on port `1984` |
 | **Required Service** | `firewalla` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `1984` |
-| **Bind** | `0.0.0.0` (accessible from VM) |
+| **Bridge Port** | `1984` (bound on all interfaces, reachable from the VM) |
+| **Discovery Port** | `8833` (Firewalla P2P) |
 
-Runs `firewalla-bridge.js` which authenticates to Firewalla's cloud endpoint and then communicates locally over port 8833. The bridge binds to all interfaces so the VM can reach it at `10.10.10.1:1984`.
+The original one-shot `com.sanctum.firewalla` plist is retired (`.pre-w7.disabled`); the bridge is now babysat by this watchdog instead. It supervises `firewalla-bridge.js`, which discovers the Firewalla box over the P2P port `8833` and exposes a bearer-token HTTP API on `1984`, bound on all interfaces so the VM can reach it at `10.0.0.1:1984`.
 
-A bridge to a bridge. Networking is turtles all the way down.
+A watchdog for a bridge to a bridge. Networking is turtles all the way down, and at least one of the turtles needs a turtle-sitter.
 
 ---
 
@@ -102,17 +102,17 @@ Provides TTS for the voice agent. Replaced `com.sanctum.xtts-server` on 2026-04-
 
 ---
 
-### com.sanctum.voice-agent
+### com.sanctum.yoda-agent
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.voice-agent` |
-| **Purpose** | Yoda voice interaction agent |
-| **Required Service** | `voice_agent` |
-| **KeepAlive** | No |
+| **Label** | `com.sanctum.yoda-agent` |
+| **Purpose** | Yoda voice interaction agent — the brain of the voice path |
+| **Required Service** | `yoda_agent` |
+| **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
-Manages voice capture, wake-word detection, and Yoda personality interactions. A daemon that sits in silence, waiting for someone to speak, then answers in the cadence of a small green Jedi master. Your haus does this now. You chose this life.
+The conductor of the voice fleet. The path is no longer one daemon — it's six: `yoda-agent` (this one), `yoda-orchestrator`, `yoda-stt-worker`, `yoda-tts-worker`, `yoda-token-minter`, and `yoda-plain-bridge`, each its own LaunchAgent. Together they capture audio, transcribe it, route the turn, mint a token, synthesize a reply, and answer in the cadence of a small green Jedi master. Your haus does this now. You chose this life.
 
 ---
 
@@ -136,14 +136,17 @@ Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. The 27B
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.server` |
-| **Binary** | `proxyd` |
-| **Purpose** | Sanctum Proxy — single-binary LLM routing layer |
-| **Required Service** | `proxy` |
+| **Binary** | `sanctum-server` (`sanctum-rs`) |
+| **Purpose** | Routing MLX server — content-routed inference in front of the local seats |
+| **Required Service** | `mlx_server` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Port** | `4040` (all interfaces) |
+| **Port** | `127.0.0.1:8900` |
+| **Model** | `Qwen3.5-27B-4bit` |
 
-A single Rust binary (`proxyd`) that handles the full LLM request pipeline: request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping, model resolution, tiered fallback chains, and analytics. All agent traffic enters through port 4040. Renamed from `com.sanctum.proxy` to align with the binary name. The bouncer and the bartender in one efficient package.
+The `com.sanctum.server` label is the **routing** MLX server — `sanctum-server`, launched via `~/.sanctum/bin/sanctum-server-launch` against `Qwen3.5-27B-4bit` with `--router-config instance.yaml`, on loopback `:8900` (`/health` reports `mode: routed`). It does not own port 4040, and it is not `proxyd` — a long-standing doc conflation that this entry exists to kill.
+
+**`proxyd` is a separate binary** (`sanctum-rs`) on `*:4040`: the bouncer-and-bartender doing sanitization, content routing, prompt caching, PII scrubbing, prefill stripping, model resolution, and tiered fallback. It currently runs as a resident process, not a loaded LaunchAgent, with keys injected from `~/.sanctum/secrets/`. If it ever earns a plist, label it `com.sanctum.proxyd` — never `com.sanctum.server`.
 
 ---
 
@@ -181,17 +184,15 @@ Companion to memory-vault on the next port up. Jina v2 reranker (Python + transf
 
 Every system with a VM that can't see the LAN eventually grows a small collection of tunnels. This is that collection. Each one exists because some process needed to reach some other process, and a direct route was too much to ask.
 
-### com.sanctum.ha-tunnel
+### com.sanctum.ha-tunnel (retired 2026-05-01)
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.ha-tunnel` |
-| **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API on port 4007 |
-| **Required Service** | `home_assistant` |
-| **KeepAlive** | No |
-| **RunAtLoad** | Yes |
+| **Purpose** | SSH tunnel from the HA Docker container to the VM's Network Control API |
+| **Status** | Retired (`.plist.retired-2026-05-01`) |
 
-Allows the Home Assistant container (running in Docker bridge networking) to reach the VM's Network Control API via `host.docker.internal`. A Docker container, talking through an SSH tunnel, to a VM it can't see, about devices on a network it's not on. Distributed systems are just loneliness at scale.
+This let the Home Assistant container reach the VM's Network Control API via `host.docker.internal` — a Docker container, talking through an SSH tunnel, to a VM it can't see, about devices on a network it's not on. Distributed systems are just loneliness at scale. The topology moved on: this tunnel and `com.sanctum.network-control-tunnel` (retired 2026-06-04) are both gone. Kept here as a stub because the cabinet remembers its drawers.
 
 ---
 
@@ -234,23 +235,23 @@ Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `sanc
 | **RunAtLoad** | Yes |
 | **Ports** | `18080` (HTTP), `18085` (API) |
 
-Forwards VM traffic from `10.10.10.1:18080` to the Orbi router at `192.168.1.2:80` and `10.10.10.1:18085` to `192.168.1.2:5000`. Required because the VM has no direct LAN access.
+Forwards VM traffic from `10.0.0.1:18080` to the Orbi web UI (`:80`) and `:18085` to the Orbi API (`:5000`), because the VM has no direct LAN access. The Orbi's LAN IP is **not hardcoded** — `orbi-bridge.sh` resolves it from `endpoints.env` (`SANCTUM_ORBI_LAN`) or `instance.yaml` (`network.orbi_lan`), per the no-hardcoded-endpoints doctrine that earned a memory entry the day the old Bell-subnet literal went stale.
 
-The VM wants to talk to the router. The VM can't reach the router. So we built a socat tunnel through the Mac. Networking: where every problem is solved by adding another layer of indirection.
+If neither source is set — say the Orbi got unplugged at the Gold Pro cutover — the bridge idles with one clear log line instead of forwarding to a dead address, then self-heals on the next `launchctl kickstart -k`. A socat tunnel through the Mac that has the good sense to stay quiet when there's nothing on the other end.
 
 ---
 
-### com.sanctum.signal-bridge
+### com.sanctum.signal-tcp-bridge
 
 | Property | Value |
 |----------|-------|
-| **Label** | `com.sanctum.signal-bridge` |
-| **Purpose** | Signal messaging bridge for agent communication |
+| **Label** | `com.sanctum.signal-tcp-bridge` |
+| **Purpose** | TCP bridge fronting `signal-cli` for agent messaging |
 | **Required Service** | `signal_bridge` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 
-Lets agents send and receive Signal messages. End-to-end encrypted AI communication — because if your haus is going to text you, it should at least have the decency to do it privately.
+Lets agents send and receive Signal messages. Three labels, not one: `signal-tcp-bridge` is the TCP front door, `com.sanctum.signal-cli` is the long-lived `signal-cli` daemon holding the registration, and `com.sanctum.signal-health` watches the pair. End-to-end encrypted AI communication — because if your haus is going to text you, it should at least have the decency to do it privately.
 
 ---
 
@@ -283,55 +284,52 @@ Watches iCloud Drive directories and automatically files documents into organize
 | **RunAtLoad** | Yes |
 | **Interval** | `30s` (internal loop) |
 
-A native Rust binary that monitors system RAM every 30 seconds. When free memory drops below 20%, it automatically kills Apple bloatware (Siri, Hydra) and unloads large LM Studio models to prevent kernel panics.
+A native Rust binary that monitors system RAM every 30 seconds, in graduated tiers. Under 30% free (or swap over 15 GB) it kills Apple bloatware — `siriinferenced`, `sirittsd`, `HydraRenderingService`, and friends. Under 20% free (or swap over 20 GB) it escalates: unloading large LM Studio models and triaging unloadable Sanctum services to keep the criticals breathing. Under 10% it would purge harder still — that tier is wired but deliberately disabled.
 
-The system's white blood cells. It only acts when the body is under pressure, and it acts with the cold efficiency of compiled code.
+The system's white blood cells. It only acts when the body is under pressure, and it acts with the cold efficiency of compiled code — Apple's chattiest background daemons are simply the first to go.
 
 ---
 
-### com.sanctum.watchdog
+### com.sanctum.watchdog (retired as a launchd job)
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.watchdog` |
-| **Purpose** | Health monitoring watchdog that runs every 600 seconds |
-| **Required Service** | `watchdog` |
-| **KeepAlive** | No |
-| **RunAtLoad** | Yes |
-| **StartInterval** | `600` |
+| **Binary** | `sanctumd` (`sanctum-rs`) |
+| **Purpose** | Periodic health sweep + auto-heal via `service-doctor` |
+| **Status** | Not loaded (`com.sanctum.watchdog-rust.plist.pre-w6.disabled`) |
 
-Periodically checks the health of all enabled services and auto-heals failures via `service-doctor`. Not KeepAlive — uses launchd's `StartInterval` for periodic execution. Every ten minutes, it wakes up, looks around, makes sure nothing is on fire, and goes back to sleep. The most relatable agent in the fleet.
+For a long time this was the most relatable agent in the fleet: every so often it woke up, looked around, made sure nothing was on fire, and went back to sleep. The Rust binary `sanctumd` did the sweep and auto-healed through `service-doctor`, with an intentional file-vs-label drift — `com.sanctum.watchdog-rust.plist` on disk, `com.sanctum.watchdog` as the label inside.
 
-The plist filename on disk is `com.sanctum.watchdog-rust.plist` (the binary is a Rust port — `sanctumd` from `sanctum-rs`). The launchd label inside is still `com.sanctum.watchdog`. File-vs-label drift is intentional, not a bug.
+It is no longer loaded (`.pre-w6.disabled`). The generic sweep-and-heal role was carved up among specialists — `council-guardian` heals the MLX seat, `launchd-health-sentinel` surfaces stuck jobs, `r2d2` runs the classify-and-fix loop. A stray `sanctumd` may still be resident from an old session, but nothing in launchd starts it now. The most relatable agent in the fleet was, in the end, also the most replaceable.
 
 ---
 
-### com.sanctum.lmstudio-guardian
+### com.sanctum.lmstudio-guardian (retired 2026-06-07)
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.lmstudio-guardian` |
-| **Purpose** | Babysitter for LM Studio: SIGCONT stopped workers, reap orphans, restart on API hang, autoload expected model |
-| **Required Service** | `lm_studio` |
-| **KeepAlive** | No |
-| **RunAtLoad** | Yes |
-| **StartInterval** | `60` |
+| **Purpose** | Babysitter for LM Studio: SIGCONT stopped workers, reap orphans, restart on API hang |
+| **Status** | Retired (`.plist.retired-20260607`) |
 
-Built 2026-04-24 after a multi-hour outage where macOS App Nap SIGSTOP'd LM Studio's `llmworker` children and never reaped them. Thirteen zombies accreted in thirty minutes before anyone noticed. This guardian wakes every minute, SIGCONTs any STAT=T workers, kills orphan workers (multiple loaded for the same model), restarts the LM Studio app entirely if the API on `:1234` is dead three minutes running (with a 3-restarts-per-5-min circuit breaker), and reloads the expected model (currently `qwen2.5-coder-14b-instruct`, 24h TTL) if it ever drops out. Logs JSON-lines to `~/.openclaw/logs/lmstudio-guardian.log`.
+Built 2026-04-24 after a multi-hour outage where macOS App Nap SIGSTOP'd LM Studio's `llmworker` children and never reaped them — thirteen zombies accreted in thirty minutes before anyone noticed. The guardian woke every minute, SIGCONT'd any `STAT=T` workers, killed orphans, and restarted the app if the `:1234` API hung for three minutes (behind a 3-restarts-per-5-min circuit breaker).
+
+Retired 2026-06-07 alongside the LM Studio coder seat itself — the local coder moved onto `sanctum-mlx-codestral` (Codestral-22B on `:3301`), which needs no SIGCONT nursemaid. The guardian's old habit of re-loading an `EXPECTED_MODEL` every 60s kept fighting manual `sanctum-admit` releases anyway. The triage daemon now covers what's left of the memory-pressure unloads.
 
 ---
 
-### Council Observability Quartet
+### Council Observability Quintet
 
-A set of five plists that watch the council from different angles. Documented as a group because they share a pattern: each runs on a `StartInterval`, writes JSON-lines to `~/.openclaw/logs/`, and reports drift rather than fixing it. Logging-grade rather than enforcement-grade.
+Five plists that watch the council from different angles. Documented as a group because they share a pattern: each writes JSON-lines to `~/.openclaw/logs/` and reports drift rather than fixing it — logging-grade, not enforcement-grade. The lone exception is `council-guardian`, which actually heals. The cadences are all over the map because the things they watch decay at different speeds; the table below is the live truth, not the convenient round numbers.
 
 | Label | Cadence | What it watches |
 |-------|---------|-----------------|
-| `com.sanctum.council-canary` | every 5 min | A pinned prompt sent through the proxy; logs latency + answer hash drift |
-| `com.sanctum.council-drift` | every 5 min | Cross-checks the running `sanctum-mlx` model hash against the manifest |
-| `com.sanctum.council-guardian` | every 1 min | Auto-heals `com.sanctum.mlx` if down. The only one in the quartet that fixes things instead of just observing |
-| `com.sanctum.council-integrity` | every 15 min | Validates mTLS cert expiry + manifest signature chain |
-| `com.sanctum.council-parity-smoke` | every 30 min | Runs a tiny golden-prompt diff between local council and a cloud reference; flags deviations |
+| `com.sanctum.council-guardian` | every 1 min | Auto-heals `com.sanctum.mlx` if down. The only one in the quintet that fixes things instead of just observing |
+| `com.sanctum.council-integrity` | every 5 min | Validates mTLS cert expiry + manifest signature chain |
+| `com.sanctum.council-canary` | every 10 min | A pinned prompt sent through the proxy; logs latency + answer hash drift |
+| `com.sanctum.council-drift` | hourly | Cross-checks the running `sanctum-mlx` model hash against the manifest |
+| `com.sanctum.council-parity-smoke` | daily, 03:00 | Runs a tiny golden-prompt diff between local council and a cloud reference; flags deviations |
 
 Five separate plists is more than the average homelab needs. Five separate plists is the answer to the question "how do you keep a 35-billion-parameter model in compliance with itself?"
 

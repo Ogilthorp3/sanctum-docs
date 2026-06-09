@@ -17,12 +17,17 @@ This page is the shortest path from "I have a cert envelope" to "I have a stream
 |---|---|
 | Endpoint | `https://<host>:1337/v1/chat/completions` |
 | Auxiliary | `https://<host>:1337/v1/models` |
-| Model ID | `qwen3.6-35b-a3b-4bit` |
+| Model you send | `qwen3.6-35b-a3b-4bit` (in the request body) |
+| Model you get back | the snapshot hash — see below |
 | Auth | mutual TLS (no bearer, no API key) |
 | Transport | HTTP/1.1 over TLS 1.3; SSE for streams |
 | Concurrency | one in-flight request, GPU-dispatch mutex |
 
-The model is Qwen3.6-35B-A3B-4bit — a sparse MoE with about three billion active parameters per token, LoRA-tuned for the Council's domain (refusal posture, in-character voice, our specific tool-calling shapes). The base is competent at general reasoning; the adapter is what makes it sound like itself.
+The model is Qwen3.6-35B-A3B-4bit — a sparse MoE with about three billion active parameters per token. The base is genuinely strong at reasoning; the Council's voice and refusal posture come from the system prompt each Jedi wears, not from a fine-tune baked into these weights.
+
+<Aside type="note">
+The `model` field is asymmetric. You send `qwen3.6-35b-a3b-4bit`; the response (and `/v1/models`) echoes the HuggingFace snapshot hash — a 40-character string like `38740b84…` — because the server names the model after the directory it loaded from, and that directory is `…/snapshots/<hash>`. The slug you sent is not validated against it; any string is accepted. Don't assert on `response.model` until the server learns to wear a friendly name.
+</Aside>
 
 ## Step 1 — get a cert envelope
 
@@ -55,7 +60,7 @@ curl --cert ~/.sanctum-mlx-beta/client.crt \
      https://<host>:1337/v1/chat/completions
 ```
 
-A correct response is a normal OpenAI chat-completion JSON: `choices[0].message.content` holds the text, `usage.prompt_tokens` / `completion_tokens` are filled in, `model` echoes `qwen3.6-35b-a3b-4bit`. If you get one of those back, you are done with onboarding.
+A correct response is a normal OpenAI chat-completion JSON: `choices[0].message.content` holds the text, `usage.prompt_tokens` / `completion_tokens` are filled in, and `model` echoes the snapshot hash (not the slug you sent — see the note above). If you get text back, you are done with onboarding.
 
 ## Step 3 — streaming
 
@@ -82,7 +87,7 @@ What this costs you, in practice:
 | 16K tokens | ~1-2 min | ~3-4 min |
 | 32K tokens | ~7 min | ~15 min |
 
-Decode is the same fast it always is once prefill finishes — about 25-30 tokens per second. The cost is paid up front, in silence, before the first token comes back. Plan your `read_timeout` accordingly. The default in most HTTP clients will hang you out to dry well before a 32K prefill finishes.
+Decode is the same fast it always is once prefill finishes — about 50-55 tokens per second end-to-end on the current build, and that is *with* TurboQuant's CPU dequant tax on. The cost is paid up front, in silence, before the first token comes back. Plan your `read_timeout` accordingly. The default in most HTTP clients will hang you out to dry well before a 32K prefill finishes.
 
 ## Limits and one weekly window
 

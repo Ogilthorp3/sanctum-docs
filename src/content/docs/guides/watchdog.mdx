@@ -5,30 +5,30 @@ description: Automated health monitoring with self-healing capabilities and conf
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The watchdog is the part of Sanctum that doesn't sleep. Every ten minutes it sweeps every service, attempts to fix what's broken, and tells you about whatever it couldn't fix. It is, in the most literal sense, a program that watches other programs and judges them — a sentinel with no tentacles, only probes, hunting anomalies in the construct. If it ever develops opinions about your uptime, unplug everything.
+The watchdog is the part of Sanctum that doesn't sleep — a long-running Rust daemon (`sanctumd`) that wakes every ten minutes, sweeps every service, fixes what it can, and tells you about whatever it couldn't. It is, literally, a program that watches other programs and judges them. If it ever develops opinions about your uptime, unplug everything.
 
-![The watchdog — tireless guardian of twenty-something services](./images/watchdog.png)
+![The watchdog — tireless guardian of three dozen services](./images/watchdog.png)
 
 ## How It Works
 
 <Steps>
-1. **Check health** — The watchdog runs the full health test suite against all monitored services.
-2. **Evaluate failures** — Any failing checks are collected with their severity and diagnostic output.
-3. **Auto-fix** — If `auto_fix` is enabled, the watchdog invokes `service-doctor --fix` for each failing service.
-4. **Settle delay** — Waits for the configured `settle_delay` period to allow services to stabilize after repair.
-5. **Re-check** — Runs the health suite again to confirm whether repairs succeeded.
-6. **Notify** — Sends notifications for any services that remain in a failed state after the fix attempt.
+1. **Check health** — `service-graph.py check-all --json` probes every manifest, reporting per-service status plus root causes.
+2. **Evaluate** — The graph separates root causes from downstream casualties, so dependants aren't restarted blindly.
+3. **Auto-remediate** — With `auto_fix` on, each root cause goes to `service-graph.py remediate <svc>`, bounded by a restart budget and circuit breaker.
+4. **Settle** — Waits `settle_delay` for services to stabilize.
+5. **Re-check** — Runs `check-all` again.
+6. **Notify** — Alerts on anything still failed.
 </Steps>
 
 ```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│ Health Check │────→│ Failures?    │─No─→│ All Clear   │
-└─────────────┘     └──────────────┘     └─────────────┘
+┌──────────────┐     ┌──────────────┐     ┌─────────────┐
+│ check-all    │────→│ Root causes? │─No─→│ All Clear   │
+└──────────────┘     └──────────────┘     └─────────────┘
                            │ Yes
                            ▼
                     ┌──────────────┐
-                    │ service-     │
-                    │ doctor --fix │
+                    │ remediate    │
+                    │ <svc>        │
                     └──────────────┘
                            │
                            ▼
@@ -47,177 +47,175 @@ The watchdog is the part of Sanctum that doesn't sleep. Every ten minutes it swe
                     └──────────────┘
 ```
 
-Most of the time, the happy path is: check, all clear, go back to sleep. On the less happy days, the watchdog detects a failure, summons the doctor, waits, checks again, and either nods in satisfaction or sends you a message on Signal that your evening is about to get worse.
+Most days the path is: check, all clear, sleep. On the bad days it finds a root cause, remediates, re-checks, and either nods or tells you on Signal your evening is about to get worse.
 
 ## Schedule
 
-The watchdog runs every 10 minutes via a LaunchAgent:
+The watchdog is not a periodic LaunchAgent — it's a continuously-running daemon that loops on its own timer. launchd's only job is to keep it alive:
 
-| Property         | Value                          |
-|------------------|--------------------------------|
-| Label            | `com.sanctum.watchdog`        |
-| StartInterval    | 600 (seconds)                  |
-| RunAtLoad        | true                           |
+| Property         | Value                                              |
+|------------------|----------------------------------------------------|
+| Label            | `com.sanctum.watchdog`                             |
+| Plist            | `/Library/LaunchDaemons/com.sanctum.watchdog-rust.plist` |
+| Program          | `sanctumd` (sanctum-rs release build)              |
+| KeepAlive        | true (relaunched immediately if it ever exits)     |
+| Check interval   | `WATCHDOG_CHECK_INTERVAL`, default 600 (seconds)   |
+| Health API       | port 2187                                          |
 
-The first execution occurs at LaunchAgent load time (typically at login or boot), then repeats at the configured interval.
+It starts at boot and runs forever, one sweep every `check_interval` seconds. Being a single long-lived process is why the dedup state below lives in memory.
 
 ## Notification Deduplication
 
-To avoid flooding notification channels during extended outages — because nothing helps you fix a problem like your phone buzzing every ten minutes about it — the watchdog implements deduplication. When a service fails and a notification is sent, subsequent failures of the **same service** are suppressed for the duration of the `dedup_window`.
-
-The dedup state is tracked in memory between invocations using a timestamp file. Each service failure is keyed by service name and the dedup window is evaluated against the last notification time for that key.
+Nothing helps you fix a problem like your phone buzzing about it every ten minutes — so once a service fails and notifies, further failures of that **same service** are suppressed for the `dedup_window`. State is an in-memory map of service name to last-notified time, no on-disk file — so a restart wipes it, and the first failure after a relaunch always notifies.
 
 ```
-First failure of "openclaw-gateway" → Notify ✓
-Same failure 5 min later             → Suppressed (within 30 min window)
-Same failure 35 min later            → Notify ✓ (window expired)
-Different service fails               → Notify ✓ (independent key)
+First failure of "home-assistant" → Notify ✓
+Same failure 5 min later           → Suppressed (within 30 min window)
+Same failure 35 min later          → Notify ✓ (window expired)
+Different service fails             → Notify ✓ (independent key)
 ```
 
 <Aside type="danger">
-  If the watchdog process itself fails, there is no meta-monitor. Nobody watches the watchmen. The LaunchAgent will restart it on the next interval, but a gap in monitoring may occur. Check the watchdog's own logs if you suspect missed alerts. If you find yourself building a watchdog for the watchdog, it's time to step outside and look at a tree.
+  If the watchdog process crashes, KeepAlive relaunches it in seconds — but that's a resurrection, not a logic check. Nobody watches the watchmen's *judgment*. Check `~/.openclaw/logs/watchdog-rust.log` if you suspect missed alerts. If you find yourself building a watchdog for the watchdog, step outside and look at a tree.
 </Aside>
 
 ## Configuration
 
-All watchdog settings live in `instance.yaml` under the `services.watchdog` key:
+All settings live in `instance.yaml` under `services.watchdog`:
 
 ```yaml
 services:
   watchdog:
     enabled: true
-    settle_delay: 30        # seconds to wait after fix attempt
-    auto_fix: true           # enable service-doctor auto-repair
+    interval: 600            # seconds between check sweeps
+    settle_delay: 15         # seconds to wait after a fix attempt
+    auto_fix: true           # enable manifest-driven auto-remediation
     dedup_window: 1800       # seconds (30 min) to suppress repeat alerts
+    notify_channels:
+      - macos
+      - signal
+      - dashboard
 ```
 
-| Setting        | Type    | Default | Description                                        |
-|----------------|---------|---------|----------------------------------------------------|
-| `enabled`      | boolean | true    | Enable or disable the watchdog entirely             |
-| `settle_delay` | number  | 30      | Seconds to wait after repair before re-checking     |
-| `auto_fix`     | boolean | true    | Whether to invoke service-doctor on failures        |
-| `dedup_window` | number  | 1800    | Seconds to suppress duplicate notifications         |
+| Setting        | Type    | Default | Description                                          |
+|----------------|---------|---------|------------------------------------------------------|
+| `enabled`      | boolean | true    | Enable or disable the watchdog entirely               |
+| `interval`     | number  | 600     | Seconds between check sweeps                           |
+| `settle_delay` | number  | 15      | Seconds to wait after repair before re-checking       |
+| `auto_fix`     | boolean | true    | Whether to run manifest remediation on root causes    |
+| `dedup_window` | number  | 1800    | Seconds to suppress duplicate notifications           |
 
 ## Notification Channels
 
-The watchdog delivers alerts through three independent channels. All channels fire in parallel when a notification is triggered. Redundancy is the point — if one channel is down, the others still reach you.
+The watchdog delivers alerts through three channels, routed by severity in `~/.sanctum/lib/notify.sh` — the louder the problem, the more channels it lights up:
 
-### macOS Notifications
+| Severity   | macOS | Dashboard | Signal | Channel detail                                    |
+|------------|-------|-----------|--------|---------------------------------------------------|
+| `ambient`  |       |           |        | Log + chitti samskara only                        |
+| `warn`     | yes   | yes       |        | `osascript` Notification Center + dashboard banner |
+| `error`    | yes   | yes       | yes    | Full fan-out                                       |
+| `critical` | yes   | yes       | yes    | Full fan-out (memory kills land here)              |
 
-Uses `osascript` to display a native macOS notification with the service name and failure summary. These appear in Notification Center and are useful when physically at the machine.
+The dashboard banner appends to `~/.sanctum/alerts.json`, which the command center polls. Signal goes to a configured group via the apple-toolkit skill, reserved for `error` and `critical` — and nothing quite says good evening like a Signal from your haus at midnight telling you a service is down.
 
-### Dashboard Banner
+## Remediation
 
-Writes alert data to the health API, which the command center dashboard polls. Active alerts appear as a banner at the top of the dashboard with severity coloring and a timestamp.
+The repair engine is the **service graph**, not a separate doctor process. With `auto_fix` enabled, each *root cause* goes to `service-graph.py remediate <svc>`, running that service's manifest-defined action — a `heal_launchagent.sh` restart, a systemd kick over SSH, a Docker bounce. Blunt, but most failures here respond to "have you tried turning it off and on again."
 
-### Signal Messenger
-
-Sends a message to a configured Signal group using the apple-toolkit skill's Signal integration. This provides mobile-reachable alerts for critical failures when away from the LAN. Nothing quite like getting a Signal message from your haus at midnight telling you the gateway is down.
-
-## Service Doctor Integration
-
-The `service-doctor` skill is the repair engine invoked by the watchdog. It knows how to restart LaunchAgents, restart systemd services on the VM via SSH, restart Docker containers, and reset network interfaces. It is a blunt instrument with a narrow range of repair strategies, but most failures in this stack respond to "have you tried turning it off and on again."
-
-When `auto_fix` is enabled, the watchdog passes each failing service to service-doctor with the `--fix` flag. The doctor applies the appropriate repair action based on the service type and returns a success or failure status.
+Two guards keep a flapping service from turning the watchdog into a respawn machine: a per-service **restart budget** (`max_restarts_per_hour`, default 3) and a **circuit breaker** that halts remediation when too many fail at once.
 
 <Aside type="tip">
-  You can run `service-doctor --fix` manually at any time to repair a specific service without waiting for the watchdog cycle. Sometimes you don't want to wait ten minutes. Sometimes the haus is broken and you know it.
+  The `service-doctor.sh` script still exists as a manual tool — run it bare for a report, or `--fix` to remediate every failing service at once. No longer the watchdog's engine, but it's what you reach for when the haus is broken and you don't want to wait ten minutes.
 </Aside>
 
 ## Health Test Suite
 
-The test suite covers all critical Sanctum subsystems:
+The suite isn't a hardcoded list — it's whatever manifests live in `~/.sanctum/services/`. Each `*.yaml` declares how its service is probed, and `check-all` walks every one (roughly 37 today). Add a manifest and the watchdog picks it up next sweep, no code change. A probe is one of a few `type`s:
 
-| Test                  | What It Checks                                      |
-|-----------------------|-----------------------------------------------------|
-| VM reachable          | SSH connectivity to 10.10.10.10                     |
-| Bridge100 IP          | bridge100 interface has IP 10.10.10.1               |
-| Gateway (Mac)         | Port 1977 responds                                 |
-| Gateway (VM)          | Port on VM responds via SSH                         |
-| Home Assistant        | Port 8123 returns HTTP 200                          |
-| Docker running        | Docker daemon is responsive                         |
-| Tailscale connected   | `tailscale status` succeeds                         |
-| Cloudflare tunnel     | Tunnel process is alive                             |
-| LM Studio            | Port 1234 responds with model list                  |
-| Qwen3-TTS server     | Port 8008 responds                                  |
-| Firewalla bridge     | Port 1984 responds                                 |
-| Memory sentinel      | System free memory above critical threshold           |
+| Probe `type` | What It Checks                                  | Example                       |
+|--------------|-------------------------------------------------|-------------------------------|
+| `port`       | TCP port is open (`nc -z`) — *not* an HTTP code | home-assistant :8123, sanctum-tts :8008 |
+| `process`    | A named process is alive                        | sanctum-tts (`tts_server`)    |
+| `command`    | A command exits zero                            | tailscale (`tailscale status`)|
+| `interface`  | A network interface holds its expected IP       | bridge interface              |
 
-Tests return structured results with pass/fail status, latency, and diagnostic messages that feed into both the notification system and the dashboard. Twelve tests. Every ten minutes. That's 1,728 health checks a day. Your haus gets more checkups than you do.
+Probes return pass/fail, latency, and a diagnostic message; the graph follows `requires` edges so a fallen dependency takes the blame, not everything downstream. Roughly 37 services every ten minutes is about 5,300 probes a day. Your haus gets more checkups than you do.
+
+<Aside type="caution">
+  Two things deliberately absent: the DenchClaw gateway on port 1977 (retired 2026-04-23 — a standing security exception now, not a health test) and LM Studio. The MLX seats actually watched are `council-mlx` and `mlx-builtin`. If a doc or dashboard still lists `:1977` as a live check, it's lying to you.
+</Aside>
 
 ## Memory Sentinel
 
-At 3:39 AM on March 23, 2026, two rogue Python processes leaked 59 GB on the 64 GB Mac Mini. WindowServer hit a watchdog timeout and the entire machine crashed. The service-graph kept checking ports and HTTP endpoints while the system slowly asphyxiated underneath it — because knowing that a service is up doesn't help when there's no RAM left to run it.
+On April 23, 2026, a runaway session pushed the 64 GB Mac Mini into OOM until WindowServer missed its watchdog checkin and the kernel panicked — twice in one evening. The service graph kept dutifully checking ports while the system asphyxiated, because knowing a service is up doesn't help when there's no RAM left to run it.
 
-The memory sentinel exists because of that night. It runs as a pre-flight check *before* the service-graph, because the service-graph itself spawns Python, threads, and SSH connections — all of which consume memory. Running diagnostics on a memory-starved system is the monitoring equivalent of performing surgery on a patient who is actively on fire.
+The memory sentinel exists because of that night. It runs *before* the service graph — which itself spawns Python, threads, and SSH connections, all of which cost memory. Running diagnostics on a starved system is the monitoring equivalent of operating on a burning patient.
 
 ### How It Works
 
-The sentinel reads `kern.memorystatus_level` (the kernel's view of free memory, accounting for compression) and scans per-process RSS via `ps`. It classifies the system into four levels:
+The sentinel doesn't reason about whole-system free memory. It reasons about *Sanctum's own services*, one at a time: it enumerates every running `com.sanctum.*` job, reads each PID's RSS via `ps -o rss=`, and compares it to a **per-service limit in megabytes**. Limits are tuned per service — `mlx-builtin` gets 20 GB because it holds a model in RAM; a tunnel gets 64 MB, anything over is a leak. Override any limit under `services.<key>.memory_limit_mb`. The worst grades set the overall status:
 
-| Level | System Free | Per-Process RSS | Action |
-|-------|------------|-----------------|--------|
-| OK | >= 20% | < 8 GB | Exit 0, all clear |
-| Warning | 15–19% | 8–12 GB | Exit 0, log only |
-| Critical | 8–14% | 12–20 GB | Exit 1, SIGTERM top offender (5s grace, then SIGKILL) |
-| Emergency | < 8% | > 20 GB | Exit 1, immediate SIGKILL |
+| Level | Trigger | Action |
+|-------|---------|--------|
+| OK | Every service under 80% of its limit | Exit 0, all clear |
+| Warning | At least one service at or above 80% | Exit 0, log only |
+| Critical | At least one service over 100% of its limit | Exit 1, kill the worst offender |
+| Emergency | Three or more services over their limits | Exit 1, kill the worst offender |
 
-The "top offender" is the highest-RSS process *not* on the safelist. Safelisted processes are never killed regardless of consumption:
-
-- `kernel_task`, `WindowServer`, `launchd` — killing these *is* the crash
-- `com.apple.Virtualization.VirtualMachine`, `QEMULauncher` — RSS is guest-mapped memory, not a leak
-- `mds_stores`, `corespotlightd`, `mediaanalysisd` — system indexers that self-regulate
-
-Everything else — MLX server, LM Studio, node processes, Docker, Python agents — is fair game. Managed services get killed and the service-graph handles the restart. Unmanaged processes get killed and get to think about what they did.
+The "worst offender" is the service the most megabytes *over its own limit*. On a kill it sends SIGTERM, pauses, then SIGKILLs — and since every victim is a `com.sanctum.*` job, launchd restarts it clean.
 
 <Aside type="caution">
-Before killing, the sentinel re-reads the process's RSS to confirm it hasn't exited or shrunk. A process that was at 15 GB when the scan started might be at 2 GB by the time the kill arrives. The sentinel checks. Most kill scripts don't. That's how you get bug reports titled "why did my database get SIGKILLed during a vacuum."
+The flip side: the sentinel only touches `com.sanctum.*` jobs. A rogue process that *isn't* one of yours — a browser tab eating 30 GB — is invisible to it. It guards Sanctum from its own leaks; for everything else, you're still the watchdog.
 </Aside>
 
 ### Watchdog Integration
 
-The sentinel runs as Step 0.5 in the watchdog cycle — after log rotation, before the service-graph:
+The sentinel runs as Step 0.5 — the first thing each sweep does, before any service-graph work:
 
 ```
 Watchdog check starting
-  → Memory sentinel pre-flight (--json)
+  → Step 0.5: Memory sentinel pre-flight (--json)
     → If emergency/critical: --kill, notify, sleep 3s
     → If warning: log only
-  → Step 1: service-graph check-all (existing flow)
+  → Step 1: validate manifests + service-graph check-all
 ```
 
-If the sentinel kills a process, it sends a critical notification via all channels (macOS, dashboard, Signal) and waits three seconds for the system to reclaim memory before the service-graph runs.
+On a kill it fires a critical notification and sleeps three seconds for the system to reclaim memory — so the `check-all` that follows sees a machine that has exhaled.
 
 ### Configuration
+
+The real knobs are the per-service `memory_limit_mb` overrides under each service's key. The dedicated `instance.yaml` block also carries some forward-looking scaffolding:
 
 ```yaml
 services:
   memory_sentinel:
     enabled: true
+    auto_kill: true
+    kill_grace_seconds: 5
     thresholds:
       warning_free_pct: 15
       critical_free_pct: 8
       emergency_free_pct: 5
-      per_process_warn_gb: 8
-      per_process_kill_gb: 12
-    auto_kill: true
-    kill_grace_seconds: 5
     safelist:
       - "com.apple.Virtualization.VirtualMachine"
-      - "QEMULauncher"
+      - "sanctum-mlx"
       - "WindowServer"
       - "kernel_task"
-      - "mds_stores"
-      - "corespotlightd"
-      - "mediaanalysisd"
-      - "launchd"
 ```
 
+<Aside type="caution">
+Honesty about what's wired: `memory-sentinel.py` grades by **per-service RSS vs. limit**, so the `thresholds` and `safelist` keys above aren't read yet, and `kill_grace_seconds` is ignored for a hardcoded 2-second pause before SIGKILL. (The killable set is implicitly safelisted anyway — `com.sanctum.*` only.) Flagged as code fixes below.
+</Aside>
+
 <Aside type="tip">
-You can run the sentinel manually at any time: `bash ~/.sanctum/scripts/memory-sentinel.sh --status` for a human-readable table, or `--json` for structured output. The `--kill` flag only acts at critical or emergency level — you can't accidentally nuke a process by running it on a healthy system.
+Run it by hand with `python3 ~/.sanctum/scripts/memory-sentinel.py --status` for a table, or `--json`. `--kill` only acts when a service is over its limit — on a healthy system it reports "no services over their memory limit" and exits without touching anything.
 </Aside>
 
 ### Agent Integration
 
-Cilghal (the health agent) can invoke the sentinel through the `memory-check.sh` tool in the service-doctor skill. This gives agents the ability to check memory pressure and, if authorized, kill runaway processes without SSH access to the host. The tool passes `--status`, `--json`, or `--kill` through to the sentinel script.
+The health agent can invoke the sentinel through the service-doctor skill's `memory-check.sh`, checking pressure and resetting a runaway service without SSH to the host.
+
+<Aside type="caution">
+That wrapper still points at a `memory-sentinel.sh` that no longer exists (the live script is `.py`), so the agent path errors until it's repointed — and the Rust daemon hits the same dangling default, silently skipping the pre-flight. Both are flagged as code fixes below.
+</Aside>
 
