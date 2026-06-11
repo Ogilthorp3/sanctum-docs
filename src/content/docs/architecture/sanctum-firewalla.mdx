@@ -23,6 +23,29 @@ The Rust bridge is **byte-compatible** with the Node bridge on every endpoint sc
   - **`Policy already exists` returns HTTP 200 with `{success: true, alreadyExists: true}` instead of HTTP 500**. The Node bridge treated Firewalla's "this rule is already in place" reply as an error; every caller was already retry-looping over it; ~355 false-error log lines per day were the cost. The Rust port normalises this to a success-with-flag.
   - **`/ping` is moved into the public (no-auth) subrouter** alongside `/health`. In the Node bridge `/ping` sits behind the bearer gate; the Rust port treats it as a liveness probe like `/health`. This is a deliberate divergence, not a byte-for-byte port — flagged here so the cutover diff harness expects it instead of failing on it.
 
+### Contract drift notice (2026-06-11)
+
+The Node bridge — still the live deployment — grew past the 24-endpoint
+contract in the June 10-11 sprint: QoS throttle/unthrottle (bedtime
+wind-down), `/host/:mac/app-usage`, `/system/qos`, `/policies/purge`, plus
+the seven dns-floor routes (feature/tag/network projections and scoped
+policy writes). The Rust port must catch up to the Node bridge's contract
+before any cutover talk resumes. The Node file remains the source of truth;
+this page's count is historical.
+
+### The expire contract (learned the hard way)
+
+Firewalla's `policy.expire` is a **duration in seconds since activation**,
+not an epoch timestamp (`Policy.js`: `activatedTime + expire < now`). Send
+an epoch and two things happen, both bad: the rule never expires naturally
+(hello, 2,014-row corpse pile), and if you also set `autoDeleteWhenExpires`,
+the box schedules `setTimeout(epoch × 1000)` — which overflows Node's 32-bit
+timer and fires the delete **immediately**. Your rule is born, assigned a
+pid, and executed within the second, with nothing in any log. The bridge
+converts at the boundary (`expireEpochToDuration`); callers keep sending
+epochs and live happily ever after. Any future port MUST preserve this
+conversion or rediscover it the way we did: at 1 a.m., with tcpdump.
+
 ## The five-module decomposition (and the swarm that built it)
 
 | Module | Owns | Tests |

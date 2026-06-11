@@ -70,6 +70,25 @@ Wind-down blocks are explicitly cleaned up at wake time. The system tracks which
 
 The `service_categories` config in `devices.yaml` defines which domains belong to which category. Adding a new service is one YAML entry, not a code change.
 
+### The Dimmer (Bandwidth Wind-Down)
+
+On boxes with a QoS engine (Purple and the Gold family -- the bridge reports
+`capabilities.qos` + `qos_engine` so nobody has to memorize a SKU chart),
+there's a second, sneakier slope: `wind_down_minutes: 30` on a child throttles
+their network-enforced devices to a dial-up-cosplay **1 Mbit** (configurable
+via `wind_down_mbit`) for the last N minutes before their effective curfew.
+YouTube buffers into oblivion, Fortnite's ping becomes a war crime, but
+iMessage still works -- the kid *chooses* to stop, which is the whole point.
+At curfew the hard block takes over and the throttle self-expires on the box.
+
+Three honesty guarantees: it follows the **effective** schedule (study mode,
+holidays, weekends -- not wall-clock superstition); if a parent grants an
+override mid-window, the throttle is **lifted**, not left strangling the
+evening; and it applies exactly once per window -- no per-tick hammering of
+the box API. Configure via `POST /screen/winddown`, the Holocron panel
+toggle, or plain YAML. Ships off by default: throttling a child's internet
+is a decision a parent makes, not a default a vendor sneaks in.
+
 ## Smart Features
 
 ### Homework Mode
@@ -97,7 +116,19 @@ MAC randomization detection: if a device with a locally-administered MAC bit app
 
 ### Weekly Digest
 
-Every **Sunday at 6 PM**, a digest is sent via Signal and push notification. Contents: average bedtime for the week, number of overrides, credits earned and redeemed, any guest device activity. It's the parental equivalent of a sprint retrospective, except the sprint is "did the 12-year-old go to bed on time."
+Every **Sunday at 6 PM**, a digest is sent via Signal and push notification. Contents: average bedtime for the week, number of overrides, credits earned and redeemed, any guest device activity -- and, on QoS-class boxes, a per-kid **top-3 app line** straight from the Firewalla's native app tracker (`Albert apps: Youtube 4h12 · Fortnite 0h45`). Apple Screen Time tells you "Entertainment: 6 hours" and calls it insight; the box names names. It's the parental equivalent of a sprint retrospective, except the sprint is "did the 12-year-old go to bed on time."
+
+### Box Compatibility Gate
+
+Not every Firewalla enforces equally, and finding that out from a kid who
+discovered the gap is the wrong telemetry channel. `sanctum screen-time
+compat` (CLI), `GET /screen/compat` (API), and the Holocron's compat card all
+run the same five assertions: bridge paired, box API live, **in-path mode**
+(router/DHCP enforce unconditionally; spoof-mode Red/Blue boxes only enforce
+ARP-monitored devices -- the gate names every unmonitored kid MAC), policy
+capacity headroom (Red caps at 1,000 rules; everyone else 3,000), and QoS
+availability for the dimmer. `--strict` turns warnings into onboarding
+failures. Five greens or you hear about it before the kids do."
 
 ## Enforcement Resilience
 
