@@ -5,7 +5,7 @@ description: How Sanctum manages hub, satellite, mobile, and sensor nodes across
 
 import { Card, CardGrid, Aside, Steps } from '@astrojs/starlight/components';
 
-Sanctum is designed to run across multiple physical locations. A primary **hub** at your main haus coordinates with **satellite** nodes at secondary properties, **mobile** nodes on laptops, and (in the future) **sensor** nodes for lightweight IoT devices. All nodes share a single `instance.yaml` configuration and communicate over Tailscale.
+Sanctum is designed to run across multiple physical locations. A primary **hub** at your main haus coordinates with **satellite** nodes at secondary properties, **mobile** nodes on laptops, and **sensor** nodes for lightweight IoT devices (the RuView door cameras are the first). All nodes share a single `instance.yaml` configuration and communicate over Tailscale.
 
 ![The DNS maze — navigating a multi-node network topology](./images/dns-maze.png)
 
@@ -24,7 +24,7 @@ What you're looking at is a multi-site distributed system. The kind of thing a m
     A MacBook Pro or similar portable device. Connects to the hub remotely via Tailscale for agent access, SSH, and API calls. Runs a small set of persistent guardrail daemons (see "Persistent Services Across Hosts" below) but no user-facing primary services.
   </Card>
   <Card title="Sensor" icon="setting">
-    A future node type for dedicated IoT or monitoring hardware. Planned for low-power devices that report data to the hub without running the full Sanctum stack.
+    Dedicated IoT or monitoring hardware that reports to the hub without running the full Sanctum stack. The first ones in service are the RuView door cameras (`ruview_front`, `ruview_garage`, and friends) — low-power eyes, not brains.
   </Card>
 </CardGrid>
 
@@ -35,11 +35,11 @@ Each node knows who it is through a single-line file at `~/.sanctum/.node_id`:
 ```bash
 # On the hub:
 cat ~/.sanctum/.node_id
-# hub
+# manoir
 
 # On the satellite:
 cat ~/.sanctum/.node_id
-# satellite
+# chalet
 ```
 
 One file. One word. The machine's entire sense of self lives in a text file smaller than a tweet. And yet if you delete it, everything stops knowing where it is. Identity is fragile -- even for computers.
@@ -49,10 +49,12 @@ The identity string must match a key in the `nodes` section of `instance.yaml`. 
 ```bash
 source ~/.sanctum/lib/config.sh
 
-NODE=$(sanctum_whoami)                          # "hub"
+NODE=$(sanctum_whoami)                          # "manoir"
 TYPE=$(sanctum_node_get "$NODE" type)            # "hub"
 IP=$(sanctum_node_get "$NODE" tailscale_ip)      # "100.0.0.20"
 ```
+
+The node *key* (`manoir`) is the machine's name; its `type` (`hub`) is its role. Two different words for the same box — a distinction that earns its keep the day you have two hubs.
 
 ## Node Definitions in instance.yaml
 
@@ -60,38 +62,32 @@ Every node is declared under the `nodes` key with its network addresses, SSH use
 
 ```yaml
 nodes:
-  hub:
+  manoir:
     type: hub
-    host: 192.168.1.10
+    host: 192.0.2.10
     tailscale_ip: 100.0.0.20
-    ssh_user: operator
-    services:
-      - gateway
-      - home_assistant
-      - dashboard
-      - voice_agent
-      - mlx_coder
-      - council_mlx
-      - sanctum_server
-      - firewalla_bridge
-      - cloudflare_tunnel
-      - watchdog
+    ssh_user: neo
+    vm:
+      host: 10.0.0.10             # agent VM over the host bridge
+      ssh_user: ubuntu
 
-  satellite:
+  chalet:
     type: satellite
-    host: null                     # Set during on-site install
+    host: ""                       # Set during on-site install
     tailscale_ip: 100.0.0.30
-    ssh_user: operator
+    ssh_user: neo
     services:
-      - gateway
-      - home_assistant
+      home_assistant: { enabled: true, port: 8123 }
+      agent:        { enabled: true, name: ahsoka, model: qwen2.5-coder-14b-instruct }
+      local_model:  { enabled: true, port: 1234 }   # Qwen2.5-Coder-14B via LM Studio
 
-  macbook:
+  mbp:
     type: mobile
-    host: null                     # DHCP, varies by network
+    host: 192.0.2.111              # DHCP on the haus LAN; varies elsewhere
     tailscale_ip: 100.0.0.40
-    ssh_user: operator
-    services: []                   # No persistent services
+    ssh_user: neo
+    services:
+      autoresearch: { enabled: true }
 ```
 
 ### Field Reference
@@ -99,10 +95,10 @@ nodes:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `type` | Yes | One of `hub`, `satellite`, `mobile`, `sensor` |
-| `host` | No | LAN IP address. `null` if not on the haus network or DHCP. |
+| `host` | No | LAN IP address. Empty string (`""`) if off the haus network or DHCP-assigned. |
 | `tailscale_ip` | Yes | Stable Tailscale IP for cross-network access |
 | `ssh_user` | Yes | Username for SSH connections to this node |
-| `services` | Yes | List of service keys from `services.*` that this node runs |
+| `services` | No | Map of services this node runs (`name: { enabled, port, ... }`). The hub omits it — by definition it runs the full catalog. |
 
 ## Hub Node
 
@@ -110,7 +106,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 
 ### Hub Responsibilities
 
-- Runs the full AI agent cluster (6 agents on the VM)
+- Runs the full AI agent cluster (5 agents on the VM: Yoda + cilghal, mundi, quigon, windu)
 - Hosts the command center dashboard
 - Manages the Cloudflare tunnel for external access
 - Runs inference servers (`sanctum-mlx`, `sanctum-mlx-codestral`, Sanctum TTS) and the `sanctum-server` router that fronts them
@@ -133,7 +129,7 @@ These services only run on the hub and are not deployed to satellites:
 
 ## Hub Network — The Bridge
 
-The Mac Mini hub runs one virtual machine — the Ubuntu agent VM on Lima `vmType=vz` — plus an OrbStack container runtime for the few persistent containers (Home Assistant, Outline). The bridge from the Mac host to the VM is `bridge100` on `10.10.10.0/24`: the Mac is 10.10.10.1, the VM is 10.10.10.10. OrbStack runs on its own private network and does not contest `bridge100`.
+The Mac Mini hub runs one virtual machine — the Ubuntu agent VM on Lima `vmType=vz` — plus an OrbStack container runtime for the few persistent containers (Home Assistant, Outline). The bridge from the Mac host to the VM is `bridge100` on a private `/24`: the Mac is `10.0.0.1`, the VM is `10.0.0.10`. OrbStack runs on its own private network and does not contest `bridge100`.
 
 ### One bridge, one VM
 
@@ -145,25 +141,23 @@ Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `s
 
 ### Boot Sequence
 
-The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of LaunchDaemons (six P0 services in `/Library/LaunchDaemons/`) and the usual user LaunchAgents:
+The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of system LaunchDaemons in `/Library/LaunchDaemons/` and the usual user LaunchAgents:
 
 1. **Phase 1: Containers** — OrbStack starts headlessly via its hidden-autostart LaunchAgent, Docker socket ready, Home Assistant + Outline containers up.
-2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit) and `sanctum-mlx-codestral` (`:3301`, Codestral-22B-v0.1-4bit, the coder seat since the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them.
-3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; host IP is pinned to `10.10.10.1`; the boot path waits for VM SSH before declaring success.
+2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit) and `sanctum-mlx-codestral` (`:3301`, Codestral-22B-v0.1-4bit, the coder seat since the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them. Both MLX seats load as **user** LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-codestral`), not system daemons.
+3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; the host IP is pinned to `10.0.0.1`; the boot path waits for VM SSH before declaring success.
 4. **Phase 4: SSH + bridges** — `apple-post-boot.sh` loads SSH keys from Keychain via `ssh-add --apple-load-keychain`; socat proxies stitch VM-side requests to Mac-side services (Firewalla, MLX coder, SanctumBridge).
 
-The six P0 services (`force-flow`, `proxyd`, `watchdog`, `mlx`, `ha-gateway`, `firewalla`) were promoted from user LaunchAgents to system LaunchDaemons in 2026-05-07/08 ([field note](/operations/2026-05-07-the-reboot-reveals/)). They survive any reboot pattern, including a missing `/etc/kcpassword`.
+Five P0 services (`force-flow`, `proxyd`, `watchdog-rust`, `ha-gateway`, `firewalla`) were promoted from user LaunchAgents to system LaunchDaemons in 2026-05-07/08 ([field note](/operations/2026-05-07-the-reboot-reveals/)). They survive any reboot pattern, including a missing `/etc/kcpassword`. The MLX seats stayed user-domain on purpose: a model that can't reach the user's Keychain boots into a brick, so they wait for login state rather than racing it.
 
 <Aside type="note">
 The VM runs via Lima `vmType=vz` (Apple Virtualization framework), not bare QEMU. The QEMU/HVF era ended on 2026-05-10 — the 370% idle-spin that bind was burning is gone. `socket_vmnet` still provides the vmnet.framework bridge; Lima just drives the hypervisor differently. No Apple Developer ID signing required.
 </Aside>
 
 ```bash
-# Install or update the bootstrap (one command)
-bash ~/.sanctum/boot/install-bootstrap.sh
-
-# Run bootstrap tests (30 integration tests)
-bash ~/.sanctum/boot/test_bootstrap.sh
+# The whole boot graph is one script, run by the bootstrap LaunchDaemon at boot.
+# Run it by hand to (re)start every service without a reboot:
+bash ~/.sanctum/boot/sanctum-bootstrap.sh
 ```
 
 ### SSH Key Persistence
@@ -185,7 +179,7 @@ Think of it as a field office. It can operate independently, make local decision
 2. Copy the install bundle (synced via iCloud) and run the setup scripts.
 3. Set the `.node_id` file to the satellite's name (e.g., `satellite`).
 4. Install OrbStack and deploy Home Assistant.
-5. Install a local model on the satellite's MLX runtime (e.g., Qwen 3.5 3B 4-bit for limited hardware via `sanctum-mlx`, or route the satellite to the hub's `:3301` Codestral coder seat if the link is reliable).
+5. Install a local model the satellite hardware can hold — the chalet's M1 16 GB runs Qwen2.5-Coder-14B 4-bit (~10 GB) via LM Studio on `:1234`, which backs the on-site agent (`ahsoka`). Or route to the hub's `:3301` Codestral coder seat when the link is reliable.
 6. Configure on-site integrations (cameras, sensors, smart devices).
 7. Update the satellite's `host` field in `instance.yaml` on the hub.
 </Steps>
@@ -199,7 +193,7 @@ Think of it as a field office. It can operate independently, make local decision
 Satellites pull updates from the hub over Tailscale:
 
 ```
-Hub (hub)                             Satellite (satellite)
+Hub (manoir)                          Satellite (chalet)
     |                                       |
     +-- instance.yaml  ---- Tailscale ---->  instance.yaml (subset)
     +-- skills repo    ---- Tailscale ---->  skills repo (rsync)
@@ -218,10 +212,10 @@ Mobile nodes are laptops that connect to the Sanctum instance remotely. They run
 
 | Action | Command / URL |
 |--------|--------------|
-| SSH to hub | `ssh operator@100.0.0.20` |
-| SSH to VM | `ssh -J operator@100.0.0.20 ubuntu@10.10.10.10` |
+| SSH to hub | `ssh neo@100.0.0.20` |
+| SSH to VM | `ssh -J neo@100.0.0.20 ubuntu@10.0.0.10` |
 | Dashboard | `http://100.0.0.20:1111` |
-| Home Assistant | `https://ha.example.net` (via Cloudflare) |
+| Home Assistant | `https://ha.<your-domain>` (via Cloudflare tunnel) |
 | Agent query | Via gateway API at `100.0.0.20:1977` |
 
 <Aside>
@@ -230,15 +224,16 @@ Mobile nodes are laptops that connect to the Sanctum instance remotely. They run
 
 ## Persistent Services Across Hosts
 
-Three Sanctum daemons run on **both** the hub and the mobile node. They are deliberately symmetric: each host enforces its own RAM ceiling, sheds its own offenders, and exposes its own Claude Max subscription. There is no central authority — that was the point of the 2026-04-24 capacity doctrine. Each host is responsible for its own air supply.
+Two Sanctum daemons run on **both** the hub and the mobile node. They are deliberately symmetric: each host enforces its own RAM ceiling and exposes its own Claude Max subscription. There is no central authority — that was the point of the 2026-04-24 capacity doctrine. Each host is responsible for its own air supply.
 
 | Daemon | Hub (Mac Mini) | Mobile (MacBook Pro) | Role |
 |--------|----------------|----------------------|------|
-| `com.sanctum.castellan` (Gollum) | `:2189` | `:2189` | RAM-pool admission + capacity governor (Rust root LaunchDaemon, superseded `sanctum-admit` 2026-05-30). Per-host doctrine. |
-| `com.sanctum.pressure-valve` | `:N/A` (no listener) | `:N/A` (no listener) | Sheds and freezes offenders before the kernel does. Per-host. |
+| `com.sanctum.castellan` (Gollum) | `:2189` | `:2189` | RAM-pool admission + capacity governor (Rust root LaunchDaemon). Superseded `sanctum-admit` 2026-05-29 and absorbed the old pressure-valve's shed-and-freeze duty. Per-host doctrine. |
 | `com.sanctum.claude-max-proxy` | `:3456` | `:3456` | OpenAI-compatible HTTP wrapper around the local `claude` CLI. Each host has its own Claude Max OAuth session; no cross-machine routing required. |
 
-The Claude proxy was unified on 2026-04-27 — before that the hub ran a per-request CLI-spawn proxy on `:2001` (`com.sanctum.claude-cli-proxy`), while the mobile ran the persistent `claude-max-api-proxy` npm package. Both hosts now run the same npm package via a tiny wrapper at `/Users/neo/.sanctum/bin/claude-max-api-tailscale.js`. Smart-router cloud-backend fallback is symmetric: either host can serve the other's escalations if the primary is down.
+`com.sanctum.pressure-valve` used to be the third entry here — a standalone daemon that shed and froze memory offenders before the kernel could. It was retired 2026-05-29 and its job folded into castellan; one governor that admits *and* sheds is harder to leave half-running than two that have to agree.
+
+The Claude proxy was unified on 2026-04-27 — before that the hub ran a per-request CLI-spawn proxy on `:2001` (`com.sanctum.claude-cli-proxy`), while the mobile ran the persistent `claude-max-api-proxy` npm package. Both hosts now run the same npm package via a tiny wrapper at `~/.sanctum/bin/claude-max-api-tailscale.js`. Smart-router cloud-backend fallback is symmetric: either host can serve the other's escalations if the primary is down.
 
 Per-host symmetry by design: each machine answers for its own air supply (capacity doctrine, 2026-04-24). User-facing and stateful daemons (watchdog, chitti, livekit-server, sanctum-mlx, home-assistant, outline) remain hub-only — the mobile is a dev and validation surface and doesn't carry production state.
 
@@ -250,34 +245,34 @@ Both the shell and TypeScript libraries provide functions for working with the n
 source ~/.sanctum/lib/config.sh
 
 # Who am I?
-sanctum_whoami                                    # "hub"
+sanctum_whoami                                    # "manoir"
 
 # Get a field from any node
-sanctum_node_get satellite tailscale_ip           # "100.0.0.30"
-sanctum_node_get macbook ssh_user                 # "operator"
+sanctum_node_get chalet tailscale_ip              # "100.0.0.30"
+sanctum_node_get mbp ssh_user                     # "neo"
 ```
 
 ```typescript
 import { whoami, nodeGet, getNodesByType } from './lib/config';
 
-const me = whoami();                              // "hub"
-const satellites = getNodesByType('satellite');    // ["satellite"]
-const satelliteIp = nodeGet('satellite', 'tailscale_ip'); // "100.0.0.30"
+const me = whoami();                              // "manoir"
+const satellites = getNodesByType('satellite');    // ["chalet"]
+const chaletIp = nodeGet('chalet', 'tailscale_ip'); // "100.0.0.30"
 ```
 
 ## Network Diagram
 
 ```
-                         Tailscale Mesh (tail7c6d11.ts.net)
+                         Tailscale Mesh (your-tailnet.ts.net)
                     _______________________________________________
                    /                       |                       \
-    Hub: hub                     Satellite: satellite        Mobile: macbook
-    100.0.0.20                100.0.0.30               100.0.0.40
+    Hub: manoir               Satellite: chalet              Mobile: mbp
+    100.0.0.20                100.0.0.30                     100.0.0.40
          |                             |                          |
     [Mac Mini M4 Pro]            [Mac Mini M1]           [MacBook Pro M4 Max]
     +-- Lima vz VM (Ubuntu)      +-- Gateway              (guardrail daemons)
-    +-- 6 AI Agents              +-- Home Assistant       +-- admit/valve
-    +-- Full service catalog     +-- Local LLM (3B)       +-- claude-max-proxy
+    +-- 5 AI Agents              +-- Home Assistant       +-- castellan
+    +-- Full service catalog     +-- Coder-14B (LM Studio) +-- claude-max-proxy
     +-- Home Assistant
     +-- sanctum-mlx + codestral
     +-- sanctum-server router

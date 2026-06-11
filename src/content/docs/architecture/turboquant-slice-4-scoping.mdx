@@ -7,13 +7,11 @@ import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/compone
 
 ![TurboQuant Slice 4 — three machinists under one lamp working the same crystalline component: a hand-file, then a precision lathe, then a particle-beam etcher, escalating from MLX ops to a custom Metal kernel.](./images/hero-turboquant-slice-4.png)
 
-<Aside type="tip" title="4a landed — 2026-04-19 (and was rebuilt 2026-04-24)">
-The original Slice 4a (Lloyd-Max key dequant ported to MLX ops) shipped across `21f230f` + `b469c52` on `feat/turboquant-kv-slice-1` and measured 9.4× per-fetch versus the CPU reference. **End-to-end on the production Qwen3.6-A3B MoE on Mini, that win didn't translate** — the per-step kernel-launch overhead and concat-grow costs canceled it. A **second iteration on 2026-04-24** rewrote the cache around a different premise: drop key compression entirely (4 MB/layer of bf16 K is nothing on a 64 GB Mini) and write a custom fused Metal kernel that dequantizes V inline during attention. That ships as `sdpa_dequant_v` in `services/sanctum-mlx/src/turboquant/attention_kernel.rs` and is currently default-on under `--turboquant`. End-to-end MBP throughput went from 62.4 to 75.6 tok/s (+21%, within 5% of the no-TurboQuant baseline). This scoping page is preserved as the planning-time record; see [TurboQuant KV Compression](/architecture/turboquant-kv-compression/) for the shipped architecture.
+<Aside type="tip" title="4a landed — 2026-04-19, then got rebuilt from the ground up 2026-04-24">
+The original 4a (Lloyd-Max key dequant ported to MLX ops, `21f230f` + `b469c52`) measured 9.4× per-fetch versus the CPU reference — but end-to-end on the production Qwen3.6-35B-A3B MoE the win didn't translate, eaten by per-step kernel-launch overhead and concat-grow cost. So we threw it away. The **2026-04-24 rebuild** flipped the premise: stop compressing keys entirely (~4 MB/layer of bf16 K at T=2048 is nothing on a 64 GB Mini) and hand-write a fused Metal kernel that dequantizes V inline during attention, so V never materializes. It ships as `sdpa_dequant_v` in `services/sanctum-mlx/src/turboquant/attention_kernel.rs`, and on the MBP M4 Max bench (vanilla MoE) lifts the dev-grade Slice-1 path from 62.38 to 75.64 tok/s (+21.2%), ~5% under the 79.42 no-TurboQuant baseline. The flag still defaults **off** — `--turboquant` is opt-in, as the [shipped-architecture page](/architecture/turboquant-kv-compression/) says — because flipping a default takes a confirmed winner, not a fast one. This page is the planning-time record; the architecture that shipped lives there.
 </Aside>
 
-Slices 1 through 1f got us from "TurboQuant doesn't compile" to "ships 21× better quality at 4× compression as an opt-in flag." The missing piece for `--turboquant` to be the **default** is performance. Right now our dequant lives on the CPU, and that's fine for correctness validation but unshippable for production.
-
-This page scopes Slice 4.
+Slices 1 through 1f got us from "TurboQuant doesn't compile" to "ships 21× better quality at 4× compression as an opt-in flag." The one thing between that flag and a **default** is performance: dequant lives on the CPU — fine for correctness validation, unshippable for production. This page scopes Slice 4 — the fix.
 
 ## The current bottleneck
 
@@ -28,20 +26,18 @@ step t: Array::from_slice → fp32→bf16 cast on GPU
 
 Three problems, in priority order:
 
-1. **O(T²) CPU work across a generation.** Each step rebuilds every previously-stored token. At T=1000 that's 500,000 per-vector dequants on the CPU.
-2. **CPU↔GPU bounce every step.** The dequant output is an f32 Vec in host memory, then `Array::from_slice` ships it back to the GPU. Full round-trip per decode step.
-3. **No kernel fusion.** Even with GPU dequant, the attention path is: dequant → cast → scaled-dot-product-attention. Two separate Metal dispatches. Ideal: one fused kernel that does dequant + Q·Kᵀ + softmax + ·V in one shot.
+1. **O(T²) CPU work across a generation.** Each step rebuilds every prior token — at T=1000, 500,000 per-vector CPU dequants.
+2. **CPU↔GPU bounce every step.** The f32 Vec lives in host memory; `Array::from_slice` ships it back to the GPU. Full round-trip per decode step.
+3. **No kernel fusion.** Even with GPU dequant, the path is dequant → cast → SDPA: two Metal dispatches where one fused kernel could do dequant + Q·Kᵀ + softmax + ·V in a single shot.
 
-On an M4 Max at realistic context lengths (1k–4k tokens), the CPU dequant cost is the dominant factor. That's why `--turboquant` ships with a bold warning about "dev-grade CPU dequant, expect throughput regression" in the server startup log.
+At realistic context lengths (1k–4k), CPU dequant dominates — which is why `--turboquant` ships a "dev-grade CPU dequant, expect throughput regression" warning at startup.
 
 ## The three tiers
 
 <Tabs>
 <TabItem label="4a — MLX ops (no Metal)">
 
-**The practical production unlock.** Replace every CPU-side dequant step with MLX operations, which run as Metal kernels automatically.
-
-Storage refactor: `CompressedKVCache` stores **mlx_rs::Array** instead of `Vec<u8>` / `Vec<half::f16>`. Quantize produces Arrays directly; concatenate across tokens with `mx.concatenate`; dequantize with `mx.astype` + `mx.multiply` + `mx.add` (all Metal-backed).
+**The practical production unlock.** Replace every CPU-side dequant with MLX ops, which run as Metal kernels automatically. `CompressedKVCache` stores **mlx_rs::Array** instead of `Vec<u8>` / `Vec<half::f16>`: quantize produces Arrays, concatenate with `mx.concatenate`, dequantize with `mx.astype` + `mx.multiply` + `mx.add` (all Metal-backed).
 
 **Key path (rotation + per-vector affine):**
 
@@ -55,28 +51,15 @@ on read:
   dequantize + unrotate :: Array → Array     # reverse of the above
 ```
 
-No per-token CPU loops, no Vec allocation, no host round-trip.
+No per-token CPU loops, no Vec allocation, no host round-trip. **Value path:** `mlx_quantize` / `mlx_dequantize` already exist as C FFI → Metal kernels doing exactly our per-group affine scheme — a drop-in for `quantize_value_group` / `dequantize_value_group`.
 
-**Value path:** `mlx_quantize` and `mlx_dequantize` already exist as C FFI → Metal kernels. They do exactly our per-group affine scheme. Drop-in replacement for `quantize_value_group` / `dequantize_value_group`.
-
-**Estimated effort:** 200–400 LOC net (replacement of `cache.rs` internals + removal of CPU vec storage + plumbing of Array↔Array in the `KeyValueCache::update_and_fetch` contract).
-
-**Risk:** Medium-low. The algebra is unchanged; we're porting CPU float loops to MLX Array ops that do exactly the same math. Main risks are (a) Array layout quirks we already burned ourselves on once (the `flatten` stride bug from Slice 1), and (b) dtype conversions introducing numerical drift vs the validated CPU path. Mitigation: re-run the 3-arm A/B and `bench/ANALYSIS.md` sanity checks before merging.
-
-**Wins:**
-- **O(T) per step → O(1) amortized per step** with proper concatenation.
-- Zero CPU↔GPU round-trips in the decode loop.
-- Expected throughput at 2k context: 3–6× current `--turboquant` path; within spitting distance of the fp16 reference.
-
-**Blocking concerns:** None. MLX has all the primitives. This is a straightforward engineering port.
+**Effort:** 200–400 LOC net. **Risk:** Medium-low — algebra unchanged; watch Array layout quirks (the `flatten` stride bug from Slice 1) and dtype drift vs the CPU path; re-run the 3-arm A/B first. **Wins:** O(T)→O(1) amortized; zero round-trips; 3–6× the current path at 2k, within spitting distance of fp16.
 
 </TabItem>
 
 <TabItem label="4b — mx.compile fusion">
 
-**The mid-tier polish.** Once 4a lands, wrap the dequant + SDPA stages in `mx.compile` so MLX fuses them into a single kernel dispatch.
-
-MLX's `compile` takes a function that calls MLX ops and returns an Array, then traces it into a graph and generates a single Metal kernel. Real fusion, no shader-authoring required. We'd wrap:
+**The mid-tier polish.** Once 4a lands, wrap dequant + SDPA in `mx.compile`, which traces a function of MLX ops into a graph and emits one fused Metal kernel — no shader-authoring:
 
 ```rust
 mx.compile(|cache_state, q| {
@@ -86,81 +69,57 @@ mx.compile(|cache_state, q| {
 })
 ```
 
-The compiled function becomes one kernel call: dequant + SDPA, no intermediate materialization of the full K/V tensor.
+One kernel call — dequant + SDPA, no full-K/V materialization.
 
-**Estimated effort:** 50–150 LOC on top of 4a. Mostly dealing with `mx.compile`'s shape requirements and making sure cache state flows in as compile-stable inputs.
-
-**Risk:** Medium. `mx.compile` has footguns around shape variation (decode increments T every step), and the compiled graph may need re-tracing when T hits new sizes. Mitigation: profile first — if 4a is already "fast enough" (&lt;2× fp16 overhead), 4b is polish, not necessary.
-
-**Wins:**
-- Single Metal dispatch per decode step for the attention block.
-- Potentially 20–40% faster than 4a at small T.
+**Effort:** 50–150 LOC on top of 4a. **Risk:** Medium — `mx.compile` has footguns around shape variation (decode increments T every step) and may re-trace at new sizes; if 4a is already &lt;2× fp16, 4b is polish. **Wins:** single dispatch per step; potentially 20–40% faster than 4a at small T.
 
 </TabItem>
 
 <TabItem label="4c — custom Metal kernel">
 
-**The maximum-effort play.** Write a Metal compute shader that takes quantized K/V buffers + rotation metadata + scales + zeros, and computes the full scaled-dot-product-attention inline without ever materializing the dequantized K or V tensors.
+**The maximum-effort play.** A Metal shader takes quantized K/V buffers + rotation metadata + scales + zeros and computes the full SDPA inline: read quantized bytes, dequantize lane-local, multiply by Q, softmax, write the output — dequantized tensors never leave registers. Kills **both** the O(T²) compute AND the bandwidth of moving dequantized K/V through GPU memory.
 
-This is the version that kills **both** the O(T²) compute AND the memory bandwidth cost of transferring dequantized K/V through GPU memory. The kernel reads quantized bytes, dequantizes lane-local, multiplies by Q, softmaxes, and writes the attention output. Dequantized tensors never leave registers.
+**Effort:** 800–2000 LOC: `.metal` source inside mlx-sys, build glue to compile a `.metallib`, host-side Rust dispatch, correctness tests against 4a, benchmarks.
 
-**Estimated effort:** 800–2000 LOC including:
-- Metal shader source in `.metal` files inside mlx-sys (or a new crate)
-- Build-system integration to compile the .metal into a .metallib
-- Host-side Rust plumbing to dispatch the kernel with the right buffer bindings
-- Correctness tests cross-verified against the MLX-ops 4a path
-- Benchmarks
+**Risk:** High. Metal shader authoring is a whole new skill layer; Apple's debugging tooling is Xcode-bound and UI-heavy; subtle bugs hide for weeks. Don't start 4c until 4a ships and profiling gives a concrete reason the MLX path isn't enough.
 
-**Risk:** High. Metal shader authoring is an entirely new skill layer; tooling for debugging shaders on Apple Silicon is sparse; subtle correctness bugs can hide for weeks. Mitigation: don't start 4c until 4a is shipped and we have a concrete profiling-derived reason the MLX-ops path isn't enough.
-
-**Wins:**
-- Single Metal dispatch.
-- Zero bandwidth spent on dequantized tensors.
-- Plausibly 1.1–1.3× the fp16 reference speed (because the quantized K/V is smaller in DRAM than fp16 K/V, so memory-bound attention actually gets faster with good compression).
-
-**Blocking concerns:**
-- Apple hasn't made Metal shader development a welcoming experience on M-series. Debugging tools are Xcode-bound and UI-heavy.
-- MLX's internal C++ contributes some of the Metal kernels it ships; adopting their approach (shader source embedded in Objective-C++, linked into the framework) is a build-system rabbit hole.
+**Wins:** Single dispatch; zero bandwidth on dequantized tensors; plausibly 1.1–1.3× the fp16 reference, because quantized K/V is smaller in DRAM — so memory-bound attention gets *faster* with good compression. Against its own "don't start this until profiling forces it" hedge, this is the tier we shipped.
 
 </TabItem>
 </Tabs>
 
 ## Recommended ordering
 
-1. **Ship 4a first.** It gives us real-world production throughput and removes the "dev-grade" warning from the server log. Measurable quickly on a wikitext decode loop.
-2. **Measure before 4b or 4c.** Profile at 2k and 4k contexts. If 4a is within 2× of fp16, 4b and 4c become nice-to-haves, not necessities. If 4a is still 5× slower than fp16, 4b is the right next move.
-3. **4c only if 4b hits a wall.** `mx.compile` is Apple's own answer to kernel fusion; building a bespoke Metal kernel to beat their compiler is a long bet with high carrying cost.
+1. **Ship 4a first.** Real production throughput, removes the "dev-grade" warning, measurable on a wikitext decode loop.
+2. **Measure before 4b or 4c.** Profile at 2k and 4k. Within 2× of fp16 → 4b/4c are nice-to-haves; still 5× slower → 4b is next.
+3. **4c only if 4b hits a wall.** `mx.compile` is Apple's own fusion answer; hand-rolling Metal to beat their compiler is a long bet.
 
-## What 4a buys us (and when to stop)
-
-The production gate on `--turboquant` becoming auto-on isn't "fastest possible" — it's "within 2× of fp16 throughput at acceptable context lengths." If 4a clears that bar, the flag graduates to default-on for memory-constrained contexts (shared-hardware Mac Mini) and stays opt-in for throughput-dominated contexts (M4 Max with 128 GB).
+The ordering was right; the world wasn't. 4a-as-ported didn't clear the bar, 4b never happened, and we went straight to a 4c-shaped rebuild (see the Aside). And even at ~5% under baseline, the flag *still* didn't flip: a passing throughput bar is necessary, not sufficient — the default also waits on a confirmed quality winner across architectures, a separate and slower clock.
 
 ## Contracts we DON'T want to break
 
-- **Quality is already paid for.** Slices 1a–1f landed at Δppl ≤ 0.01 on Qwen3.5, Δppl ≤ 0.17 on Qwen2. Any perf optimization that shifts those numbers by more than measurement noise is a bug, not a win.
-- **The `KeyValueCache` trait is a load-bearing boundary.** Slice 4 changes the internals of `CompressedKVCache`; it must not change `update_and_fetch`'s signature or the `KeyValueCache + Default` bound that Qwen3.5 and Qwen2 model impls depend on.
-- **Bypass modes stay.** `BypassMode::{IdentityPassthrough, BridgeOnly}` saved us from a stride bug on day one and saved us from a mislabeled A/B on day two. Whatever storage refactor 4a imposes, the bypass short-circuits must keep working.
+- **Quality is already paid for.** Slices 1a–1f landed at Δppl ≤ 0.01 on Qwen3.5, ≤ 0.17 on Qwen2. Any perf change that moves those past measurement noise is a bug, not a win.
+- **The `KeyValueCache` trait is a load-bearing boundary.** Slice 4 changes `CompressedKVCache` internals only — never `update_and_fetch`'s signature or the `KeyValueCache + Default` bound the model impls depend on.
+- **Bypass modes stay.** `BypassMode::{IdentityPassthrough, BridgeOnly}` caught a stride bug on day one and a mislabeled A/B on day two. The short-circuits keep working through any refactor.
 
-## Rough timeline
+## Rough timeline (planning-time)
 
-- **4a implementation**: 1 focused day. Much of the surgery is in `cache.rs::update_and_fetch` — rewriting the storage model from Vec-based to Array-based and teaching the two halves of the pipeline (write-side quantize, read-side dequantize) to speak in mlx_rs::Array the whole way through.
-- **4a validation**: 2–3 hours. Re-run `turboquant_ppl` across all validated configs, diff against current results. Any Δppl change > 0.01 means a correctness bug somewhere in the port.
-- **4a profiling + doc**: half a day. Before/after latency + memory numbers, update `ANALYSIS.md`, add a "GPU dequant" section to `turboquant-kv-compression.mdx`.
+- **4a implementation**: 1 focused day — rewrite `cache.rs` storage from Vec-based to Array-based, both pipeline halves speaking `mlx_rs::Array` end to end.
+- **4a validation**: 2–3 hours — re-run `turboquant_ppl`; any Δppl change > 0.01 is a port bug.
+- **4a profiling + doc**: half a day — before/after latency + memory, write the GPU-dequant section into `turboquant-kv-compression.mdx`.
 
-Total: **~2 days of focused work** for the change that unlocks `--turboquant` default.
+We pencilled in **~2 days** to GPU-port the existing math. What shipped was a from-scratch rebuild on the opposite premise. The estimate wasn't wrong about the port; the port just wasn't the answer.
 
 ## Where the work lives
 
-- `services/sanctum-mlx/src/turboquant/cache.rs` — the main target
-- `services/sanctum-mlx/src/turboquant/quantizer.rs` — migrate `quantize_key_affine` / `quantize_value_group` to Array-based signatures
-- `vendor/mlx-rs/mlx-rs/src/ops/` — may need to expose mlx_quantize / mlx_dequantize in the Rust wrapper (C FFI exists; Rust safe wrapper may not)
-- New: `services/sanctum-mlx/bench/slice4_perf.jsonl` — throughput measurements per config
-
-No sanctum-rs commits needed for mlx-rs FFI changes until we verify whether `mx.quantize` is already wrapped. Quick check: `grep -r 'pub fn quantize' vendor/mlx-rs/mlx-rs/src/ops/` — came up empty on the first look, so we'd need to add a thin safe wrapper around `mlx_quantize`/`mlx_dequantize` first.
+- `services/sanctum-mlx/src/turboquant/cache.rs` — the main target.
+- `services/sanctum-mlx/src/turboquant/quantizer.rs` — migrate `quantize_value_group` to an Array-based signature *(planning-time this also listed a key-side `quantize_key_affine`; the rebuild deleted the legacy key path in `37853d8`, so only the value side survived)*
+- `vendor/mlx-rs/mlx-rs/src/ops/` — expose mlx_quantize / mlx_dequantize in the Rust wrapper. The planning-time `grep 'pub fn quantize'` came up empty, and still does: what landed is `quantize_device`, not a bare `quantize`, so a thin safe wrapper is still the first step.
+- Validation lives in `tests/turboquant_ppl.rs` plus the `turboquant_truncate_test` / `drift_probe` bins — no `bench/` dir was ever created.
 
 ## References
 
 - [MLX fast.scaled_dot_product_attention](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.fast.scaled_dot_product_attention.html) — the optimized kernel we're feeding
 - [MLX quantize](https://ml-explore.github.io/mlx/build/html/python/_autosummary/mlx.core.quantize.html) — the GPU primitive Slice 4a leans on
 - [mx.compile](https://ml-explore.github.io/mlx/build/html/usage/compile.html) — Apple's kernel fusion path for 4b
-- Slice 1a–1f writeup: `services/sanctum-mlx/bench/ANALYSIS.md`
+- [TurboQuant KV Compression](/architecture/turboquant-kv-compression/) — the full pivot writeup, plus the Slice 1a–1f validation discipline

@@ -1,34 +1,43 @@
 ---
 title: Signal CLI API Reference
-description: Three signal interfaces, three protocols, three ports. A field guide to not getting 404s.
+description: One Signal interface, one protocol, one port. A field guide to not getting 404s.
 ---
 
-import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside } from '@astrojs/starlight/components';
 
 ![Signal API — a secure communication device projecting a holographic signal wave.](./images/hero-signal-api.png)
 
-Sanctum runs three separate Signal interfaces. They share a name and a purpose but almost nothing else. Confusing them is the most common source of 404 errors in the stack, because "signal-cli on port 8080" and "signal-cli on port 18081" are not the same service, the same protocol, or the same API. They are three strangers with the same surname who happen to live in the same building.
+Sanctum once ran three separate Signal interfaces. It now runs one: the native `signal-cli` daemon speaking JSON-RPC on port `8080`. The two Docker REST wrappers — `signal-cli-rest-api` on `18081` and `signal-yoda` on `18082` — were torn down on 2026-04-26 when the native daemon's TCP socket made them redundant. If you came here looking for `/v1/about` on a Docker container, that's the ghost; see [Retired interfaces](#retired-interfaces-2026-04-26).
 
-## The Three Interfaces
+The one rule that survives all of that: **port 8080 speaks JSON-RPC, not REST.**
 
-| Interface | Port | Protocol | Container / Process | API Style |
-|-----------|------|----------|---------------------|-----------|
-| signal-cli native | `8080` | JSON-RPC | Homebrew binary (PID on Mac) | `POST /api/v1/rpc` |
-| signal-cli-rest-api | `18081` | REST | Docker: `signal-cli-rest-api` | `/v1/...`, `/v2/...` |
-| signal-yoda | `18082` | REST | Docker: `signal-yoda` | `/v1/...`, `/v2/...` |
+## The One Interface
 
+| Interface | Port | Protocol | Process | API Style |
+|-----------|------|----------|---------|-----------|
+| signal-cli native | `8080` | JSON-RPC | Homebrew binary, `com.sanctum.signal-cli` | `POST /api/v1/rpc` |
+| signal-cli native | `7583` | JSON-RPC over raw TCP | same process, `--tcp` | line-delimited JSON-RPC |
 
 <Aside type="danger">
-Port 8080 does **not** serve REST endpoints. Hitting `/v1/about` or `/api/v1/accounts` on port 8080 will always return `404 Not Found` with `No context found for request`. This is not a bug. The native `--http` mode only speaks JSON-RPC. The REST endpoints live on ports 18081 and 18082 via the bbernhard Docker wrapper.
+Port 8080 does **not** serve REST endpoints. Hitting `/v1/about` or `/api/v1/accounts` on port 8080 returns `404 Not Found` with `No context found for request`. This is not a bug — the native `--http` mode only speaks JSON-RPC. The REST endpoints those paths belong to lived on the Docker wrappers, which are gone. There is no REST API in the stack anymore.
 </Aside>
 
-## 1. signal-cli Native (Port 8080)
+## signal-cli Native (Ports 8080 + 7583)
 
-The Homebrew-installed `signal-cli 0.14.2` binary running as a daemon with `--http 127.0.0.1:8080`. This is OpenClaw's primary bridge — Yoda sends and receives messages through this interface.
+The Homebrew-installed `signal-cli 0.14.4.1` binary running as a launchd daemon. This is OpenClaw's only Signal bridge — Yoda sends and receives through it.
 
-**Process:** `signal-cli -a +1XXXXXXXXXX daemon --http 127.0.0.1:8080 --no-receive-stdout`
+**Process** (from the live cmdline):
 
-### Endpoints
+```text
+signal-cli -a +15555550100 daemon \
+  --http localhost:8080 \
+  --tcp localhost:7583 \
+  --no-receive-stdout
+```
+
+Two listeners, one daemon: HTTP JSON-RPC on `8080` for local tooling, and raw-TCP JSON-RPC on `7583` for the VM. A `socat` bridge (`com.sanctum.signal-tcp-bridge`) republishes `7583` on the Mac↔VM link (`10.0.0.1:7583`) so the VM's `yoda-chat-consumer` can read the same daemon without a second account. One identity, two transports, zero containers.
+
+### HTTP Endpoints (Port 8080)
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -36,15 +45,14 @@ The Homebrew-installed `signal-cli 0.14.2` binary running as a daemon with `--ht
 | `GET` | `/api/v1/events` | Server-Sent Events stream for incoming messages |
 | `GET` | `/api/v1/check` | Health check |
 
-Everything else returns 404. There is no `/v1/about`. There is no `/api/v1/accounts`. Those paths belong to the Docker wrapper, not this interface.
-
+Everything else returns 404. There is no `/v1/about`. There is no `/api/v1/accounts`. Those paths belonged to the Docker wrapper, and the Docker wrapper retired.
 
 ### JSON-RPC Examples
 
 **Send a message:**
 ```bash
 curl -s -X POST -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"send","params":{"recipient":["+1XXXXXXXXXX"],"message":"Hello from Sanctum"},"id":1}' \
+  -d '{"jsonrpc":"2.0","method":"send","params":{"recipient":["+15555550100"],"message":"Hello from Sanctum"},"id":1}' \
   http://127.0.0.1:8080/api/v1/rpc
 ```
 
@@ -53,7 +61,7 @@ curl -s -X POST -H "Content-Type: application/json" \
 curl -s -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"version","id":2}' \
   http://127.0.0.1:8080/api/v1/rpc
-# Returns: {"jsonrpc":"2.0","result":{"version":"0.14.2"},"id":2}
+# Returns: {"jsonrpc":"2.0","result":{"version":"0.14.4.1"},"id":2}
 ```
 
 **List groups:**
@@ -66,7 +74,7 @@ curl -s -X POST -H "Content-Type: application/json" \
 **Check if a number is registered:**
 ```bash
 curl -s -X POST -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","method":"getUserStatus","params":{"recipient":["+1XXXXXXXXXX"]},"id":4}' \
+  -d '{"jsonrpc":"2.0","method":"getUserStatus","params":{"recipient":["+15555550100"]},"id":4}' \
   http://127.0.0.1:8080/api/v1/rpc
 ```
 
@@ -76,81 +84,9 @@ Key methods (camelCase, passed as `"method"` in the JSON-RPC request): `send`, `
 
 Full method list: [signal-cli-jsonrpc(5) man page](https://github.com/AsamK/signal-cli/blob/master/man/signal-cli-jsonrpc.5.adoc).
 
-
-## 2. signal-cli-rest-api (Port 18081)
-
-The [bbernhard/signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) Docker wrapper. Provides a proper REST API with versioned endpoints. Runs its own signal-cli instance internally with a separate data directory (`data-rest-api/`).
-
-**Container:** `signal-cli-rest-api` on `127.0.0.1:18081`
-
-### Key REST Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/v1/about` | Version info, capabilities, mode |
-| `GET` | `/v1/accounts` | List registered accounts |
-| `POST` | `/v2/send` | Send a message (v2 — supports quotes, mentions) |
-| `GET` | `/v1/groups/{number}` | List groups for an account |
-| `GET` | `/v1/receive/{number}` | Receive pending messages |
-
-### REST Example
-
-```bash
-# Check version
-curl -s http://127.0.0.1:18081/v1/about
-# Returns: {"versions":["v1","v2"],"build":2,"mode":"json-rpc","version":"0.98",...}
-
-# Send a message
-curl -s -X POST -H "Content-Type: application/json" \
-  -d '{"message":"Hello","number":"+1XXXXXXXXXX","recipients":["+1XXXXXXXXXX"]}' \
-  http://127.0.0.1:18082/v2/send
-```
-
-## 3. signal-yoda (Port 18082)
-
-Identical to the REST API above but with a separate data directory (`data-yoda/`). This is the Yoda-specific Signal identity used by the agent council. Same image, same API, different account.
-
-**Container:** `signal-yoda` on `127.0.0.1:18082`
-
-
-## Docker Compose
-
-Both Docker containers are defined in `~/.openclaw/signal-cli/compose.yaml`:
-
-```yaml
-services:
-  signal-cli-rest-api:
-    image: bbernhard/signal-cli-rest-api:latest
-    container_name: signal-cli-rest-api
-    restart: unless-stopped
-    environment:
-      - MODE=json-rpc
-    ports:
-      - "127.0.0.1:18081:8080"
-      - "127.0.0.1:6001:6001"
-    volumes:
-      - ./data-rest-api:/home/.local/share/signal-cli
-
-  signal-cli-yoda:
-    image: bbernhard/signal-cli-rest-api:latest
-    container_name: signal-yoda
-    restart: unless-stopped
-    environment:
-      - MODE=json-rpc
-    ports:
-      - "127.0.0.1:18082:8080"
-      - "127.0.0.1:6002:6001"
-    volumes:
-      - ./data-yoda:/home/.local/share/signal-cli
-```
-
-<Aside type="caution" title="Docker Compose container naming bug">
-Docker Compose v5 has a known issue where stale container references corrupt the project state. If `docker compose up` fails with `Error response from daemon: No such container: <hash>`, the fix is: stop and remove all signal containers manually, then recreate the yoda container with `docker run` using the exact same flags from the compose file. The compose state for the yoda service gets stuck referencing a deleted container ID and no amount of `docker compose down` will clear it.
-</Aside>
-
 ## OpenClaw Integration
 
-OpenClaw connects to signal-cli via the **native CLI binary**, not through any HTTP API. The relevant config in `openclaw.json`:
+OpenClaw reaches signal-cli over **HTTP JSON-RPC on port 8080** — not via the CLI binary, not via a socket the binary opens for it. The relevant config in `openclaw.json`:
 
 ```json
 {
@@ -160,8 +96,8 @@ OpenClaw connects to signal-cli via the **native CLI binary**, not through any H
         "yoda": {
           "name": "Yoda Signal",
           "enabled": true,
-          "account": "+1XXXXXXXXXX",
-          "cliPath": "/opt/homebrew/bin/signal-cli"
+          "account": "+15555550100",
+          "httpUrl": "http://127.0.0.1:8080"
         }
       },
       "enabled": true
@@ -170,43 +106,42 @@ OpenClaw connects to signal-cli via the **native CLI binary**, not through any H
 }
 ```
 
-This means OpenClaw messaging works even when the HTTP/REST interfaces are down. The CLI binary talks directly to the signal-cli daemon via its internal socket, not via HTTP. The HTTP API is for external tooling, health checks, and regression tests — not for the primary message flow.
+The `httpUrl` is load-bearing: if the daemon on `8080` is down, OpenClaw messaging is down. That is the trade for having exactly one transport instead of three — when the bridge breaks, you know precisely which one. The native daemon's `--http` HTTP server *is* the message flow, so health monitoring leans on it hard.
 
 ## Quick Diagnostic
 
 ```bash
-# Native JSON-RPC (should return version)
+# Native JSON-RPC (should return version 0.14.4.1)
 curl -s -X POST -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","method":"version","id":1}' \
   http://127.0.0.1:8080/api/v1/rpc
 
-# REST API container 1 (should return about info)
-curl -s http://127.0.0.1:18081/v1/about
+# Daemon is the launchd job — confirm it's loaded
+launchctl list | grep com.sanctum.signal-cli
 
-# REST API container 2 / Yoda (should return about info)
-curl -s http://127.0.0.1:18082/v1/about
+# TCP bridge to the VM (raw JSON-RPC, line-delimited)
+nc -z 10.0.0.1 7583 && echo "VM bridge up"
 
-# Docker container status (both should be "running")
-docker inspect --format '{{.State.Status}}' signal-cli-rest-api signal-yoda
+# 18081 should be SILENT — it's the dead port the health check kills on sight
+nc -z 127.0.0.1 18081 && echo "WARNING: dead port is active" || echo "dead port quiet (good)"
 ```
-
 
 ## Health Monitoring
 
-The `signal-health.sh` script provides military-grade monitoring of all Signal interfaces with auto-recovery capabilities.
+The `signal-health.sh` script monitors the daemon and its consumer pipeline, with auto-recovery on `--fix`.
 
 **Location:** `~/.sanctum/scripts/signal-health.sh`
 
 ### Usage
 
 ```bash
-# Check-only mode (human-readable)
+# Check-only mode (human-readable summary)
 ~/.sanctum/scripts/signal-health.sh
 
 # Auto-fix mode (restarts failed components)
 ~/.sanctum/scripts/signal-health.sh --fix
 
-# Machine-readable JSON output
+# Machine-readable JSON output (for service-graph.py)
 ~/.sanctum/scripts/signal-health.sh --json
 
 # Silent mode (log only, no stdout)
@@ -215,24 +150,32 @@ The `signal-health.sh` script provides military-grade monitoring of all Signal i
 
 ### What It Checks
 
-| Component | Check | Auto-Fix Action |
-|-----------|-------|-----------------|
-| Native daemon (`:8080`) | JSON-RPC `version` call | Restart via launchctl or direct launch |
-| signal-cli-rest-api (`:18081`) | `/v1/accounts` returns expected account | `docker restart signal-cli-rest-api` |
-| signal-yoda (`:18082`) | `/v1/accounts` returns Yoda number | `docker restart signal-yoda` |
-| OpenClaw bridge (`:1977`) | Gateway listening + node bridge connected to `:8080` | Report only (manual) |
+Six checks, run in order — the port check first, because the rest depend on it. No Docker references anywhere; the containers are gone and the script knows it.
+
+| Check | What it verifies | Auto-Fix Action |
+|-------|------------------|-----------------|
+| `signal_port` | JSON-RPC `version` on `:8080` responds | `launchctl kickstart -k` the daemon, else direct relaunch |
+| `single_daemon` | Exactly one `signal-cli` Java process, and nothing squatting dead port `18081` | Kill the dead-port squatter; kill all + restart on duplicates |
+| `gateway_plugin` | force-flow `:4077` up AND a consumer holds an ESTABLISHED conn to `:8080` | Kickstart `com.sanctum.force-flow` |
+| `forceflow_port` | `force_flow.py` still points at `:8080` (config-drift detector) | `sed`-patch the port and restart force-flow |
+| `websocket_health` | No Signal WebSocket connection-storm in the last 15 min | Report only |
+| `outbound_send` | A real outbound send succeeded recently | Report only |
+
+<Aside type="caution" title="Port 18081 is a tripwire, not an endpoint">
+`18081` was the old `signal-cli-rest-api` Docker port. The health script treats it as a **dead port**: if anything is listening there, it kills the process and fires a Force Flow warning. So if you find yourself wanting to "bring 18081 back," the monitoring will fight you. That's the design.
+</Aside>
 
 ### Exit Codes
 
 | Code | Meaning |
 |------|---------|
 | `0` | All components healthy |
-| `1` | One or more components were down but auto-recovered |
+| `1` | One or more were down but self-healed (recovered) |
 | `2` | Manual intervention required |
 
 ### LaunchAgent (Periodic Monitoring)
 
-A LaunchAgent runs the health check every 5 minutes with `--fix --quiet`:
+A LaunchAgent runs the check every 5 minutes (`StartInterval 300`) with `--fix --quiet`.
 
 **Plist:** `~/Library/LaunchAgents/com.sanctum.signal-health.plist`
 
@@ -247,10 +190,19 @@ launchctl load ~/Library/LaunchAgents/com.sanctum.signal-health.plist
 
 ### Logs
 
-All health check results are appended to `~/.sanctum/logs/signal-health.log`. LaunchAgent stdout/stderr go to `~/.sanctum/logs/signal-health-stdout.log` and `signal-health-stderr.log`.
+Health check results append to `~/.sanctum/logs/signal-health.log`. LaunchAgent stdout/stderr go to `~/.sanctum/logs/signal-health-stdout.log` and `signal-health-stderr.log`.
 
-### Architecture Notes
+## Retired interfaces (2026-04-26)
 
-<Aside type="tip">
-The 18081 container (`signal-cli-rest-api`) runs account `+15555550101` — a **different number** from Yoda. The Yoda account (`+15555550100`) lives on the native daemon (`:8080`) and the signal-yoda container (`:18082`). Trying to send as Yoda via `:18081` will always return "Specified account does not exist" — this is expected behavior, not a bug.
+Two Docker REST wrappers used to run alongside the native daemon. They are gone — `docker ps -a` lists no signal container in any state, and `:18081` / `:18082` answer nothing.
+
+| Retired interface | Old port | What replaced it |
+|-------------------|----------|------------------|
+| `signal-cli-rest-api` (bbernhard) | `18081` | native daemon `:8080` (JSON-RPC) |
+| `signal-yoda` (bbernhard) | `18082` | native daemon — same Yoda account, no second container |
+
+The active `~/.openclaw/signal-cli/compose.yaml` is now `services: {}` behind a retirement header. The original two-service definition is preserved at `~/.openclaw/signal-cli/compose.yaml.bak-pre-retire-yoda` if the REST containers ever need to come back. The data directories `data-rest-api/` and `data-yoda/` survive as stale leftovers; neither is mounted by anything live.
+
+<Aside type="note">
+Why fold three interfaces into one? The native daemon's `--tcp` socket gave the VM a direct line to the same Signal identity, so the separate `signal-yoda` container existed only to hold an account the daemon already held. Two strangers with the same surname moved out; the one who stayed answers to both names now.
 </Aside>

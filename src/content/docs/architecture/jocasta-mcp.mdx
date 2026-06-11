@@ -7,9 +7,9 @@ import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
 ![Jocasta MCP — a vast library of floating data crystals and holographic scrolls weaving a unified data stream.](./images/hero-jocasta-mcp.png)
 
-Jocasta is the ultimate local-first AI data gateway. Rather than relying on cloud API scraping or headless browser hacks (which are notoriously brittle), `sanctum-jocasta-mcp` connects directly to the underlying `SQLite` databases running silently on the Mac Mini host. It exposes 23 discrete tool sets that are shared centrally among the Jedi Council.
+Jocasta is the local-first data gateway for the haus. Rather than scraping cloud APIs or driving a headless browser — both notoriously brittle — `sanctum-jocasta-mcp` reads the `SQLite` databases sitting on disk on the Mac Mini host. It exposes 23 tools, shared across the Jedi Council.
 
-Because all the databases queried (Messages, iOS Notes, Health) live entirely offline under `~/Library`, data egress costs and latency are basically zero.
+Because every database it queries (Messages, Apple Notes, Photos) lives offline under `~/Library`, egress cost and network latency are zero. Nothing leaves the box to answer a question about what's already on the box.
 
 **Source**: [github.com/Ogilthorp3/jocasta-mcp](https://github.com/Ogilthorp3/jocasta-mcp) (private) — `~/Projects/jocasta-mcp/`
 
@@ -39,53 +39,53 @@ The `jocasta_health` tool reports server status and bridge connectivity in one c
 
 <CardGrid>
   <Card title="Apple Mail" icon="email">
-    Reads `~/Library/Mail/V*` and queries the primary `Envelope Index`. It maps sender aliases and email subjects instantaneously.
+    Reads the `Envelope Index` under `~/Library/Mail/V*/MailData` to map sender aliases and subjects. Timestamps are Unix epoch seconds here, not Apple's 2001 epoch — a one-line off-by-31-years bug if you forget.
   </Card>
   <Card title="Messages & Protocols" icon="comment">
-    Parses `chat.db` for natively synced iMessage and SMS, and hooks into Catalyst bundles for **WhatsApp** and **Telegram**. iMessage and WhatsApp now route through SanctumBridge (:4078) by default, with direct DB fallback. Signal still decodes the `config.json` master key to decrypt its local SQLCipher `db.sqlite` directly — the bridge doesn't handle encrypted databases.
+    Parses `chat.db` for iMessage and SMS, reads **Telegram** straight from its `postbox/db/db.sqlite`, and reaches **WhatsApp** through its own store. iMessage and WhatsApp route through SanctumBridge (:4078) by default, with direct DB fallback. Signal is the holdout: it decodes the `config.json` master key and opens its SQLCipher `sql/db.sqlite` directly, because the bridge doesn't speak encrypted databases.
   </Card>
   <Card title="Electron Bundles" icon="warning">
     **Slack** and **Discord** data is heavily blocked due to Electron's use of LevelDB packet chunks (`Local Storage/leveldb`). Those tools respond with graceful failures for now.
   </Card>
   <Card title="Apple Core Data" icon="apple">
-    Jocasta queries `NoteStore.sqlite` for uncompressed **Apple Notes** brainstorming, extracts **Calendar** schedules out of `Calendar Cache`, and parses `AddressBook-v22.abcddb` for **CRM correlation** of cell numbers to names. Calendar and Contacts route through SanctumBridge by default. Notes stays on direct SQLite — the bridge doesn't serve it yet.
+    Jocasta pulls **Apple Notes** previews from the `ZSNIPPET` column of `NoteStore.sqlite` (the full bodies live in compressed `ZDATA` packets, untouched for now), reads **Calendar** events through the EventKit Swift helper at `~/.sanctum/bin/jocasta-eventkit` (the on-disk `Calendar Cache` is stale by design on modern macOS, so it's only the fallback), and parses `AddressBook-v22.abcddb` for **CRM correlation** of cell numbers to names. Calendar and Contacts route through SanctumBridge by default; Notes stays on direct SQLite — the bridge doesn't serve it yet.
   </Card>
   <Card title="Offline Knowledge" icon="open-book">
-    Provides access to Wikipedia and encyclopedias by proxying requests securely to a local `.zim` unzipper (`kiwix-serve`).
+    `jocasta_search_kiwix` pings a local `kiwix-serve` on `:8080` and confirms the offline `.zim` archive is reachable. Article extraction isn't wired yet — the tool returns "reached, here's how to parse me," not the article. An honest stub beats a pretty lie.
   </Card>
   <Card title="GPS & Media" icon="magnifier">
-    Queries the master `Photos.sqlite` for exact timestamp and location metadata of media. Integrates with OpenStreetMap to reverse-geocode those latitudes/longitudes seamlessly.
+    Queries `Photos.sqlite` for the timestamp and GPS metadata on each item, then hits OpenStreetMap's Nominatim to turn those raw lat/long pairs into a place name you can actually read.
   </Card>
 </CardGrid>
 
-## Active Operations (The Native executioner's blade)
-Because Jocasta operates via secure `sqlite3.OPEN_READONLY` connections for reads (or SanctumBridge for the four bridged databases), she utilizes a separate isolated AppleScript pipeline (`osascript`) to enact destructive actions securely. This avoids Core Data corruption natively:
-- **`jocasta_write_note`**: Scaffolds an organized document in your default iCloud Apple Notes directory natively.
-- **`jocasta_write_calendar`**: Ingests ISO datetimes to programmatically schedule meetings and events directly in the Calendar app without manual scraping.
-- **`jocasta_send_imessage`**: Invokes the Mac's background Messages daemon to dispatch iMessages/SMS seamlessly.
-  - *Primary Use Case*: Mon Mothma utilizes this tool as a PagerDuty pipeline. If a service drops, she can dispatch a text message *directly to your own phone number*, guaranteeing the alert hits your lock screen.
+## Active Operations
+Reads go through `sqlite3.OPEN_READONLY` (or the bridge, for the four bridged databases). Writes never touch those files — they run through `osascript`, letting the host apps own the mutation so we never risk corrupting a Core Data store we don't fully understand:
+- **`jocasta_write_note`**: creates a note in the default iCloud Apple Notes account.
+- **`jocasta_write_calendar`**: takes ISO datetimes and tells Calendar.app to schedule the event.
+- **`jocasta_send_imessage`**: hands the message to the Messages daemon to send as iMessage/SMS.
+  - *Primary use case*: Mon Mothma runs this as a pager. When a service drops, she texts the alert to your own phone — the one channel that lights up the lock screen whether or not you're at the terminal.
 
 ## Web Browsing (Agent-Browser)
 
-Rather than embedding a bloated Playwright container inside the Node runtime, Jocasta natively proxies automation requests down to the user's global `agent-browser` (Chrome via CDP).
+Rather than embed a Playwright container in the Node runtime, Jocasta shells out to the user's global `agent-browser` (Chrome via CDP).
 - **Tool**: `jocasta_agent_browser`
-- By passing strings directly (like `open https://github.com && snapshot -i`), Jocasta handles DOM inspection and downloading files via refs magically.
-- **Security Check**: This process explicitly launches heavily bounded via the `AGENT_BROWSER_ALLOWED_DOMAINS` env var. She cannot explore arbitrary websites, thereby locking out heavy prompt-injection risks!
+- It passes the command string straight through (e.g. `open https://github.com && snapshot -i`), so DOM inspection and ref-based file downloads work exactly as they do from the CLI.
+- **Security Check**: the connector sets `AGENT_BROWSER_ALLOWED_DOMAINS` to a fixed allowlist (currently `github.com`) before launching. Navigation off the list is blocked by agent-browser itself, which is the cheap way to keep a prompt-injected page from steering the browser somewhere it shouldn't go.
 
 <Aside type="caution">
-  **The Keychain Risk**: Jocasta can execute `security find-internet-password`. This throws a native Touch ID/macOS access pop-up the first try. It is inherently dangerous to give an AI plaintext passwords! Where possible, users should utilize the `agent-browser auth login` vault pattern instead to abstract secrets away from the LLM context.
+  **The Keychain Risk**: `jocasta_read_keychain` shells out to `security find-generic-password` / `find-internet-password`, so the first read on a given item throws the macOS Keychain access dialog — the "Allow / Always Allow" prompt for whatever process (here, `node`) is asking. Handing an LLM a plaintext password is inherently dangerous. Where possible, use the `agent-browser auth login` vault pattern instead, so the secret never reaches the model's context.
 </Aside>
 
 ## Document Parsing and Telemetry (Anti-Sith Army)
 
 For systems failure tracking and massive unstructured document ingest:
 
-1. **Jocasta Sysmon** (`jocasta_read_syslog` & `jocasta_read_process_list`): Exposes raw memory profiling (unix `ps`) and macOS Unified Logs (`log show --predicate`). To protect the LLM context window, these outputs are hard-truncated precisely to 500 records.
+1. **Jocasta Sysmon** (`jocasta_read_syslog` & `jocasta_read_process_list`): Exposes macOS Unified Logs (`log show --predicate`) and raw process state (`ps -ax -r`, sorted hot-CPU-first). To protect the LLM context window, both are hard-truncated — syslog to the last 500 log lines, the process list to the top 50 processes. Fifty hot processes tells you what's pinning the box; line 51 onward is just the idle tail.
 2. **Universal Files** (`jocasta_read_file`): Equipped with `pdf-parse` and `mammoth`, Jocasta can slice through generic `.docx`, `.pdf`, `.md`, and `.csv` items downloaded into iCloud.
 
 ## Package Manager
 
-Jocasta runs on **pnpm** (10.33.0). The `packageManager` field is set in `package.json` and native module builds (sqlcipher, sqlite3, esbuild) are explicitly allowlisted via `pnpm.onlyBuiltDependencies`. If you run `npm install` instead of `pnpm install`, you will have a bad time — Manoir's global npm config has `omit=dev`, which silently skips TypeScript.
+Jocasta runs on **pnpm** (10.33.0). The `packageManager` field is set in `package.json`, and the native module builds (`@journeyapps/sqlcipher`, `sqlite3`, `esbuild`) are explicitly allowlisted via `pnpm.onlyBuiltDependencies`. Run `npm install` instead of `pnpm install` and you'll have a bad time: npm ignores `pnpm.onlyBuiltDependencies`, so those native modules never compile their bindings and the server falls over at first DB open. Use the package manager the lockfile was written for.
 
 ```bash
 pnpm install
@@ -94,4 +94,4 @@ pnpm build
 
 ## Testing and E2E
 
-Like `.mlx` components, Jocasta asserts viability with an explicitly built `test_e2e_jocasta.sh`. The test builds the TypeScript outputs cleanly via pnpm, calls all Core CLI functions checking for intact `stdout`/`stderr` structures, tests telemetry, and gracefully evaluates unknown paths for exception management. Connectors that hit missing databases (Calendar Cache on Manoir, for instance) return readable errors that the test suite validates as expected failures — not silent crashes.
+Like the `.mlx` components, Jocasta proves itself with `test_e2e_jocasta.sh`. It builds the TypeScript via pnpm, runs each CLI command and asserts on the `stdout`/`stderr` it gets back, exercises the telemetry tools, and feeds in bad paths to check the error handling. The point worth keeping: connectors that hit a missing or stale database (the on-disk `Calendar Cache` on `manoir.local`, for instance) return a readable error the suite validates as an *expected* failure — a tool that fails loudly is doing its job; one that fails silently is the bug.

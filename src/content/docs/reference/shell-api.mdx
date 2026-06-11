@@ -9,21 +9,21 @@ import { Aside } from '@astrojs/starlight/components';
 
 The Sanctum shell library provides a set of `sanctum_*` functions for reading instance configuration, querying node topology, and interacting with the Sanctum infrastructure from Bash scripts and LaunchAgent wrappers.
 
-Under the hood, these functions read from a JSON cache that was generated from YAML by a Python script. Bash calls `jq` which reads JSON that was written by Python that parsed YAML that you wrote by hand. The Rube Goldberg machine of config access. But it resolves any key in under 50ms, it never breaks, and it's been running in production for months. Sometimes the unglamorous solution is the correct one.
+Under the hood, these functions read a JSON cache that a Python script generated from YAML. Bash shells out to a tiny inline `python3` reader that walks JSON written by Python that parsed YAML you wrote by hand — Python at both ends, JSON in the middle, Bash holding it together with `$()`. The Rube Goldberg machine of config access. But it resolves any key in well under 50ms, it never breaks, and it's been running in production for months. Sometimes the unglamorous solution is the correct one.
 
 ## Setup
 
-Two `source` lines at the top of any script and the entire `sanctum_*` namespace is yours. The first gives you the config reader. The second gives you a way to make the haus say something out loud.
+Two `source` lines at the top of any script and the entire `sanctum_*` namespace is yours. The first gives you the config reader; the second, a way to make the haus say something out loud.
 
 ```bash
 source ~/.sanctum/lib/config.sh
 source ~/.sanctum/lib/notify.sh
 ```
 
-The second one is optional unless you plan on raising your voice; the first one is not.
+The second is optional unless you plan on raising your voice; the first is not.
 
 <Aside type="note" title="Backwards Compatibility">
-The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been removed. All callers should use the `sanctum_*` functions directly. If you find a script still using `fos_*`, it's overdue for a rename and probably a few other things too.
+The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been removed; use the `sanctum_*` functions directly. A script still calling `fos_*` is overdue for a rename, and probably a few other things too.
 </Aside>
 
 ---
@@ -32,7 +32,7 @@ The legacy `fos_*` prefix aliases (e.g. `fos_get`, `fos_enabled`) have been remo
 
 ### sanctum_get
 
-Read any value from the instance config using dot-notation path. The Swiss Army knife. The one function you'll use more than all others combined.
+Read any value from the instance config using a dot-notation path. The Swiss Army knife — the one function you'll use more than all the others combined.
 
 ```bash
 sanctum_get <key_path>
@@ -46,75 +46,87 @@ sanctum_get <key_path>
 
 ```bash
 # Read a scalar value
-port=$(sanctum_get services.gateway.port)
-echo "$port"  # 1977
+port=$(sanctum_get services.voice_agent.port)
+echo "$port"  # 1138
 
 # Read the instance slug
-sanctum_get instance.slug  # sanctum-hub
+sanctum_get instance.slug  # manoir-neo
 
 # Read a nested value
-sanctum_get network.vm_ip  # 10.10.10.10
+sanctum_get network.vm_ip  # 10.0.0.10
+
+# A second argument is the default returned when the key is missing
+sanctum_get services.firewalla.port 18094  # 18094 if unset
 ```
 
 ---
 
 ### sanctum_enabled
 
-Check whether a config path evaluates to `true`. Returns an exit code, so it plays nicely with `if` statements — which is more than can be said for most things in Bash.
+Check whether a service is enabled. You pass a **bare service name** — the function prepends `services.` and appends `.enabled`, then checks the result. It returns an exit code, so it plays nicely with `if` statements — more than can be said for most things in Bash.
 
 ```bash
-sanctum_enabled <key_path>
+sanctum_enabled <service_name>
 ```
 
-**Returns:** Exit code 0 if the value is `true`, non-zero otherwise.
+**Returns:** Exit code 0 if `services.<service_name>.enabled` is `true`, non-zero otherwise.
 
 ```bash
-if sanctum_enabled services.gateway.enabled; then
-  echo "Gateway is active"
+if sanctum_enabled voice_agent; then
+  echo "Voice agent is active"
 fi
 
-if sanctum_enabled services.signal_bridge.enabled; then
-  echo "Signal bridge is active"
+if sanctum_enabled signal_proxy; then
+  echo "Signal proxy is active"
 else
-  echo "Signal bridge is disabled"
+  echo "Signal proxy is disabled"
 fi
 ```
+
+<Aside type="caution" title="Bare name, not a path">
+Pass `voice_agent`, not `services.voice_agent.enabled`. Hand it the full path and it dutifully looks up `services.services.voice_agent.enabled.enabled`, finds nothing, and reports "disabled" forever — doing exactly what you asked, which was the wrong question.
+</Aside>
 
 ---
 
 ### sanctum_expand
 
-Expand `{{PLACEHOLDER}}` tokens in a string using values from the instance config. Used primarily by `generate-plists.sh` for template rendering.
+Expand a leading `~` in a path to the configured Mac home (`users.mac.home`). That's the whole job — no `{{PLACEHOLDER}}` engine, no template language. A path with no leading tilde comes back untouched.
 
 ```bash
-sanctum_expand <template_string>
+sanctum_expand <path>
 ```
 
 ```bash
-expanded=$(sanctum_expand "User is {{users.mac}} at {{network.lan_ip}}")
-echo "$expanded"  # User is operator at 192.168.1.10
+sanctum_expand "~/Projects/foo"  # /Users/neo/Projects/foo
+sanctum_expand "~"               # /Users/neo
+sanctum_expand "/already/absolute"  # /already/absolute (unchanged)
 ```
 
-<Aside type="tip">
-This is the engine behind plist generation. Every `{{PLACEHOLDER}}` in a template gets resolved through this function. If a placeholder resolves to empty, the template renders with a blank — which is usually a sign that you forgot to fill in `instance.yaml`.
+<Aside type="note">
+It resolves `~` against the *configured* home, not the shell's `$HOME` — which matters when a LaunchAgent runs as a different user than the config was written for. Don't reach for this expecting Mustache; it expands one tilde and goes home.
 </Aside>
 
 ---
 
 ### sanctum_home
 
-Return the Sanctum haus directory.
+Return the configured Mac home (`users.mac.home`).
 
 ```bash
 sanctum_home
 ```
 
-**Returns:** The path to `~/.sanctum`.
+**Returns:** The Mac home path — `/Users/neo`, *not* `/Users/neo/.sanctum`.
 
 ```bash
-config_dir=$(sanctum_home)
-echo "$config_dir"  # /Users/neo/.sanctum
+home=$(sanctum_home)
+echo "$home"  # /Users/neo
 ```
+
+<Aside type="caution" title="It's $HOME, not the Sanctum dir">
+The name reads like it should hand you `~/.sanctum`, but it returns the *user's* home. Want the config dir? Append it yourself: `"$(sanctum_home)/.sanctum"`. The names of things and the things themselves are not always on speaking terms.
+</Aside>
 
 ---
 
@@ -127,7 +139,7 @@ sanctum_slug
 ```
 
 ```bash
-sanctum_slug  # sanctum-hub
+sanctum_slug  # manoir-neo
 ```
 
 ---
@@ -141,7 +153,7 @@ sanctum_name
 ```
 
 ```bash
-sanctum_name  # Sanctum Hub
+sanctum_name  # Manoir Neo
 ```
 
 ---
@@ -157,7 +169,7 @@ sanctum_vm_ip
 ```
 
 ```bash
-sanctum_vm_ip  # 10.10.10.10
+sanctum_vm_ip  # 10.0.0.10
 ```
 
 ---
@@ -171,22 +183,24 @@ sanctum_mac_ip
 ```
 
 ```bash
-sanctum_mac_ip  # 10.10.10.1
+sanctum_mac_ip  # 10.0.0.1
 ```
 
 ---
 
 ### sanctum_vm_ssh
 
-Return the SSH alias for connecting to the VM.
+Return the `user@ip` SSH target for the VM — assembled from `users.vm.username` and `network.vm_ip`, not an alias.
 
 ```bash
 sanctum_vm_ssh
 ```
 
 ```bash
+sanctum_vm_ssh  # ubuntu@10.0.0.10
+
 ssh $(sanctum_vm_ssh) 'uptime'
-# equivalent to: ssh openclaw 'uptime'
+# expands to: ssh ubuntu@10.0.0.10 'uptime'
 ```
 
 ---
@@ -216,7 +230,7 @@ sanctum_whoami
 ```
 
 ```bash
-sanctum_whoami  # hub
+sanctum_whoami  # manoir
 ```
 
 The existential question, answered in one function call.
@@ -234,7 +248,7 @@ sanctum_is_node <node_id>
 **Returns:** Exit code 0 if the current node matches, non-zero otherwise.
 
 ```bash
-if sanctum_is_node hub; then
+if sanctum_is_node manoir; then
   echo "Running on the hub"
 fi
 ```
@@ -253,11 +267,13 @@ sanctum_my_type
 sanctum_my_type  # hub
 ```
 
+The type comes from `nodes.<me>.type` — one of `hub`, `satellite`, `mobile`, or `sensor`.
+
 ---
 
 ## Node Topology Functions
 
-These functions query the `nodes` section of the instance config. They accept a `<node_id>` argument (e.g., `hub`, `satellite`). Useful when your haus automation hobby has metastasized into a multi-site distributed system.
+These functions query the `nodes` section of the instance config. They accept a `<node_id>` argument — the real ones here are `manoir` (the hub) and `chalet` (a satellite at the cottage). Useful when your haus automation hobby has metastasized into a multi-site distributed system.
 
 ### sanctum_node_type
 
@@ -268,8 +284,8 @@ sanctum_node_type <node_id>
 ```
 
 ```bash
-sanctum_node_type hub        # hub
-sanctum_node_type satellite  # satellite
+sanctum_node_type manoir  # hub
+sanctum_node_type chalet  # satellite
 ```
 
 ---
@@ -283,9 +299,11 @@ sanctum_node_host <node_id>
 ```
 
 ```bash
-sanctum_node_host hub        # 192.168.1.10
-sanctum_node_host satellite  # satellite.local
+sanctum_node_host manoir  # 192.0.2.10
+sanctum_node_host chalet  # (empty — the cottage has no LAN host)
 ```
+
+A node behind a different network has no `host` value — that's the cue to use `sanctum_node_ts_ip` and the `_ts` SSH variant instead.
 
 ---
 
@@ -298,7 +316,8 @@ sanctum_node_ts_ip <node_id>
 ```
 
 ```bash
-sanctum_node_ts_ip hub  # 100.0.0.20
+sanctum_node_ts_ip manoir  # 100.0.0.20
+sanctum_node_ts_ip chalet  # 100.0.0.21
 ```
 
 ---
@@ -312,7 +331,7 @@ sanctum_node_ts_name <node_id>
 ```
 
 ```bash
-sanctum_node_ts_name hub  # hub-mac-mini
+sanctum_node_ts_name manoir  # manoir
 ```
 
 ---
@@ -326,75 +345,79 @@ sanctum_node_user <node_id>
 ```
 
 ```bash
-sanctum_node_user hub  # operator
+sanctum_node_user manoir  # neo
 ```
 
 ---
 
 ### sanctum_node_online
 
-Check if a node is reachable (via Tailscale ping or LAN ping).
+Read the **cached** reachability flag for a node (`nodes.<id>.online`, defaulting to `false`). It does not ping anything — it reports the last value written by whatever heartbeat keeps the field fresh.
 
 ```bash
 sanctum_node_online <node_id>
 ```
 
-**Returns:** Exit code 0 if the node responds, non-zero otherwise.
+**Returns:** Exit code 0 if the cached `online` flag is `true`, non-zero otherwise.
 
 ```bash
-if sanctum_node_online satellite; then
+if sanctum_node_online chalet; then
   echo "Chalet is reachable"
 fi
 ```
 
 <Aside type="note">
-This does a real network ping, so it takes a second or two. Don't put it in a tight loop unless you enjoy watching your script crawl.
+It's instant — but only as fresh as the heartbeat that last set the flag. For *live* reachability, ping `sanctum_node_ts_ip <id>` yourself. Trusting a cached flag for an up-to-the-second call is how you SSH confidently into a node that went down ten minutes ago.
 </Aside>
 
 ---
 
 ### sanctum_node_ssh
 
-SSH to a node over the LAN.
+Resolve the LAN SSH target (`ssh_user@host`) for a node. It prints the target — it does not run `ssh`, so wrap it in an actual `ssh` call.
 
 ```bash
-sanctum_node_ssh <node_id> [command...]
+sanctum_node_ssh <node_id>
 ```
 
 ```bash
+sanctum_node_ssh manoir  # neo@192.0.2.10
+
 # Interactive shell
-sanctum_node_ssh satellite
+ssh $(sanctum_node_ssh manoir)
 
 # Run a remote command
-sanctum_node_ssh satellite 'uptime'
+ssh $(sanctum_node_ssh manoir) 'uptime'
 ```
 
 ---
 
 ### sanctum_node_ssh_ts
 
-SSH to a node over Tailscale (for remote/off-LAN access).
+Resolve the Tailscale SSH target (`ssh_user@tailscale_ip`) for a node — for off-LAN access, or for a node like the cottage that has no LAN `host` at all.
 
 ```bash
-sanctum_node_ssh_ts <node_id> [command...]
+sanctum_node_ssh_ts <node_id>
 ```
 
 ```bash
-sanctum_node_ssh_ts satellite 'df -h'
+sanctum_node_ssh_ts chalet  # neo@100.0.0.21
+ssh $(sanctum_node_ssh_ts chalet) 'df -h'
 ```
 
 ---
 
 ### sanctum_node_vm_ssh
 
-SSH to the VM on a specific node (if that node has a VM).
+Resolve the SSH target for the VM running on a specific node (`nodes.<id>.vm.ssh_user@nodes.<id>.vm.host`), if that node has a VM.
 
 ```bash
-sanctum_node_vm_ssh <node_id> [command...]
+sanctum_node_vm_ssh <node_id>
 ```
 
 ```bash
-sanctum_node_vm_ssh hub 'systemctl --user status openclaw-gateway'
+sanctum_node_vm_ssh manoir  # ubuntu@10.0.0.10
+ssh $(sanctum_node_vm_ssh manoir) 'systemctl --user status openclaw-gateway'
 ```
 
 ---
@@ -410,10 +433,12 @@ sanctum_node_enabled <node_id> <service_name>
 **Returns:** Exit code 0 if the service is enabled on that node.
 
 ```bash
-if sanctum_node_enabled satellite home_assistant; then
+if sanctum_node_enabled chalet home_assistant; then
   echo "Chalet runs HA"
 fi
 ```
+
+As with `sanctum_enabled`, the service name is bare — the function builds the `nodes.<id>.services.<name>.enabled` path for you.
 
 ---
 
@@ -426,53 +451,64 @@ sanctum_node_service <node_id> <service_name> <key>
 ```
 
 ```bash
-sanctum_node_service hub gateway port  # 1977
+sanctum_node_service chalet local_model port      # 1234
+sanctum_node_service chalet heartbeat interval     # 300
 ```
 
 ---
 
 ### sanctum_node_hub
 
-Return the node ID of the hub node.
+Return the node ID of the hub that a given **satellite** syncs with (`nodes.<id>.sync.hub`). It takes a node argument — there's no no-arg form that magically finds "the hub."
 
 ```bash
-sanctum_node_hub
+sanctum_node_hub <node_id>
 ```
 
 ```bash
-hub=$(sanctum_node_hub)
-echo "$hub"  # hub
+hub=$(sanctum_node_hub chalet)
+echo "$hub"  # manoir
 ```
 
 ---
 
 ## Notification Functions
 
-Source `~/.sanctum/lib/notify.sh` for notification support. Because when your haus has something to say, it should be able to say it.
+Source `~/.sanctum/lib/notify.sh` for notification support. When your haus has something to say, it should be able to say it.
 
 ### sanctum_notify
 
-Send a notification through configured channels (macOS Notification Center, agent message, etc.).
+Send a notification, routed by **severity** through a tiered set of channels (macOS Notification Center, the dashboard banner, Signal, the chitti samskara journal).
 
 ```bash
-sanctum_notify <title> <message> [priority]
+sanctum_notify <title> <message> [severity]
 ```
 
 | Parameter | Description |
 |-----------|-------------|
 | `title` | Notification title |
 | `message` | Notification body |
-| `priority` | Optional: `low`, `normal` (default), `high` |
+| `severity` | Optional: `ambient`, `info` (default), `warn`, `error`, `critical` |
+
+Severity is not cosmetic — it decides *which channels fire*. Anything outside the five known values is silently normalized to `info`, so a typo like `high` lands in the quietest tier, not the loudest.
+
+| Severity | Channels |
+|----------|----------|
+| `ambient` | chitti samskara journal only — never pages |
+| `info` | macOS Notification Center |
+| `warn` | macOS + dashboard banner |
+| `error` | macOS + dashboard + Signal |
+| `critical` | macOS + dashboard + Signal (with the `Sosumi` alert sound) |
 
 ```bash
 source ~/.sanctum/lib/notify.sh
 
-sanctum_notify "Backup Complete" "All files backed up successfully"
-sanctum_notify "Disk Warning" "Boot volume is 90% full" high
+sanctum_notify "Backup Complete" "All files backed up successfully"          # info
+sanctum_notify "Disk Warning" "Boot volume is 90% full" critical            # pages via Signal
 ```
 
-<Aside type="caution">
-Use `high` priority sparingly. It's for things that actually need attention right now — disk full, service down, security event. Not for "backup completed successfully." Nobody needs to be woken up because a backup worked. That's what backups are supposed to do.
+<Aside type="caution" title="Quiet hours change the math">
+From 08:01 to 22:00 local, only `error` and `critical` break through — `info` and `warn` are logged and queued for the morning briefing instead of dinging. The "90% full" example pages precisely because it's `critical`; as `info` it would sit in the queue until 8am. Reserve `critical` for what can't wait — disk full, service down, security event. Nobody needs Signal to buzz because a backup worked. That's what backups are supposed to do.
 </Aside>
 
 ---
@@ -488,19 +524,19 @@ echo "Instance: $(sanctum_name) [$(sanctum_slug)]"
 echo "Node: $(sanctum_whoami) ($(sanctum_my_type))"
 echo "VM: $(sanctum_vm_user)@$(sanctum_vm_ip)"
 
-if sanctum_enabled services.gateway.enabled; then
-  port=$(sanctum_get services.gateway.port)
-  echo "Gateway running on port $port"
+if sanctum_enabled voice_agent; then
+  port=$(sanctum_get services.voice_agent.port)
+  echo "Voice agent running on port $port"
 fi
 
-hub=$(sanctum_node_hub)
-echo "Hub node: $hub ($(sanctum_node_host $hub))"
+hub=$(sanctum_node_hub chalet)
+echo "Chalet syncs with: $hub ($(sanctum_node_host $hub))"
 
-if sanctum_node_online satellite; then
+if sanctum_node_online chalet; then
   sanctum_notify "Chalet Status" "Chalet node is online"
 else
-  sanctum_notify "Chalet Status" "Chalet node is offline" high
+  sanctum_notify "Chalet Status" "Chalet node is offline" error
 fi
 ```
 
-Twenty lines. Queries the config, checks the network, sends a notification. This is what the shell library is for — turning what would be 200 lines of raw `jq` and `ssh` and `osascript` into something a human can read before coffee.
+Twenty lines. Queries the config, checks the network, sends a notification. This is what the shell library is for — turning what would be 200 lines of raw `python3` and `ssh` and `osascript` into something a human can read before coffee.

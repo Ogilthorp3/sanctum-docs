@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Council Router — Yoda chairing a holographic routing chamber with teal and amber pathways branching to every agent in the haus.](./images/hero-council-router.png)
 
-For the first year of the Sanctum Council, agents talked to each other by running SSH one-liners from memory. Windu would discover something at 2 AM, spawn a subshell to `ssh neo@10.10.10.1`, hope the right PATH was in scope, and fire a message into the void. Half the time it reached the right agent. The other half it reached `nothing`, `your login shell`, or `an unrelated cron job that was now very confused`.
+For the first year of the Sanctum Council, agents talked to each other by running SSH one-liners from memory. Windu would discover something at 2 AM, spawn a subshell to `ssh neo@10.0.0.1`, hope the right PATH was in scope, and fire a message into the void. Half the time it reached the right agent. The other half it reached `nothing`, `your login shell`, or `an unrelated cron job that was now very confused`.
 
 Council Router is the fix. One routing table. One message format. Every node, every agent, every direction — routed, escalated, or logged on purpose.
 
@@ -17,12 +17,12 @@ The council lives across four nodes, each hosting a subset of agents. Routing is
 
 | Node | Host | SSH User | Agents | Role |
 |------|------|----------|--------|------|
-| `hub` (MM64) | `10.10.10.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
-| `vm` (Manoir VM) | `10.10.10.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
+| `hub` (MM64) | `10.0.0.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
+| `vm` (Manoir VM) | `10.0.0.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
 | `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — remote presence, eventually home automation |
-| `mobile` (MBP128) | `10.0.5.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
+| `mobile` (MBP128) | `192.0.2.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
 
-Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invoked as `--agent main` on the VM, Windu as `--agent windu`, and so on. The router knows all of this, so you don't have to.
+Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invoked as `agent --agent main` on the VM, Windu as `--agent windu`, and so on. The router knows all of this, so you don't have to.
 
 ## Agents & Domains
 
@@ -47,10 +47,10 @@ send.sh <from> <to> <type> <priority> <message>
   ├─ Look up local node (Darwin → hub, Linux → vm)
   │
   ├─ Local node == target node?
-  │    └─ invoke <cli> --agent <flag> --message <structured>
+  │    └─ invoke <cli> agent --agent <flag> --message <structured>
   │
   ├─ Direct route exists (hub ↔ vm)?
-  │    └─ ssh <user>@<host> '<cli> --agent <flag> --message <structured>'
+  │    └─ ssh <user>@<host> '<cli> agent --agent <flag> --message <structured>'
   │
   └─ Indirect route (satellite ↔ vm, mobile ↔ vm)?
        └─ relay through hub (see relay_rules)
@@ -80,7 +80,7 @@ The receiving agent parses the header first, the body second. This means Yoda ca
 ```bash
 # Windu tells Yoda about a suspicious login
 ./scripts/send.sh windu yoda alert high \
-  "Unusual SSH login from 203.0.113.42 targeting neo@10.10.10.1"
+  "Unusual SSH login from 203.0.113.42 targeting neo@10.0.0.1"
 
 # Yoda delegates a ticket to Qui-Gon
 ./scripts/send.sh yoda quigon task normal \
@@ -109,7 +109,7 @@ Broadcast skips the sender if the sender is on the target node. It also keeps a 
   "Current Mac host is out of disk. VM has 200G free but no GPU passthrough."
 ```
 
-Sessions write to `~/.openclaw/workspace/council/sessions/<topic>-<date>.md`. Each participant reads every prior contribution, adds theirs, and Yoda synthesises the final recommendation. The transcript survives reboots. The agents do not.
+Sessions write to `~/.openclaw/workspace/council/sessions/session-<YYYYMMDD-HHMMSS>.md` — the topic lives in the file's header, not its name, so two debates about the same question never clobber each other. Each participant reads every prior contribution, adds theirs, and Yoda synthesises the final recommendation. The transcript survives reboots. The agents do not.
 
 ### health-check.sh — is anyone home?
 
@@ -118,7 +118,7 @@ Sessions write to `~/.openclaw/workspace/council/sessions/<topic>-<date>.md`. Ea
 ./scripts/health-check.sh --json   # machine output
 ```
 
-Returns per-node `OK/UNREACHABLE` and per-agent `RESPONDING/SILENT`. It's the first thing any other script runs before trusting a route.
+Returns per-node `SSH: OK/UNREACHABLE` plus `CLI: OK/MISSING`, and per-agent `AVAILABLE/UNAVAILABLE`. It's a reachability check, not a séance: `AVAILABLE` means the node answers SSH and the CLI binary is on disk, not that the agent answered. It's the first thing any other script runs before trusting a route.
 
 ## Escalation Protocol
 
@@ -146,7 +146,7 @@ Not every council call is worth an Opus invocation.
 |------|-------|-----------------|
 | Free / local ops | Codestral-22B-v0.1-4bit on `sanctum-mlx-codestral` `:3301` (native MLX seat) | Qui-Gon, Ahsoka, coding sub-tasks |
 | Free / local secure | Qwen3.6-35B-A3B-4bit on sanctum-mlx `:1337` | Cilghal, Mundi (private data stays local) |
-| Cloud | Opus 4.7 via sanctum-cloud-proxy `:4040` | Windu, Mothma, Jocasta, Yoda digest |
+| Cloud | Opus 4.7 via sanctum-cloud-proxy `:4040` | Windu, Jocasta, Yoda digest |
 | Smart-routed | `council-brain` on `:4040` | Yoda — Opus by default, local council-mlx for general chat, `council-max-thinking` for deep reasoning |
 
 The router doesn't pick the tier; the receiving agent does. But because the router carries the `from/to/type/priority` header, the agent's model-selection logic has everything it needs to refuse Opus for a level-0 `briefing`. The target is ~10-15 Opus calls per day across the whole council. Most days it holds.
@@ -171,7 +171,7 @@ Model Scout finds a candidate model, writes a report to Memory Vault, and hands 
 
 ## Daily Test Suite
 
-Twenty-one tests across three suites (Windu security, Qui-Gon infra, cross-node) run at 07:00 CET on both the Mac and VM. Results are reported back to Yoda via `send.sh`, closing the loop on the thing that routes them.
+Forty-odd tests across six suites — Windu security, Qui-Gon infra, cross-node, system-health, HA-integration, and Qui-Gon resilience — run at 05:00 America/Montreal off a crontab entry (`--suite all --quiet`). The VM mirror runs the same suite. Results are reported back to Yoda via `send.sh`, closing the loop on the thing that routes them.
 
 ```bash
 # Run everything with self-healing remediation
@@ -197,7 +197,7 @@ Test fails
              task to Windu or Qui-Gon via send.sh for LLM investigation
 ```
 
-Eight of the twenty-one tests have deterministic auto-fixes today: expected services, gateway health, OrbStack container health, MLX runtime loads (`sanctum-mlx`, `sanctum-mlx-codestral`), log-file size, remote gateway health, skill sync freshness, and Tailscale status. The remaining thirteen — SSH hardening, auth log anomalies, listening-port audits, and similar — skip straight to agent escalation, because there is no correct script-only answer for "there is a new SSH key in `authorized_keys`."
+Remediation is opt-in (`--remediate`); the scheduled 05:00 run reports without auto-fixing. When you do pass the flag, nine tests have deterministic auto-fixes today: expected services, OrbStack container health, LM Studio models, log-file size, Signal-proxy health, skill-sync freshness, Tailscale status, Signal delivery, and the Council MLX server. The security-class tests — SSH hardening, auth-log anomalies, listening-port audits, and their kin — skip straight to agent escalation, because there is no correct script-only answer for "there is a new SSH key in `authorized_keys`."
 
 Escalated investigations run on the native MLX seat `sanctum-mlx` (Qwen3.6-35B-A3B-4bit on `:1337`) locally, so the remediation layer itself has no marginal API cost.
 
@@ -216,9 +216,9 @@ If they break, they'll be rewritten.
 | Escalation config | `config/escalation.json` |
 | Routes config | `config/routes.json` |
 | Scripts | `scripts/send.sh`, `broadcast.sh`, `council-session.sh`, `health-check.sh`, `sentry-check.sh` |
-| Tests | `tests/run-suite.sh` (21 tests across windu/quigon/cross-node) |
+| Tests | `tests/run-suite.sh` (~48 tests across six suites: windu / quigon / cross-node / system-health / ha / resilience) |
 | Session workspace | `~/.openclaw/workspace/council/sessions/` |
-| CLI (Mac) | `/opt/homebrew/bin/openclaw` |
+| CLI (Mac) | `~/Library/pnpm/openclaw` |
 | CLI (VM) | `/home/ubuntu/.npm-global/bin/openclaw` |
 | CLI (Satellite) | `openclaw` on `$PATH` |
 

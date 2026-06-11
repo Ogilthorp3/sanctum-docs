@@ -1,6 +1,6 @@
 ---
 title: TurboQuant KV Compression
-description: How sanctum-mlx compresses the KV cache 4–5× on Apple Silicon — and the scientific protocol we use to tune the knobs without lying to ourselves.
+description: How sanctum-mlx shrinks the KV cache on Apple Silicon (values ~2×, keys left alone) — and the scientific protocol we used to tune the knobs without lying to ourselves.
 ---
 
 import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -8,10 +8,10 @@ import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/compone
 ![TurboQuant KV compression — a cathedral memory vault where token-cards collapse into hexagonal cells, each labeled with a fractional inscription, Apple-Silicon silhouettes embossed on the back wall.](./images/hero-turboquant-kv.png)
 
 <Aside type="tip" title="2026-04-24 — production architecture is now Slice 4a-final">
-  The shipping `CompressedKVCache` does **not** compress keys. After measuring, the Lloyd-Max + FWHT + QJL key path turned out to be both the throughput tax (CPU round-trip every step) and a negligible memory win at our context lengths (~80 MB across 40 attention layers at T=2048). Keys now live as a plain on-device Array; values stay 4-bit group-affine compressed; a custom Metal kernel (`sdpa_dequant_v`) fuses dequant + attention so V never materializes as a full tensor. Throughput recovered to within ~5% of the no-TurboQuant baseline. The Slice 1 algorithm and protocol below remain accurate as the *measurement-discipline scaffolding* that got us here, but the production storage model has changed. See [Slice 4 Scoping](/architecture/turboquant-slice-4-scoping/) for the pivot.
+  The shipping `CompressedKVCache` does **not** compress keys. After measuring, the Lloyd-Max + FWHT + QJL key path turned out to be both the throughput tax (CPU round-trip every step) and a negligible memory win at our context lengths (~4 MB per attention layer at T=2048) — nothing on a 64 GB Mini. Keys now live as a plain on-device Array; values stay 4-bit group-affine compressed; a custom Metal kernel (`sdpa_dequant_v`) fuses dequant + attention so V never materializes as a full tensor. The live blended ratio the server logs is **~1.3×** — values shrink ~2×, keys ride at full bf16 width, and the average lands between. The Slice 1 algorithm and protocol below remain accurate as the *measurement-discipline scaffolding* that got us here, but the production storage model has changed. See [Slice 4 Scoping](/architecture/turboquant-slice-4-scoping/) for the pivot.
 </Aside>
 
-The KV cache is where long conversations go to eat memory. Every token a language model generates leaves behind a pair of tensors — the keys and values from every attention head in every layer. For a 27B model at 256-dim heads, that's hundreds of megabytes per thousand tokens. On a Mac Mini that also runs `sanctum-mlx-coder`, Home Assistant, Sanctum TTS, and a dozen other services, the KV cache is the thing that decides whether you get to have a conversation at all.
+The KV cache is where long conversations go to eat memory. Every token a language model generates leaves behind a pair of tensors — the keys and values from every attention head in every layer. The production model, Qwen3.6-35B-A3B-4bit, is mercifully hybrid: only 10 of its 40 layers run full attention (the other 30 are linear-attention and hold no standard KV cache), but each of those 10 still hoards keys and values at 256-dim heads. On a Mac Mini that also runs `sanctum-mlx-codestral`, Home Assistant, Sanctum TTS, and a dozen other services, the KV cache is the thing that decides whether you get to have a conversation at all.
 
 **TurboQuant** is how we make it smaller. The idea is not ours — it comes from [Google's ICLR 2026 paper (arXiv 2504.19874)](https://arxiv.org/abs/2504.19874), layered on top of [KVQuant](https://arxiv.org/abs/2401.18079) and [QJL](https://arxiv.org/abs/2310.19536). Our job is to implement it cleanly inside `sanctum-mlx`, wire it into Apple's MLX runtime, and — most importantly — prove the quality doesn't collapse when we turn the bits down.
 
@@ -34,10 +34,12 @@ incoming K,V tensor  [1, H_kv, L, D]
              ever materializes
 ```
 
-Both halves live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand off to a `CompressedKVCache` that implements `mlx_lm::cache::KeyValueCache` — a drop-in for stock `ConcatKeyValueCache`. Routed via the new `KeyValueCache::fused_attention` trait method.
+Both halves live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand off to a `CompressedKVCache` that implements `mlx_lm::cache::KeyValueCache` — a drop-in for stock `ConcatKeyValueCache`. Routed via the `KeyValueCache::fused_attention` trait method.
+
+This is not a flag waiting in the wings: the production `com.sanctum.mlx` LaunchAgent passes `--turboquant` against Qwen3.6-35B-A3B-4bit, and the server log emits a `turboquant ... ratio=1.32x` line for each of the 10 full-attention layers (3, 7, 11, … 39) on every request. The `--turboquant` flag and the Slice-1 history below describe how it earned that default seat.
 
 <Aside type="note" title="Why keys stopped being compressed">
-  The paper's full recipe (Hadamard rotate → Lloyd-Max → QJL) shipped in Slice 1 and was deleted in commit `37853d8` (2026-04-25). Two findings: at our context lengths the key compression saved ~80 MB across 40 attention layers — nothing on a 64 GB Mini — and the CPU dequant round-trip every decode step was the dominant throughput tax. Plain bf16 keys on device + group-affine V + the fused kernel land us within ~5% of the no-TurboQuant baseline while keeping the V memory savings. Receipts and earlier-attempt lessons live in `project_turboquant.md` in agent memory.
+  The paper's full recipe (Hadamard rotate → Lloyd-Max → QJL) shipped in Slice 1 and was deleted in commit `37853d8` (2026-04-25). Two findings: at our context lengths the key compression saved only ~4 MB per attention layer — nothing on a 64 GB Mini — and the CPU dequant round-trip every decode step was the dominant throughput tax. Plain bf16 keys on device + group-affine V + the fused kernel keep the V memory savings without that tax. The whole `TurboQuantizer` + `codebook.rs` + `rotation.rs` machinery went with it; `key_bits` and `use_qjl` survive only as vestigial config fields. Receipts and earlier-attempt lessons live in `project_turboquant.md` in agent memory.
 </Aside>
 
 ## The paper's recipe — historical context
@@ -96,7 +98,7 @@ About 20 runs total. Each run takes ~10 seconds on an M4 Max once the model is c
 
 ### 3. Reproducibility
 
-Every run appends one line to [`services/sanctum-mlx/bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/turboquant_sweep.jsonl):
+Every run appends one line to [`services/sanctum-mlx/bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/turboquant_sweep.jsonl):
 
 ```json
 {
@@ -124,9 +126,13 @@ The **text SHA** is the comparability key — different text means different row
 
 ### 4. One knob at a time
 
-Never change two variables between runs. The harness supports this through environment variables — the test binary reads `SANCTUM_TQ_KEY_BITS`, `SANCTUM_TQ_VALUE_BITS`, `SANCTUM_TQ_GROUP_SIZE`, `SANCTUM_TQ_USE_QJL`, `SANCTUM_TQ_HEAD_DIM` and installs them into a `OnceLock` before the model is loaded. No recompile between runs.
+Never change two variables between runs. The sweep harness supports this through environment variables — the test binary reads `SANCTUM_TQ_KEY_BITS`, `SANCTUM_TQ_VALUE_BITS`, `SANCTUM_TQ_GROUP_SIZE`, `SANCTUM_TQ_USE_QJL`, `SANCTUM_TQ_HEAD_DIM` and installs them into a `OnceLock` before the model is loaded. No recompile between runs.
 
-The shell driver [`bench/tune.sh`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/tune.sh) orchestrates the staircase. Individual stages (`ablation`, `key`, `value`, `group`, `qjl`) can be run in isolation.
+The shell driver [`bench/tune.sh`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/tune.sh) orchestrates the staircase. Individual stages (`ablation`, `key`, `value`, `group`, `qjl`) can be run in isolation.
+
+<Aside type="caution" title="This harness lives on a branch">
+  The full `SANCTUM_TQ_*` knob harness, `tune.sh`, the `bench/` tree, and the `BypassMode` short-circuits below are all on the `feat/turboquant-kv-slice-1` branch — they were the measurement scaffold. After the Slice 4a-final pivot deleted the CPU key path, `main` kept only the trimmed `turboquant_ppl` regression test, which reads just `SANCTUM_MLX_TEST_MODEL` (and optionally `SANCTUM_MLX_TEST_TEXT_FILE`). The sweep commands here reproduce the original tuning; check out that branch to run them.
+</Aside>
 
 ### 5. Early stop
 
@@ -200,16 +206,16 @@ Metal memory ceilings (orthogonal to TurboQuant, but relevant to the *why*):
 
 ## What "pass" means — and doesn't
 
-The default gate is `abs_delta ≤ 0.3 AND rel_delta ≤ 5%` on a short eval. That's permissive compared to the TurboQuant paper's reported < 0.1 Δppl, and intentionally so — our implementation omits some of the paper's refinements (learned rotations, full TurboQuant value pipeline) in favor of shipping Slice 1.
+The gate is `abs_delta ≤ 0.3 AND rel_delta ≤ 5%` on a short eval. That's permissive compared to the TurboQuant paper's reported < 0.1 Δppl, and intentionally so — our implementation omits some of the paper's refinements (learned rotations, full TurboQuant value pipeline) in favor of shipping Slice 1.
 
-A config that passes here is **good enough to ship under `--turboquant` behind a flag**. It is *not* yet good enough to be the default. Default-flip requires:
+A config that merely passes that short-eval gate was, in Slice 1, only good enough to ship behind a flag — not yet good enough to enable by default. Promotion to default required clearing a higher bar:
 
 - Clean ablation pass across all stages
-- Wider eval (wikitext-2 chunk, ≥1024 tokens)
+- Wider eval (≥1024 tokens of real prose, not the calibration string)
 - Sample-quality check: generate 200 tokens continuation from the same prefix with both caches, compare
 - No regression across multiple prompt families (code, prose, reasoning)
 
-Until then, turboquant is **opt-in**. Operators who want the memory savings know they're in an experiment.
+The Bold config cleared that bar in Slice 1b (below), which is why `--turboquant` now ships in the production plist. The section that follows walks the evidence that earned it.
 
 ## References
 
@@ -233,7 +239,7 @@ Catastrophic. The instinct would have been to turn knobs — "try 4-bit, try 5-b
 
 The ablation revealed that **all four bit configurations gave the same +20 PPL collapse** — 3-bit+QJL and 8-bit/8-bit with QJL off both +20. That's physically impossible if the quant math were the issue. The bug had to be upstream.
 
-We added `BypassMode::{IdentityPassthrough, BridgeOnly}` — short-circuits that skip the quantization pipeline. Result:
+We added `BypassMode::{IdentityPassthrough, BridgeOnly}` — short-circuits that skip the quantization pipeline (Slice-1 branch only; the Slice 4a-final pivot deleted the CPU bridge they probed). Result:
 
 | Run | Mode | Δppl |
 |---|---|---|
@@ -314,22 +320,13 @@ Both decisively inside the 0.3 abs / 5% rel budgets. The wider sample firmed up 
 
 ### Verdict — Bold is the consecrated default
 
-`TurboQuantConfig::default()` stays `key_bits=3, value_bits=4, use_qjl=true` — the original scaffold had the right intent. What we earned through the protocol is **evidence** that it was right, not just a hunch.
+`TurboQuantConfig::default()` on `main` is still `key_bits=3, value_bits=4, use_qjl=true` — the original scaffold had the right intent, and the protocol gave us **evidence** it was right rather than a hunch. After the Slice 4a-final pivot only `value_bits` and `value_group_size` actually steer storage; `key_bits` and `use_qjl` are now vestigial fields (the key-compression path was deleted in `37853d8`).
 
-**Safe remains the documented fallback** for operators who want a tighter quality gate or are running on a model we haven't validated. Two env vars flip to Safe:
+### `--turboquant` is on by default in production
 
-```bash
-SANCTUM_TQ_KEY_BITS=4 SANCTUM_TQ_VALUE_BITS=4 SANCTUM_TQ_USE_QJL=false \
-  sanctum-mlx --turboquant
-```
+Slice 4 landed: the Metal-fused dequant kernel `sdpa_dequant_v` is the production attention path, and the old O(T²) CPU round-trip that justified the opt-in caution is gone with the key pipeline. So the flag did flip — `com.sanctum.mlx` runs Qwen3.6-35B-A3B-4bit with `--turboquant`, and the live ~1.32× blended ratio is the steady state, not an experiment.
 
-### `--turboquant` stays opt-in
-
-Even with a validated default config, the flag stays opt-in until:
-- Slice 4 (Metal-fused dequant) lands — current CPU-side path has O(T²) cost that surprises operators
-- Model coverage widens — Qwen3.5-27B is one data point; Qwen3.6-35B, Qwen2.5-Coder, Gemma4-31B each deserve their own protocol run before auto-on
-
-Evidence dictates defaults. Evidence is narrower than ambition. Keep the knob.
+What stays narrow is **model coverage**: the 35B and the original Qwen3.5-27B are the validated datapoints. Qwen2.5-Coder, Gemma4-31B, and anything else still deserve their own protocol run before we'd trust the same default — see Slice 1c below for the cross-architecture wall we hit trying. Evidence dictates defaults; evidence is narrower than ambition; keep the knob.
 
 ## Slice 1c — cross-architecture de-risk (ecosystem wall + a finding)
 
@@ -369,7 +366,7 @@ A PPL of 339,210 on a ~152k-vocab model is **worse than uniform random**. That's
 - **Slice G** — Gemma-4 Rust loader. Gated on upstream Python landing `gemma4` support AND Slice 1d passing. Not before.
 - **Slice Q2** — Qwen2 Rust loader. Unlocks Qwen2.5-Coder in sanctum-mlx production. Adjacent practice for Slice G.
 
-Details in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/ANALYSIS.md) and the raw JSON at [`bench/qwen25coder_kvq_validation.json`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/qwen25coder_kvq_validation.json).
+Details in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/ANALYSIS.md) and the raw JSON at [`bench/qwen25coder_kvq_validation.json`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/qwen25coder_kvq_validation.json).
 
 ## The knowledge we now carry forward
 
@@ -378,7 +375,7 @@ Two things are load-bearing going into Slice 2+:
 1. **Any MLX Array read via `as_slice` after a transpose must flatten first.** Documented in `cache.rs`; future cache backends must follow suit or justify skipping.
 2. **The value pathway is the quality floor, not the key pathway.** Any compression improvement plan should prioritize better value quantization (rotation? learned group scales?) over squeezing key bits further.
 
-Full run log: [`bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/turboquant_sweep.jsonl). Decisions recorded in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/bench/ANALYSIS.md).
+Full run log: [`bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/turboquant_sweep.jsonl). Decisions recorded in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/ANALYSIS.md).
 
 ## Cross-references
 

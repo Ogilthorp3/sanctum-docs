@@ -1,165 +1,145 @@
 ---
 title: sanctum CLI Reference
-description: The Family Pass operator surface. Twelve user-facing subcommands and a handful of operator-grade helpers. They are all you should need.
+description: The Sanctum operator surface. One Python binary — router, wizard, doctor — that drives every host in the haus.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 
-![Sanctum CLI — a vintage Swiss Army knife laid open, exactly nine distinct hand-tools fanned out from a single pivot, a teal beam catching the hinge at the center. Nine subcommands. They are all you should need.](./images/hero-sanctum-cli.png)
+![Sanctum CLI — a vintage Swiss Army knife laid open, distinct hand-tools fanned out from a single pivot, a teal beam catching the hinge at the center. One binary, every host.](./images/hero-sanctum-cli.png)
 
-`sanctum` is the Family Pass operator surface. It's a Python application distributed through the Homebrew tap `Ogilthorp3/sanctum`; after `brew install ogilthorp3/sanctum/sanctum-cli` the binary lives at `/opt/homebrew/bin/sanctum` (a symlink into a private virtualenv under Homebrew's `libexec`). The 12 user-facing subcommands cover onboarding, health, regression, observability, upgrades, removal, key custody, and the agent surface; a handful of operator-grade helpers (`bridge`, `cloud`, `code`, `config`, `keychain`, `proxy`, `vision`) live alongside for power users.
+`sanctum` is the operator surface for every Sanctum host — router, wizard, doctor in one Python binary (Typer + Rich). On this host it's a dev install at `~/.local/bin/sanctum`; the intended public path is the Homebrew tap `ogilthorp3/sanctum`, but that tap is private, so `brew install` refuses it as untrusted until you `brew tap` it first. The everyday commands are below; a dozen deeper helpers sit one level down. `sanctum --help` is the canonical roster, and it moves faster than this page.
 
 ```bash
-sanctum <subcommand> [args]
+sanctum <command> [args]
 ```
 
-Every command short-circuits cleanly when `~/.sanctum/instance.yaml` is missing or invalid. The errors are deliberately blunt — Family Pass is for technical-friend haushelds, and we trust you with the FATAL line rather than wrapping it in apology.
+Most commands read `~/.sanctum/instance.yaml` and fail blunt when it's missing or invalid. The errors are deliberately curt — Sanctum is for technical-friend haushelds, and we trust you with the real line.
 
 <Aside type="note">
-There is no global `--verbose`. The subcommands are tight enough that adding one would mostly produce stack traces. If you need more than `sanctum doctor` and `sanctum logs <service>` tell you, the source is in `~/Projects/sanctum-cli/sanctum_cli/commands/` (one Python file per command, average ~150 lines) and it is short enough to read end-to-end in one coffee.
+No global `--verbose` — for the few commands that need it the flag is `--traceback`. If you want more than `sanctum doctor` and `sanctum logs <service>` give you, the source is one short Python file per command under `sanctum_cli/commands/`.
 </Aside>
 
 ---
 
 ## sanctum doctor
 
-The first command you run, the first command you run when something is wrong, and the first command we will ask you to run when you reach out for help. It checks the host prerequisites and the subsystems that have to be up for anything else to work.
+The first command you run, the first when something's wrong, and the first we'll ask you to run when you reach out for help. It probes the three subsystems that must be healthy for the host to work.
 
 ```bash
 sanctum doctor
+sanctum doctor --full
+sanctum doctor --json
 ```
 
 ### What it checks
 
-| Check | Pass condition |
-|-------|----------------|
-| `macOS` | `>=14` (Sonoma or later) |
-| `Apple Silicon` | `uname -m == arm64` |
-| `RAM` | `>=16 GB` |
-| `brew` | Present on `$PATH` |
-| `limactl` | Present on `$PATH` |
-| `socket_vmnet` | Installed at `/opt/socket_vmnet/bin/socket_vmnet` |
-| `Lima '<instance>'` | Status `Running` (instance name from `services.lima.instance`, default `openclaw-staging`) |
-| `Firewalla @<host>` | `ping -c 1` reachable (host from `firewalla.host`, default `192.168.1.1`) |
+| Group | Probe |
+|-------|-------|
+| LaunchAgents | `launchctl list`, filtered to `com.sanctum.*`. Each row's status is derived from its PID and last exit code |
+| Providers | Reachability + latency for each configured model provider (`claude`, `gemini`, `mlx_local`) |
+| Backup repos | `restic snapshots` against each configured repo (local SSD + cloud) |
+
+It's **brevity-gated** — one `OK` line when green, the full tables only on a `DEGRADED`/`FAILED` row or `--full`. `--json` emits the whole report, for the menu-bar plugin and CI.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | All checks passed |
-| `1` | One or more checks failed |
-| `1` (FATAL message) | `~/.sanctum/sanctum.yaml` not found |
+| `0` | Nothing worse than `OPERATIONAL` |
+| `1` | At least one subsystem is `DEGRADED` or `FAILED` (or `instance.yaml` is missing) |
 
 <Aside type="tip">
-`sanctum doctor` is wired into the install flow as the post-flight verification. If you forget which command to run after an unexpected reboot, it is this one.
+A `DEGRADED` LaunchAgent row is usually a non-zero `last exit` on a job *meant* to exit non-zero on a quiet night — drift sentinels, parity smoke. The row names the label; `sanctum logs <service>` tells you whether to care.
 </Aside>
-
-### Mocked mode
-
-For CI runs and `bats` tests, set `SANCTUM_DOCTOR_MOCK=1`. The doctor will print synthetic pass lines for the host triplet (`macOS 14.5`, `arm64`, `16 GB`) and skip the live checks. This exists so tests on dev laptops with the wrong RAM count do not fail spuriously. Not for use in production.
 
 ---
 
 ## sanctum self-test
 
-The regression suite. After install, after `sanctum update`, after a Mac reboot, or whenever you suspect something has drifted, this is the command that tells you whether the eleven canonical probes still pass.
+The canonical health suite — tells you whether the install is still good after an update, a reboot, or a drift suspicion. Twelve probes, two tiers:
 
 ```bash
 sanctum self-test
+sanctum self-test --json
+sanctum self-test --only cathedral
 ```
 
-### The eleven probes
+### The twelve probes
 
-| # | Probe | Verifies |
-|---|-------|----------|
-| 1 | `01-network` | Mac↔VM bridge interface is up |
-| 2 | `02-firewalla-bridge-bearer-auth` | Bridge accepts the bearer token |
-| 3 | `03-firewalla-rule-roundtrip` | A rule can be created and deleted via the bridge |
-| 4 | `04-lima-vm-up` | The named Lima instance is `Running` |
-| 5 | `05-neo4j-responding` | OpenClaw's graph store accepts a query |
-| 6 | `06-devices-yaml-parses` | `~/.sanctum/devices.yaml` is valid YAML and has the expected shape |
-| 7 | `07-schedule-fires` | The schedule cron actually wakes up and writes a heartbeat |
-| 8 | `08-pwa-serves` | The Screen Time PWA returns 200 on `/` |
-| 9 | `09-sops-roundtrip` | `sops` can encrypt and decrypt against the haushold age key |
-| 10 | `10-age-key-roundtrip` | `age` can encrypt and decrypt without `sops` in the path |
-| 11 | `11-firewalla-baseline-survives-bridge-down` | Killing the bridge does not drop the Firewalla baseline rules |
+| # | Probe | Verifies | Tier |
+|---|-------|----------|------|
+| 1 | network reachability | loopback + DNS resolve | CLI |
+| 2 | node binary identity | `/usr/local/bin/node` is the signed Node.js Foundation binary | CLI |
+| 3 | sanctum config valid | `~/.sanctum/instance.yaml` parses and validates | CLI |
+| 4 | recent backup snapshot | a restic snapshot exists and is recent (n/a on a fresh install) | CLI |
+| 5 | Yoda cathedral (`:1337`) | TLS port reachable | haus |
+| 6 | Coder cathedral (`:1338`) | TLS port reachable | haus |
+| 7 | proxyd routing (`:4040`) | service alive (an HTTP 401 counts — it answered) | haus |
+| 8 | Force Flow (`:4077`) | listening | haus |
+| 9 | chitti samskara (`:2188`) | listening | haus |
+| 10 | TCC grants | the expected automation grants are present | haus |
+| 11 | R2D2 supervisor heartbeat | the auto-fix supervisor is beating, with a sane success rate | haus |
+| 12 | audit log within budget | the audit log is under its size cap | haus |
 
-### Pass threshold
+The four **CLI-tier** probes run everywhere. The eight **haus-tier** probes only mean something once the haus services are up; on a CLI-only box they return `n/a`, not `fail`, and `n/a` doesn't count.
 
-The suite passes when **at least 95% of probes succeed** — i.e. ten of eleven. The threshold is intentional: a single transient probe failure (the Firewalla under load, the Lima VM mid-respawn) should not make the suite red. Two failures should.
+### Pass rule
+
+No percentage threshold. The suite exits `0` iff **every applicable probe passes**; one real failure exits `1`. `n/a` probes are skipped either way.
 
 ```
-Summary: 11/11 probes passed
-Result: PASS (>=95% threshold)
+  [ 6/12] Coder cathedral (:1338)    ···· fail   no response on :1338
+
+  1 probe(s) failed.  11/12 applicable probes passed in 185 ms. Each red
+  line above has the actionable detail.
 ```
 
-If self-test fails, look at the line immediately above `Summary:` to find which probe came back red. Then run the corresponding `lib/*.sh` or look at `sanctum logs self-test` for the last full transcript.
-
-<Aside type="caution">
-The 95% threshold does not mask probe 11. If `11-firewalla-baseline-survives-bridge-down` fails, you are running with no fail-closed enforcement — that is a fix-now condition even if the other ten passed.
-</Aside>
-
-### Mocked mode
-
-| Env var | Behavior |
-|---------|----------|
-| `SANCTUM_SELF_TEST_MOCK=all_pass` | All probes return success without executing |
-| `SANCTUM_SELF_TEST_MOCK=one_fail` | Probe 5 (`neo4j-responding`) returns failure; others succeed |
-| `SANCTUM_SELF_TEST_MOCK=1` | Randomized pass/fail (regression test the threshold itself) |
-
-### When to run
-
-- After install (the installer runs it automatically).
-- After `sanctum update`.
-- After any macOS major version upgrade.
-- After a Lima reboot where you are not certain the VM came back clean.
-- Once a week as a hygiene pass, even if nothing seems wrong.
+`sanctum logs self-test` has the full transcript if a red line's own detail isn't enough. `--only <substr>` narrows to matching probe names; `--json` feeds the soak harness. Run it after install, a macOS major upgrade, or a reboot you're unsure of, and weekly as hygiene — `sanctum update` runs it as the gate.
 
 ---
 
 ## sanctum status
 
-The thirty-second health glance. Six lines, color-blind safe `[ok]` / `[FAIL]` markers, no narrative. If you only run one command in the morning, run this one.
+The thirty-second health glance — who am I, where's my disk, when did I last back up, how busy have I been. The host's own vital signs, no probes into other services. Run this if you run one command in the morning.
 
 ```bash
 sanctum status
+sanctum status --oneline
+sanctum status --json
 ```
 
-### What it checks
+### What it reports
 
-| Service | Probe |
-|---------|-------|
-| Lima VM | `limactl list openclaw-staging --format '{{.Status}}'` returns `Running` |
-| Firewalla bridge | `curl localhost:1984/health` with bearer token returns 200 |
-| Screen Time daemon | `launchctl list` shows `com.sanctum.screen-time` |
-| Force Flow | TCP probe to `127.0.0.1:4077` |
-| Backup plist | `launchctl list` shows `com.sanctum.backup` |
-| PWA | `curl localhost:5151/` returns 200 |
+| Field | Source |
+|-------|--------|
+| instance / host | `instance.yaml` (instance name, hostname) |
+| default provider | the router's current default (e.g. `claude`) |
+| disk | `df` on `/System/Volumes/Data`; `DEGRADED` at `>=85%` used, `FAILED` at `>=90%` |
+| backups | restic snapshot count + age per repo (local SSD + cloud), oldest age wins |
+| telemetry | 7-day rollup: requests and errors |
 
-### Mocked mode
+The default render is a set of Rich tables; `--oneline` collapses it to one line, what the menu-bar plugin and a morning glance want:
 
-`SANCTUM_STATUS_MOCK=1` returns synthetic `[ok]` for every line. Tests only.
+```
+sanctum @ manoir.local · backup 7h / ? · router→claude · disk 76% (operational) · telemetry 32r/8e/7d
+```
 
-`sanctum status` is faster than `sanctum doctor` and exists for the case where you just want to know whether your haus is healthy right now. `doctor` is what you reach for when `status` shows red. The two are deliberately not the same command.
+`status` answers "is this host okay right now?"; `doctor` is what you reach for when it shows red.
 
 ---
 
 ## sanctum update
 
-Pulls every Sanctum repo, restarts the LaunchAgents that need restarting, then re-runs `sanctum self-test`. Designed to be run by hand when there is a new release; not (yet) wired into a launchd timer.
+Upgrades the CLI via the Homebrew tap, then re-runs `sanctum self-test` as the gate. Run by hand on a new release; not (yet) wired into a launchd timer.
 
 ```bash
 sanctum update
 sanctum update --dry-run
-sanctum update --auto
+sanctum update --skip-self-test
 ```
 
-### What it does
-
-1. `brew update` (refreshes Homebrew's view of the world)
-2. `brew upgrade ogilthorp3/sanctum/sanctum-cli` (pulls the latest tagged release from the tap)
-3. `sanctum self-test` as the gate — refuses to call the upgrade "done" unless every probe still passes
+It runs `brew update`, then `brew upgrade ogilthorp3/sanctum/sanctum-cli`, then `sanctum self-test` as the gate — and refuses to call the upgrade "done" unless every probe still passes.
 
 ### Flags
 
@@ -168,185 +148,156 @@ sanctum update --auto
 | `--dry-run` | Print every action without executing |
 | `--skip-self-test` | Skip the gate. Operator-grade — use when you know what you're doing |
 
-If `brew upgrade` reports "already installed" the command exits cheerfully without running the gate (no upgrade happened, nothing to verify). If the self-test gate fails after a real upgrade, the command exits non-zero and prints the failing probes — you investigate, decide whether to `brew unpin && downgrade` or fix forward.
+`brew upgrade` exits `0` even when nothing changed, so an already-current install falls through harmlessly. If the gate fails after a real upgrade, the command exits non-zero and says so — investigate, then downgrade or fix forward.
 
 <Aside type="tip">
-If `sanctum self-test` fails immediately after `sanctum update`, the most common causes are: a probe that expects a new env var you have not set yet (check the release notes); a service that needs a manual restart after the upgrade (look at `launchctl print gui/$(id -u)/com.sanctum.<service>`); or a TCC grant that was orphaned by a related toolchain bump (see `architecture/tcc-identity-anchors`).
+A self-test failure right after an update usually means a service wants a manual restart, a probe expects a new env var (check the release notes), or a TCC grant was orphaned by a toolchain bump. The red line names which.
 </Aside>
 
 ---
 
 ## sanctum uninstall
 
-Removes the LaunchAgents, stops the Lima VM, and clears Firewalla baseline rules. Preserves your config and state by default. Pass `--purge` if you actually want everything gone.
+Removes every operational artifact — LaunchAgents, Keychain credentials, the brew tap reference — but never your data. Pass `--purge` if you actually want the data gone too.
 
 ```bash
 sanctum uninstall
 sanctum uninstall --purge
+sanctum uninstall --dry-run
 ```
 
 ### What it removes (always)
 
-- All Sanctum LaunchAgents (`com.sanctum.vm-autostart`, `com.sanctum.force-flow`, `com.sanctum.backup`, `com.sanctum.fileproviderd-watchdog`, `com.sanctum.screen-time`, `com.sanctum.firewalla-bridge-watchdog`, `com.sanctum.firewalla`)
-- The Lima `openclaw-staging` instance (stopped, not deleted)
-- Firewalla rules tagged `sanctum-baseline` (best-effort, fail-quiet)
+- Every `com.sanctum.*` LaunchAgent in `~/Library/LaunchAgents/` — `bootout` plus the plist renamed `.plist.uninstalled-YYYY-MM-DD` (orphan plists are worse than missing services). Discovered by glob, so it tracks the roster.
+- Every `sanctum/*` Keychain entry, revoked via `security delete-generic-password`.
+- The `ogilthorp3/sanctum` brew tap reference (a later `brew install` re-taps).
+- `SanctumBridge.app` + `SanctumLauncher.app`, renamed with the `.uninstalled-` suffix.
 
 ### What it preserves (without `--purge`)
 
-- `~/.sanctum/` (sanctum.yaml, devices.yaml, schedule.yaml, age key bundle, backup archives)
-- `~/.openclaw/` (agent configs, log history)
-- Keychain entries (Firewalla bridge token, Anthropic key)
+`~/.sanctum/logs/` (audit), `memory/` (agent memory + Memory Vault), `backups/` (local snapshots), `secrets/` (mode-600 files), and your cloud bucket — your R2/B2/gdrive target is untouched.
 
 ### What `--purge` adds
 
-- `rm -rf ~/.sanctum`
-- `rm -rf ~/.openclaw`
-
-`--purge` does **not** delete Keychain entries. Use `security delete-generic-password -s firewalla-bridge-token` etc. if you want those gone too. The asymmetry is intentional — files inside `~/.sanctum` are easy to back up before purging; Keychain entries are not, and we would rather you delete them deliberately than accidentally.
+The `~/.sanctum/` data dirs above, renamed to `~/.sanctum.purged-<timestamp>` rather than `rm -rf`'d — a fat-fingered purge gets a few seconds of grace. It never touches `/usr/local/bin/node`, the Apple Installer's domain.
 
 <Aside type="caution">
-`--purge` is irreversible. If you have not exported your age key (`sanctum keys backup`), any sops-encrypted secrets in your backups become unrecoverable the moment `~/.sanctum` goes away. There is no recovery email.
+Uninstall revokes your Keychain credentials. Run `sanctum keys backup` first, or you'll re-mint every key by hand on the next install.
 </Aside>
-
-### Mocked mode
-
-`SANCTUM_UNINSTALL_MOCK=1` skips the `launchctl bootout`, `limactl stop`, and Firewalla DELETE calls but still removes config files when `--purge` is set. Tests only.
 
 ---
 
 ## sanctum logs &lt;service&gt;
 
-A typed shortcut around `tail -F` for the logs you actually look at. Resolves a short name to the right path under `~/.openclaw/logs/`, then execs `tail -F`. Ctrl-C to exit, same as you would expect.
+A typed shortcut around `tail`. Resolves a short name to its real path (some under `~/.sanctum/logs/`, some `~/.openclaw/logs/`) and streams it — follow, last 50 lines.
 
 ```bash
 sanctum logs <service>
+sanctum logs --list
+sanctum logs proxyd --once -n 200
 ```
 
 ### Service names
 
+`sanctum logs --list` prints the canonical map — names, paths, which files exist — and won't go stale:
+
 | Name | File |
 |------|------|
-| `backup` | `~/.openclaw/logs/sanctum-backup.log` |
-| `vm-autostart` | `~/.openclaw/logs/vm-autostart.log` |
+| `r2d2` | `~/.sanctum/logs/r2d2-audit.jsonl` |
+| `kitchen-loop` | `~/.sanctum/logs/kitchen-loop.log` |
+| `proxyd` | `~/.openclaw/logs/proxyd.log` |
+| `yoda` | `~/.openclaw/logs/sanctum-mlx.log` |
+| `coder` | `~/.openclaw/logs/sanctum-mlx-coder.log` |
+| `cathedral` | both `sanctum-mlx.log` + `sanctum-mlx-coder.log` |
+| `bridge` | `~/.openclaw/logs/sanctum-bridge.log` |
 | `force-flow` | `~/.openclaw/logs/force-flow.log` |
-| `screen-time` | `~/.openclaw/logs/screen-time.log` |
-| `firewalla` | `~/.openclaw/logs/firewalla-bridge.log` |
-| `self-test` | `~/.openclaw/logs/sanctum-self-test.log` |
+| `watchdog` | `~/.openclaw/logs/watchdog-rust.log` |
+| `agent-trace` | `~/.sanctum/logs/agent-trace.log` |
+| `ram-sentinel` | `~/.sanctum/logs/ram-sentinel.log` |
+| `launchd-health` | `~/.sanctum/logs/launchd-health.log` |
+| `signal` | `~/.sanctum/logs/signal-health.log` |
+| `backup` | `~/.sanctum/logs/backup.log` |
+| `self-test` | `~/.sanctum/logs/self-test.log` |
+| `log-rotate` | `~/.sanctum/logs/log-rotate.log` |
 
-Anything else is rejected with the list of valid names. We resisted the temptation to make this fuzzy-match — there are six services, and you should know which one you want.
+### Flags
+
+| Flag | Behavior |
+|------|----------|
+| `--follow` / `--once`, `-f` | Stream (default) or take a one-shot snapshot |
+| `--lines`, `-n` | How many lines of history to show first (default 50) |
+| `--list` | Print every known service + its path, then exit |
+
+Anything not in the map is rejected with a pointer to `--list` — no fuzzy-match; know which log you want.
 
 <Aside type="tip">
-If a log file does not exist, the command exits with a FATAL line rather than silently waiting for the file to appear. A missing log means the LaunchAgent never wrote one, which is itself the diagnostic.
+A missing log file isn't a crash, it's a clue — usually the LaunchAgent that should have written it never ran. `--list` marks which files exist, so a glance there often diagnoses the problem before you've tailed it.
 </Aside>
 
 ---
 
 ## sanctum devices
 
-List, add, or remove devices in `~/.sanctum/devices.yaml`. This is the file Screen Time uses to map MAC addresses to human-readable names and per-device schedule categories.
+Read-only inventory, three tables: Family (per-person), Shared, and Unassigned (auto-discovered, not yet attributed). It reads the Screen Time module's `devices.yaml` — the source of truth mapping MACs to people and categories.
 
 ```bash
 sanctum devices
-sanctum devices list
-sanctum devices add <MAC> <NAME> [CATEGORY]
-sanctum devices remove <MAC>
 ```
 
-### Subcommands
-
-| Subcommand | Behavior |
-|------------|----------|
-| `list` (or no arg) | Print all devices in `devices.yaml`, formatted `<mac>  <name>  category=<category>` |
-| `add MAC NAME [CATEGORY]` | Append a device. `CATEGORY` defaults to `other`. |
-| `remove MAC` | Remove the device whose `mac` matches. No prompt. |
-
-```bash
-sanctum devices add fa:ce:de:ca:ca:01 "Albert's iPad" school
-sanctum devices list
-sanctum devices remove fa:ce:de:ca:ca:01
-```
-
-The file is rewritten in place via PyYAML. Comments and key order are not preserved across writes — if you have hand-edited `devices.yaml` with annotations, mutate it from your editor instead and Sanctum will re-read it on the next probe cycle.
-
-<Aside type="note">
-The override env var is `SANCTUM_DEVICES_YAML`. Used by `bats` to point at a fixture instead of your live devices file. Production paths should leave this alone.
-</Aside>
+Lookup order: `$SANCTUM_DEVICES_FILE` (a fixture override; unset in production), then `~/.sanctum/screen-time/devices.yaml`, then `~/Projects/sanctum-screen-time/devices.yaml`; first existing wins. It does not mutate — assigning is `sanctum screen-time assign` (Family Pass Phase 2) or editing the YAML.
 
 ---
 
 ## sanctum schedule
 
-Show or edit `~/.sanctum/schedule.yaml`, the file that defines wind-down windows, curfew, homework gates, and screen-time credits.
+Read-only view of the curfew schedule — weekday/weekend cutoffs per child, plus shared-device hard curfews. No separate file; curfews live in the same `devices.yaml` that `sanctum devices` reads.
 
 ```bash
 sanctum schedule
-sanctum schedule show
-sanctum schedule edit
 ```
 
-### Subcommands
+It shows; it does not edit. To extend a curfew once — a school event, a late movie — use the Force Flow override the command prints:
 
-| Subcommand | Behavior |
-|------------|----------|
-| `show` (or no arg) | Cat the schedule file to stdout |
-| `edit` | Open the schedule file in `$EDITOR` (default: `nano`) |
-
-`schedule edit` does not validate the file on save. If you write invalid YAML, the Screen Time probe (`07-schedule-fires`) will catch it on the next tick. The fast feedback loop is "edit, save, run `sanctum self-test`" — about ten seconds.
+```bash
+curl -X POST http://127.0.0.1:4077/screen/override \
+  -d '{"target":"NAME","minutes":30}'
+```
 
 <Aside type="tip">
-The full schema for `schedule.yaml` lives in the [Screen Time docs](/screen-time/). This command just opens the file; it does not generate one. If `~/.sanctum/schedule.yaml` does not exist, the installer's Screen Time module writes the default at first boot.
+Full curfew schema in the [Screen Time docs](/screen-time/). To change the standing schedule rather than grant a one-off, edit the `curfew` block in `devices.yaml`.
 </Aside>
-
-The override env var is `SANCTUM_SCHEDULE_YAML`.
 
 ---
 
 ## sanctum keys backup &lt;path&gt;
 
-Export an encrypted bundle of your haushold age key. This is the single most important command in the CLI. Without this bundle, a hardware failure makes every sops-encrypted secret in your Sanctum unrecoverable.
+Export an encrypted bundle of your Sanctum Keychain credentials — OpenRouter, Anthropic, Gemini, Firewalla-bridge, R2, B2. The single most important command in the CLI: `sanctum uninstall` revokes those entries and a dead disk takes them with it. The bundle re-keys a fresh Mac in seconds instead of by hand.
 
 ```bash
-sanctum keys backup ~/Desktop/sanctum-keys.age
+sanctum keys backup ~/Documents/sanctum-keys-2026-06-09.tar.gz.enc
 ```
 
-### What it does
-
-1. Reads your age key from `~/.config/sops/age/keys.txt` (override: `SANCTUM_AGE_KEYS`).
-2. Calls `age -p` to passphrase-encrypt the key. You will be prompted for the passphrase interactively.
-3. Writes the encrypted bundle to the path you specified.
-
-### What it does not do
-
-- It does not auto-generate a passphrase. You choose one. The CLI will not save it for you.
-- It does not copy the bundle anywhere. It is on disk, exactly where you told it to go.
-- It does not call any cloud service. The encryption is local, with `age`, against a passphrase you typed once and must remember.
-
-```bash
-# Encrypt
-sanctum keys backup ~/Desktop/sanctum-keys.age
-
-# Decrypt (later, on a different machine if you need to restore)
-age -d -o keys.txt ~/Desktop/sanctum-keys.age
-```
+It reads each `sanctum/*` Keychain entry into a mode-600 file, prompts for a passphrase (twice, minimum 12 characters — the CLI neither generates nor stores it), then `tar.gz`s and `openssl enc -aes-256-cbc -pbkdf2 -salt`s the lot to the `.enc` path you gave. No copy anywhere, no cloud call. Restore with `sanctum keys restore <path>`.
 
 <Aside type="danger">
-The recovery model is: you have the bundle, you have the passphrase, you can restore. If either is gone, the encrypted half of your Sanctum is gone. There is no recovery email. There is no support line that can decrypt this for you. Print the passphrase on paper if you have to. We are deadly serious about this.
+The recovery model is: bundle plus passphrase equals restore. If either is gone, those credentials are gone — you re-mint them at each provider's console. No recovery email, no support line that can decrypt this for you. Put the passphrase in your password manager. We are deadly serious about this.
 </Aside>
 
 ---
 
 ## Options
 
-Two global options. Anything else gets routed to the subcommand.
+Global options; everything else routes to the command.
 
 | Option | Behavior |
 |--------|----------|
 | `--version` | Print the CLI version and exit `0` |
-| `-h`, `--help` | Print the usage banner and exit `2` |
+| `--traceback` | Print a full traceback on an uncaught exception (otherwise you get the curt line) |
+| `-h`, `--help` | Print the usage banner and exit `0` |
 
 ```bash
-sanctum --version    # → sanctum 1.0.0
-sanctum --help       # → usage banner
+sanctum --version    # → sanctum 0.1.0a1
+sanctum --help       # → command roster
 ```
 
 ---
@@ -355,9 +306,9 @@ sanctum --help       # → usage banner
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success |
-| `1` | Subcommand-level failure (probe failed, prereq missing, file not found) |
-| `2` | Usage error (unknown subcommand, missing required argument, `--help`) |
+| `0` | Success (`--help` and `--version` included) |
+| `1` | Command-level failure (a probe failed, a prereq is missing, a file wasn't found) |
+| `2` | Usage error (unknown command, missing required argument) |
 
 ---
 
@@ -365,13 +316,15 @@ sanctum --help       # → usage banner
 
 | Command | Purpose |
 |---------|---------|
-| `sanctum doctor` | Are the prereqs and subsystems healthy? |
-| `sanctum status` | Quick green/red glance, six lines |
-| `sanctum self-test` | Run the eleven canonical probes |
-| `sanctum update` | Pull repos, restart services, re-test |
-| `sanctum uninstall` | Remove LaunchAgents (preserve state by default) |
-| `sanctum uninstall --purge` | Remove everything including config |
-| `sanctum logs <service>` | Tail one of the six known log files |
-| `sanctum devices [list\|add\|remove]` | Manage `devices.yaml` |
-| `sanctum schedule [show\|edit]` | Show or edit `schedule.yaml` |
-| `sanctum keys backup <path>` | Encrypt your age key to a portable bundle |
+| `sanctum status` | Host vital signs — one line with `--oneline` |
+| `sanctum doctor` | Are the LaunchAgents, providers, and backups healthy? |
+| `sanctum self-test` | Run the twelve canonical probes |
+| `sanctum update` | `brew upgrade` + self-test as the gate |
+| `sanctum uninstall` | Remove operational artifacts (preserve data by default) |
+| `sanctum uninstall --purge` | Also remove the `~/.sanctum/` data dirs |
+| `sanctum logs <service>` | Tail a known log — `--list` to see them all |
+| `sanctum devices` | Read-only haushold device inventory |
+| `sanctum schedule` | Read-only curfew view |
+| `sanctum keys backup <path>` | Encrypt your Keychain credentials to a portable bundle |
+| `sanctum chat` / `code` / `vision` | Talk to the router-chosen / Claude / Gemini model |
+| `sanctum onboard` | One-shot first-run: recipe → cloud → first backup → canary |

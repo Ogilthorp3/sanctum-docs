@@ -12,9 +12,13 @@ A pluggable HTTP + MCP gateway hosted on the Mac Mini that lets Claude
 push artifacts (memos, tearsheets, DD docs, transcripts) into SharePoint —
 and, by extension, any future destination — with one self-contained call.
 
-The first module is `sharepoint`; a second, `slack`, is wired but lights up
-only when its webhooks land in `secrets.yaml`. Adding a third destination
-is a `bridges/<name>/` package drop, not a service rewrite.
+Three modules are live and HMAC-scoped: `sharepoint` (writes — uploads
+and folder lookups), `m365` (reads — Graph mail `$search` over a partner
+mailbox), and `tearsheets` (renders a portco `.docx` with the Python
+pixel-parity renderer). A fourth, `slack`, is code-complete but dormant —
+it stays dark until an `hmac.slack` secret and webhooks land in
+`secrets.yaml`. Adding a destination is a `bridges/<name>/` package drop,
+not a service rewrite; the discovery loop just imports whatever's there.
 
 <Aside type="caution" title="Naming">
   This is the *gateway* whose code lives at
@@ -60,9 +64,10 @@ every rejection is captured by the audit middleware before it leaves.
    │    HMACAuthMiddleware (size + sig)                 │
    ├────────────────────────────────────────────────────┤
    │  Routes:                                           │
-   │    /sharepoint/upload  ──► Graph                   │
-   │    /sharepoint/folder  ──► Graph                   │
-   │    /slack/post  ──► Triptyq                        │
+   │    /sharepoint/upload + /folder  ─────────► Graph  │
+   │    /m365/search  ─────────────────────────► Graph  │
+   │    /tearsheets/render  ──────► python renderer     │
+   │    /slack/post  ─────► dormant (no hmac.slack)     │
    │    /_health  /_manifest  /_diagnostic              │
    │    /_metrics  /mcp/                                │
    ├────────────────────────────────────────────────────┤
@@ -106,10 +111,13 @@ Tunable via `SANCTUM_RATE_LIMIT_RPS` / `SANCTUM_RATE_LIMIT_BURST`.
 
 CF Access signs a JWT for every authenticated request, even service
 tokens, and forwards it in `Cf-Access-Jwt-Assertion`. The middleware
-verifies the signature against
-`https://sanctum.cloudflareaccess.com/cdn-cgi/access/certs`
-(JWKS, cached by PyJWT) and the `aud` claim against the gateway's app
-AUD. Closes the gap where a future tunnel misconfig — or a second
+verifies the signature against the team's JWKS at
+`https://<team_domain>/cdn-cgi/access/certs` — `<team_domain>` comes from
+`cloudflare.team_domain` in `secrets.yaml`, never hardcoded, so the URL
+can't drift from the Access app it checks. PyJWT caches keys by `kid` and
+refetches on rotation; the `aud` claim is matched against
+`cloudflare.access_aud`. Closes the gap where a future tunnel
+misconfig — or a second
 cloudflared on the same token — could let an attacker present
 trusted-looking `Cf-Access-Client-Id` headers without a real CF Access
 flow behind them.
@@ -132,13 +140,17 @@ X-Sanctum-Signature: <hex>
 
 with `signature = HMAC-SHA256(module_secret, f"{timestamp}\n{nonce}\n{method}\n{path}\n{sha256(body)}")`.
 
-Server-side, in order:
+Server-side, in source order (`auth.py`):
 
-1. `Content-Length > 250 MiB` → 413 immediately, before reading body.
-2. Timestamp within ±60 s of UTC.
-3. Nonce not seen in the last 5 min (3-bucket bloom filter, 64 KB each).
-4. Signature matches.
-5. Module secret matches the `X-Sanctum-Module` header.
+0. `Content-Length > 250 MiB` → 413 before the body is read — the only
+   check outside `_verify`.
+1. `Authorization` is exactly `SanctumHMAC v1` and all five headers present.
+2. `X-Sanctum-Module` matches the module in the path — you can't sign for
+   one module and POST to another.
+3. Timestamp within ±60 s of UTC.
+4. Nonce not seen in the last 5 min (3-bucket bloom filter, 64 KB each).
+5. The module's secret resolves; unknown module rejects here.
+6. Signature matches under that secret.
 
 The body's sha256 is computed once and stashed on the ASGI scope so the
 audit layer can log it without re-reading the body.
@@ -148,7 +160,7 @@ audit layer can log it without re-reading the body.
 `module_secret` differs per bridge: `hmac.sharepoint`, `hmac.slack`, …
 Compromise of the SharePoint secret cannot be used to invoke the Slack
 module. Stored in `/opt/sanctum/bridge/secrets.yaml`, SOPS-encrypted with
-the age key at `/opt/sanctum/keys/age.key` (mode 600, bert-owned). The
+the age key at `/opt/sanctum/keys/age.key` (mode 600, neo-owned). The
 public key is also published in 1Password as a recovery anchor.
 
 ### What this protects against
@@ -171,8 +183,9 @@ public key is also published in 1Password as a recovery anchor.
   scope, host hardening is a separate problem).
 - Claude itself being prompt-injected into making a malicious upload —
   mitigated at the skill layer with the explicit-list allowlist
-  (`triptyq-skills/sharepoint-structure.yaml`) and per-channel webhook
-  scoping for Slack.
+  (`triptyq-skills/sharepoint-structure.yaml`), the hard-coded
+  `@triptyq.vc` suffix on `m365` reads, and — once Slack is live —
+  per-channel webhook scoping.
 
 ## Modules
 
@@ -207,29 +220,57 @@ Upload behavior:
   custom column isn't defined in the SP library). Skills can branch on
   this without parsing prose.
 
-### `slack`
+### `m365`
 
-Per-channel incoming webhooks + explicit channel-ID allowlist. Council
-ruled webhooks over a forever-valid bot token: the webhook URL itself is
-the destination, so a leaked URL can only spam the channel it was issued
-for. Allowlist file at `triptyq-skills/slack-allowed-channels.yaml` is
-belt-and-suspenders — the gateway refuses to look up a webhook for a
-channel that isn't on the list, even when a matching key exists.
+The read counterpart to `sharepoint`'s writes. `/m365/search` runs a
+Graph mail `$search` over a partner mailbox so a partner Mac can run
+`tq scan-mail` without holding the SOPS age key locally. It re-uses the
+SharePoint app registration's credentials with `Mail.Read` granted. Two
+guards reject before Graph is touched: a hard-coded `@triptyq.vc` suffix
+check (deliberately *not* env-configurable, so a typo'd allowlist edit
+can't pivot to an outside address) and a `MailboxAllowlist` of the
+current partners. The `needle` is hashed, never logged — partners search
+the names of confidential deals, so the audit line carries only the
+sha256.
 
-`build()` returns `None` when `hmac.slack` or `slack.webhooks` are
-absent; the discovery loop silently skips the module so a
-sharepoint-only deployment doesn't need an empty Slack stanza.
+### `tearsheets`
+
+Wraps `triptyq.generator.render_tearsheet` so the portal's Render button
+produces a `.docx` byte-identical to the CLI's. `POST /tearsheets/render`
+takes a `slug` + `quarter` (regex-validated), reads the matching
+`<slug>_<quarter>.yaml` from the CLI checkout, and returns
+`<slug>_tearsheet_<quarter>.docx` base64-encoded. No secrets — the data
+is on disk — so `build()` returns `None` only when the checkout or the
+`triptyq.generator` import is missing, which keeps canary hosts clean.
+The render is CPU-bound, so it runs in a worker thread; the event loop
+stays answerable while a portco's logos get packed.
+
+### `slack` (dormant)
+
+Code-complete but unconfigured: with no `hmac.slack` in `secrets.yaml`,
+`build()` returns `None` and the discovery loop skips it. When it lights
+up the model is per-channel incoming webhooks — Council ruled these over
+a forever-valid bot token, since the webhook URL *is* the destination, so
+a leaked one can only spam the channel it was issued for. The
+belt-and-suspenders allowlist at
+`triptyq-skills/slack-allowed-channels.yaml` isn't provisioned yet —
+create it before going live.
 
 ## Endpoints
+
+The CF Access JWT layer fronts *everything* except `/_health` and
+`/_metrics` (the only two paths in `_NO_JWT_EXACT`), so when the bridge
+sits behind its tunnel the "auth" below is really CF JWT *plus* the inner
+gate named.
 
 | Path             | Auth          | Notes                                            |
 |------------------|---------------|--------------------------------------------------|
 | `/_health`       | none          | Public liveness — `ok`, `version`, `commit`, `started_at`, `modules`, `allowlist_count`. CF Access still gates the public URL. |
-| `/_diagnostic`   | HMAC          | Same as `/_health` plus rotator status, request count, full allowlist roots, JWT enabled flag. |
-| `/_manifest`     | HMAC          | Module + action listing with JSONSchema for every request/response model. Powers `triptyq-skills/scripts/sync-bridge-manifest.py`. |
-| `/_metrics`      | none, 127.0.0.1 only | Prometheus exposition format. |
-| `/mcp/`          | HMAC          | FastMCP `streamable_http_app`. v0.1 has no MCP-side session auth, so this stays HMAC-gated; the previous "skip /mcp" path was a silent bypass. |
-| `/<module>/<action>` | HMAC      | Module-defined; SharePoint and Slack today.      |
+| `/_diagnostic`   | CF JWT + HMAC | Everything in `/_health` plus rotator status, request count, full allowlist roots, JWT enabled flag. |
+| `/_manifest`     | CF JWT + HMAC | Module + action listing with JSONSchema for every request/response model. Powers `triptyq-skills/scripts/sync-bridge-manifest.py`. |
+| `/_metrics`      | none; localhost-bound | Prometheus exposition format. No route-level IP guard — it's private only because the whole server binds `127.0.0.1`. |
+| `/mcp/`          | CF JWT + HMAC | FastMCP `streamable_http_app`. v0.1 has no MCP-side session auth, so this rides the same HMAC as everything else; the previous "skip /mcp" path was a silent bypass. |
+| `/<module>/<action>` | CF JWT + HMAC | Module-defined: `/sharepoint/upload`, `/sharepoint/folder`, `/m365/search`, `/tearsheets/render` today. |
 
 ## Operations
 
@@ -237,12 +278,12 @@ sharepoint-only deployment doesn't need an empty Slack stanza.
 
 A single LaunchDaemon at
 `/Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist` runs
-`/opt/sanctum/bridge/.venv/bin/python -m sanctum_bridge` as user `bert`
+`/opt/sanctum/bridge/.venv/bin/python -m sanctum_bridge` as user `neo`
 (via `UserName/GroupName` drop). `KeepAlive=true`, `RunAtLoad=true`,
 `ThrottleInterval=30` so a misconfigured `secrets.yaml` or bad code
 deploy can't restart-loop the daemon.
 
-Two user agents back the daemon:
+Three user agents back the daemon:
 
 - `com.sanctum.bridge-rotate` — daily 09:00 local. Self-gates: reads the
   current CF Access token's `expires_at` and exits unless the token
@@ -278,7 +319,7 @@ Status one-liners land at `~/.sanctum/state/bridge-rotate.status` and
 
 ### Backup
 
-Bert's restic SOURCES (`~/Backups/sanctum-backup.sh`) include
+The restic SOURCES (`~/Backups/sanctum-backup.sh`) include
 `/opt/sanctum` (the encrypted `secrets.yaml`, the bridge code, and the
 keys directory) and `~/Projects/triptyq-skills` (allowlist SoT + the
 manifest sync script). The age master key is *also* in 1Password as a
@@ -304,8 +345,8 @@ SharePoint is wired correctly; the first red row points at what to fix.
 
 1. **Scopes — read AND write.** Bridge holds `Sites.ReadWrite.All` +
    `Files.ReadWrite.All`. Reuses the existing `SharePoint MCP Server`
-   app registration rather than creating a separate one — Bert's call,
-   logged 2026-04-28.
+   app registration rather than creating a separate one — operator's
+   call, logged 2026-04-28.
 2. **Allowlist source-of-truth — `triptyq-skills/sharepoint-structure.yaml`.**
    Pulled at startup, refreshed hourly. Stale cache is safe — falls back
    to last-known-good. Adding a new root is a skills-repo PR.

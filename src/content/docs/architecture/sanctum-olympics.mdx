@@ -14,92 +14,65 @@ import { Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
 Every model thinks it's the best. The marketing page says so. The Hugging Face leaderboard says so. The Reddit thread where someone ran it on 47 multiple-choice questions definitely says so.
 
-The Olympics exist to prove most of them wrong — not on generic benchmarks, but on the questions that actually matter to this haus. Can you parse a real boot log from this Mac Mini? Do you know which Sonos speaker is in the master bedroom? Can you tell the difference between Albert's desktop trying to rejoin the network and an attacker spoofing its MAC address? These are not on MMLU. They probably should be.
+The Olympics exist to prove most of them wrong — not on generic benchmarks, but on the questions that actually matter to this haus. Can you parse a real boot log from this Mac Mini? Do you know which Sonos speaker the kitchen jazz request should target? Can you read a Firewalla config and say what's actually exposed? These are not on MMLU. They probably should be.
 
-## Two Tiers
+## One Arena, Six Events
 
-### Standard Olympics (`sanctum-olympics/`)
-
-30 tasks across 6 categories. Uses an LLM judge (Claude Opus via OpenRouter) to score responses against rubrics. Good for the broad strokes — separating the serious contenders from the ones that crumble the moment you ask them something specific.
+The benchmark lives in `sanctum-olympics/` — 30 tasks across 6 categories, each task a real prompt with a rubric. An LLM judge (Claude Opus via OpenRouter) scores every response 0.0–1.0 against its rubric, so the grade is "did it actually do the haus-specific thing," not "did it sound confident." Good for the broad strokes — separating the serious contenders from the ones that crumble the moment you ask them something specific.
 
 | Category | Tasks | What It Tests |
 |----------|-------|---------------|
-| Council Identity | 5 | Persona adherence, jailbreak resistance |
-| Home Automation | 5 | HA intent parsing, entity resolution |
-| Code Generation | 5 | LaunchAgent plists, Rust handlers, bash scripts |
-| Reasoning | 5 | Log analysis, memory pressure triage |
-| Security Review | 5 | Config audits, threat assessment |
-| Triage/Ops | 5 | Incident response, service correlation |
+| Council Identity | 5 | Persona adherence, jailbreak resistance, cross-agent boundaries |
+| Home Automation | 5 | Home Assistant intent parsing, entity resolution, composite actions |
+| Code Generation | 5 | LaunchAgent plists, Rust, bash, Python, HA automation YAML |
+| Reasoning | 5 | Multi-step analysis of system, health, and ML issues |
+| Security Review | 5 | Threat assessment, config review, attack-surface analysis |
+| Triage/Ops | 5 | Incident response, prioritization, macOS-specific debugging |
 
-### Carmack Olympics (`scripts/carmack_eval.py`)
+The tasks are deliberately specific. Home Automation hands the model a fixed entity list (`light.vr_cave`, `media_player.bedroom_sonos`, friends) and a request like "play jazz in the living room," then checks whether it targeted `media_player.living_room_sonos` and nothing else. Security Review hands it a config that names the Firewalla Purple and asks what's exposed. A model that hand-waves the entity name or invents a port scores 0.0 — the rubric doesn't grade on vibes.
 
-26 brutally hard tasks with programmatic scoring. No LLM judge needed — uses keyword matching, must-contain/must-not-contain rules, and violation penalties. Named after the Carmack optimization philosophy: if two models score the same on the easy test, the easy test is wrong.
-
-| Category | Tasks | What Makes It Hard |
-|----------|-------|--------------------|
-| Identity Escalation | 4 | Social engineering with fake authority, narrative framing |
-| Cross-Agent Knowledge | 5 | Must know what OTHER agents do, dependency chains |
-| Real-World Reasoning | 4 | Actual log snippets, boot race conditions, sickness patterns |
-| Domain Precision | 5 | FBAR thresholds, freeze protocols, Albert's MAC address |
-| Advanced Jailbreak | 4 | Injected system tags, eval framework pretexts |
-| Tool Precision | 4 | Correct Sonos speakers, VM UUIDs, graceful restart procedures |
-
-<Aside type="caution">
-The Carmack Olympics found that Windu correctly identified 192.168.1.1 as the Firewalla router (not an attacker) and that the model recognized Albert's MAC address before blocking it. These are the tests that matter — not whether the model can write a haiku about recursion.
+<Aside type="note">
+The grader is the same family of model under test, which sounds like a fox auditing a henhouse. It works because the rubric does the judging, not the judge's taste: each rubric spells out the exact entity, service call, or refusal that earns 1.0, so Opus is checking a fact, not awarding style points. The day a rubric says "score 1.0 if it's clever," delete that rubric.
 </Aside>
 
-## Score Matrix (2026-04-08)
+## What Actually Ran
 
-Three-way Carmack Olympics comparison. This is the benchmark that found V3 — the moment the numbers stopped being close and started being decisive.
+The honest state of the scoreboard: the harness, the 30 tasks, and the judge all work, and the only runs committed to `results/` so far are mock-backend smoke runs (`olympics_YYYYMMDD_HHMMSS.json`) that prove the pipeline end-to-end. A full council-27b-vs-codestral-vs-Opus matrix is the next thing to record here, not a number this page will invent for you.
 
-```
-Category         V1 (Carmack OG)  V2 (Optimized)  V3 (Nightly) *WINNER*
-─────────────────────────────────────────────────────────────────────────
-domain              1.000            1.000            1.000
-reasoning           1.000            1.000            1.000
-tool_calling        1.000            1.000            1.000
-cross_agent         0.733            0.733            0.733
-identity            0.787            0.716            0.752
-jailbreak           0.675            0.725            0.775 ★
-─────────────────────────────────────────────────────────────────────────
-OVERALL             0.866            0.862            0.877 ★
-```
-
-Three adapters trained on the same base model. Same data, different recipes. V1 and V2 are separated by four thousandths of a point — the benchmark equivalent of a photo finish where both runners are wearing the same shoes. Then V3 walks in with a jailbreak score ten points higher than V1, and everything else stays the same or improves.
-
-The nightly pipeline's continued training didn't just add capability — it hardened the one category that matters most when your model has access to your Firewalla config. The standard eval couldn't tell V1 from V3. The Carmack tier could. That's why both tiers exist.
+That gap is on purpose. A benchmark page that publishes scores nobody can reproduce is worse than no benchmark — it's a leaderboard fan-fiction. When the real matrix lands it goes in this section with the results filename next to it, so you can re-run the exact thing.
 
 ![The evaluation rubric — a magnifying glass examining AI responses against strict pass/fail criteria.](./images/inline-olympics-scoring.png)
 
 ## Running
 
 ```bash
-# Standard Olympics (needs OPENROUTER_API_KEY for judge)
+# Needs OPENROUTER_API_KEY for the judge (and for the cloud backends)
 cd sanctum-olympics
-python run_olympics.py --backend council-mlx --category reasoning
 
-# Carmack Olympics (no API key needed — programmatic scoring)
-cd ~/Projects/mlx-finetune
-.venv/bin/python scripts/carmack_eval.py \
-  --model ./models/Qwen3.5-27B-4bit-text \
-  --adapter-path ./adapters-carmack-overnight-optimized \
-  --agent-config ./configs/agents.yaml \
-  --output ./eval/carmack_results.json \
-  --verbose
+# See what would execute, no API calls
+python run_olympics.py --dry-run
+
+# One backend, one category
+python run_olympics.py --backend council-27b --category reasoning
+
+# Everything against everything, full matrix to results/
+python run_olympics.py
 ```
+
+The backend keys are `council-27b` (the local MLX Council seat on `:1337`), `codestral` (Codestral-22B on `:3301`), and `claude-opus` (cloud, via OpenRouter) — defined in `config.yaml`, not hardcoded in the runner.
 
 ## Routing Table
 
-The Olympics score matrix doesn't just produce a report. It becomes the Smart Router's Tier 3 routing policy. For each task category, route to whoever won:
+The Olympics produce a report; a human reads it and edits the router. The mapping below is the hand-maintained policy in `~/.sanctum/sanctum-proxy/config.yaml` and the `council-router` skill — informed by the eval, not auto-generated from it. (Wiring a script that reads the latest `results/` JSON and emits the proxy config is on the list; today the judgment call is still a person's.)
 
-| Category | Best Backend | Score |
-|----------|-------------|-------|
-| Code Generation | Codestral-22B (`sanctum-mlx-codestral` `:3301`) — succeeded the retired Qwen2.5-Coder seat (`sanctum-mlx-coder` `:1338`, retired 2026-06-07) | — |
-| Council Identity | Council MLX (V3 LoRA) | 0.752 |
-| Reasoning | Council MLX | 1.000 |
-| Security | Claude Opus (cloud) | — |
+| Category | Backend | Where It Lives |
+|----------|---------|----------------|
+| Code Generation | Codestral-22B | `com.sanctum.mlx-codestral` on `:3301` — succeeded the retired Qwen2.5-Coder seat (`:1338`, retired 2026-06-07) |
+| Council Identity | Council MLX | `:1337`, Qwen3.6-35B-A3B (the cathedral seat — migrated up from the Qwen3.5-27B LoRA this page was first written against) |
+| Reasoning | Council MLX | `:1337`, same seat |
+| Security | Claude Opus | cloud, via OpenRouter |
 
-The Olympics literally decide which brain each Jedi gets. Yoda's reasoning goes to the model that scored 1.000 on reasoning. Windu's security analysis goes to Opus because nobody local could touch it on threat assessment. Cilghal's health data stays on the local secure tier regardless of score, because some constraints aren't about performance — they're about the kind of data that doesn't leave the building.
+The eval shapes which brain each Jedi gets. Yoda's reasoning goes to the local Council seat. Windu's security analysis goes to Opus, because on threat assessment nobody local has earned that seat yet. Cilghal's health data stays on the local secure tier regardless of score, because some constraints aren't about performance — they're about the kind of data that doesn't leave the building.
 
 This is the point of the whole system. Not "which model is best" — that question doesn't have an answer. "Which model is best *at the specific thing this specific agent needs to do*" — that question has a number, and the number has a routing rule, and the routing rule has a port.
 
@@ -111,4 +84,4 @@ This is the point of the whole system. Not "which model is best" — that questi
 cd sanctum-olympics && python test_olympics.py
 ```
 
-Thirty-one tests to make sure the system that judges models is itself beyond judgment. Quis custodiet ipsos custodes, except the answer is pytest.
+Thirty-one tests to make sure the system that judges models is itself beyond judgment. Quis custodiet ipsos custodes, except the answer is `unittest.main(verbosity=2)`.

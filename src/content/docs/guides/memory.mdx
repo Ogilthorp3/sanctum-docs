@@ -7,7 +7,7 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 ![The constellation — every memory a node, every connection a reason to remember](./images/memory-constellation.png)
 
-The Memory Service is a Rust binary (port 42069) that gives every Sanctum agent persistent memory without requiring any of them to manage it. It is the primary engine, supported by the memory-vault-mcp shim with something faster, smaller, and wired directly into the proxy so that remembering happens as a side effect of thinking — which, if you squint, is how it works for the rest of us too.
+The Memory Service is a Rust binary (port 42069) that gives every Sanctum agent persistent memory without requiring any of them to manage it. It is the primary engine; the older memory-vault-mcp shim has been replaced by something faster, smaller, and built to sit directly behind the proxy so that remembering can happen as a side effect of thinking — which, if you squint, is how it works for the rest of us too.
 
 Dual storage: SQLite with FTS5 for search, markdown files for humans and Obsidian. The database is fast. The files are legible. The agents don't care which one you read. You will care, at 2 AM, when you need to understand why Yoda thinks the internet goes down every Thursday.
 
@@ -15,7 +15,7 @@ Dual storage: SQLite with FTS5 for search, markdown files for humans and Obsidia
 
 The proxy (port 4040) already sees every conversation in the haus. Making it the memory capture point was less a design decision than an observation: the data was already flowing through the wire. We just started writing it down.
 
-The integration is three hooks, all non-blocking:
+The proxy carries the memory hooks (`sanctum-proxy/src/memory.rs`), but the two services aren't introduced yet: the proxy's default `memory.url` still points at the service's old code-default port (`18097`), while the live service answers on `42069`. Until that's reconciled, capture is dark and agents recall only what they wrote directly. The hooks themselves are three, all non-blocking:
 
 1. **Pre-request** — The proxy queries sanctum-memory for cached context relevant to the incoming conversation and injects it into the system message. The agent receives memories it didn't ask for and doesn't know it received. This is, technically, inception.
 2. **Post-response** — After streaming the response, the proxy fires an async ingest call with the conversation data. No waiting. No acknowledgment. Fire and forget.
@@ -62,10 +62,10 @@ Every memory gets a score between 0.0 and 1.0. The score determines how long it 
 
 | Factor | Calculation | Rationale |
 |--------|-------------|-----------|
-| Source weight | user=0.9, system=0.85, claude-code=0.7, openclaw=0.7, HA=0.5 | User-stated facts outrank machine observations |
+| Source weight | user=0.9, system=0.85, claude-code=0.7, gemini-cli=0.7, openclaw=0.7, HA=0.5 | User-stated facts outrank machine observations |
 | Recency | `hours^(-0.3)` (power-law decay) | Recent memories matter more, but the decay is gentle |
 | Access boost | `1 + ln(access_count + 1)` | Frequently accessed memories earn protection |
-| Link boost | Proportional to inbound wikilinks | Well-connected knowledge survives longer |
+| Link boost | `1 + 0.1 × tag_count` | More tags, more reach — a proxy for connectedness, until backlinks land |
 
 ## TTL Rules
 
@@ -82,13 +82,13 @@ Importance determines lifespan. The system forgets on purpose — and considers 
 
 ## Consolidation
 
-Runs every 6 hours. The process is hybrid: regex extraction happens immediately, LLM enrichment is deferred to council-mlx on a best-effort basis. If the local model is busy or down, consolidation finishes without enrichment and tries again next cycle.
+Runs every 6 hours. The process is hybrid: the cheap work happens immediately, LLM enrichment is deferred to `council-27b` on a best-effort basis. If the local model is busy or down, consolidation finishes without enrichment and tries again next cycle — the report just shows `llm_enriched: 0` and nobody panics.
 
 1. **Scan inbox** — Find raw notes older than 24 hours
 2. **Recompute scores** — Update importance for all active memories
-3. **LLM enrichment** — Extract entities, tags, and relationships via council-mlx (best-effort)
+3. **LLM enrichment** — Extract entities, tags, and relationships via `council-27b` (best-effort)
 4. **Promote** — Move consolidated notes to `knowledge/`, `events/`, or `procedures/`
-5. **Expire** — Apply TTL rules, archive expired notes (retained 90 days)
+5. **Expire** — Apply TTL rules, archive expired notes; archived notes are deleted after 90 days
 6. **Enforce caps** — Inbox: 300, Knowledge: 1000, Events: 500, Procedures: 200
 
 <Aside>
@@ -97,34 +97,32 @@ Runs every 6 hours. The process is hybrid: regex extraction happens immediately,
 
 ## API Reference
 
-All endpoints accept and return JSON. The service binds to `127.0.0.1:42069` by default.
+All endpoints return JSON. The service binds to `127.0.0.1:42069`. Retrieval is GET-with-query-params, not POST — the things you read are reads, and the router believes in HTTP verbs.
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/recall` | Context-aware retrieval — returns memories ranked by relevance to a query |
-| POST | `/search` | Full-text search with filters (type, tags, date range, source) |
-| POST | `/ingest` | Async ingestion of conversation data (called by proxy) |
-| POST | `/write` | Create or update a memory with schema enforcement |
-| GET | `/read/{id}` | Read a memory by ID (auto-tracks access count) |
-| DELETE | `/delete/{id}` | Remove a memory |
-| GET | `/health` | Service health and vault metrics |
-| POST | `/consolidate` | Trigger manual consolidation (dry-run by default) |
+| GET | `/v1/recall?agent=&limit=` | Context-aware retrieval — memories ranked by relevance for an agent |
+| GET | `/v1/search?q=&agent=&limit=` | FTS5 full-text search, optionally scoped to one agent |
+| POST | `/v1/ingest` | Async ingestion of conversation data (called by the proxy) |
+| POST | `/v1/write` | Create or update a note |
+| GET | `/v1/read?path=` | Read a note by markdown path (auto-tracks access count) |
+| DELETE | `/v1/note?path=` | Remove a note by markdown path |
+| GET | `/health` | Liveness probe — `{status, service, version}` |
+| POST | `/v1/consolidate` | Trigger a consolidation pass; returns the per-stage report |
 
 ## Configuration
 
-All settings live in `instance.yaml` under `services.memory_vault`:
+All settings live in `instance.yaml` under `services.memory_vault`. The live block sets only `enabled` and `port`; every other field below is a struct default the service fills in if you leave it out:
 
 ```yaml
 services:
   memory_vault:
     enabled: true
     port: 42069
-    db_path: "~/.sanctum/memory/.vault.db"
-    markdown_dir: "~/.sanctum/memory"
-    consolidation_interval: 21600  # 6 hours in seconds
-    model: "council-mlx"           # LLM for enrichment
-    max_context_tokens: 2048       # injected context budget
-    ttl_check_interval: 3600       # hourly TTL sweep
+    vault_dir: "~/.sanctum/memory"                    # db lives at {vault_dir}/.vault.db
+    consolidation_interval_hours: 6                    # hours, not seconds
+    llm_url: "http://127.0.0.1:1234/v1/chat/completions"  # LM Studio-style endpoint
+    llm_model: "council-27b"                           # enrichment model, best-effort
 ```
 
 ## Technical Specifications
@@ -133,12 +131,12 @@ services:
 |----------|-------|
 | Host | `127.0.0.1` |
 | Port | 42069 |
-| Binary | ~3.8MB (Rust, statically linked) |
+| Binary | ~6.2MB (Rust; SQLite compiled in, links only system libs) |
 | Storage | SQLite 3 + FTS5, markdown files |
-| Model tier | council-mlx (enrichment only, best-effort) |
-| Dependencies | None at runtime (SQLite compiled in) |
+| Model tier | `council-27b` (enrichment only, best-effort) |
+| Dependencies | None at runtime (SQLite bundled via rusqlite) |
 | LaunchAgent | `com.sanctum.memory-vault` |
 
 <Aside type="caution">
-  The memory service stores everything locally. No cloud sync, no external API calls except to council-mlx on localhost. Your haus's memories stay in your haus. This is a privacy decision, a latency decision, and — given what the agents remember about your network outages — probably a dignity decision.
+  The memory service stores everything locally. No cloud sync, no external API calls — enrichment talks only to `council-27b` over localhost (`127.0.0.1:1234`). Your haus's memories stay in your haus. This is a privacy decision, a latency decision, and — given what the agents remember about your network outages — probably a dignity decision.
 </Aside>

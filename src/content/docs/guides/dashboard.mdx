@@ -5,9 +5,9 @@ description: Real-time monitoring dashboard for Sanctum services, infrastructure
 
 import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
 
-Every haus has a thermostat. This haus has a mission control. The command center dashboard is the primary interface for monitoring and managing a Sanctum instance — real-time visibility into service health, VM status, Docker containers, network peers, and AI model availability, all rendered in a browser window that your spouse will never voluntarily open.
+Every haus has a thermostat. This haus has a mission control. The command center dashboard is the primary interface for monitoring and managing a Sanctum instance — real-time visibility into service health, VM status, Docker containers, and network peers, all rendered in a browser window that your spouse will never voluntarily open.
 
-The root shell at `http://localhost:1111/` is the Jocasta chat interface. The operational panels live behind the same backend on `/api/*` and the packaged Holocron shell. Sanctum insists on making the librarian the front desk.
+The root shell at `http://localhost:1111/` serves the Command Center React app directly — the page title is `… Command Center`, not a chat window. The backend can swap in a Jocasta chat shell at `/` when a `jocasta.html` sits next to the running server, but the shipped build doesn't include one, so you get the dashboard. The operational data lives behind the same backend on `/api/*`.
 
 If you want the same core surfaces in a native macOS shell instead of a browser tab, see the [Holocron App](/guides/holocron-app/). Same Sanctum, less tab sprawl, slightly higher expectations.
 
@@ -15,60 +15,56 @@ If you want the same core surfaces in a native macOS shell instead of a browser 
 
 ## Architecture
 
-The dashboard runs a **Vite + React** frontend served by an **Express** backend on port 1111. A reverse proxy LaunchDaemon forwards port 80 to 1111, enabling clean browser access via the instance hostname. The number of layers involved in showing you a green dot is, frankly, unreasonable.
+The dashboard runs a **Vite + React** frontend served by an **Express** backend on port 1111, bound on all interfaces. You reach it directly at `http://manoir.local:1111/` (or by IP). The number of layers involved in showing you a green dot is, frankly, unreasonable.
+
+There's also a `:80` reverse proxy in the haus, but it does **not** front the command center. The `com.sanctum.dench-proxy` Node LaunchDaemon forwards port 80 to the Holocron renderer on `:19001`, with a hostname rule sending `force/flow.*` to Force Flow on `:4077`. The dashboard is not in that path.
 
 ```
-Browser → http://sanctum-hub (port 80)
-       → socat LaunchDaemon (port 80 → 1111)
-       → Express backend (port 1111)
-       → Vite/React frontend
+Browser → http://manoir.local:1111  → Express backend (:1111) → Vite/React frontend
+
+Browser → http://<host> (:80)        → com.sanctum.dench-proxy (Node) → :19001 (Holocron)
+                                                                       → :4077 (Force Flow, if host starts force/flow)
 ```
 
 <Aside type="tip">
-  The browser alias relies on Firewalla local DNS and an mDNS broadcast LaunchAgent. Both must be running for hostname resolution on the LAN. If neither is running, you can always fall back to the IP like an animal.
+  The only mDNS broadcaster installed (`com.sanctum.mdns-docs`) advertises `sanctum.local` for the docs site on `:4321` — not a dashboard hostname. There is no mDNS alias for the command center today, so reach it by IP or `manoir.local:1111` like an animal.
 </Aside>
 
 ## Dashboard Panels
 
-The dashboard renders conditionally based on services enabled in `instance.yaml`. Each panel polls its data source independently. It's like having seven tiny air traffic controllers, each watching one runway and none of them talking to each other.
+The dashboard polls each data source independently. It's like having a handful of tiny air traffic controllers, each watching one runway and none of them talking to each other.
 
 ### Service Health
 
-Displays the status of every LaunchAgent and systemd unit tracked by the health subsystem. Services are grouped by category (core, AI, network, monitoring) with color-coded indicators:
+Probes a fixed roster of Mac services — Home Assistant, Firewalla Bridge, XTTS, Voice Agent, MLX Council, Codestral, Kiwix, Outline, and Docker Desktop — by opening a TCP socket on each port. The result is binary:
 
-- **Green** — running, passed last health check
-- **Yellow** — running, degraded (e.g., high memory usage)
-- **Red** — stopped or failing health checks
-- **Grey** — disabled in configuration
+- **Up** — the port accepted a connection
+- **Down** — connection refused, timed out, or the port is closed
 
-You will develop a Pavlovian relationship with these colors.
+No degraded-yellow or disabled-grey state lives in the backend yet; a port either answers or it doesn't. You will still develop a Pavlovian relationship with that one color.
 
 ### VM Status
 
-Shows the Ubuntu VM state as reported by QEMU, including CPU core count, memory allocation, disk usage, and network connectivity on the bridge100 interface.
+Shows the Ubuntu VM state by SSHing into the guest (it's Lima-managed — `services.lima.instance: sanctum-vm`) and running `free -m`, `df -h /`, `uptime -p`, and `docker ps`. So: memory, disk, uptime, and the in-guest container list — reported by the guest itself, not by the hypervisor.
 
 ### Docker Containers
 
-Lists all Docker containers with their image, status, port mappings, and resource consumption. The Home Assistant container is highlighted when present.
+Lists the names of running Docker containers on the Mac (`docker ps --format '{{.Names}}'`). Names only — image, ports, and resource stats aren't surfaced yet.
 
 ### LaunchAgents
 
-Enumerates all Sanctum-managed LaunchAgents with their loaded/running state, PID, last exit status, and any recent restart events.
+Reports the loaded/running state of a curated list of Sanctum-managed LaunchAgents (watchdog, Firewalla bridge, voice agent, MLX server, the dashboard itself, and friends) as a simple up/down per label.
 
 ### Tailscale Peers
 
-Renders the Tailscale network topology showing all connected devices, their IP addresses, online status, and last seen timestamps.
-
-### LM Studio Models
-
-Queries LM Studio on port 1234 for loaded and available models, displaying model name, parameter count, quantization level, and VRAM usage.
+Renders the Tailscale peer list — each device's name, IP, OS, and online status — straight from `tailscale status`.
 
 ### Alerts
 
-Shows active and recent alerts from the watchdog system with severity, source, message, and timestamp. Alerts can be acknowledged directly from the panel.
+Shows non-dismissed alerts with their severity (`info`, `warn`, `error`, `critical`), source, message, and timestamp. Alerts are **dismissed** directly from the panel — there's no separate acknowledged-but-still-showing state; dismiss removes it from the active list.
 
 <Aside type="danger">
-  Acknowledging an alert does not fix the underlying problem. It just makes the dashboard stop yelling at you. These are different things, and confusing them is how outages happen at 2 AM.
+  Dismissing an alert does not fix the underlying problem. It just makes the dashboard stop yelling at you. These are different things, and confusing them is how outages happen at 2 AM.
 </Aside>
 
 ## API Endpoints
@@ -77,19 +73,26 @@ The Express backend exposes several endpoints consumed by the frontend and avail
 
 ### GET /api/health/status
 
-Returns the current health status of all monitored services.
+Returns a single snapshot of everything the panels render — one object, six top-level keys.
 
 ```json
 {
-  "status": "degraded",
-  "services": {
-    "openclaw-gateway": { "status": "running", "pid": 1234, "uptime": "4d 12h" },
-    "home-assistant": { "status": "running", "pid": 5678, "uptime": "2d 8h" },
-    "qemu-vm": { "status": "running", "cpu": "4 cores", "memory": "8GB" }
+  "macServices": [{ "name": "Home Assistant", "status": "down", "port": 8123 }],
+  "vm": {
+    "reachable": true,
+    "memory": "1895/7922MB (23%)",
+    "disk": "15G/96G (16%)",
+    "uptime": "up 1 day, 10 hours, 9 minutes",
+    "containers": ["openclaw-sbx-agent-main", "neo4j"]
   },
-  "timestamp": "2026-03-19T14:30:00Z"
+  "dockerContainers": ["homeassistant"],
+  "launchAgents": [{ "name": "Sanctum Watchdog", "status": "down" }],
+  "lmstudioModels": [],
+  "tailscale": [{ "name": "manoir", "ip": "100.0.0.5", "os": "macOS", "online": true }]
 }
 ```
+
+There is no top-level `status` or `timestamp` field — each panel reads its own slice and decides for itself how worried to be.
 
 ### GET /api/config
 
@@ -97,17 +100,11 @@ Serves the instance configuration from `instance.yaml` with secrets excluded. Us
 
 ### GET /api/alerts
 
-Returns active alerts with optional query parameters for filtering by severity and time range.
-
-| Parameter  | Type   | Description                        |
-|------------|--------|------------------------------------|
-| `severity` | string | Filter: `critical`, `warning`, `info` |
-| `since`    | string | ISO 8601 timestamp for lower bound |
-| `limit`    | number | Maximum results (default: 50)      |
+Returns all non-dismissed alerts as `{ "alerts": [...], "total": N }`, newest first. It takes no query parameters — no severity filter, no time range, no limit. (`GET /api/alerts/all` includes dismissed ones.) To clear one, `DELETE /api/alerts/:id` sets `dismissed: true`; `DELETE /api/alerts` clears them all.
 
 ### GET /api/health/tests
 
-Runs the full health test suite on demand and returns results. This is the same suite executed by the watchdog on its periodic schedule. Think of it as pulling the fire alarm to see if the sprinklers work. Useful, but don't do it during dinner.
+Runs the council-router test suite on demand (`run-suite.sh --suite all`) and returns the results. Think of it as pulling the fire alarm to see if the sprinklers work. Useful, but don't do it during dinner.
 
 ## Proxied Services
 
@@ -115,11 +112,11 @@ The dashboard backend proxies requests to services that are not directly accessi
 
 ### Firewalla
 
-Firewalla API calls are proxied through the Express backend, which handles the cloud authentication handshake and local P2P connection on port 8833. The frontend never communicates with Firewalla directly.
+Firewalla API calls are proxied by the backend to the Firewalla bridge on `localhost:18094` with a bearer token. The bridge — a separate service — owns the cloud authentication handshake and the box's local P2P connection on port 8833. The dashboard just talks to the bridge; the hard parts happen one hop further in.
 
 ### Home Assistant
 
-HA API requests are forwarded to `localhost:8123` through the backend, which injects long-lived access tokens stored in the Keychain. This avoids exposing HA tokens to the browser.
+HA API requests are forwarded to `localhost:8123` through the backend, which injects a long-lived access token (`HA_TOKEN`, read from the backend environment) so the browser never sees it. The token lives in the backend's env, not the Keychain — a hardening gap we know about.
 
 ## Configuration
 
@@ -127,13 +124,12 @@ Dashboard behavior is driven by `instance.yaml`:
 
 ```yaml
 services:
-  command-center:
-    enabled: true
-    port: 1111
-    bind: lan
+  dashboard:
+    port: 3333         # Vite dev server
+    backend_port: 1111 # Express backend (the one you actually hit)
 ```
 
-The `bind: lan` directive restricts the Express server to the LAN interface. The socat LaunchDaemon handles port 80 forwarding separately.
+The backend listens on `0.0.0.0:1111` — all interfaces, not LAN-only. If you want it firewalled to the LAN, that's the host firewall's job, not a config flag here.
 
 ## LaunchAgent
 
@@ -141,13 +137,13 @@ The dashboard runs as a persistent LaunchAgent:
 
 | Property       | Value                          |
 |----------------|--------------------------------|
-| Label          | `com.sanctum.dashboard`    |
+| Label          | `com.sanctum.dashboard`        |
 | RunAtLoad      | true                           |
-| KeepAlive      | false                          |
+| KeepAlive      | true                           |
 | Port           | 1111                           |
 
 <Aside type="note">
-  The reverse proxy from port 80 to 1111 runs as a **LaunchDaemon** (`com.sanctum.dench-proxy`) because binding to port 80 requires root privileges. One of the few places in this system where we admit the operating system is still in charge.
+  The `:80` reverse proxy (`com.sanctum.dench-proxy`) runs as a **LaunchDaemon** because binding to port 80 requires root privileges. It fronts the Holocron renderer on `:19001`, not this dashboard — one of the few places in this system where we admit the operating system is still in charge.
 </Aside>
 
 For the packaged desktop shell that embeds this dashboard alongside command and health surfaces, see [Holocron App](/guides/holocron-app/).

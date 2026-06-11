@@ -140,12 +140,14 @@ HA automations call Force Flow via `rest_command.force_flow` instead of `notify.
 
 ### Sanctum (Living Force, Watchdog)
 
-The `sanctum_notify` bash function in `lib/notify.sh` routes through Force Flow with a fallback to macOS Notification Center if Force Flow is down.
+The supervision layer is the most integrated: the Rust watchdog and the heal-actions and sentinel scripts under `~/.sanctum/` all `curl :4077/notify` directly, so the brain gets to decide their fate. The Rust side is wired; the shell side is mid-migration.
+
+The legacy `sanctum_notify` bash function in `lib/notify.sh` is the holdout. It still runs its own local stack — osascript, the dashboard `alerts.json`, Signal — and does its own quiet-hours gating, never touching 4077. It is the last direct path on the list below, and it is on the list to die.
 
 ```bash
 sanctum_notify "Service Down" "Gateway is unreachable" "error"
-# → POST http://127.0.0.1:4077/notify
-# → Falls back to osascript if Force Flow is down
+# → today: osascript + dashboard + Signal, computed in-process
+# → planned: POST http://127.0.0.1:4077/notify, local stack as fallback
 ```
 
 ### Council Router
@@ -184,11 +186,10 @@ The database keeps everything. There is no automatic purge. If this becomes a pr
 |----------|-------|
 | Port | 4077 |
 | LaunchAgent | `com.sanctum.force-flow` |
-| Binary | `~/.sanctum/force-flow/.venv/bin/python3.12` |
+| Interpreter | `/opt/homebrew/bin/python3` (python@3.14) |
 | Script | `~/.sanctum/force-flow/force_flow.py` |
 | Log | `~/.openclaw/logs/force-flow.log` |
 | Database | `~/.sanctum/force-flow/notifications.db` |
-| Tests | `~/.sanctum/force-flow/test_force_flow.py` (42 tests) |
 | KeepAlive | Yes (restarts on crash) |
 
 ## What It Replaced
@@ -207,14 +208,13 @@ Five systems, zero awareness of each other. Force Flow is one system that knows 
 
 If Force Flow is the switchboard, [Jocasta MCP](/architecture/jocasta-mcp/) is the archive room behind it: less glamorous, more dangerous, and usually the reason the right alert reaches the right person with fewer false alarms.
 
-As of March 30, 2026, the migration is complete. Every notification source in the haus routes through Force Flow:
+The migration is nearly complete. Almost every notification source in the haus routes through Force Flow:
 
 | Source | Integration | Fallback |
 |--------|-------------|----------|
-| HA automations (11) | `rest_command.force_flow` | None (HA native) |
-| Living Force (swap alerts) | `curl :4077/notify` | osascript |
-| `sanctum_notify()` (lib/notify.sh) | `curl :4077/notify` | osascript |
-| Proxy watchdog | `curl :4077/notify` | Direct Signal |
-| ChaosForge (weekly chaos) | `curl :4077/notify` | Log warning |
+| HA automations | `rest_command.force_flow` | None (HA native) |
+| Sanctum watchdog (Rust) | `curl :4077/notify` | local |
+| Heal-actions + sentinels | `curl :4077/notify` | local |
+| `sanctum_notify()` (lib/notify.sh) | direct local stack (not yet on 4077) | — |
 
-There are no remaining direct notification paths. If it alerts, it flows through 4077.
+The shell helper is the one holdout — it still notifies on its own, which is exactly why it is on the to-do list and not in the win column. Everything else, if it alerts, flows through 4077. "All of it" is the goal; "almost all of it" is the honest status, and the gap is one bash function wide.

@@ -16,7 +16,7 @@ That is Sanctum working correctly. Thirty-eight services, two machines, one priv
 
 ## The Shape
 
-Physically, Sanctum is a Mac Mini M4 Pro and a Lima `vmType=vz` Ubuntu VM (24.04 LTS) running on it, connected by a private `bridge100` interface on `10.10.10.0/24`. The VM was [migrated from QEMU+HVF to Lima vz on 2026-05-10](/operations/2026-05-10-the-vision-probe-lied/) to end the 370% idle-spin the QEMU/HVF bind was burning. The Mac is where hardware lives: Apple Silicon inference, Sonos bridging, Signal, HomeKit, and everything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet. If the VM wants to reach the outside world, it asks the Mac nicely, and the Mac decides whether the request is reasonable. It is an air-gapped tenant with an indoor-plumbing privilege.
+Physically, Sanctum is a Mac Mini M4 Pro and a Lima `vmType=vz` Ubuntu VM (24.04 LTS) running on it, connected by a private `bridge100` interface on `10.0.0.0/24`. The VM was [migrated from QEMU+HVF to Lima vz on 2026-05-10](/operations/2026-05-10-the-vision-probe-lied/) to end the 370% idle-spin the QEMU/HVF bind was burning. The Mac is where hardware lives: Apple Silicon inference, Sonos bridging, Signal, HomeKit, and everything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet. If the VM wants to reach the outside world, it asks the Mac nicely, and the Mac decides whether the request is reasonable. It is an air-gapped tenant with an indoor-plumbing privilege.
 
 <ZoomImage src={networkTopology.src} alt="Sanctum network topology — Mac Mini host and Ubuntu VM connected via bridge100, with Cloudflare Tunnel and Tailscale as the two external on-ramps" />
 
@@ -38,13 +38,13 @@ As of this writing, two services actually meet that bar:
 
 | Bone | Port | What It Holds Up |
 |------|-----:|------------------|
-| `sanctum-watchdog` | — | The Living Force incarnate. Checks every service every ten minutes, self-heals the ones it can, escalates the ones it can't. |
+| `sanctum-watchdog` | 2187 | The Living Force incarnate. Checks every service every ten minutes, self-heals the ones it can, escalates the ones it can't. Ships two binaries — `sanctum-watchdog` and the daemon `sanctumd` that launchd actually runs. |
 | `sanctum-proxy` | 4040 | The cloud-tier model router. Classifies requests, applies daily cost caps, falls back through a configured chain before giving up. |
 
-Several more services have Rust source scaffolded in `sanctum-rs/services/` — `sanctum-firewalla`, `sanctum-tts`, `sanctum-mlx`, `sanctum-memory`, `sanctum-server`, `sanctum-idle` — but their runtimes are still the original Node or Python implementations on the ports you'd expect (`:1984`, `:8008`, `:1337`, `:42069`). The [`tools/rust_readiness.py`](/architecture/language-maturity/#tooling) harness tracks them honestly under the `porting` stage — it will not honour a `graduated` claim unless the binary actually exists at `sanctum-rs/target/release/<name>` on disk. Bones must be earned.
+`sanctum-firewalla` has its Rust binary compiled and waiting at `sanctum-rs/target/release/`, but its live `:1984` listener is still the Node bridge — built is not deployed, so [`tools/rust_readiness.py`](/architecture/language-maturity/#tooling) parks it at the `porting` stage with the only recommendation that matters: *cut the launchd unit over*. Two more — `sanctum-tts` and `memory-vault-mcp` — have crossed into Rust source (`rusted` in the registry) but, as the Flesh section admits below, the process answering on `:8008` is still the Python TTS worker. The harness will not honour a `graduated` claim unless the binary exists at `sanctum-rs/target/release/<name>` *and* a human cuts the runtime over. Bones must be earned, then occupied.
 
 <Aside type="note">
-The binary at `~/.sanctum/living-force.sh` is four lines of bash that `exec`s `sanctum-watchdog`. Living Force is the doctrine, `sanctum-watchdog` is the vertebra. They are indexed as aliases in the readiness registry so the two names resolve to the same thing.
+There is no `living-force.sh` wrapper — the system LaunchDaemon `com.sanctum.watchdog` (plist: `/Library/LaunchDaemons/com.sanctum.watchdog-rust.plist`) runs the compiled `sanctumd` binary directly, no bash in the path. Living Force is the doctrine; `sanctum-watchdog` is the vertebra. The registry carries `living-force` as a literal alias on the `sanctum-watchdog` entry, so the two names resolve to one thing without a script pretending to be the glue.
 </Aside>
 
 ## The Flesh
@@ -57,34 +57,34 @@ The flesh is Python. It is how we find out what the service *is* before we carve
 |--------|-----:|------------------------------|
 | `force-flow` | 4077 | The unified notification hub. iPhone push, Sonos TTS, Signal via signal-cli daemon, dashboard banners, macOS Notification Center. The channel list keeps gaining members. |
 | `screen-time` | — | Curfew, wind-down, homework mode, credits, guests. Deployed alongside force-flow. The rules here change whenever a teenager finds a loophole. |
-| `memory-vault-mcp` | — | MCP server in front of `sanctum-memory`. The consolidation pass is still tuning its heuristics. |
+| `yoda-tts-worker` | 8008 | The Python TTS backend answering on `:8008` under the `com.sanctum.yoda-tts-worker` unit. The Rust `sanctum-tts` adapter that's meant to front it is built but not yet the live listener. |
 
-Flesh hardens. The `rust_readiness` tool exists specifically so we can tell when a muscle has stopped twitching long enough to become a bone. The current readout (`python3 tools/rust_readiness.py`) puts `force-flow` and `memory-vault-mcp` in the `hardening` stage — feature velocity is slowing, but not zero. `screen-time` is still firmly `organic`. It will cross when the guest-approval flow stabilises, and not a day before.
+Flesh hardens. The `rust_readiness` tool exists specifically so we can tell when a muscle has stopped twitching long enough to become a bone. The current readout (`python3 tools/rust_readiness.py`) puts `force-flow` alone in the `hardening` stage — feature velocity is slowing, but not zero. `screen-time` is still firmly `organic`, the busiest service on the chart with 42 commits in thirty days. It will cross when the guest-approval flow stabilises, and not a day before.
 
 ## The Nerves
 
 Between bones and flesh runs a network of private pathways — `bridge100` on the Mac–VM axis, and a short list of well-known local ports that services use to find each other without DNS. The rule is simple: no service reaches across the bridge for a remote HTTP call if there's a local one that does the same job. Every cross-service conversation in Sanctum is a few hundred microseconds on the loopback interface, which means nothing interesting depends on the router's mood at 3 AM.
 
 ```
- Mac Mini  10.10.10.1
+ Mac Mini  10.0.0.1
  ├─ 1111   command-center
- ├─ 1234   coder bridge (socat)
  ├─ 1337   sanctum-mlx (mTLS)
- ├─ 1338   sanctum-mlx-coder (mTLS)
- ├─ 1984   sanctum-firewalla
+ ├─ 1984   firewalla bridge (Node)
+ ├─ 2187   sanctum-watchdog
+ ├─ 3301   sanctum-mlx-codestral (coder)
  ├─ 4040   proxyd
  ├─ 4077   force-flow
- ├─ 8008   sanctum-tts
+ ├─ 8008   yoda-tts-worker
  ├─ 8900   sanctum-server router
  └─ 42069  sanctum-memory
          │
-    bridge100  10.10.10.0/24
+    bridge100  10.0.0.0/24
          │
- Ubuntu VM  10.10.10.10
+ Ubuntu VM  10.0.0.10
  ├─ openclaw-gateway (systemd)
  ├─ Yoda, Windu, Qui-Gon,
  │  Cilghal, Mundi, Mothma
- └─ outbound → 10.10.10.1 only
+ └─ outbound → 10.0.0.1 only
 ```
 
 The VM has no independent route to the outside world. Any external dependency — an Anthropic API call, a Gemini image generation, a git pull — happens through a Mac-side proxy or a Tailscale tunnel. This is either excellent security architecture or the opening scene of a containment thriller. It has been both.
@@ -125,7 +125,7 @@ When the answer is wrong in interesting ways, the notification fans out through 
 
 The thing we have learned, building this: a living system cannot be rewritten all at once, and it cannot be frozen all at once either. Rust is brittle if you reach for it too early; Python is expensive if you reach for it too late. So Sanctum runs on two substrates at the same time, and we accept that. We write new things in Python, where iteration is cheap and the shape of the service is still negotiable. We port old things to Rust, where deploys are single binaries and compile-time guarantees pay rent every day. The `rust_readiness` harness tells us the transition date. The Living Force doctrine tells us how to keep the thing alive during the transition.
 
-The practical rule is this: **you cannot tell a service's maturity from its function, only from its velocity.** Force Flow is mission-critical and still Python. `sanctum-tts` is cosmetic voice synthesis and already Rust. What graduates a service is not how important it is — it is how *settled* it is. Hardened and flexible at the same time is the only configuration that survives contact with a real family living in a real haus in Québec for a real decade. Welcome to City Montreal. Where we're going, we don't need roads — we need launchd, age keys, and a watchdog that doesn't lie.
+The practical rule is this: **you cannot tell a service's maturity from its function, only from its velocity.** Force Flow is mission-critical and still Python, because the channel list won't sit still. `memory-vault-mcp` is a medium-stakes archivist and already a single Rust binary, because its six tools stopped arguing months ago. What graduates a service is not how important it is — it is how *settled* it is. Hardened and flexible at the same time is the only configuration that survives contact with a real family living in a real haus in Québec for a real decade. Welcome to City Montreal. Where we're going, we don't need roads — we need launchd, age keys, and a watchdog that doesn't lie.
 
 <Aside type="tip">
 This overview is the ten-thousand-foot view. For the floor plan, walk through the Architecture sidebar in order: [Living Force](/architecture/living-force/) for the health doctrine, [Language Maturity](/architecture/language-maturity/) for the Python→Rust transition, [Force Flow](/architecture/force-flow/) for the notification anatomy, [Sanctum Proxy](/architecture/proxy/) for the model routing, [Services](/architecture/services/) for the full port catalogue. Every room in the haus has its own page.

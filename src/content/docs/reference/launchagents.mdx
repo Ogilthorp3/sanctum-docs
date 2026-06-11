@@ -23,41 +23,43 @@ In practice, everything starts within seconds of each other and sorts itself out
 
 ## LaunchAgents
 
-Every Sanctum-managed user-level agent has its own paragraph in the
-[LaunchAgent Catalog](/reference/launchagents-catalog/) — grouped by
-role (Core Infrastructure, AI & Voice, Network & Tunnels, System &
-Maintenance), each with port, KeepAlive setting, purpose, and the
-specific 3 AM incident that earned the paragraph. Twenty-three plists
-is a lot to scroll past on the way to a config tweak, so the catalog
-gets its own room.
+Every Sanctum-managed user-level agent worth knowing has its own
+paragraph in the [LaunchAgent Catalog](/reference/launchagents-catalog/)
+— grouped by role (Core Infrastructure, AI & Voice, Network & Tunnels,
+System & Maintenance), each with port, KeepAlive setting, purpose, and
+the specific 3 AM incident that earned the paragraph. Twenty-three
+entries is a lot to scroll past on the way to a config tweak, so the
+catalog gets its own room.
 
-The labels all live in `~/Library/LaunchAgents/`, all follow the
-`com.sanctum.*` namespace, all render from templates at
-`~/.sanctum/templates/launchagents/`, and all load at user-session
-start via `launchctl bootstrap gui/$(id -u)`. The convention is the
-only thing standing between the haus and twenty-three little XML
+The catalogued labels all live in `~/Library/LaunchAgents/`, all
+follow the `com.sanctum.*` namespace, and all load at user-session
+start via `launchctl bootstrap gui/$(id -u)`. The documented core also
+renders from templates at `~/.sanctum/templates/launchagents/` —
+twenty-two templates today, against a long tail of hand-rolled and
+one-off plists that the generator has never met. The convention is the
+only thing standing between the haus and a screenful of little XML
 islands all doing roughly the same thing slightly differently.
 
 ## LaunchDaemons
 
-Everything above runs as your user. Everything below runs as root. There is exactly one daemon in this section, and it exists because of a number: 80. The lowest-numbered privilege escalation in the history of haus automation.
+Everything above runs as your user. Everything below runs as root. Sanctum runs a fistful of root daemons — `proxyd`, `force-flow`, `firewalla`, `castellan`, `watchdog-rust`, `vmnet`, `pfctl`, `bootstrap` — but the only one that earns a paragraph here exists because of a number: 80. The lowest-numbered privilege escalation in the history of haus automation. The rest are documented where they belong.
 
 ### com.sanctum.dench-proxy
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.dench-proxy` |
-| **Purpose** | Reverse proxy from port 80 to port 1977 for the Holocron chat interface |
-| **Required Service** | `gateway` |
+| **Purpose** | Reverse proxy from port 80 to 19001 (the Holocron dashboard); hostnames starting `force` or `flow` route to 4077 (Force Flow) instead |
+| **Required Service** | `command-center` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 | **Runs as** | `root` |
 
-This is a **LaunchDaemon** (not a LaunchAgent) because binding to port 80 requires root privileges. It enables `http://holocron/` access from the LAN without specifying a port.
+This is a **LaunchDaemon** (not a LaunchAgent) because binding to port 80 requires root privileges. It enables `http://holocron/` access from the LAN without specifying a port. Unlike the agents above, it has no template — `~/.sanctum/scripts/dench-proxy.js` is hand-maintained Node, and the plist is checked in by hand.
 
 Plist location: `/Library/LaunchDaemons/com.sanctum.dench-proxy.plist`
 
-The entire reason this runs as root is so family members can type `holocron` into a browser instead of `holocron:1977`. Usability has a cost. That cost is `sudo`.
+The entire reason this runs as root is so family members can type `holocron` into a browser instead of `holocron:19001`. Usability has a cost. That cost is `sudo`.
 
 ---
 
@@ -78,7 +80,9 @@ The generator:
 2. Checks if the corresponding service is enabled in `instance.yaml`
 3. Expands `{{PLACEHOLDER}}` tokens with config values
 4. Pulls secrets from the macOS Keychain using the configured `keychain_account`
-5. Writes the rendered plist to `~/Library/LaunchAgents/` (or `/Library/LaunchDaemons/` for daemons)
+5. Writes the rendered plist to `~/Library/LaunchAgents/`
+
+The generator only manages user agents — it never writes to `/Library/LaunchDaemons/`. The one daemon on this page, `dench-proxy`, is hand-maintained for exactly that reason.
 
 ---
 
@@ -88,13 +92,13 @@ Load or unload agents using `launchctl`:
 
 ```bash
 # Load an agent
-launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.memory-vault.plist
 
 # Unload an agent
-launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.watchdog.plist
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.sanctum.memory-vault.plist
 
 # Check if an agent is running
-launchctl print gui/$(id -u)/com.sanctum.watchdog
+launchctl print gui/$(id -u)/com.sanctum.memory-vault
 ```
 
 <Aside type="caution">
