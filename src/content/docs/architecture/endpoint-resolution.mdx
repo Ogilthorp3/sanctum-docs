@@ -1,0 +1,101 @@
+---
+title: Endpoint Resolution
+description: How Sanctum resolves every host and service address dynamically so nothing breaks when the LAN or Tailscale moves — and the lint that keeps it that way.
+---
+
+import { Card, CardGrid, Aside, Steps } from '@astrojs/starlight/components';
+
+A hardcoded IP address is a time bomb with a long fuse. It works perfectly until the day the LAN shifts subnets, the router is swapped, or a Tailscale node re-authenticates with a new address — and then a dozen scripts fail at once, quietly, at 2 a.m. Sanctum has been burned by this enough times that it now treats a literal IP in code the way it treats a hardcoded password.
+
+The doctrine is one sentence: **every address a Sanctum service contacts is resolved at runtime from a single source of truth — never written as a literal in code or config.**
+
+## Why (the incidents that earned this)
+
+- **2026-04-26** — the Firewalla LAN shifted from `192.168.1.x` to a new subnet. Screen-time enforcement contacted a hardcoded gateway and silently went offline for 24+ hours. Nobody noticed until a kid did.
+- **2026-06** — the haus moved to a Gold Pro firewall on `10.0.0.0/24`. Overnight the Mac Mini's LAN IP drifted again (`10.0.0.248` → `10.0.0.10`). Every `192.168.1.x` literal was already wrong; cert SANs asserted addresses the servers no longer bound to; a mDNS proxy was advertising a dead host. {/* ip-allow: historical incident narrative — documented past addresses, not live config */}
+
+In both cases the failure was invisible because the literal was *plausible* — a real IP, just the wrong one. The resolver makes the wrong-but-plausible state impossible.
+
+## The two halves
+
+<CardGrid>
+  <Card title="Resolve" icon="random">
+    `sanctum-endpoints` discovers live addresses and writes them to a generated file every service reads. The map is never hand-edited.
+  </Card>
+  <Card title="Enforce" icon="approve-check">
+    The `no-hardcoded-ip` lint fails any commit that reintroduces a literal. Discovery without enforcement just rots again.
+  </Card>
+</CardGrid>
+
+## The resolver — `sanctum-endpoints`
+
+`~/.sanctum/bin/sanctum-endpoints` reads `instance.yaml` for **names and virtual anchors only**, then resolves them to live addresses. Every source is dynamic:
+
+| Address | How it's resolved |
+|---------|-------------------|
+| Own LAN IP | the default-route interface (`route get default` → `ipconfig getifaddr`) — never a hardcoded interface |
+| Firewalla box | the bridge's own discovery endpoint (`GET :1984/health` → `.discovery.ip`) |
+| Tailscale peers | `tailscale status --json`, matched by **MagicDNS DNSName stem** (not the messy display name), gated on `Online` — an offline node resolves to `null`, not a stale address |
+| Loopback / co-resident services | `127.0.0.1` (stable by definition) |
+| vmnet bridge / VM | the `10.10.10.x` anchors from `instance.yaml` — addresses *we* assign on a private vmnet, so they never drift |
+
+It writes two artifacts, atomically and **content-hash idempotent** (identical inputs produce a byte-identical file, so re-running never churns):
+
+- `~/.sanctum/endpoints.json` — structured, for Python / Rust / TypeScript consumers.
+- `~/.sanctum/endpoints.env` — flat `KEY=value`, sourced by shell.
+
+<Aside type="tip" title="Degrade, don't empty">
+If `tailscale` or the bridge is briefly unreachable, the generator keeps the last-known file rather than overwriting it with nulls. A transient discovery failure can't take down everything that reads the map.
+</Aside>
+
+Commands: `generate` (default), `check` (exit 1 on drift vs live), `get <KEY>`. A launchd job regenerates on network change (`WatchPaths`) and every ten minutes, so the map self-heals.
+
+### Consuming it
+
+```bash
+# shell — source the helper, resolve with a stable-anchor fallback
+source ~/.sanctum/lib/config.sh
+VM=$(sanctum_endpoint SANCTUM_VM_BRIDGE)        # 10.10.10.10  (ip-allow: doc example output)
+TS=$(sanctum_endpoint SANCTUM_MANOIR_TS)        # 100.x, current
+```
+
+```python
+import json, os
+ep = json.load(open(os.path.expanduser("~/.sanctum/endpoints.json")))
+manoir_lan = ep["hosts"]["manoir"]["lan_ip"]
+```
+
+Plists can't call a resolver from a string argument, so a launch wrapper sources `endpoints.env` and `exec`s the binary — the plist itself carries no literal. Agent prompts get a generated `<!-- AUTO:network -->` block so the council never reasons on a stale address.
+
+## The enforcement lint — `no-hardcoded-ip`
+
+`~/.sanctum/sentinels/no-hardcoded-ip.py` scans tracked files for infra-IP and MagicDNS literals (`10.0.0.x`, legacy `192.168.x`, vmnet `10.10.10.x`, Tailscale `100.64–127.x`, `*.tail*.ts.net`) and exits non-zero on any violation, so it can gate pre-commit and CI. It is the half that makes this *productized* rather than a one-time cleanup.
+
+What it does **not** flag, because those are correct by construction:
+
+- the source of truth (`instance.yaml`) and the generated `endpoints.*`
+- loopback, binaries, test fixtures
+- a line carrying an inline `ip-allow` comment — or, for declarative formats like systemd units that forbid trailing comments, `ip-allow` on the **preceding** line
+- anything inside an `<!-- AUTO:network -->` block (machine-maintained from the SoT)
+
+A justified `ip-allow` (a stable vmnet anchor used as a documented example, a dated historical runbook) is legitimate. A stale `192.168.x` never is — the lint treats those as drift, not exceptions.
+
+## The migration
+
+Roughly **920 literal sites across the Sanctum repos** were moved onto the resolver in a single pass, dispatched as parallel review-and-fix agents — one per file, each syntax-checked and reverted if it broke. Drift-prone LAN and Tailscale literals became resolver lookups; stable vmnet anchors became lookups-with-fallback or justified `ip-allow`s; dated docs and runbooks were `ip-allow`'d rather than rewritten. No services were restarted during the sweep; the changes take effect the next time each consumer runs.
+
+## Resolved sharp edges
+
+<Aside type="tip" title="Closed 2026-06-08">
+- **mTLS `--tls-host` in plists** no longer pins a literal Tailscale IP. The `com.sanctum.mlx` plist invokes `~/.sanctum/bin/sanctum-mlx-launch`, which resolves an `@SANCTUM_MANOIR_TS@` token to the live Tailscale IP at launch; the server cert SAN now carries the stable `manoir.tail7c6d11.ts.net` MagicDNS name, so remote callers verify by name regardless of IP drift. Proven against a real network failover during a single-NAT cutover (manoir fell back onto the Bell router at `192.168.2.x`, off the Gold Pro LAN): the device-stable Tailscale IP held, and every bind path (loopback, vmnet bridge, Tailscale IP) plus the MagicDNS-name SAN validated over mTLS. Both cert-gen scripts (`mtls-gen-certs.sh`, `mtls-rebuild.sh`) emit the resolved MagicDNS name as `DNS.5`, so a regeneration can't silently drop it.
+
+  :::caution[Deploying a plist change? Sync all three copies.]
+  `com.sanctum.mlx.plist` lives in **three** places that must stay byte-identical: prod `~/Library/LaunchAgents/`, the `~/.sanctum/launchagents/live/` git snapshot, and the sanctum-rs deploy canonical `services/sanctum-mlx/deploy/`. `council-drift-check.sh` SHA-compares prod against the sanctum-rs canonical every hour and pages `council-drift` on any mismatch — updating only prod (as the cert-wrapper deploy first did) floods the operator's phone hourly. Also note `PlistBuddy` strips `<!-- -->` comments, so an `ip-allow`'d literal silently loses its exemption on edit.
+  :::
+- **Two sources of truth.** `tailnet/topology.yaml` is now marked superseded (no live consumers); `instance.yaml` + the resolver are canonical.
+</Aside>
+
+## Related
+
+- [Node Topology](/architecture/node-topology/) — the hub/satellite/mobile model `instance.yaml` describes.
+- [Port Summary](/architecture/port-summary/) — the companion registry for ports (addresses' other half).
