@@ -5,7 +5,7 @@ description: Building and deploying agent skills with the shared skills reposito
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Skills are how you teach the council new tricks. Each skill is a self-contained package — documentation, executable tools, configuration — that any agent can pick up and use. You build it once, push it to GitHub, and thirty minutes later a Jedi named after a Mon Calamari healer can invoke it on a VM that has never seen the internet. The future is strange and beautiful and running on cron.
+Skills are how you teach the council new tricks. Each skill is a self-contained package — documentation, executable tools, configuration — that any agent can pick up and use. You build it once, push it to GitHub, and by the next morning's bundle sync a Jedi named after a Mon Calamari healer can invoke it on a VM that has no internet route at all. The future is strange and beautiful and running on cron.
 
 ![The automation octopus — one skill repo, many arms](./images/automation-octopus.png)
 
@@ -36,26 +36,26 @@ The `tools/` directory contains executable scripts that agents can invoke. Tools
 - Return meaningful exit codes (0 for success, non-zero for failure)
 - Include error messages on stderr
 
-## Available Skills
+The repository holds 22 documented skills (a `SKILL.md` apiece) and grows whenever someone teaches the council a new trick. A representative slice:
 
-The skills repository contains the following skills:
+| Skill                  | Description                                                      |
+|------------------------|------------------------------------------------------------------|
+| **apple-toolkit**      | Unified Apple management: messaging read access (iMessage, WhatsApp, Slack, Signal), LaunchAgents, boot health, post-boot remediation, iCloud backup/filing status |
+| **mac-mini-ops**       | UTM VM control, LaunchAgent management, LM Studio model ops, boot resilience, network topology |
+| **dench-ops**          | DenchClaw/OpenClaw gateway management, auth token refresh, plugin and model management, log diagnostics |
+| **firewalla-toolkit**  | Firewalla network security via the REST bridge: device inventory, alarms, blocking, DNS mapping, flow analysis |
+| **security-policy**    | Policy-driven auto-block on Firewalla's native quarantine — monitors alarms, quarantines threats, auto-unblocks on timeout, escalates to Yoda |
+| **orbi-toolkit**       | Orbi 960 mesh management: device inventory, WiFi blocking, mesh reboot, DHCP reservations, health checks |
+| **council-router**     | Universal multi-agent routing for the Jedi Council — structured messages, broadcasting, sessions, escalation |
+| **council-bridge**     | *(legacy — superseded by council-router; direct Jocasta ↔ Yoda SSH messaging as a fallback only)* |
+| **house-pulse**        | Single-command infrastructure dashboard: Mac services, VM health, network, Firewalla devices, boot chain |
+| **service-doctor**     | Diagnose and fix Mac Mini services — ports, LaunchAgents, Docker, tunnels, Memory Vault, VM gateway; predictive anomaly detection |
+| **reboot-check**       | Pre-reboot verification: LaunchAgents, Login Items, Docker auto-start, service health, VM reachability, boot chain |
+| **chaos-forge**        | Controlled failure injection and monthly fire drills to validate self-healing, escalation, and recovery |
+| **memory-vault**       | Obsidian-compatible shared memory for all agents — Markdown notes with frontmatter and `[[wikilinks]]` |
+| **yoda-voice**         | Live phone-call voice conversations with the operator, for matters too urgent or complex for text |
 
-| Skill                | Description                                                      |
-|----------------------|------------------------------------------------------------------|
-| **apple-toolkit**    | Unified Mac management: iMessage, WhatsApp, Signal, Slack messaging, LaunchAgents, boot checks, iCloud backup and filing |
-| **mac-mini-ops**     | QEMU VM control, LM Studio model operations, network topology     |
-| **dench-ops**        | Gateway restart, auth token refresh, plugin and model management, troubleshooting |
-| **firewalla-toolkit**| Firewalla network management: rules, DNS, device monitoring      |
-| **council-bridge**   | Jocasta-Yoda cross-instance agent communication                  |
-| **council-router**   | Agent routing, escalation configuration, port and service tests  |
-| **haus-pulse**      | Home monitoring and environmental status                         |
-| **reboot-check**     | Post-reboot verification of services and connectivity            |
-| **service-doctor**   | Service health diagnosis and automated repair                    |
-| **yoda-voice**       | Voice agent management and TTS configuration                     |
-| **orbi-toolkit**     | Orbi router and access point management                          |
-| **memory-vault**     | Persistent memory storage and retrieval                          |
-
-Twelve skills. One repository. Six agents and a dead cat. If any of them ever unionize, you're in trouble.
+Twenty-two skills. One repository. Six agents and a dead cat. If any of them ever unionize, you're in trouble.
 
 ## Skills Repository
 
@@ -67,48 +67,59 @@ The shared skills repository lives at `~/Projects/openclaw-skills` on the Mac an
 ├── mac-mini-ops/
 ├── dench-ops/
 ├── firewalla-toolkit/
-├── council-bridge/
+├── security-policy/
 ├── council-router/
-├── haus-pulse/
-├── reboot-check/
+├── council-bridge/       # legacy
+├── house-pulse/
 ├── service-doctor/
+├── reboot-check/
+├── chaos-forge/
+├── memory-vault/
 ├── yoda-voice/
-├── orbi-toolkit/
-└── memory-vault/
+└── ...                   # 22 in all, and counting
 ```
 
 Both the Mac (DenchClaw) and VM (OpenClaw) gateways load skills from this directory via the `extraDirs` configuration in their respective `openclaw.json` files. Skills appear under the `openclaw-extra` source in the gateway's skill listing.
 
 ## Sync Pipeline
 
-The VM has no direct internet access (host-only networking), so skills are synced through the Mac using a two-stage pipeline. The VM is, essentially, an air-gapped system that receives care packages from the outside world.
+The VM has no internet route at all (host-only networking), so it can't `git fetch origin`. It still ends up with the same skills as the Mac — by two completely separate paths that happen to share a name. Conflating them is the easiest mistake on this page, so here they are pulled apart.
 
 ```
-GitHub Repository
-       │
-       ▼ git pull (every 30 min)
-Mac: ~/Projects/openclaw-skills/
-       │
-       ▼ rsync (every 30 min)
-VM: ~/Projects/openclaw-skills/
+                 GitHub: openclaw-skills
+                 ┌──────────┴──────────┐
+                 ▼                     ▼
+   git pull (hourly)        git bundle (daily airgap sync)
+                 │                     │
+                 ▼                     ▼
+   Mac: ~/Projects/         VM: ~/Projects/openclaw-skills/
+        openclaw-skills/    (its own clone, fed by bundle)
+                 │
+                 ▼ rsync --delete (same hourly cron)
+   Mac: ~/.openclaw/skills/  (local gateway mirror)
 ```
+
+Both machines hold a real git clone. Neither receives a file-copy of the other's working tree — that arrow does not exist. The Mac's `rsync` is a strictly *local* mirror step.
 
 ### Schedule
 
-A Mac cron job runs every 30 minutes:
+The Mac cron runs hourly, on the hour:
 
 ```
-*/30 * * * * cd ~/Projects/openclaw-skills && git pull && rsync -az --delete ./ ubuntu@10.10.10.10:~/Projects/openclaw-skills/
+0 * * * * cd ~/Projects/openclaw-skills && git pull >> ~/.openclaw/logs/skills-sync.log 2>&1 \
+  && rsync -az --delete ~/Projects/openclaw-skills/ ~/.openclaw/skills/
 ```
 
 <Steps>
-1. `git pull` fetches the latest changes from GitHub to the Mac
-2. `rsync` mirrors the Mac copy to the VM over SSH
-3. The `--delete` flag ensures removed skills are also removed on the VM
+1. `git pull` fetches the latest changes from GitHub into the Mac clone.
+2. `rsync` mirrors that clone into the **local** gateway directory `~/.openclaw/skills/` — no network hop, no SSH.
+3. `--delete` keeps the mirror in lockstep with the repo, so removed skills disappear from the mirror, not just newly-added ones.
 </Steps>
 
+The VM is on its own schedule. The daily airgap sync (`com.sanctum.vm-sync`, 03:00) bundles `origin/main` into a portable file, SCPs it across the host-only link, and fast-forwards the VM's clone — the only way to move git history to a machine with no route to GitHub.
+
 <Aside type="caution">
-  Because the VM has no GitHub access, any skill changes made directly on the VM will be overwritten on the next sync cycle. Always commit changes through GitHub and let the pipeline propagate them. The VM forgets your local edits every thirty minutes. This is not a bug. This is a boundary.
+  Because the VM can't reach GitHub, always commit through GitHub and let the bundle sync carry your work across. But the VM does **not** silently clobber your local edits: its `git merge --ff-only origin/main` *refuses* a dirty tree, logs it, and pages the operator — your work survives, the decision is yours. The boundary is real; it's just polite about it.
 </Aside>
 
 ## Developing a New Skill
@@ -122,7 +133,7 @@ A Mac cron job runs every 30 minutes:
 
 4. **Test locally** by invoking tools directly from the command line to verify inputs, outputs, and error handling.
 
-5. **Commit and push** to GitHub. The sync pipeline will distribute the skill to both Mac and VM within 30 minutes.
+5. **Commit and push** to GitHub. The Mac picks it up on its next hourly pull; the VM gets it on the next daily airgap bundle sync. Two clocks, not one.
 
 6. **Verify** by asking an agent to list its available skills and confirm the new skill appears.
 </Steps>

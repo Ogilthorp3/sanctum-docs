@@ -26,52 +26,54 @@ The central configuration file lives at `~/.sanctum/instance.yaml`. It contains 
 ```yaml
 # ~/.sanctum/instance.yaml
 instance:
-  name: "Sanctum Hub"
-  slug: sanctum-hub
-  domain: example.net
+  name: Manoir Neo
+  slug: manoir-neo
+  timezone: America/New_York
 
 network:
-  lan_subnet: 192.168.1.0/24
-  vm_subnet: 10.10.10.0/24
-  gateway_ip: 192.168.1.1
-  mac_bridge_ip: 10.10.10.1
-  vm_ip: 10.10.10.10
+  mac_bridge_ip: 10.0.0.1
+  vm_ip: 10.0.0.10
+  mac_lan_ip: 192.0.2.10
+  bridge_subnet: 10.0.0.0/24
+  lan_subnet: 192.0.2.0/24
 
 services:
-  gateway:
-    enabled: true
-    port: 1977
   home_assistant:
-    enabled: true
     port: 8123
     homekit_port: 21063
   dashboard:
-    enabled: true
-    port: 1111
-  mlx_codestral:
-    enabled: true
-    port: 3301              # sanctum-mlx-codestral serving Codestral-22B-v0.1-4bit (CODER role)
+    port: 3333
+    backend_port: 1111
   council_mlx:
     enabled: true
-    port: 1337              # sanctum-mlx serving Qwen3.6-35B-A3B-4bit
+    port: 1337                          # sanctum-mlx serving Qwen3.6-35B-A3B-4bit (mTLS)
+    model_path: ~/Projects/mlx-finetune/models/Qwen3.6-35B-A3B-4bit-text
   voice_agent:
     enabled: true
     port: 1138
   # ... additional services
 
+# The coder seat (Codestral-22B at :3301) is NOT a services.* block --
+# it's a router backend. The router owns where prompts get sent:
+router:
+  backends:
+    coder:
+      url: http://127.0.0.1:3301/v1   # sanctum-mlx-codestral, plain HTTP
+      default_model: mlx-community/Codestral-22B-v0.1-4bit
+
 nodes:
   hub:
     type: hub
-    host: 192.168.1.10
+    host: 192.0.2.10
     tailscale_ip: 100.0.0.20
     ssh_user: operator
-    services: [gateway, home_assistant, dashboard, voice_agent]
+    services: [home_assistant, dashboard, voice_agent, council_mlx]
   satellite:
     type: satellite
     host: null  # set during on-site install
     tailscale_ip: 100.0.0.30
     ssh_user: operator
-    services: [gateway, home_assistant]
+    services: [home_assistant]
 ```
 
 <Aside type="tip">
@@ -101,14 +103,16 @@ source ~/.sanctum/lib/config.sh
 
 | Function | Description | Example |
 |----------|-------------|---------|
-| `sanctum_get <path>` | Read a value by dotted path | `sanctum_get services.gateway.port` |
-| `sanctum_slug` | Return the instance slug | `sanctum-hub` |
-| `sanctum_home` | Return the Sanctum haus directory | `~/.sanctum` |
-| `sanctum_vm_ssh` | Return the VM SSH target | `ubuntu@10.10.10.10` |
+| `sanctum_get <path>` | Read a value by dotted path | `sanctum_get services.voice_agent.port` |
+| `sanctum_slug` | Return the instance slug | `manoir-neo` |
+| `sanctum_home` | Return the Mac home directory | `/Users/neo` |
+| `sanctum_vm_ssh` | Return the VM SSH target | `ubuntu@10.0.0.10` |
 | `sanctum_enabled <service>` | Check if a service is enabled | `sanctum_enabled voice_agent` |
 | `sanctum_expand <template>` | Expand `{{PLACEHOLDER}}` strings | See below |
 | `sanctum_whoami` | Return this node's identity | `hub` |
-| `sanctum_node_get <node> <path>` | Read a value from a specific node | `sanctum_node_get satellite tailscale_ip` |
+| `sanctum_node_ts_ip <node>` | Read a typed field from a node | `sanctum_node_ts_ip satellite` |
+
+There's a typed helper for each node field that gets read often -- `sanctum_node_type`, `sanctum_node_host`, `sanctum_node_user`, `sanctum_node_ts_ip` -- so you're not reaching for `sanctum_get nodes.X.field` every time. They're thin wrappers around exactly that, named so the call site reads like a sentence.
 
 ### Usage Example
 
@@ -142,18 +146,18 @@ import { get, isEnabled, expand, vmSsh, whoami, nodeGet, getNodesByType } from '
 | `expand(template)` | Replace `{{PLACEHOLDER}}` tokens | `string` |
 | `vmSsh()` | Return the VM SSH connection string | `string` |
 | `whoami()` | Return this node's identity | `string` |
-| `nodeGet(node, path)` | Read a value from a specific node | `string \| number \| boolean` |
-| `getNodesByType(type)` | List nodes of a given type | `string[]` |
+| `nodeGet(node, field)` | Read a value from a specific node | `T` (defaults to `string`) |
+| `getNodesByType(type)` | List nodes of a given type | `Array<{ id: string } & object>` |
 
 ### Usage Example
 
 ```typescript
 import { get, isEnabled } from './lib/config';
 
-const port = get('services.dashboard.port') as number;  // 1111
+const port = get('services.dashboard.port') as number;  // 3333
 
 if (isEnabled('home_assistant')) {
-  const haPort = get('services.home_assistant.port');
+  const haPort = get('services.home_assistant.port');  // 8123
   console.log(`HA available at http://localhost:${haPort}`);
 }
 ```
@@ -171,28 +175,26 @@ If you've ever manually edited 11 plist files, changed a port number, missed one
 Templates live in `~/.sanctum/templates/launchagents/` and use a `{{PLACEHOLDER}}` syntax:
 
 ```xml
-<!-- Template: com.sanctum.gateway.plist -->
+<!-- Template: com.sanctum.council-mlx.plist -->
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.sanctum.gateway</string>
+    <string>com.sanctum.council-mlx</string>
     <key>ProgramArguments</key>
     <array>
-        <string>{{NODE_PATH}}</string>
-        <string>{{GATEWAY_BIN}}</string>
-        <string>gateway</string>
-        <string>start</string>
+        <string>{{MAC_HOME}}/.sanctum/bin/sanctum-council-mlx</string>
+        <string>--model</string>
+        <string>{{MLX_MODEL_PATH}}</string>
+        <string>--host</string>
+        <string>{{MAC_BRIDGE_IP}}</string>
         <string>--port</string>
-        <string>{{GATEWAY_PORT}}</string>
+        <string>{{MLX_PORT}}</string>
     </array>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>GATEWAY_TOKEN</key>
-        <string>{{GATEWAY_TOKEN}}</string>
-    </dict>
+    <key>StandardOutPath</key>
+    <string>{{LOGS_DIR}}/mlx-server.log</string>
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -226,7 +228,7 @@ The `generate-plists.sh` script renders all templates:
 
 ## Secrets Management
 
-Secrets never appear in `instance.yaml` or any configuration file. They are stored in two locations depending on the platform:
+Secrets never appear in `instance.yaml` or any configuration file. They live in two stores, split by what they protect: per-service tokens in the Keychain, the gateway config under SOPS.
 
 <Tabs>
   <TabItem label="macOS (Keychain)">
@@ -238,23 +240,26 @@ Secrets never appear in `instance.yaml` or any configuration file. They are stor
 
     Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM. Nothing like waking up to fresh tokens you didn't have to think about.
   </TabItem>
-  <TabItem label="VM (SOPS + age)">
-    On the VM, secrets are encrypted at rest using SOPS with age encryption:
+  <TabItem label="Gateway (SOPS + age)">
+    The OpenClaw gateway config is encrypted at rest with SOPS and age. The encrypted file is the source of truth and lives in git; the plaintext is regenerated on every launch and never committed:
 
     ```bash
-    # Encrypted file
-    ~/.sanctum/secrets.enc.yaml
+    # Encrypted source of truth (git-tracked)
+    ~/.openclaw/openclaw.json.enc
 
-    # Decrypted at gateway startup by the wrapper script
-    ~/.sanctum/sops-start.sh
+    # Decrypt wrapper, wired into ai.openclaw.gateway as ProgramArguments[0]
+    ~/.openclaw/scripts/sops-start.sh
+
+    # age private key (never leaves the host)
+    ~/.config/sops/age/keys.txt
     ```
 
-    The `sops-start.sh` wrapper decrypts secrets into environment variables, starts the gateway, and never writes plaintext to disk. The secrets exist in memory only, like a thought you can't quite remember but that still controls your haus.
+    At launch, `sops-start.sh` decrypts `openclaw.json.enc` into `openclaw.json` (mode `0600`, gitignored), then execs SanctumBridge. One guardrail worth knowing: if you edit `openclaw.json` directly and it's newer than the encrypted source, the wrapper skips the decrypt rather than clobber your edits -- and quietly reminds you to re-encrypt. The plaintext is disposable; the `.enc` is the one you protect.
   </TabItem>
 </Tabs>
 
 <Aside type="danger">
-  Never commit secrets to Git, never add them to `instance.yaml`, and never pass them as command-line arguments (they appear in `ps` output). Use Keychain on macOS and SOPS on the VM. If you're reading this because you already did one of those things -- rotate immediately. We'll wait.
+  Never commit secrets to Git, never add them to `instance.yaml`, and never pass them as command-line arguments (they appear in `ps` output). Keychain holds the per-service tokens; SOPS + age holds the gateway config. If you're reading this because you already did one of those things -- rotate immediately. We'll wait.
 </Aside>
 
 ## Adding a New Service

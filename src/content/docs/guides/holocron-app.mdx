@@ -33,20 +33,27 @@ At launch, Electron loads the built renderer from `dist-renderer` and then start
 /Users/neo/Documents/Claude_Code/run_sanctum.sh --headless
 ```
 
-That startup path brings up the services the window depends on:
+Ports and paths are centralized in `holocron-config.yaml`, read by `yq` at startup — no hardcoding. The sectors the window depends on:
 
 ```yaml
-ui:
-  port: 3333
-command_center:
-  port: 1111
-health_center:
-  port: 2222
-archives:
-  port: 3344
-library:
-  port: 8888
+sectors:
+  ui:
+    port: 3333
+  command_center:
+    port: 1111
+  health_center:
+    port: 2222
+  archives:           # navigator-sidecar
+    port: 3344
+  obliteratus:        # ML engine
+    port: 7860
+  neural_link:        # remote debugging / vision
+    port: 1138
+  living_force:       # Sanctum Watchdog health
+    port: 2187
 ```
+
+The Jedi Archives library (Kiwix offline reader on `:8888`) is not in that list because it is not a startup sector — it is an embedded surface you open from Settings, running on its own whether or not the Holocron is up. The shell links to it; it does not babysit it.
 
 The renderer is intentionally thin. It owns the shell, navigation, theme state, and fallback panels. The actual work still lives in the local services. This is good. When the shell breaks, you debug a shell. When the shell also contains the whole backend, you debug a lifestyle.
 
@@ -54,22 +61,25 @@ The renderer is intentionally thin. It owns the shell, navigation, theme state, 
 
 The black-screen failure turned out not to be a React bug. It was process cleanup performed with the accuracy of artillery.
 
-The packaged app launched `run_sanctum.sh`, and that script previously contained:
+The packaged app launches `run_sanctum.sh --headless`, and that script's `kill_zombies` sweep contains:
 
 ```sh
-pkill -f "the-holocron"
+pkill -f "the-holocron" || true
+pkill -f "vite" || true
 ```
 
-Electron helper processes included `the-holocron` in their command line via the app's user-data path, so the backend bootstrap script was killing the freshly launched renderer just after startup. The app was booting correctly and then quietly stepping on its own throat.
+Electron helper processes carry `the-holocron` in their command line via the app's user-data path, so the backend bootstrap can kill the freshly launched renderer just after startup. The app boots correctly, then quietly steps on its own throat.
 
-The fix was to narrow cleanup to actual Holocron dev processes instead of anything containing the string:
+The correct narrowing scopes cleanup to actual Holocron dev processes instead of anything containing the string:
 
 ```sh
 pkill -f "/Users/neo/Projects/the-holocron/.*vite" || true
 pkill -f "vite --host 127.0.0.1 --port 3333" || true
 ```
 
-We also hardened the renderer startup path:
+The broad lines are still in `run_sanctum.sh` today — the scoped form above is the fix, not yet landed. It is the next obvious commit, not folklore about how it already works.
+
+We did harden the renderer startup path:
 
 - `KyberHealth` now uses Electron IPC for status instead of browser fetch on first paint.
 - The library tab degrades to an intentional fallback panel when its embedded surface is unavailable.
@@ -97,17 +107,19 @@ For reference, the npm script resolves to:
 bash /Users/neo/Projects/the-holocron/scripts/install-latest-holocron.sh
 ```
 
-The updater now runs the full release path:
+The updater runs the full release path:
 
 ```sh
 npm run build
 npm run test:e2e
-bash scripts/sign-holocron-app.sh /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app
-bash scripts/notarize-holocron-app.sh /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app
-ditto /Users/neo/Projects/the-holocron/dist/mac-arm64/The\ Holocron.app /Applications/The\ Holocron.app
+npm run package:app                 # electron-builder --dir
+bash scripts/sign-holocron-app.sh   dist/mac-arm64/The\ Holocron.app
+bash scripts/notarize-holocron-app.sh dist/mac-arm64/The\ Holocron.app   # only if notary profile set
+ditto dist/mac-arm64/The\ Holocron.app /Applications/The\ Holocron.app
+codesign --verify --deep --strict dist  # then stapler validate, then release/native e2e
 ```
 
-That means the app in `/Applications` is the app that just passed browser e2e, release signing, Apple notarization, and post-install validation. A surprisingly modern concept, especially for a bridge app that used to black-screen itself on principle.
+Notarization is conditional: the script notarizes only when the `holocron-notarization` keychain profile (or an App Store Connect API key) is configured, and logs "Skipping notarization" otherwise — in which case the final smoke test runs in `native` mode instead of `release`. With the profile present, the app in `/Applications` is the one that just passed browser e2e, packaging, release signing, Apple notarization, and post-install validation. A surprisingly modern concept for a bridge app that used to black-screen itself on principle.
 
 ## End-to-End Validation
 
@@ -124,16 +136,15 @@ cd /Users/neo/Projects/the-holocron
 npm run test:e2e
 ```
 
-It validates:
+After the Apple-UX redesign the seven tabs collapsed to four destinations, so the suite now drives those. It validates:
 
-- dashboard rendering
-- theme switching
-- chat rendering
-- command tab
-- health tab
-- library tab or library fallback
-- screenshot artifacts in `tests/artifacts/`
-- installed notarized release launch, signature, and stapled ticket in release mode
+- **Status** — the hero (System status) plus the Memory / Storage / Repository vitals and the Core sectors grid
+- **Activity** — chat rendering (the personalized greeting and the "Consult the Jedi Archives" input), captured to `tests/artifacts/chat.png`
+- **Haus** — the property switcher (main hub plus the satellite property, pending)
+- **Settings** — the Appearance section and the Jedi Archives library link
+- **Family** — the Household header (screen-time + digital twin)
+- a clean console after the walkthrough (any page error fails the run)
+- in `release` mode: installed-app signature, stapled ticket, and a launch-and-stays-alive smoke test
 
 The suite uses `agent-browser` instead of Playwright. This is not ideology. It is because the fastest way to debug the Holocron is to make the browser tell you what it sees, not to spend an afternoon constructing a browser abstraction layer so a test runner can lie more formally.
 
@@ -150,10 +161,10 @@ HOLOCRON_E2E_MODE=release HOLOCRON_E2E_EXPECT_STAPLED=1 bash tests/holocron-e2e.
 ```
 
 - `web` drives the Vite surface on `127.0.0.1:3333`
-- `native` attaches `agent-browser` to an installed debug-style Electron window through CDP
-- `release` verifies the installed app the way macOS actually sees it: signed, stapled, launchable, and not immediately dead
+- `native` attaches `agent-browser` to an installed debug-style window through CDP on `:9223`
+- `release` verifies the installed app the way macOS sees it: signed, stapled, launchable, and not immediately dead
 
-That split exists because a hardened notarized release should be treated like a release artifact, not bullied into behaving like a debug target with a remote debugging port jammed into it at runtime. Apple gets touchy. In this case, correctly.
+That split exists because a hardened notarized release should be treated like a release artifact, not bullied into behaving like a debug target with a remote debugging port jammed in at runtime. Apple gets touchy. In this case, correctly.
 
 ## Signing and Notarization
 
@@ -168,7 +179,7 @@ Expected result:
 ```text
 accepted
 source=Notarized Developer ID
-origin=Developer ID Application: Bertrand Nepveu (GJ994MN2YF)
+origin=Developer ID Application: <your name> (<TEAMID>)
 ```
 
 The release pipeline uses:
@@ -199,8 +210,8 @@ Until then, `npm run update:app` is the operational truth. It is not elegant. It
 
 ## Idle Behavior
 
-The Holocron used to drop into an idle "screensaver" mode that grabbed fullscreen and always-on-top behavior after two minutes. That was thematically coherent and operationally irritating.
+The Holocron used to drop into a hyperspace-stars "screensaver" mode that grabbed fullscreen after five minutes of idle. Thematically coherent, operationally irritating.
 
-Idle screensaver behavior is currently disabled in the renderer. If you leave the app open while you make tea, it now mostly minds its own business. This is the sort of restraint we should encourage when possible.
+The MeditationMode screensaver is currently disabled in the renderer; the fullscreen `toggle-screensaver` IPC still exists in `main.js` but nothing fires it. If you leave the app open while you make tea, it now mostly minds its own business. This is the sort of restraint we should encourage when possible.
 
 If the installed app goes black again, the first stop is [Troubleshooting](/operations/troubleshooting/). We try very hard not to repeat incidents. We also keep having enough material to stay in business.

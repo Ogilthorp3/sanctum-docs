@@ -12,9 +12,9 @@ import { Aside } from '@astrojs/starlight/components';
 **Date:** 2026-04-12
 **Status:** Hard-won wisdom
 
-Fine-tuning a language model is like teaching a surgeon to paint. You might get a beautiful painting, but there's a real chance they forget where the liver is.
+Fine-tuning a language model is like teaching a surgeon to paint. You might get a beautiful painting, but there's a real chance they forget where the liver is. Catastrophic forgetting isn't a metaphor here — it's a number, and we measured it.
 
-This page documents what we learned from training five different models for the Sanctum Council — including the time we turned a 0.929 coding champion into a model that forgot what port 1337 does.
+This page documents what we learned from training five different models for the Sanctum Council — including the time we trained our best coding model into one that forgot what port 1337 does.
 
 ## The Catastrophic Forgetting Incident
 
@@ -79,14 +79,14 @@ The Qwen and Gemma models started weak and improved with training. Coder-14B sta
 | Weak base (Qwen 27B raw) | Full LoRA with persona + domain | Needs everything |
 | Moderate base (Gemma 4 31B) | LoRA with balanced data | Needs persona + jailbreak hardening |
 | Strong base (Coder-14B) | **No training** — rich system prompts | Already good. Training hurts. |
-| Cloud (Opus 4.6) | Not trainable — prompt engineering only | Best overall, use as-is |
+| Cloud (Opus 4.7) | Not trainable — prompt engineering only | Best overall, use as-is |
 
 ### 4. Measure Before and After — Always
 
 The Model Tournament exists because "it feels better" is not a metric. Every training run gets a Carmack v2 before and after. If the after is worse, the adapters get deleted, not promoted.
 
 <Aside type="tip">
-The nightly pipeline now includes a promotion gate: the candidate must beat the champion by >5% on at least one category to be promoted. This prevents catastrophic forgetting from reaching production. The gate saved us this time — the 0.252 model was never deployed.
+The nightly pipeline now includes a promotion gate — four ordered thresholds, each *derived* from the current champion's own measured score rather than set by hand, documented in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/). A candidate that regresses gets refused with a breadcrumb naming the cell that killed it. The gate saved us this time: the 0.252 model never reached a port anyone could call.
 </Aside>
 
 ## The Enriched System Prompt Breakthrough
@@ -111,19 +111,19 @@ Instead of training the model's weights, we enriched the system prompts in `agen
 | **Enriched system prompts** | **0.765** | **+0.061** |
 
 <Aside type="tip">
-Enriched system prompts improved Coder-14B by 8.7% without touching a single weight. The few-shot examples are the key — they teach the model *how to reason* about the domain, not *what to memorize*. When Windu sees "MAC FA:CE:DE:CA:CA:01 at 2AM," the few-shot example shows it should identify the device (Albert's iPhone), check the time against screen-time policy, and recommend action. No training required.
+Enriched system prompts improved Coder-14B by 8.7% without touching a single weight. The few-shot examples are the key — they teach the model *how to reason* about the domain, not *what to memorize*. When Windu sees a known MAC (say `AA:BB:CC:DD:EE:XX`) making requests at 2 AM, the few-shot example shows it should identify the device (Albert's iPhone), check the time against screen-time policy, and flag it. No training required — the prompt did the teaching.
 </Aside>
 
 The cost? A YAML file. The benefit? A model that's better than any fine-tuned version we produced. The lesson: if the model already understands your domain from context, give it better context rather than burning your domain into its weights.
 
 ## Nightly Pipeline — Bugs We Caught
 
-The promotion pipeline (`master-pipeline.sh`) ran for 4 consecutive nights (Apr 9-12) without ever promoting a candidate. Not because the candidates were bad — because the benchmarking had two bugs:
+The first promotion pipeline — a since-retired shell script, not the current `sanctum-model-scout` + `benchmark.py` pair — ran for 4 consecutive nights (Apr 9-12) without ever promoting a candidate. Not because the candidates were bad. Because the benchmarking had two bugs:
 
-1. **`get_score()` always returned 0** — a `pipefail` + SIGPIPE interaction where `ls | head -1` triggered a broken pipe exit code, which `set -euo pipefail` silently swallowed
+1. **The score function always returned 0** — a `pipefail` + SIGPIPE interaction where `ls | head -1` triggered a broken-pipe exit code, which `set -euo pipefail` silently swallowed
 2. **Missing `pkill` between V1 and candidate benchmarks** — the V1 server was never killed before starting the candidate, so both benchmarks tested the same model on the same port
 
-Both produced identical scores (0.699 vs 0.699), both returned as 0, and every night the pipeline "rejected" the candidate. Four nights of training, zero promotions, zero errors logged.
+Both produced identical scores (0.699 vs 0.699), both returned as 0, and every night the pipeline "rejected" the candidate. Four nights of training, zero promotions, zero errors logged. The harness has since been rebuilt; the calibrated four-gate version lives in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/).
 
 <Aside type="caution">
 The promotion gate correctly prevented bad models from deploying — but it also prevented good models from deploying, because the scoring was broken. Test your tests. Monitor your monitors. The pipeline that validates your model is itself a system that needs validation.
@@ -131,13 +131,12 @@ The promotion gate correctly prevented bad models from deploying — but it also
 
 ## Current Best Configuration
 
-Based on all experiments:
+The deployed config has rolled forward since these experiments — Coder-14B was retired 2026-06-07 once a denser model won the local seat — but the lesson it taught is load-bearing in every row:
 
-| Agent | Model | Training | Why |
-|-------|-------|----------|-----|
-| Windu, Mothma, Jocasta | Opus 4.6 (cloud) | None | Best overall, prompt-only |
-| Yoda, Qui-Gon, Ahsoka | Coder-14B (local) | **Enriched prompts** | 0.765 — prompts beat LoRA |
-| Cilghal, Mundi | Gemma4+LoRA (local) | LoRA on enriched data | Privacy + jailbreak hardening |
-| Coding | Coder-14B (local) | **None** | 0.929 — don't touch it |
+| Seat | Model | Training | Why |
+|------|-------|----------|-----|
+| Cloud heavy-reasoning | Opus 4.7 | None | Best overall, prompt-only |
+| Local council (`:1337`, mTLS) | Qwen3.6-35B-A3B-4bit | **Enriched prompts**, nightly LoRA gated | Prompts carry the domain; gated adapters earn their floor |
+| On-call code (`:3301`) | Codestral-22B-v0.1-4bit | **None** | Won the code seat on the eval, not on size |
 
-The surprise: the best local model is the one we didn't train. Sometimes the most sophisticated engineering decision is knowing when to stop engineering.
+The pattern survived the model churn intact: the strongest local model is still the one whose weights we leave alone and whose context we obsess over. Sometimes the most sophisticated engineering decision is knowing when to stop engineering.

@@ -7,13 +7,13 @@ import { Steps, Aside, Tabs, TabItem, Code } from '@astrojs/starlight/components
 
 ![Tommy supervises the Mac Mini setup — quality assurance by feline](./images/tommy-mac-mini.png)
 
-This is the detailed install reference. If you've never set up Sanctum before and you want the friendly 4-step version, start with [Quick Start](./quick-start/) — it's the same canonical flow, just terser.
+Tommy has sat on every Mac Mini that ever ran Sanctum and rejected exactly none of them. Low bar, but he's never been wrong.
 
-This page goes deeper: full troubleshooting for the steps that occasionally go sideways, a verification protocol you can run after install, and an operator-grade appendix for people running Sanctum from source rather than from the published binary.
+This is the detailed install reference. Never set up Sanctum and want the friendly 4-step version? Start with [Quick Start](./quick-start/) — same canonical flow, just terser. This page goes deeper: troubleshooting, a post-install verification protocol, and an operator-grade appendix for running from source.
 
 ## The canonical install path
 
-Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sanctum`. The tap installs the `sanctum-cli` Python application, which then orchestrates everything else (cloud backup setup, first backup, restore canary, all of it).
+Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sanctum`. The tap installs the `sanctum-cli` Python application, which orchestrates everything else — cloud backup setup, first backup, restore canary.
 
 <Steps>
 
@@ -23,10 +23,10 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
 
-   Homebrew installs into `/opt/homebrew/` and will ask for your administrator password once during the install. That prompt is from Apple's installer, not Homebrew — it needs to create directories under `/opt/`. After it finishes, run `brew --version` to confirm; you should see something like `Homebrew 5.x.x`.
+   Homebrew installs into `/opt/homebrew/` and asks for your administrator password once. That prompt is from Apple's installer, not Homebrew — it needs to create directories under `/opt/`. When it finishes, `brew --version` should print something like `Homebrew 5.x.x`.
 
    <Aside type="tip">
-   On a brand-new Mac, the first time you run `brew install` Homebrew may also prompt you to install Apple's Command Line Tools. Let it. That's a one-time macOS thing and Apple does it from System Settings → Software Update if your Mac doesn't have them yet.
+   On a brand-new Mac, the first `brew install` may also prompt you to install Apple's Command Line Tools. Let it — that's a one-time macOS thing, routed through System Settings → Software Update if your Mac doesn't have them yet.
    </Aside>
 
 2. **Install `sanctum-cli` via the Homebrew tap.**
@@ -35,7 +35,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    brew install ogilthorp3/sanctum/sanctum-cli
    ```
 
-   This installs Python 3.12 (if you don't already have it), creates a private virtual environment under Homebrew's `libexec`, pulls `sanctum-cli` v0.8.0 plus its 38 runtime Python dependencies from PyPI, and symlinks the `sanctum` command into `/opt/homebrew/bin/sanctum`.
+   This installs Python 3.12 (if you don't already have it), creates a private virtual environment under Homebrew's `libexec`, pulls `sanctum-cli` v0.9.0 plus its 38 runtime Python dependencies from PyPI, and symlinks the `sanctum` command into `/opt/homebrew/bin/sanctum`.
 
    Confirm:
 
@@ -43,7 +43,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum --help
    ```
 
-   You should see a help screen listing the available sub-commands (`status`, `doctor`, `onboard`, `backup`, `chat`, `agent`, `proxy`, `bridge`, `cloud`, `code`, `config`, `keychain`, `vision`).
+   You should see a help screen. The eight commands a new operator actually meets are `status`, `doctor`, `onboard`, `backup`, `cloud`, `chat`, `agent`, and `config`. The full surface is wider (`self-test`, `update`, `logs`, `devices`, `keys`, `proxy`, `bridge`, `screen-time`…) but you can ignore the operator commands until you need them. `--help` is the authoritative list; this page won't pretend to be.
 
 3. **Run the one-shot onboarding flow.**
 
@@ -51,7 +51,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum onboard --recipe family
    ```
 
-   The `family` recipe is the right pick for a new haus. It pulls a curated backup set (Documents, Desktop, ssh keys, dotfiles — about 5 GB after dedup), walks you through Cloudflare R2 cloud-bucket setup if you don't have one yet, runs a dry-run backup so you can see exactly what will happen, executes the real backup, and verifies the round-trip by restoring a known file as a canary.
+   The `family` recipe is the right pick for a new haus. It pulls a curated backup set (Documents, Desktop, ssh keys, dotfiles — ~5 GB after dedup), runs a pre-flight size estimate to confirm the recipe fits R2's free tier before touching the network, walks you through Cloudflare R2 setup if you don't have a bucket yet, executes the real backup, and verifies the round-trip by restoring `~/.zshrc` as a canary. That canary is the point: a backup you've never restored is a rumour, not a backup.
 
    When it finishes, you'll see a green panel that says **"Your Sanctum is alive, &lt;your name&gt;."** That's the moment.
 
@@ -69,7 +69,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum doctor        # full diagnostic
    ```
 
-   `status` should print a single line ending in green text. `doctor` runs deeper checks: each cloud backend, the Keychain credentials, the LaunchAgent that runs daily backups, and the network paths. Everything green is the goal.
+   `status` should print a single line ending in green text. `doctor` runs deeper checks: the `com.sanctum.*` LaunchAgents, the AI providers it routes to (Claude, Gemini, the local MLX seat), and the restic backup repos — reading the backup key out of Keychain to run a real `restic check` on each. Brevity-gated: one OK line when healthy, `--full` for every row. Everything green is the goal.
 
 </Steps>
 
@@ -77,13 +77,13 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
 
 | What | Where | How long it lasts |
 |---|---|---|
-| Daily backups (verified) | `com.sanctum.backup` LaunchAgent runs at a quiet hour | Forever, automatic |
-| Restore canary (proves round-trip works) | Same LaunchAgent, weekly | Forever, automatic |
+| Daily backups (verified) | `com.sanctum.backup` LaunchAgent, 04:00 | Forever, automatic |
+| Restore canary (proves round-trip works) | `com.sanctum.backup-canary` LaunchAgent, weekly (Sun 06:00) | Forever, automatic |
 | Health snapshot command | `sanctum status` | On-demand |
 | Deep diagnostic | `sanctum doctor` | On-demand |
 | Local agent chat | `sanctum chat` | On-demand |
-| Audit log of every action | `~/.sanctum/logs/` with bounded rotation | Bounded at 50 MB per service |
-| Credentials in macOS Keychain | `security find-generic-password -s sanctum/...` | Until you rotate them |
+| Audit log of every action | `~/.sanctum/logs/` with bounded rotation | Rolls at 10 MB per file |
+| Credentials in macOS Keychain | `security find-generic-password -a sanctum-backup -s sanctum-backup-key` | Until you rotate them |
 
 No phone-home. Nothing leaves your Mac unless you explicitly configured a cloud backup target (which you did, for backups, encrypted with a key only you control).
 
@@ -104,21 +104,21 @@ pkgutil --pkg-info=com.apple.pkg.CLTools_Executables
 sudo xcode-select --install
 ```
 
-If the install dialog doesn't appear, open System Settings → Software Update — Apple sometimes routes CLT updates through the regular macOS Update path.
+If the install dialog doesn't appear, check System Settings → Software Update — Apple sometimes routes CLT updates through there.
 
 ### "Cloudflare R2 setup failed"
 
-The R2 wizard opens browser tabs for the steps that need your input (account creation, API token generation, bucket creation). If a browser tab didn't open or you cancelled it partway, re-run:
+The R2 wizard opens browser tabs for the steps that need your input (account creation, API token, bucket creation). If a tab didn't open or you cancelled partway, re-run:
 
 ```bash
-sanctum cloud setup r2
+sanctum cloud setup --backend r2
 ```
 
-The wizard is idempotent — it picks up where you left off. If R2 is being slow to provision (rare but real), wait a few minutes and try `sanctum doctor` again.
+(The backend is an option, not a positional, so plain `sanctum cloud setup` already defaults to R2.) The wizard is idempotent — it picks up where you left off. If R2 is slow to provision (rare but real), wait a few minutes and try `sanctum doctor` again.
 
 ### "Permission denied (publickey)"
 
-This shows up if you ran `sanctum onboard` while signed into a different Mac account, or with `sudo` (don't). Sanctum stores its credentials in your user-level Keychain. Make sure you're running as your normal user, not root.
+This shows up if you ran `sanctum onboard` from a different Mac account, or with `sudo` (don't). Sanctum stores credentials in your user-level Keychain — run it as your normal user, not root.
 
 ### "The brew tap failed to clone"
 
@@ -132,16 +132,16 @@ If that returns a custom path, the hooks in that directory need to soft-fail whe
 
 ### "Permissions prompts every time I run `sanctum`"
 
-If you keep seeing macOS permission dialogs ("node would like to access X"), the canonical fix lives in [`runbooks/node-tcc-stop-the-prompts.md`](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md). Short version: install the Node.js Foundation `.pkg` from `nodejs.org/dist/`, migrate sanctum services to `/usr/local/bin/node`, and grant Full Disk Access once. The runbook has the script that automates all 13 grants.
+If you keep seeing macOS permission dialogs ("node would like to access X"), the canonical fix lives in [`runbooks/node-tcc-stop-the-prompts.md`](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md). Short version: grant Full Disk Access once to the pinned Homebrew node binary at `/opt/homebrew/Cellar/node/<version>/bin/node` (Cmd+Shift+G in the FDA pane to paste the path). FDA is a TCC superset — one grant silences every `SystemPolicy*` prompt for all nine sanctum node services. The catch: TCC keys the grant to the exact versioned path, so a `brew upgrade node` orphans it. That's why node is on the brew pin list; re-grant only after a deliberate unpin-upgrade. (FDA does *not* cover Automation or Accessibility — those are separate one-time grants, both in the runbook.)
 
 ## What's next
 
 If everything looks green:
 
-- Read the [First Run](./first-run/) page for the verification checklist (it's the same sanity-check the daily LaunchAgent runs, on demand)
-- Read [What Is Sanctum?](./what-is-sanctum/) if you want context on the why
-- Browse the architecture pages if you want to know how it works under the hood
-- For sharing the haus with family members, see [Family Pass installation](./installation-family-pass/) (v1.0 is in active implementation — the operator path works today)
+- [First Run](./first-run/) — the verification checklist (same sanity-check the daily LaunchAgent runs, on demand)
+- [What Is Sanctum?](./what-is-sanctum/) — context on the why
+- The architecture pages, if you want to know how it works under the hood
+- [Family Pass installation](./installation-family-pass/) for sharing the haus (v1.0 is in active implementation; the operator path works today)
 
 If something is failing:
 
@@ -157,10 +157,10 @@ If something is failing:
 If you're an operator running Sanctum from the source tree rather than the published binary — typically because you're hacking on it — there's a separate flow that installs the full audit-wall toolchain and the checked-in renderers.
 
 <Aside type="tip">
-You almost certainly do not want this if you're just trying Sanctum out. The brew install path above gives you the full beta-tester experience. The source-install path is for active contributors.
+You almost certainly do not want this if you're just trying Sanctum out. The brew path above is the whole beta-tester experience. This appendix is for people who plan to edit the renderer that writes its plumbing — a strictly smaller crowd.
 </Aside>
 
-The legacy `sanctumctl` operator CLI is what older docs reference. It still exists, but its consumers are mostly the daily audit-wall and the release-discipline gate (`tools/sanctum-release.sh`), not new users. If you're maintaining a fork or building from a tag, that's the path:
+The legacy `sanctumctl` operator CLI is what older docs reference. It still exists, but its consumers are mostly the daily audit-wall and the release gate (`tools/sanctum-release.sh`), not new users. If you're maintaining a fork or building from a tag, that's the path:
 
 ```bash
 # From inside the checked-in workspace
@@ -168,6 +168,6 @@ python3 tools/sanctumctl.py bootstrap --write   # writes the ~/.sanctum scaffold
 python3 tools/sanctumctl.py doctor              # runs the audited verification wall
 ```
 
-That flow creates the `~/.sanctum` scaffold, drops in the annotated `instance.yaml.example`, writes a node identity file, and runs the audited verification wall. Inspect-before-write is `bootstrap` without `--write`.
+That flow creates the `~/.sanctum` scaffold, drops in the annotated `instance.yaml.example`, writes a node identity file, and runs the audited verification wall. Run `bootstrap` without `--write` to preview first.
 
-The manual section that used to live here (`mkdir`, `cp`, hand-editing `instance.yaml`, generating LaunchAgents one by one) is preserved in git history if you need it for a deep-debugging scenario, but the canonical operator path is `sanctumctl bootstrap --write` followed by `sanctumctl doctor`. The same `instance.yaml` schema, the same `~/.sanctum` layout — just driven by the audit-wall renderer instead of by hand.
+The old by-hand section (`mkdir`, `cp`, hand-editing `instance.yaml`, generating LaunchAgents one at a time) lives in git history if you ever need it for deep debugging. Same schema, same `~/.sanctum` layout — the renderer just stopped trusting you to type it correctly.

@@ -18,16 +18,16 @@ The Capacity Doctrine is the immune-system answer: refuse bad loads up front ins
     Every heavyweight service has a `ram_budget_mb` number in `~/.sanctum/capacity.yaml`. No budget, no admission. The number is measured with `vmmap --summary` at peak inference, then rounded up. A false refuse is strictly cheaper than an OOM freeze.
   </Card>
   <Card title="Rule 2: Admission controller gates every load" icon="approve-check">
-    `castellan` on port 2189 computes `free = pool − Σ(loaded.peak_reserve)` from `phys_footprint` (the same metric jetsam uses), not RSS. Loading a service is admitted only if `new.budget ≤ free` AND none of its `exclusive_with` neighbours are currently loaded. Refusals return HTTP 409 with the blocking service name and the remedy command.
+    `castellan` on port 2189 computes `free = pool − Σ phys_footprint(all loaded) − Σ peak_reserve(pinned)` from `phys_footprint` (the same metric jetsam uses), not RSS — pinned services reserve their *peak*, everyone else only what they hold right now. A load is admitted only if its budget fits that free pool AND none of its `exclusive_with` neighbours are loaded. A budget shortfall returns HTTP 503 with the shortfall and the eviction order; an exclusion clash returns HTTP 409 with the blocking service name.
   </Card>
   <Card title="Rule 3: Nothing critical gets suspended" icon="shield">
-    the Lima/vz VM, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
+    The council VM, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
   </Card>
 </CardGrid>
 
 ## The Ledger Is Live
 
-The admission ledger is not a state file that can drift from reality. On every `/admit` or `/capacity` request, the daemon re-scans `ps` output and reconciles against `capacity.yaml`. A service is loaded iff either:
+The admission ledger is not a state file that can drift from reality. On every `/status` or `/services` request — and before any `/load/{svc}` — the daemon re-scans `ps` output and reconciles against `capacity.yaml`. A service is loaded iff either:
 
 - its `process_pattern` regex matches some live command line, **or**
 - its `loaded_check_cmd` exits zero within two seconds.
@@ -62,8 +62,8 @@ Exclusion isn't about RAM arithmetic alone — two 20 GB services could technica
 |---|---|---|
 | **Kernel-as-arbiter** | Program jetsam priority bands per-PID so the kernel itself shelters Cilghal and sheds Codestral | Every 2s via `memorystatus_control`; birth-floor via plist `JetsamPriority` |
 | **Admission** | Refuse loads that exceed headroom | Before anything allocates |
-| **Monitor** | Catch half-loaded states and signal-stopped processes | Every 2s tick; every 60s inference probe |
-| **Recovery** | Unstick what slipped through | `kill -CONT` on T; `unload_cmd + load_cmd` after 3 probe failures; deadman SIGCONT if the keeper himself dies |
+| **Monitor** | Catch half-loaded states and signal-stopped processes | Every 2s tick — pinned-service probe, drift check, SIGSTOP scan |
+| **Recovery** | Unstick what slipped through | `kill -CONT` on a stopped service; `unload_cmd + load_cmd` on a failed probe, rate-limited to one rescue per service per 30 min with backoff after two failures in an hour; deadman SIGCONT if the keeper himself dies |
 
 The layers are independent. The kernel arbitration alone would miss admission cases where everything fits but the wrong thing got loaded. Admission alone would miss a runaway allocation that grew after load. Monitoring alone would miss the load that never should have started. Recovery alone is the old watchdog — it reacts too late. Together they form a control loop where every pathway back to a known-good state is explicit. The Castellan implements all four — see [The Castellan](./the-castellan.mdx) for the daemon's anatomy.
 
@@ -75,7 +75,7 @@ The canonical way to load a heavy service is never `launchctl kickstart …` dir
 castellan load <service-name>
 ```
 
-The CLI posts to `/load/{svc}`, and only if the HTTP response is 200/202 does the daemon execute the service's `load_cmd`. A refused load exits non-zero with the remedy printed to stderr. Direct calls bypass admission — they're permitted but discouraged, and the kernel-band layer will still steer jetsam toward the right victim if pressure crests.
+The CLI posts to `/load/{svc}`. The daemon runs admission first and only then executes the service's `load_cmd`, synchronously, returning `200` once the seat probes healthy. A refusal never reaches `load_cmd`: the CLI exits non-zero on the `503` or `409`, remedy printed to stderr. Direct `launchctl` calls bypass admission — they're permitted but discouraged, and the kernel-band layer will still steer jetsam toward the right victim if pressure crests.
 
 ## Host Budget Math
 
@@ -84,7 +84,7 @@ Each host declares three numbers. The pool is derived:
 ```yaml
 hosts:
   cabane:                        # slug for the home-server role
-    hostname: manoir.lan         # the actual machine on that slug
+    hostname: manoir.local       # the actual machine on that slug
     ram_physical_mb: 65536       # Mac Mini M4 Pro, 64 GiB unified
     ram_reserved_mb: 10240       # macOS + WindowServer + user apps
     ram_safety_mb: 4096          # hard floor — never fill below
@@ -107,4 +107,4 @@ The system no longer discovers the ceiling by hitting it.
 - `sanctum-castellan` crate: `~/Projects/sanctum-rs/services/sanctum-castellan/`
 - Capacity config: `~/.sanctum/capacity.yaml`
 - Castellan log: `/var/log/sanctum/castellan.log` (system LaunchDaemon)
-- Chaos soak test: `~/Projects/openclaw-skills/chaos-forge/scenarios/memory-pressure-soak.sh`
+- Chaos scenario: `~/Projects/openclaw-skills/chaos-forge/scenarios/admission-refusal.sh` — drives a load past headroom and asserts the refusal

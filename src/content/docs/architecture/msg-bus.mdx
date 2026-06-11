@@ -24,23 +24,23 @@ Adding more channels was making the noise worse without making the system reliab
 ## The architecture
 
 ```
-         /notify            /enqueue
-sources ─────────► Force Flow ────────► sanctum-msg-bus
-                                              │
-                                  ┌───────────┼───────────┐
-                                  ▼           ▼           ▼
-                              iMessage     HA-push     Signal     SMS
-                              (primary)    (fail-2)    (fail-3)   (fail-4)
-                                  │           │           │           │
-                                  ▼           ▼           ▼           ▼
-                              chat.db     HA REST     signal-cli   voip.ms
-                              ack-poll    200=ok      delivered    DLR
+              /enqueue
+sources ───────────────► sanctum-msg-bus
+                              │
+                  ┌───────────┼───────────┐
+                  ▼           ▼           ▼
+              iMessage     HA-push     Signal
+              (primary)    (fail-2)    (fail-3)
+                  │           │           │
+                  ▼           ▼           ▼
+              chat.db     HA REST     signal-cli
+              ack-poll    200=ok      RPC-accept
 ```
 
 - **Daemon**: Python, aiohttp on `127.0.0.1:4076`. Lives at `~/.sanctum/msg-bus/`. Launchd-managed as `com.sanctum.msg-bus`.
 - **Queue**: sqlite WAL at `~/.sanctum/msg-bus/queue.db`. Tables: `messages` (one row per enqueue), `attempts` (one row per send attempt + ack). State machine: `pending` → `in_flight` → `delivered | failed`. Survives daemon restart.
-- **Dispatch policy**: per-severity failover lists in `config.yaml`. P0 cascades through all four transports; P1 stops at HA-push; P2 is iMessage-only (quiet hours: held for the morning digest).
-- **Transports**: pluggable. Each implements `send → SendReceipt`, `poll_ack → AckState`, `healthz → HealthState`. The bus dispatcher iterates the failover plan, waits for ack within the per-step timeout, escalates on no-ack.
+- **Dispatch policy**: per-severity failover lists in `config.yaml`. P0 cascades through every wired transport; P1 stops at HA-push; P2 is iMessage-only. A fourth tier (SMS via voip.ms) and quiet-hours digest batching are written into the policy but not yet wired — see [What's not wired yet](#whats-not-wired-yet).
+- **Transports**: pluggable. Each implements `send → SendReceipt`, `poll_ack → AckState`, `healthz → HealthState`. The bus dispatcher iterates the failover plan, waits for ack within the per-step timeout, escalates on no-ack. Three are wired: iMessage and HA-push have true delivery confirmation; Signal is RPC-accept only in v0.1 (a successful JSON-RPC return counts as delivered — a real `MessageDeliveredEvent` subscription waits on pinning the signal-cli daemon to a known version).
 - **API** (three endpoints, all on `127.0.0.1:4076`):
   - `POST /enqueue` — body: `{audience, severity, title, body}` → returns `{msg_id}`
   - `GET /msg/{id}` — full lifecycle (every attempt + ack + final state)
@@ -58,7 +58,7 @@ The TCC layer that makes the FDA-or-no-FDA decision durable is documented separa
 
 ## What "ack-tracked" buys you in practice
 
-The first live failover happened within twelve minutes of cutover. A P1 enqueue attempted iMessage, hit a TCC permission gap (osascript without Apple-Events grant under launchctl spawn context), returned an error in ~7 s, and the dispatcher moved to HA-push, which delivered in 0.8 s. The operator got their phone notification. The `/msg/2` lifecycle JSON recorded both attempts, with timestamps and the specific failure mode. Total operator-visible disruption: zero.
+The first live failover is still sitting in the queue as message `2`. A P1 enqueue attempted iMessage, the osascript send succeeded but the chat.db row never appeared (the launchd-spawned daemon was missing Full Disk Access), so the attempt failed after ~7 s, and the dispatcher moved to HA-push, which delivered in ~1 s. The operator got their phone notification. The `/msg/2` lifecycle JSON recorded both attempts, with timestamps and the exact failure mode — verbatim, `"osascript send succeeded but chat.db row never appeared (FDA?)"`. Total operator-visible disruption: zero.
 
 The same alert under the old fire-and-forget routing would have logged `iphone_critical sent OK` and disappeared into the void.
 
@@ -68,12 +68,22 @@ The same alert under the old fire-and-forget routing would have logged `iphone_c
 - **Voice (yoda_call) end-to-end audio.** That's a LiveKit workstream. The bus enqueues an intent; the LiveKit pipeline runs the call.
 - **Bert ↔ Yoda inbound chat.** Coming in Phase 3 as `sanctum-msg-bridge` — a chat.db poller that watches the operator's self-chat and routes new messages to Yoda for processing. Same chat.db pattern as the iMessage transport, in the reverse direction.
 
+## What's not wired yet
+
+The bus runs, the queue persists, and the iMessage/HA-push/Signal transports dispatch with the failover and ack-tracking described above. Three things the policy file anticipates are written down but not yet live — flagged here so an operator reading `/healthz` isn't surprised by the gaps:
+
+- **Force Flow doesn't produce to the bus yet.** Today `force_flow.py` still fans out to channels directly via `doctrine_route_channels()`; nothing POSTs to `/enqueue`. The bus's only producers so far are smoke tests and hand-rolled `curl`. Until the producer side is wired, the bus is a proven receiver waiting for live traffic — and retiring it changes nothing about how notifications actually flow.
+- **The SMS / voip.ms tier is policy-only.** `config.yaml` lists `voipms_sms` as the P0 fourth step, but there's no `voipms_sms.py` transport and the entry is `enabled: false`. At runtime the dispatcher hits the missing transport and skips it, so P0 today cascades through three transports, not four.
+- **Quiet-hours digest batching is half-built.** `dispatch.py` knows how to hold P2 until morning when `quiet=True`, but the live dispatcher always passes `quiet=False` and there's no digest flusher to release held messages at 07:00. So P2 fires immediately, day or night.
+
+None of these are bugs in the parts that ship. They're the honest edge of a Phase 1+2 daemon — the diagram drawn one tier ahead of the wiring.
+
 ## Operating notes
 
 - **Look at the queue first**: `curl -s http://127.0.0.1:4076/healthz | jq` shows queue depth and per-transport health. Queue depth > 50 sustained means a transport is degraded.
 - **Read a message's lifecycle**: `curl -s http://127.0.0.1:4076/msg/<id> | jq` for the full attempt log. Useful when an alert didn't arrive — you can see whether iMessage was even tried or whether the dispatcher failed over silently.
 - **Logs**: `~/.sanctum/logs/msg-bus.{stdout,stderr}.log`. Restart: `launchctl kickstart -k gui/$(id -u)/com.sanctum.msg-bus`.
-- **Retire**: `launchctl bootout gui/$(id -u)/com.sanctum.msg-bus` + rename the plist `.retired-YYYY-MM-DD`. Force Flow falls back to direct per-channel dispatch (the legacy code path) within the next request.
+- **Retire**: `launchctl bootout gui/$(id -u)/com.sanctum.msg-bus` + rename the plist `.retired-YYYY-MM-DD`. Notifications are unaffected — Force Flow still dispatches per-channel directly (see [What's not wired yet](#whats-not-wired-yet)), so until `/enqueue` has live producers, retiring the bus is a no-op for delivery.
 
 ## Spec + plan
 

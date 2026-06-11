@@ -16,7 +16,13 @@ A satellite node is a lighter Sanctum installation at a secondary location that 
 
 ## Step 1: Mac Setup
 
-On the satellite Mac, set hostname, enable SSH and Screen Sharing, and install Tailscale from the App Store. Screen Sharing is non-negotiable — you will need to reach this machine remotely, and "drive hours to a remote property to restart a LaunchAgent" is not an acceptable runbook.
+On the satellite Mac, set hostname, enable SSH and Screen Sharing, and install Tailscale via the open-source Homebrew formula:
+
+```bash
+brew install tailscale
+```
+
+Use the formula, not the App Store / GUI build — the sandboxed App Store build cannot host an SSH server, which is exactly the reachability the rest of this step depends on. Screen Sharing is non-negotiable for the same reason: you need to reach this machine remotely, and "drive hours to a remote property to restart a LaunchAgent" is not an acceptable runbook.
 
 ## Step 2: Install Sanctum
 
@@ -33,29 +39,38 @@ Add the satellite to `instance.yaml`:
 
 ```yaml
 nodes:
-  satellite:
+  chalet:
     type: satellite
-    host: 192.168.1.10
+    host: ''                      # empty — remote nodes are reached over Tailscale, not LAN
     tailscale_ip: 100.0.0.30
-    ssh_user: operator
+    tailscale_name: chalet
+    ssh_user: neo
     sync:
-      hub: hub
+      hub: manoir                 # the hub NODE NAME, not the literal "hub"
+      skills_rsync: true
+      state_reconcile: true
     services:
       home_assistant:
         enabled: true
+        port: 8123
       heartbeat:
-        interval: 120
+        enabled: true
+        interval: 300
 ```
+
+`host` is only meaningful for nodes on the hub's LAN; a satellite over Tailscale leaves it empty and is addressed by `tailscale_name`. The `hub:` under `sync` must name the hub node (`manoir`), not the literal string `hub` — the system resolves it back to a node, and "hub" resolves to nothing.
 
 ## Step 4: Install Services
 
 ```bash
-brew install node@22
-npm install -g openclaw
+brew install node
+pnpm add -g openclaw
 ~/.sanctum/generate-plists.sh
 ```
 
-Install Docker Desktop for Home Assistant if needed. Set memory to 4 GB unless the satellite Mac has resources to spare, in which case, set it to 4 GB anyway. Docker will take whatever you give it and ask for more.
+Match the hub's Node line rather than pinning a version — the haus runs Node 26, and a satellite stranded on an older track is just version skew waiting to surface during a sync. And it is `pnpm`, not `npm`: the workspace went pnpm-only to kill lockfile drift, and one `npm install` on a remote box reintroduces exactly the drift the migration buried.
+
+Install OrbStack for Home Assistant if needed — the haus runtime since the Colima retirement. OrbStack manages memory dynamically with native networking, so there is no 4 GB knob to agonize over. This is, genuinely, one fewer decision than you used to have.
 
 ## Step 5: On-Site Setup
 
@@ -63,4 +78,6 @@ Configure integrations requiring physical presence: cameras, alarm systems, smar
 
 ## Ongoing Sync
 
-The hub pushes skills, config, and secret updates to satellites via Tailscale. The satellite doesn't need to think about staying current — it receives updates from the hub the way a branch office receives memos from corporate. Whether it reads them is between it and the LaunchAgents.
+The satellite's `sync` block declares its intent — `hub: manoir`, `skills_rsync: true`, `state_reconcile: true` — and the schema is wired for a hub that pushes skills, config, and secrets over Tailscale the way a branch office gets memos from corporate.
+
+The push driver itself is not built yet. Today the contract is honest about the satellite's appetite but there is no LaunchAgent doing the rsync; bringing a chalet current is still a manual `scp` of `lib/` and `instance.yaml`, same as Step 2. The flags are a promise, not a cron job — which is the most corporate thing about the whole arrangement.

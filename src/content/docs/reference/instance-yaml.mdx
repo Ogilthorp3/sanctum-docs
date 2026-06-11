@@ -23,20 +23,24 @@ The absolute minimum to get Sanctum to acknowledge your existence:
 
 ```yaml
 instance:
-  slug: sanctum-hub
   name: Sanctum Hub
+  slug: sanctum-hub
   timezone: America/Montreal
 
 users:
-  mac: operator
-  vm: ubuntu
+  mac:
+    username: neo
+    home: /Users/neo
+  vm:
+    username: ubuntu
+    home: /home/ubuntu
 
 network:
-  vm_ip: 10.10.10.10
-  mac_bridge_ip: 10.10.10.1
+  mac_bridge_ip: 10.0.0.1
+  vm_ip: 10.0.0.10
+  mac_lan_ip: 192.0.2.10
   bridge_interface: bridge100
   vm_ssh_alias: openclaw
-  lan_ip: 192.168.1.10
 ```
 
 ---
@@ -66,17 +70,23 @@ The slug shows up everywhere — DNS records, file paths, tunnel names, dashboar
 
 ## users
 
-OS-level usernames on the Mac host and the VM. Unglamorous but load-bearing — every SSH command, every file path, every LaunchAgent plist has one of these baked in. Get them wrong and nothing errors cleanly; things just silently don't work, which is worse.
+OS-level identities on the Mac host and the VM. Unglamorous but load-bearing — every SSH command, every file path, every LaunchAgent plist resolves through one of these. Get them wrong and nothing errors cleanly; things just silently don't work, which is worse. Each side is a map of a `username` and a `home` directory, not a bare string — `sanctum_home()` and `sanctum_expand()` read the home path straight off `users.mac.home`.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `mac` | `string` | Yes | macOS username on the host machine |
-| `vm` | `string` | Yes | Linux username inside the VM |
+| `mac.username` | `string` | Yes | macOS username on the host machine |
+| `mac.home` | `string` | Yes | macOS home directory (absolute) |
+| `vm.username` | `string` | Yes | Linux username inside the VM |
+| `vm.home` | `string` | Yes | Linux home directory inside the VM |
 
 ```yaml
 users:
-  mac: operator
-  vm: ubuntu
+  mac:
+    username: neo
+    home: /Users/neo
+  vm:
+    username: ubuntu
+    home: /home/ubuntu
 ```
 
 ---
@@ -87,19 +97,23 @@ The plumbing. Nobody admires plumbing until it breaks, and then it's the only th
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
-| `vm_ip` | `string` | Yes | Static IP of the VM on the host-only network |
 | `mac_bridge_ip` | `string` | Yes | Mac-side IP on the bridge interface |
+| `vm_ip` | `string` | Yes | Static IP of the VM on the host-only network |
+| `mac_lan_ip` | `string` | Yes | Mac Mini IP on the local network |
 | `bridge_interface` | `string` | Yes | macOS bridge interface name (e.g., `bridge100`) |
+| `bridge_subnet` | `string` | No | CIDR for the Mac↔VM bridge network |
+| `lan_subnet` | `string` | No | CIDR for the LAN |
 | `vm_ssh_alias` | `string` | Yes | SSH config alias for the VM (e.g., `openclaw`) |
-| `lan_ip` | `string` | Yes | Mac Mini IP on the local network |
 
 ```yaml
 network:
-  vm_ip: 10.10.10.10
-  mac_bridge_ip: 10.10.10.1
+  mac_bridge_ip: 10.0.0.1
+  vm_ip: 10.0.0.10
+  mac_lan_ip: 192.0.2.10
   bridge_interface: bridge100
+  bridge_subnet: 10.0.0.0/24
+  lan_subnet: 192.0.2.0/24
   vm_ssh_alias: openclaw
-  lan_ip: 192.168.1.10
 ```
 
 ---
@@ -118,67 +132,69 @@ Where things live on disk. Every backup script, every log rotation, every skill 
 
 ```yaml
 paths:
-  openclaw_config: /Users/neo/.openclaw
-  openclaw_skills: /Users/neo/Projects/openclaw-skills
-  logs: /Users/neo/.sanctum/logs
-  projects: /Users/neo/Projects
-  backups: /Users/neo/.sanctum/backups
+  openclaw_config: ~/.openclaw
+  openclaw_skills: ~/Projects/openclaw-skills
+  logs: ~/.openclaw/logs
+  projects: ~/Projects
+  backups: ~/Backups
 ```
 
 <Aside type="caution">
-Use absolute paths. Tilde expansion works in the shell library but not in all contexts. The safest path is the one that doesn't require interpretation.
+The leading `~` is expanded against `users.mac.home` by `sanctum_expand()` — not by your shell — so it resolves the same whether a cron job, a LaunchAgent, or a TypeScript helper reads it. That uniformity is the whole point. A literal absolute path works too; just don't mix conventions inside one instance and expect them to agree.
 </Aside>
 
 ---
 
 ## services
 
-Here's where it gets real. Every service your haus runs — the agent gateway, the voice engine, the haus automation hub, the offline library — each one gets an `enabled` boolean and, if it listens on a port, a `port` key. Flip the boolean, regenerate plists, and the service appears or vanishes. Configuration as incantation.
+Here's where it gets real. Every service your haus runs — the agent gateway, the voice engine, the haus automation hub, the offline library — each one gets an `enabled` boolean and, if it listens on a port, a `port` key. Flip the boolean, regenerate plists, and a freshly enabled service gets its LaunchAgent. Configuration as incantation.
 
-The `enabled` flag controls whether `generate-plists.sh` renders and loads the corresponding LaunchAgent. A disabled service isn't just stopped — it's unloaded. It doesn't exist until you say it does.
+The `enabled` flag controls whether `generate-plists.sh` renders the corresponding LaunchAgent. Today a *disabled* service is simply skipped during generation — its plist isn't rewritten. If it was already loaded, it keeps running until you `launchctl bootout` it by hand. "Disabled" means "not regenerated," not yet "torn down." Honest beats incantation.
 
 ### Service Table
 
 | Service | Key | Default Port(s) | Description |
 |---------|-----|-----------------|-------------|
-| Gateway | `gateway` | `1977` | OpenClaw/DenchClaw agent gateway |
+| Agent Gateway | `dench` | — | OpenClaw/DenchClaw agent gateway (runs in the VM; reached on the host via the Lima-forwarded `127.0.0.1:1977`) |
 | Home Assistant | `home_assistant` | `8123` | Home automation hub (Docker) |
-| Dashboard | `dashboard` | `3333`, `1111` | Command center web UI (`3333` Web, `1111` API) |
-| Firewalla Bridge | `firewalla` | `1984` | Firewalla P2P bridge |
-| VM | `vm` | — | QEMU virtual machine |
+| Dashboard | `dashboard` | `3333`, `1111` | Command center web (`3333`) + API (`1111`); the Holocron UI on `3344` has since become the front door |
+| Firewalla Bridge | `firewalla_bridge` | `1984` | Firewalla P2P bridge |
+| VM | `vm` | — | Ubuntu 24.04 guest under Lima |
 | Voice Agent | `voice_agent` | `1138` | Yoda voice interaction agent |
-| Qwen3-TTS | `qwen3-tts` | `8008` | Text-to-speech server (mlx-audio backend; XTTS-v2 retired 2026-04-19) |
-| MLX Server | `mlx_server` | `1337` | Council MLX model server |
+| Qwen3-TTS | `qwen3_tts` | `8008` | Text-to-speech server (mlx-audio backend; XTTS-v2 retired 2026-04-19) |
+| Council MLX | `council_mlx` | `1337` | Council MLX model server (Qwen3.6-35B-A3B, mTLS) |
 | Cloudflare Tunnel | `cloudflare` | — | Cloudflare Zero Trust tunnel |
 | iCloud Filer | `icloud_filer` | — | Automatic iCloud filing daemon |
 | Health Center | `health_center` | `2222` | Health monitoring dashboard |
 | Tailscale | `tailscale` | — | Mesh VPN |
-| LM Studio | `lmstudio` | `1234` | Local LLM inference server |
+| Memory Vault | `memory_vault` | `42069` | Cross-session message store |
 | Watchdog | `watchdog` | — | Service health monitoring |
 | Kiwix | `kiwix` | `8888` | Offline library server |
-| Signal Bridge | `signal_bridge` | — | Signal messaging bridge |
-| Sanctum Proxy | `proxy` | `4040` | LLM routing proxy |
+| Signal Proxy | `signal_proxy` | `5150` | Signal messaging bridge (host-forwarded from the VM) |
+| Outline | `outline` | `3100` | Self-hosted wiki |
 
-Seventeen core services shown above. The full catalogue is 38 services. On a Mac Mini. Under a desk. Running a haushold.
+Seventeen of the services are shown above. The full catalogue is 28 keys under `services:`. On a Mac Mini. Under a desk. Running a haushold.
+
+<Aside type="note">
+The LLM routing proxy (`proxyd`, live on `4040`) is *not* a `services:` entry — it's driven by the top-level `router:` block, which maps model names to backends (`council-secure` on `1337`, plus coder/cloud/spatial). Don't go looking for `services.proxy`; it was never there.
+</Aside>
 
 ### Full Example
 
 ```yaml
 services:
-  openclaw_gateway:
+  dench:
     enabled: true
-    port: 1977
 
   home_assistant:
-    enabled: true
     port: 8123
+    homekit_port: 21063
 
   dashboard:
-    enabled: true
-    port: 1111
-    dev_port: 1111
+    port: 3333
+    backend_port: 1111
 
-  firewalla:
+  firewalla_bridge:
     enabled: true
     port: 1984
 
@@ -187,12 +203,15 @@ services:
 
   voice_agent:
     enabled: true
+    port: 1138
 
-  xtts_server:
+  qwen3_tts:
     enabled: true
+    port: 8008
 
   council_mlx:
     enabled: true
+    port: 1337
 
   cloudflare:
     enabled: true
@@ -202,32 +221,35 @@ services:
 
   health_center:
     enabled: true
+    port: 2222
 
   tailscale:
     enabled: true
 
-  lmstudio:
+  memory_vault:
     enabled: true
-    port: 1234
+    port: 42069
 
   watchdog:
     enabled: true
+    interval: 600
 
   triage:
     enabled: true
     interval: 30
-    enabled: true
 
   kiwix:
     enabled: true
     port: 8888
 
-  signal_bridge:
-    enabled: false
-
-  proxy:
+  signal_proxy:
     enabled: true
-    port: 4040
+    port: 5150
+    host: vm
+
+  outline:
+    enabled: true
+    port: 3100
 ```
 
 ### Checking Service Status
@@ -237,18 +259,20 @@ From the shell library:
 ```bash
 source ~/.sanctum/lib/config.sh
 
-if sanctum_enabled services.gateway; then
-  echo "Gateway is enabled on port $(sanctum_get services.gateway.port)"
+if sanctum_enabled voice_agent; then
+  echo "Voice agent is enabled on port $(sanctum_get services.voice_agent.port)"
 fi
 ```
+
+`sanctum_enabled` takes the *bare* service name — it prepends `services.` and appends `.enabled` itself. Pass it `services.voice_agent` and it dutifully looks up `services.services.voice_agent.enabled`, finds nothing, and reports disabled. `sanctum_get`, by contrast, wants the full dotted path. The asymmetry is a footgun; the rule of thumb is "name the service for `enabled`, name the path for `get`."
 
 From TypeScript:
 
 ```typescript
-import { isEnabled, get } from './lib/config';
+import { isEnabled, get } from './lib/config.js';
 
-if (isEnabled('services.gateway')) {
-  const port = get('services.gateway.port');
+if (isEnabled('voice_agent')) {
+  const port = get('services.voice_agent.port');
 }
 ```
 
@@ -261,14 +285,16 @@ The only section of this file that's about what *isn't* here. Sanctum never stor
 | Key | Type | Description |
 |-----|------|-------------|
 | `keychain_account` | `string` | macOS Keychain account name for stored tokens |
-| `onepassword_vault` | `string` | 1Password vault name for credentials |
-| `sops_file` | `string` | Path to SOPS-encrypted secrets file on the VM |
+| `op_vault` | `string` | 1Password vault name for credentials |
+| `op_item_prefix` | `string` | Prefix for 1Password item names (e.g. `Sanctum - Home Assistant`) |
+| `sops_file` | `string` | Path to the SOPS-encrypted secrets file |
 
 ```yaml
 secrets:
   keychain_account: sanctum
-  onepassword_vault: Sanctum
-  sops_file: /home/ubuntu/.openclaw/secrets.enc.yaml
+  op_vault: Private
+  op_item_prefix: Sanctum
+  sops_file: ~/.openclaw/secrets.enc.yaml
 ```
 
 Three stores, three trust models, zero plaintext on this disk. The treasure map can be committed to git. The chests cannot.
@@ -281,56 +307,64 @@ Where the smart home meets reality. This section doesn't configure Home Assistan
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `sonos_speakers` | `list` | Sonos speaker IPs and room names (used by the native Sonos Bridge on port 18421) |
-| `cameras` | `list` | Camera integration entries |
-| `hvac` | `map` | HVAC zone definitions |
+| `cameras` | `map` | Camera entity IDs keyed by friendly name |
+| `sonos_speakers` | `list` | HA `media_player.*` entity IDs for the Sonos fleet |
+| `hvac_zones` | `list` | Thermostat zones (`id`, `name`, temp + humidity sensors) |
+| `ecobee` | `map` | Ecobee climate + sensor entity IDs |
+| `floor_zones` | `list` | In-floor heating zones |
+| `carrier_sensors` | `map` | Carrier furnace/airflow sensor entity IDs |
 
 ```yaml
 home_assistant:
-  sonos_speakers:
-    - 192.168.1.101
-    - 192.168.1.102
-    - 192.168.1.103
-    - 192.168.1.104
-    - 192.168.1.105
-    - 192.168.1.106
-    - 192.168.1.107
-    - 192.168.1.108
-    - 192.168.1.109
-    - 192.168.1.110
-
   cameras:
-    - name: front_door
-      type: blink
+    front_door: camera.front_door_live_view
 
-  hvac:
-    main_floor:
-      type: ecobee
+  sonos_speakers:
+    - media_player.dining_room
+    - media_player.living_room
+    - media_player.master_bedroom
+
+  hvac_zones:
+    - id: climate.main_floor
+      name: Ground Floor
+      temp_sensor: sensor.main_floor_temperature
+      humidity_sensor: sensor.main_floor_humidity
+
+  ecobee:
+    climate: climate.main_floor
+    occupancy: binary_sensor.main_floor_occupancy
 ```
 
 <Aside type="note">
-The Sonos speakers use DHCP reservations for stable IPs, referenced by the native Sonos Bridge (port 18421) for its room-to-IP mapping. The bridge also discovers speakers via mDNS, so a stale IP won't break playback -- it just confuses the logs until the next discovery cycle.
+These are Home Assistant entity IDs, not IP addresses — the native Sonos Bridge (port `1969`) discovers speakers dynamically by name over SSDP, so a moved speaker re-registers itself and playback never notices. The old static IP list it used to consult is still tolerated in config but ignored for resolution. Inventory, not lookup table.
 </Aside>
 
 ---
 
 ## family
 
-Your haus should know who lives in it. This section defines family members for agent personalization and access control — who gets greeted by name, who can ask the agents for things, who the system considers a stranger. It's a short list with outsized consequences.
+Your haus should know who lives in it. This section is what lets the agents greet a kid by name, route an alert to their bedroom speaker, and know which devices are theirs when curfew lands. A short list with outsized consequences — and the screen-time enforcer reads it directly.
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `members` | `list` | List of family member objects |
-| `members[].name` | `string` | Display name |
-| `members[].role` | `string` | Role within the haushold |
+| `children` | `list` | List of family member objects |
+| `children[].name` | `string` | Display name |
+| `children[].sonos_speaker` | `string` | HA `media_player.*` entity to address this person |
+| `children[].devices` | `list` | Per-device `{mac, name, icon}` entries (for presence + screen time) |
+| `children[].screen_time` | `map` | Wake/block schedule (`wake_hour`, `block_hour`, `school_days`) |
 
 ```yaml
 family:
-  members:
-    - name: Bertrand
-      role: admin
-    - name: Partner
-      role: member
+  children:
+    - name: Kid One
+      sonos_speaker: media_player.vr_room
+      devices:
+        - mac: AA:BB:CC:DD:EE:XX
+          name: Kid One's iPad
+          icon: phone
+      screen_time:
+        wake_hour: 8
+        block_hour: 21
 ```
 
 ---
@@ -341,43 +375,43 @@ Multi-site node topology. Each node represents a physical location running Sanct
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `<node_id>` | `map` | Node identifier (e.g., `hub`, `satellite`) |
+| `<node_id>` | `map` | Stable short node identifier (e.g., `hub`, `satellite`) |
 | `.type` | `string` | Node type: `hub`, `satellite`, `mobile`, or `sensor` |
-| `.host` | `string` | LAN hostname or IP |
+| `.display_name` | `string` | Human-readable label shown in the dashboard |
+| `.location` | `string` | Logical location tag (e.g., `home`, `chalet`) |
+| `.host` | `string` | LAN hostname or IP (empty if unreachable from the hub) |
 | `.tailscale_ip` | `string` | Tailscale mesh IP |
 | `.tailscale_name` | `string` | Tailscale device name |
-| `.user` | `string` | SSH username on this node |
-| `.services` | `map` | Per-node service overrides (enabled flags) |
+| `.ssh_user` | `string` | SSH username on this node (read by `sanctum_node_user`) |
+| `.online` | `bool` | Last-known reachability |
+| `.vm` | `map` | Hub only: nested `host` / `ssh_user` / `ssh_alias` for the guest |
+| `.services` | `map` | Optional per-node service overrides (satellites) |
 
 ```yaml
 nodes:
   hub:
     type: hub
-    host: 192.168.1.10
+    display_name: Sanctum Hub
+    location: home
+    host: 192.0.2.10
     tailscale_ip: 100.0.0.20
-    tailscale_name: hub-mac-mini
-    user: operator
-    services:
-      gateway:
-        enabled: true
-      home_assistant:
-        enabled: true
-      vm:
-        enabled: true
+    tailscale_name: hub
+    ssh_user: neo
+    online: true
+    vm:
+      host: 10.0.0.10
+      ssh_user: ubuntu
+      ssh_alias: openclaw
 
   satellite:
     type: satellite
-    host: satellite.local
+    display_name: Chalet
+    location: chalet
+    host: ''
     tailscale_ip: 100.0.0.30
-    tailscale_name: satellite-mac-mini
-    user: operator
-    services:
-      gateway:
-        enabled: true
-      home_assistant:
-        enabled: true
-      vm:
-        enabled: false
+    tailscale_name: satellite
+    ssh_user: neo
+    online: false
 ```
 
 ### Node Types
@@ -401,7 +435,7 @@ An annotated example is available at `~/.sanctum/instance.yaml.example` and can 
 
 ## JSON Cache
 
-The YAML config is automatically converted to a flat JSON cache at `~/.sanctum/.instance.json`. This cache is used by the shell and TypeScript libraries for fast key lookups. If you edit `instance.yaml` manually, regenerate the cache:
+The YAML config is automatically converted to a JSON cache at `~/.sanctum/.instance.json` — a nested object tree mirroring the YAML, which the libraries walk with dotted-path lookups (`services.voice_agent.port`). Nothing is flattened; the dots in the query are traversal, not key names. The shell and TypeScript helpers both read this file for fast lookups. If you edit `instance.yaml` manually, regenerate the cache:
 
 ```bash
 python3 ~/.sanctum/lib/yaml2json.py

@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![A pencil-sketched stone gatehouse on a high network ridge — iron portcullis lowered, a hooded stonemason holding a heavy lock at the threshold and a tiny robed scribe passing him a brass tray of keys through a hatch in the wall, a single teal lantern above the gate, one amber halo around the lock, deep shadow elsewhere.](./images/sanctum-firewalla.png)
 
-For three years the haus's screen-time enforcement leaned on a 1,361-line Node.js bridge — `~/.openclaw/firewalla-bridge.js` — that wrapped Firewalla's encipher WebSocket SDK and exposed an HTTP surface on port 1984. It worked, defensively (96 try/catch/retry occurrences in 1.3k LOC), but two production incidents in 2026-05 — the bridge-500 socket-stale episode and the 2026-05-30 partial-pause Connection-Reset that left Albert's Apple TV reachable for 2.5 hours past curfew — exposed the cost of having that much load-bearing logic in single-process JavaScript with zero test coverage. The Rust port lives in the `sanctum-firewalla` crate of the `sanctum-rs` workspace and ships behind a feature branch.
+For three years the haus's screen-time enforcement leaned on a ~1.5k-line Node.js bridge — `~/.openclaw/firewalla-bridge.js` — that wrapped Firewalla's encipher WebSocket SDK and exposed an HTTP surface on port 1984. It worked, and it worked defensively — dozens of try/catch blocks, retry ladders, and `/health`-honesty plumbing — but two production incidents in 2026-05 (the bridge-500 socket-stale episode and the 2026-05-30 partial-pause Connection-Reset that left an Apple TV reachable for 2.5 hours past curfew) exposed the cost of putting that much load-bearing logic in single-process JavaScript with zero test coverage. A bridge defended one try/catch at a time is only as honest as the developer who last counted them. The Rust port lives in the `sanctum-firewalla` crate of the `sanctum-rs` workspace, on the `feat/firewalla-bridge-rust-port` branch.
 
 ## Why not "just rewrite it in Rust"
 
@@ -15,24 +15,49 @@ The Firewalla encipher SDK is JavaScript-only, undocumented at the protocol leve
 
 ## The 24-endpoint contract
 
-The Rust bridge is **byte-compatible** with the Node bridge on every endpoint screen-time and the sentinels call. The contract lives at `services/sanctum-firewalla/docs/API_CONTRACT.md` and is the load-bearing spec for the cutover. Highlights:
+The Rust bridge is **byte-compatible** with the Node bridge on every endpoint screen-time and the sentinels call, save the two deliberate divergences called out below. The contract lives at `services/sanctum-firewalla/docs/API_CONTRACT.md` and is the load-bearing spec for the cutover. Highlights:
 
-- `/health` and `/ping` are publicly accessible; everything else requires bearer auth (`Authorization: Bearer <token>`, token resolved at boot from `$FIREWALLA_BRIDGE_TOKEN` env then macOS keychain).
+- `/health` is publicly accessible; everything else requires bearer auth (`Authorization: Bearer <token>`, token resolved at boot from `$FIREWALLA_BRIDGE_TOKEN` env then macOS keychain).
 - 24 endpoints total: host inventory + state, policy management, MAC pause, feature toggles, DNS, alarms, stats, flows, speedtest, export.
-- One critical *intentional* contract change versus the Node bridge: **`Policy already exists` returns HTTP 200 with `{success: true, alreadyExists: true}` instead of HTTP 500**. The Node bridge treated Firewalla's "this rule is already in place" reply as an error; every caller was already retry-looping over it; ~355 false-error log lines per day were the cost. The Rust port normalises this to a success-with-flag.
+- Two *intentional* contract changes versus the Node bridge:
+  - **`Policy already exists` returns HTTP 200 with `{success: true, alreadyExists: true}` instead of HTTP 500**. The Node bridge treated Firewalla's "this rule is already in place" reply as an error; every caller was already retry-looping over it; ~355 false-error log lines per day were the cost. The Rust port normalises this to a success-with-flag.
+  - **`/ping` is moved into the public (no-auth) subrouter** alongside `/health`. In the Node bridge `/ping` sits behind the bearer gate; the Rust port treats it as a liveness probe like `/health`. This is a deliberate divergence, not a byte-for-byte port — flagged here so the cutover diff harness expects it instead of failing on it.
+
+### Contract drift notice (2026-06-11)
+
+The Node bridge — still the live deployment — grew past the 24-endpoint
+contract in the June 10-11 sprint: QoS throttle/unthrottle (bedtime
+wind-down), `/host/:mac/app-usage`, `/system/qos`, `/policies/purge`, plus
+the seven dns-floor routes (feature/tag/network projections and scoped
+policy writes). The Rust port must catch up to the Node bridge's contract
+before any cutover talk resumes. The Node file remains the source of truth;
+this page's count is historical.
+
+### The expire contract (learned the hard way)
+
+Firewalla's `policy.expire` is a **duration in seconds since activation**,
+not an epoch timestamp (`Policy.js`: `activatedTime + expire < now`). Send
+an epoch and two things happen, both bad: the rule never expires naturally
+(hello, 2,014-row corpse pile), and if you also set `autoDeleteWhenExpires`,
+the box schedules `setTimeout(epoch × 1000)` — which overflows Node's 32-bit
+timer and fires the delete **immediately**. Your rule is born, assigned a
+pid, and executed within the second, with nothing in any log. The bridge
+converts at the boundary (`expireEpochToDuration`); callers keep sending
+epochs and live happily ever after. Any future port MUST preserve this
+conversion or rediscover it the way we did: at 1 a.m., with tcpdump.
 
 ## The five-module decomposition (and the swarm that built it)
 
 | Module | Owns | Tests |
 |---|---|---|
 | `auth` | bearer-token resolution (env → keychain), `require_bearer` axum middleware with constant-time compare | 7 |
-| `http` | axum Router with all 24 endpoints, parameter extractors, success envelope, `IntoResponse` mapping | 7 + 4 full-stack |
+| `http` | axum Router with all 24 endpoints, parameter extractors, success envelope, `IntoResponse` mapping | 4 full-stack (in `tests/contract.rs`) |
 | `sdk` | spawns + supervises the Node sidecar, multiplexes requests by `request_id`, restarts on 3 `sdk_disconnect` within 60s | 2 (incl. the multiplexer-with-out-of-order-responses test) |
 | `ssh` | russh executor (single persistent session), iptables-rule builder, tri-state dnsmasq conf inspector | 15 (incl. the 2026-05-18 `--RESIDUAL--` sentinel preserved) |
 | `discovery` | TCP probe + mDNS + topology cache + rediscover state machine, populates `/health` | 6 |
 | `state` | `AppState` + atomic-rename persistence at `~/.openclaw/firewalla/state.json` + the 3-strike supervisor signal | 10 |
 
-The five modules were built in parallel by five isolated-worktree sub-agents in a single working session — apple-way + military-grade: each agent had `API_CONTRACT.md` + `SIDECAR_IPC.md` + its own module skeleton + tight definition-of-done; collisions were impossible (each owned one file), and the integration glue (lib.rs re-exports, sidecar handle wiring) was the only sequential work left for the integrator. 47 lib tests + 14 integration tests, zero ignored.
+The five modules were built in parallel by five isolated-worktree sub-agents in a single working session — apple-way + military-grade: each agent had `API_CONTRACT.md` + `SIDECAR_IPC.md` + its own module skeleton + tight definition-of-done; collisions were impossible (each owned one file), and the integration glue (lib.rs re-exports, sidecar handle wiring) was the only sequential work left for the integrator. 47 lib tests + 7 integration tests in `tests/contract.rs` (3 pure-router contract checks + 4 full-stack through the mock sidecar), zero ignored. The `http` module ships zero inline tests on purpose: its whole job is wiring, so it's proven end-to-end through the router instead of unit-by-unit.
 
 <Aside type="tip">
 The full-stack tests use a deterministic sidecar mock at `services/sanctum-firewalla/sidecar/firewalla-sdk-sidecar-mock.js` — canned responses keyed by SDK `item`. The 2026-05-30 canary (`policy:create` → `policy_already_exists` → HTTP 200 + `alreadyExists:true`) runs at *three* layers: pure `IntoResponse`, structural assertion, and full router-through-mock-sidecar end-to-end. Any future regression at any layer trips the test.
@@ -42,7 +67,7 @@ The full-stack tests use a deterministic sidecar mock at `services/sanctum-firew
 
 Every endpoint upholds the same four guards:
 
-1. **Discovery** — on SDK init failure, the bridge re-discovers Firewalla IP via topology cache → mDNS service browse → mDNS hostnames → TCP probe of common gateway IPs (`192.168.1.1`, `192.168.2.1`).
+1. **Discovery** — on SDK init failure, the bridge re-discovers Firewalla IP via topology cache → mDNS service browse → mDNS hostnames → TCP probe of common gateway IPs (`192.0.2.1`, `192.168.2.1`).
 2. **SSH fallback** — every `policy:delete` and `policy:create` tries the SDK path first, then SSH iptables fallback if the SDK returns non-success. Mirrors the Node bridge's ladder exactly.
 3. **SDK socket supervision** — the `state` module counts consecutive `sdk_disconnect` events; the `sdk` module's supervisor restarts the sidecar process after 3 within 60s.
 4. **Bounded timeouts** — 12s outer on SDK calls, 8s on SSH commands. Exceeding either returns 504, not a hang.

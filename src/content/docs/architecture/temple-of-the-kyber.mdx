@@ -1,9 +1,10 @@
 ---
 title: The Temple of the Kyber
-description: A 30 MB Rust binary on a Mac Mini in Montréal serves a 35-billion-parameter language model under mTLS. The Council's five Jedi route their reasoning to three different cloud providers and fall back here when the cloud doesn't answer. The Temple holds the local kyber.
+description: A 30 MB Rust binary on a Mac Mini in Montréal serves a 35-billion-parameter language model under mTLS. The Council's five Jedi route their reasoning across three model families — Anthropic, Google, and the local kyber — and fall back to the Temple when the cloud doesn't answer. The Temple holds the local kyber.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
+import CouncilRoster from '../../../components/CouncilRoster.astro';
 
 ![A pencil-sketch interior of a Jedi temple sanctum on a dark slate background. At its centre, a kyber crystal pedestal glows teal; the crystal itself is a small Mac Mini held in suspension. Around it, five robed Jedi silhouettes are seated in a half-circle, each marked by a different colored sigil — amber, teal, indigo, sage, rust. A parchment scroll on a side lectern is labelled DOCTRINE](./images/temple-of-the-kyber.png)
 
@@ -24,7 +25,7 @@ The metaphor is load-bearing. When fibre is up and the API budget is not yet exh
 | Stone | `sanctum-mlx` Rust binary, vendored `mlx-rs` + mlx C++ 0.30.6 |
 | Kyber | `~/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-4bit` (20 GB on disk, ~16 GB resident at startup) |
 | Vestments | TurboQuant KV compression (1.32× ratio) and a Carmack-passed vision tower (333 tensors, depth 27) |
-| Doors | mTLS on three TLS hosts: `127.0.0.1`, the Tailscale address, and `10.10.10.1` (the bridge to the OpenClaw VM). No door without a client cert. |
+| Doors | mTLS on three TLS hosts: `127.0.0.1`, the Tailscale address, and `10.0.0.1` (the bridge to the OpenClaw VM). No door without a client cert. |
 | Discipline | A single global GPU-dispatch Mutex serializes all four chat handlers (sync and stream, text and multimodal). One inference at a time. |
 | Vows | `KeepAlive=true` under launchd, plus a 60-second supervision check, plus a restart-forensics capture, plus a Sunday 04:00 perf-hygiene cron |
 | Witnesses | A vision-canary every 60 seconds probes `/v1/models` and a 1×1 PNG multimodal request. On three consecutive 1h SLO breaches it flips a kill-switch that downgrades vision in the next restart. |
@@ -33,17 +34,23 @@ For the implementation detail — TurboQuant, the fused Metal kernel, the Carmac
 
 ## The Council
 
-Five Jedi, one bench, three model providers. Each owns a domain. Each routes to the saber best-suited to it. Each falls back to the Temple's kyber if their primary backend goes quiet. Each emits a briefing on a schedule, and as of the [Vision Probe Lied](/operations/2026-05-10-the-vision-probe-lied/) sweep, every briefing is silent on green and alert-only on red.
+Five Jedi, one bench, three model families. Each owns a domain. Each routes to the saber best-suited to it. Each falls back to the Temple's kyber if their primary backend goes quiet. Each emits a briefing on a schedule, and as of the [Vision Probe Lied](/operations/2026-05-10-the-vision-probe-lied/) sweep, every briefing is silent on green and alert-only on red.
 
-| Jedi | Domain | Primary saber | Fallback | Briefing |
-|---|---|---|---|---|
-| **Yoda** | Strategy, orchestration, voice | Opus 4.7 (Claude Max via the `:3456` bridge) | Temple kyber | Master synthesis every `:15` and `:45`, weekdays 08–18 EDT |
-| **Ki-Adi-Mundi** | Financial intel for Triptyq Capital — deal flow, portfolio, fund performance | Opus 4.7 | Temple kyber | Every 4h, fires only when deals go cold |
-| **Mace Windu** | Security — firewall state, FileVault, ssh attempts, container health, network drift | Gemini 3.1 Pro Preview | Temple kyber | Every 3h, fires only on alerts |
-| **Qui-Gon Jinn** | Code and infrastructure | **Temple kyber** (since the 2026-05-10 G3 retirement of the Coder-14B local) | `sanctum/claude-opus-4-7` | On-demand via `@quigon` |
-| **Cilghal** | Health diagnostician — disk, RAM, load, services, VM, Docker | Temple kyber | (none — she is the local) | Every 3h, fires only on alerts |
+Who runs on which model is one fact the Temple does **not** keep here. It lives in one place — `src/data/council-roster.json`, regenerated from the live Mini config by `pnpm refresh:council` — and every page that needs it embeds the same component. A champion swap is one refresh and one rebuild; no page goes stale by hand:
 
-Each individual Jedi has their own page under **[Agents](/agents/yoda/)**. The roster of resolved models is generated from `~/.openclaw/openclaw.json` and the `proxyd` config; refreshed by `pnpm refresh:council` and rendered live in [Agents Architecture](./agents.mdx).
+<CouncilRoster variant="tiered" />
+
+What that table can't tell you is what each Jedi is *for*, and when they speak:
+
+| Jedi | Domain | Briefing |
+|---|---|---|
+| **Yoda** | Strategy, orchestration, voice | Morning synthesis at 08:00 EDT (`com.sanctum.morning-briefing`) |
+| **Ki-Adi-Mundi** | Financial intel for Triptyq Capital — deal flow, portfolio, fund performance | Every 4h, fires only when deals go cold |
+| **Mace Windu** | Security — firewall state, FileVault, ssh attempts, container health, network drift | Every 3h, fires only on alerts |
+| **Qui-Gon Jinn** | Code and infrastructure | On-demand via `@quigon` |
+| **Cilghal** | Health diagnostician — disk, RAM, load, services, VM, Docker | Every 3h, fires only on alerts |
+
+Each individual Jedi has their own page under **[Agents](/agents/yoda/)**, and the canonical full roster lives in [Agents Architecture](./agents.mdx).
 
 To convene them as a body, the operator runs:
 
@@ -58,7 +65,9 @@ This routes around the [Council Router](./council-router.mdx) (which can hang on
 Three rules carry the rest:
 
 1. **Heterogeneous on purpose.** [Neurodiversity is Paramount](./neurodiversity-doctrine.mdx). Three model families across the bench. One outage doesn't take the whole Council.
-2. **Cloud-first for reasoning, local for the safety net.** The Temple's kyber exists so we keep working when the cloud doesn't.
+2. **Cloud for the hard thinking, local for the workhorse seats.** Yoda and Mundi lead with Opus, Windu with Gemini; Qui-Gon and Cilghal lead with the local kyber and the Codestral lane. Every seat keeps the Temple as a fallback, so the bench keeps working when the cloud doesn't.
 3. **Silent on green, alert-only on red.** Every briefing now follows this. If you are getting a Force Flow ping, something actually needs you.
 
-A fourth, quieter rule lives in the closing line of every operations chapter and in the alt text of every Temple hero: **the dead cat tiebreaker.** If Tommy wouldn't approve of the page, the deploy, or the doctrine — rewrite it.
+<Aside type="tip" title="The dead cat tiebreaker">
+A fourth, quieter rule lives in the closing line of every operations chapter and in the alt text of every Temple hero. If Tommy — the haus's late, much-missed cat — wouldn't approve of the page, the deploy, or the doctrine, rewrite it. He never weighed in on a single one. He didn't have to.
+</Aside>

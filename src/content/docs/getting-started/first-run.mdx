@@ -21,27 +21,25 @@ Sanctum includes a test suite that validates your configuration, checks service 
    bash ~/.sanctum/tests/run-all.sh
    ```
 
-   The suite runs checks in order:
-   - Configuration validation (instance.yaml syntax, required keys)
-   - Node identity verification (.node_id exists and matches config)
-   - LaunchAgent status (loaded and running)
-   - Service health (port reachability, HTTP endpoints)
-   - VM connectivity (SSH, bridge network)
-   - Dashboard availability
+   The suite runs config-library checks, LaunchAgent and `instance.yaml`
+   validation, cron and model-scout checks, the connection suite (ports,
+   HTTP endpoints, keychain keys), every skill's own tests, and the two
+   dashboard vitest suites. The connection suite is the one that tells you
+   whether your services are actually answering.
 
 2. **Review the output.**
 
-   Each check prints a status line:
+   Each check in the connection suite prints a status line:
 
    ```
-   [PASS] instance.yaml is valid
-   [PASS] node_id "your-haus-name" matches config
-   [PASS] com.sanctum.gateway is running
-   [PASS] Gateway responding on port 1977
-   [FAIL] com.sanctum.voice-agent is not running
+   ✓ PASS instance.yaml is valid
+   ✓ PASS node_id "manoir" matches config
+   ✓ PASS com.sanctum.dashboard is running
+   ✓ PASS Dashboard responding on port 1111
+   ✗ FAIL com.sanctum.force-flow is not running
    ```
 
-   A wall of `[PASS]` is a beautiful thing. Address any `[FAIL]` lines before continuing. Do not skip them. Do not convince yourself they are probably fine. They are not fine.
+   A wall of `✓ PASS` is a beautiful thing. Address any `✗ FAIL` lines before continuing. Do not skip them. Do not convince yourself they are probably fine. They are not fine.
 
 3. **Re-run after fixes.**
 
@@ -54,7 +52,7 @@ Sanctum includes a test suite that validates your configuration, checks service 
 </Steps>
 
 <Aside type="tip">
-  You can run individual test groups by passing a filter argument. For example, `bash ~/.sanctum/tests/run-all.sh services` runs only the service health checks. Useful when you know exactly which thing you broke.
+  The runner takes one flag, `--quiet`, which collapses each suite to its summary line: `bash ~/.sanctum/tests/run-all.sh --quiet`. Handy on a healthy box, when you want the verdict without the wall of green. There is no per-group filter — to run just one suite, invoke its script directly, e.g. `bash ~/.sanctum/tests/test-connections.sh`.
 </Aside>
 
 ## Verify LaunchAgents
@@ -65,20 +63,22 @@ Check that all expected Sanctum LaunchAgents are loaded and running.
 launchctl list | grep sanctum
 ```
 
-You should see entries for each enabled service. A typical hub node might show:
+You should see entries for each enabled service. The list grows as you add
+agents and tunnels; a hub node will show dozens. A representative slice:
 
 ```
--     0     com.sanctum.gateway
 -     0     com.sanctum.dashboard
--     0     com.sanctum.homeassistant
--     0     com.sanctum.firewalla-bridge
--     0     com.sanctum.voice-agent
 -     0     com.sanctum.vm-autostart
--     0     com.sanctum.watchdog
--     0     com.sanctum.cloudflare-tunnel
+-     0     com.sanctum.r2d2
+-     0     com.sanctum.presence
+-     0     com.sanctum.memory-vault
+-     0     com.sanctum.force-flow
+-     0     com.sanctum.mlx
+-     0     com.sanctum.tunnel
+-     0     com.sanctum.backup
 ```
 
-The second column is the exit status. A `0` indicates the service exited cleanly (or is still running). A non-zero value suggests a startup failure, which is macOS's polite way of saying something went wrong and it will not be telling you what.
+The second column is the exit status. A `0` indicates the service exited cleanly (or is still running). A non-zero value suggests a startup failure, which is macOS's polite way of saying something went wrong and it will not be telling you what. (Some labels carry a negative number like `-15` — that is the signal that stopped them, not a failure; `-15` is a clean SIGTERM from a KeepAlive restart.)
 
 <Tabs>
   <TabItem label="Troubleshooting">
@@ -88,16 +88,21 @@ The second column is the exit status. A `0` indicates the service exited cleanly
     launchctl load ~/Library/LaunchAgents/com.sanctum.<service>.plist
     ```
 
-    If it exits immediately with a non-zero status, check its log output:
+    If it exits immediately with a non-zero status, check its log output. Most
+    Sanctum agents redirect stdout and stderr to a file under
+    `~/.openclaw/logs/` — the exact path is the `StandardOutPath` /
+    `StandardErrorPath` in the plist:
 
     ```bash
-    # Most LaunchAgents log to the system log
-    log show --predicate 'process == "sanctum"' --last 5m
+    # The convention is ~/.openclaw/logs/<service>.log (+ .err for stderr)
+    tail -50 ~/.openclaw/logs/<service>.log
 
-    # Or check the specific stdout/stderr files defined in the plist
-    cat /tmp/com.sanctum.<service>.stdout.log
-    cat /tmp/com.sanctum.<service>.stderr.log
+    # Confirm the exact paths from the plist itself
+    plutil -p ~/Library/LaunchAgents/com.sanctum.<service>.plist \
+      | grep -E 'StandardOutPath|StandardErrorPath'
     ```
+
+    The unified system log is a poor first stop here: Sanctum binaries run under their own names (`castellan`, `proxyd`, `sanctum-mlx`, `force_flow.py`), not a process literally called `sanctum`, so `--predicate 'process == "sanctum"'` matches nothing. Read the plist's log file first.
   </TabItem>
   <TabItem label="Common Issues">
     | Symptom | Cause | Fix |
@@ -128,12 +133,12 @@ Navigate to the dashboard in your browser. This is the reward for all that termi
    If you configured a hostname alias (such as a DNS entry or mDNS broadcast), you can use that instead:
 
    ```
-   http://your-haus-name
+   http://manoir.local:1111
    ```
 
 2. **Verify service status.**
 
-   The root page now opens the Jocasta shell, and the same backend serves the dashboard data. Verify the backend is alive, then use Holocron or the dashboard surfaces to inspect health. Each service tile displays:
+   The root page serves the Command Center — the browser tab title reads "*your instance name* Command Center". The same backend feeds both the tiles and the `/api/config` endpoint below. Each service tile displays:
    - Service name and port
    - Status indicator (green = healthy, red = down, yellow = degraded)
    - Uptime since last restart
@@ -160,9 +165,10 @@ Confirm that your node identity is correctly configured.
 cat ~/.sanctum/.node_id
 ```
 
-This should print the slug you set during installation (for example, `your-haus-name`). Verify that it matches a key in the `nodes` section of `instance.yaml`:
+This should print the slug you set during installation (for example, `manoir`). Verify that it matches a key in the `nodes` section of `instance.yaml`. `sanctum_get` is a shell function in `~/.sanctum/lib/config.sh`, not a binary on your PATH, so source the library first:
 
 ```bash
+source ~/.sanctum/lib/config.sh
 sanctum_get nodes.$(cat ~/.sanctum/.node_id).type
 ```
 
@@ -180,49 +186,61 @@ If you set up the Ubuntu VM, confirm the Mac-to-VM link is working. This is wher
    ifconfig bridge100
    ```
 
-   You should see `10.10.10.1` assigned to the interface. If the interface does not exist, verify that QEMU is running and the VM is started.
+   You should see the Mac-side bridge address (`10.0.0.1` in the default config) assigned to the interface. If the interface does not exist, verify that QEMU is running and the VM is started.
 
 2. **Test SSH.**
 
    ```bash
-   ssh ubuntu@10.10.10.10 'hostname && uptime'
+   ssh openclaw 'hostname && uptime'
    ```
 
-   This should print the VM hostname and uptime without prompting for a password (assuming SSH key auth is configured).
+   `openclaw` is the SSH alias the installer writes for the VM (it resolves to the bridge address, `10.0.0.10` by default). This should print the VM hostname and uptime without prompting for a password, assuming SSH key auth is configured.
 
 3. **Check VM services.**
 
+   The gateway on the VM runs under pnpm as a user systemd unit named `openclaw-gateway` — not `sanctum-gateway`:
+
    ```bash
-   ssh ubuntu@10.10.10.10 'systemctl --user status sanctum-gateway'
+   ssh openclaw 'systemctl --user status openclaw-gateway'
    ```
 
-   The gateway service on the VM should show `active (running)`.
+   It should show `active (running)`. Its two siblings, `yoda-chat-consumer` and `yoda-chat-proxy`, carry the Signal channel; check them the same way if voice or messaging is quiet.
 
 </Steps>
 
-## Enable the Watchdog
+## Verify the Remediation Loop
 
-The watchdog monitors all services and performs automatic remediation when it detects failures. It runs on a timer (default: every 10 minutes) and is managed by its own LaunchAgent. Think of it as a night nurse for your infrastructure — quietly checking pulses, administering medicine, only paging you when someone flatlines.
+Automatic remediation is handled by R2D2 (`com.sanctum.r2d2`), which runs on a
+timer every 600 seconds. It does not blindly restart things: each cycle it
+*detects* notices, *classifies* them through a small LLM (Hermes) against a
+registry of vetted repair recipes, *fires* only the ones whose blast radius is
+safe, and *audits* the result. Think of it as a night nurse who reads the chart
+before reaching for the medicine — and pages you instead when the fix is above
+their pay grade.
 
-Verify the watchdog is loaded:
+Verify it is loaded:
 
 ```bash
-launchctl list | grep com.sanctum.watchdog
+launchctl list | grep com.sanctum.r2d2
 ```
 
-The watchdog writes a health report after each run. Check the latest report:
+R2D2 writes one JSON line per cycle. Tail the log to see what it considered and
+what it fired (or skipped on cooldown):
 
 ```bash
-cat /tmp/sanctum-watchdog-latest.log
+tail -5 ~/.openclaw/logs/r2d2.log
 ```
+
+The durable audit trail — every recipe that actually fired — lives at
+`~/.sanctum/logs/r2d2-audit.jsonl`.
 
 <Aside type="caution">
-  The watchdog will attempt to restart failed services automatically. If you are still in the process of configuring services, you may want to delay loading the watchdog LaunchAgent until your initial setup is complete. Otherwise it will helpfully restart the thing you are actively trying to configure, creating the kind of debugging loop that erodes a person's will to live.
+  R2D2 only fires recipes whose blast radius is bounded, and most repairs sit behind a cooldown so it cannot fight you in a loop. Still, if you are mid-configuration on a service it knows a recipe for, expect it to "help." You can pause it during setup by booting it out (`launchctl bootout gui/$(id -u)/com.sanctum.r2d2`) and bring it back when you are done — restarting the thing you are actively trying to configure is the kind of debugging loop that erodes a person's will to live.
 </Aside>
 
 ## What Comes Next
 
-With a verified installation, you are ready to start using Sanctum. The hard part is over. (That was a lie. The hard part is maintenance. But you have a watchdog for that now.)
+With a verified installation, you are ready to start using Sanctum. The hard part is over. (That was a lie. The hard part is maintenance. But R2D2 takes the night shift now.)
 
 Here are recommended next steps:
 

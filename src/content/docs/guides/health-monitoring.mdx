@@ -15,9 +15,9 @@ The browser-facing view of this data lives in the dashboard, and the native macO
 
 ```
 iPhone (Health Auto Export)
-  │ HTTPS POST (hourly)
+  │ HTTPS POST /apple-health (hourly)
   ▼
-Cloudflare Tunnel (health.example.net)
+Cloudflare Tunnel (health.sanctum.haus)
   │ CF Access (OTP + Service Token)
   ▼
 Mac Mini (SSH tunnel, port 10101)
@@ -33,14 +33,14 @@ Five hops between your wrist and the knowledge graph. Each one encrypted. The Co
 
 ## Prerequisites
 
-- **Health Auto Export** app installed on iPhone ([App Store](https://apps.apple.com/app/health-auto-export/id1115567461))
+- **Health Auto Export** app installed on iPhone ([App Store](https://apps.apple.com/app/health-auto-export-json-csv/id1115567069))
 - Health ingester running on VM (part of standard Sanctum setup)
-- Cloudflare tunnel with CF Access configured for `health.example.net`
+- Cloudflare tunnel with CF Access configured for `health.sanctum.haus`
 
 ## iPhone Setup
 
 <Steps>
-1. Install **Health Auto Export** from the App Store
+1. Install **Health Auto Export - JSON+CSV** from the App Store
 2. Open the app and grant access to Apple Health data
 3. Go to **Automations** tab
 4. Tap **+** to create a new automation
@@ -49,7 +49,7 @@ Five hops between your wrist and the knowledge graph. Each one encrypted. The Co
 
    | Field | Value |
    |-------|-------|
-   | URL | `https://health.example.net/ingest` |
+   | URL | `https://health.sanctum.haus/apple-health` |
    | Method | POST |
 
 7. Add three headers:
@@ -80,14 +80,14 @@ Five hops between your wrist and the knowledge graph. Each one encrypted. The Co
 
 ## Health Ingester Service
 
-The ingester is a FastAPI service on the VM that receives health data, extracts key metrics, and stores them for the Cilghal agent.
+The ingester is a FastAPI service on the VM that receives health data, extracts key metrics, and stores them for the Cilghal agent. It also polls Withings, because a scale that talks to the cloud might as well talk to ours.
 
 | Setting | Value |
 |---------|-------|
 | Location | VM (`~/.openclaw/health-ingester.py`) |
-| Port | 10101 (bound to 10.10.10.10) |
+| Port | 10101 (bound to 10.0.0.10) |
 | Auth | Bearer token (from SOPS) |
-| Max payload | 5 MB |
+| Max payload | 10 MB |
 | Rate limit | 20 ingests/minute |
 | Data storage | `~/.openclaw/health-data/` (rolling JSON) |
 
@@ -96,7 +96,10 @@ The ingester is a FastAPI service on the VM that receives health data, extracts 
 | Endpoint | Method | Auth | Purpose |
 |----------|--------|------|---------|
 | `/health` | GET | None | Health check |
-| `/ingest` | POST | Bearer | Receive health data from iOS |
+| `/apple-health` | POST | Bearer | Receive health data from iOS |
+| `/withings/poll` | POST | Bearer | Pull the latest Withings readings |
+| `/summary` | GET | Bearer | Current snapshot for the Cilghal agent |
+| `/history` | GET | Bearer | Historical metrics |
 
 <Aside type="note">
   Yes, the health monitoring system has its own health check endpoint. The recursion is noted but not regretted.
@@ -104,14 +107,12 @@ The ingester is a FastAPI service on the VM that receives health data, extracts 
 
 ### Starting the Service
 
-The ingester is started via the SOPS wrapper which injects secrets as environment variables:
+The ingester runs as a systemd user unit at `~/.config/systemd/user/health-ingester.service`. The unit's `ExecStart` calls the SOPS wrapper (which injects secrets as environment variables) and pins `HEALTH_INGESTER_PORT=10101` and `HEALTH_INGESTER_HOST=10.0.0.10` — without those the code defaults to `18095` on loopback, which is the listener nobody can reach. Manage it the boring way:
 
 ```bash
-SOPS_AGE_KEY_FILE=~/.config/sops/age/keys.txt \
-  HEALTH_INGESTER_HOST=10.10.10.10 \
-  ~/.openclaw/sops-start.sh health-ingester \
-  ~/.openclaw/health-ingester-venv/bin/python3 \
-  ~/.openclaw/health-ingester.py
+systemctl --user restart health-ingester
+systemctl --user status health-ingester
+journalctl --user -u health-ingester -f   # tail the logs
 ```
 
 ### Verifying
@@ -121,10 +122,10 @@ Test the endpoint from the Mac:
 ```bash
 curl -s -H "CF-Access-Client-Id: $(security find-generic-password -a sanctum -s cf-access-health-client-id -w)" \
      -H "CF-Access-Client-Secret: $(security find-generic-password -a sanctum -s cf-access-health-client-secret -w)" \
-     https://health.example.net/health
+     https://health.sanctum.haus/health
 ```
 
-A successful response returns `{"status": "ok"}`.
+A healthy service returns `{"status": "ok", "version": "...", "last_ingested": "...", "data_dir": "..."}`. The `/health` route takes no auth, so a bare CF Access pass is enough to prove the tunnel is up. A `last_ingested` of `null` means the box is listening but your phone hasn't phoned home yet.
 
 ## Cloudflare Access
 
@@ -139,6 +140,6 @@ The service token expires annually and credentials are stored in the Mac Keychai
 
 The Cilghal agent on the VM reads ingested health data and maintains a knowledge graph of health trends. It provides daily health briefings and can answer questions about historical health metrics.
 
-Data flows: Health Auto Export → ingester → JSON files + Graphiti KG → Cilghal agent queries.
+Data flows: Health Auto Export → `POST /apple-health` → JSON files + Graphiti KG → Cilghal agent queries.
 
 An AI named after a Mon Calamari healer, running inside a virtual machine, inside a Mac Mini, analyzing your sleep patterns through a knowledge graph. If you find this normal, you've been reading these docs too long.

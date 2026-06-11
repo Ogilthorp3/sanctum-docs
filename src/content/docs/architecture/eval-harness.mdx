@@ -117,8 +117,8 @@ A separate `scripts/eval_diff.py` surfaces *which specific tasks* regressed — 
 
 ```bash
 .venv/bin/python scripts/check_holdout_contamination.py \
-  --holdouts configs/holdouts.jsonl \
-  --training configs/train.jsonl \
+  --holdouts data/splits-carmack/valid.jsonl \
+  --training data/splits-carmack/train.jsonl \
   --threshold 0.30 \
   --output eval/contamination-report.json
 ```
@@ -135,36 +135,24 @@ The `extract_turns()` loader ships with a placeholder schema — point `--log-di
 
 ## Authenticating against the Tailscale-exposed council
 
-The cathedral fork serves the council seat on `:1337` over **mTLS-only** in production (the former coder `:1338` seat retired 2026-06-07; the CODER role now runs Codestral-22B on `:3301`). Every eval pointed at `https://100.0.0.25:1337/v1` (or `manoir.tail7c6d11.ts.net`) must present a client cert signed by the Sanctum CA.
+The cathedral fork serves the council seat on `:1337` over **mTLS-only**, launched with `--no-plain` — the plain socket is gone, not deprecated. A plain probe doesn't get a `401`; it gets `Received HTTP/0.9 when not allowed`, because there's no HTTP server on the bare port at all. The TLS listener binds loopback, the Tailscale IP, and the `10.0.0.1` vmnet bridge; the cert's SAN carries the stable MagicDNS name so it survives Tailscale IP drift. The former coder `:1338` seat retired 2026-06-07; the CODER role now runs Codestral-22B (`Codestral-22B-v0.1-4bit`) as a separate plain-loopback service on `:3301`.
 
-The PKI lives at `~/.sanctum/certs/` on every Sanctum machine. Per-client cert and key pairs are issued for each named consumer (guardian, canary, drift, sanctum-server, parity-smoke, etc.). Two convenience flows:
+The PKI lives at `~/.sanctum/certs/` on every Sanctum machine. Per-client cert and key pairs are issued for each named consumer — `guardian`, `canary`, `drift`, `sanctum-server`, `parity-smoke`, `council-offbox`. A `curl` probe with a client identity reaches the seat:
 
 ```bash
-# One-off curl probe with the sanctum-server client identity
 curl --cacert ~/.sanctum/certs/ca.crt \
      --cert ~/.sanctum/certs/clients/sanctum-server.crt \
      --key  ~/.sanctum/certs/clients/sanctum-server.key \
-     https://100.0.0.25:1337/v1/models
-
-# Pass through to the eval
-.venv/bin/python scripts/carmack_eval_http.py \
-  --url https://100.0.0.25:1337/v1 \
-  --model mlx-community/Qwen3.6-35B-A3B-4bit \
-  --label council-remote \
-  --ca-cert ~/.sanctum/certs/ca.crt \
-  --client-cert ~/.sanctum/certs/clients/parity-smoke.crt \
-  --client-key  ~/.sanctum/certs/clients/parity-smoke.key \
-  --output eval/council-remote.json
+     https://manoir.local:1337/v1/models
+# -> {"data":[{"id":"38740b847e4cb78f...","object":"model"}], ...}
 ```
 
-`scripts/test_eval_harness.sh` auto-discovers the cert paths in the same `~/.sanctum/certs/` tree. Localhost probes (the council-guardian running on the Mini itself) connect to the same mTLS endpoint; loopback presents its own client cert from the local PKI — there is no plain-HTTP loopback bypass on the cathedral fork.
-
 <Aside type="caution">
-The Rust `sanctum-mlx` backend returns its model ID as a raw snapshot hash (e.g. `38740b847e4cb78f...`) rather than the friendly `mlx-community/Qwen3.6-35B-A3B-4bit`. The harness's model-ID parser handles both, but if you're scripting around `/v1/models` directly, don't assume the friendly name.
+The Rust `sanctum-mlx` backend returns its model ID as a raw snapshot hash (e.g. `38740b847e4cb78f...`) rather than the friendly `mlx-community/Qwen3.6-35B-A3B-4bit`. That hash is the model snapshot directory name — it's stable, just not pretty. The harness's model-ID parser handles both, but if you're scripting around `/v1/models` directly, don't assume the friendly name.
 </Aside>
 
-<Aside type="note">
-Bearer-token auth (the P5 mechanism) survives on the plain `:1337` listener for migration purposes only; production binds `--no-plain` and refuses the plain socket entirely. Any eval still using `COUNCIL_API_KEY` is targeting a non-canonical path.
+<Aside type="caution">
+**The eval CLI hasn't caught up to the server.** `carmack_eval_http.py` still authenticates with a Bearer token (`--api-key-env COUNCIL_API_KEY`) over plain HTTP — it has no `--ca-cert/--client-cert/--client-key`, so it physically cannot present a client cert. Against a `--no-plain` mTLS seat that means the connection dies before the first byte. This is the exact overclaim this page preaches against, so here it is named: the *server* is mTLS-only today; the *client* is the migration debt. Until the eval grows mTLS flags, remote council runs go through the `curl` probe above, or against a seat still speaking plain Bearer. See [the mTLS migration](/operations/2026-04-21-mtls-migration/) for the server side that landed first.
 </Aside>
 
 ## Weekend workflow
@@ -218,9 +206,12 @@ Explicitly out of scope, honestly flagged:
 
 ## Verification
 
+The harness lives in the private `Ogilthorp3/mlx-finetune` repo — so the "`git checkout` as the only setup step" promise starts with the clone:
+
 ```bash
+git clone git@github.com:Ogilthorp3/mlx-finetune.git ~/Projects/mlx-finetune
 cd ~/Projects/mlx-finetune
 bash scripts/test_eval_harness.sh
 ```
 
-Current baseline: **17 pass, 0 fail, 1 skip** (skip is `--check-determinism` via HTTP, which depends on server seed support).
+Current baseline: **17 pass, 0 fail, 1 skip**. The skip is the `--check-determinism` HTTP test against `:1337` — and worth being honest about *why*. It's filed as "depends on server seed support," but the nearer cause is the same client-side debt above: the test reaches for the seat over plain Bearer, and the `--no-plain` mTLS server has nothing listening on the bare port. A skip that needs two sentences to explain is a skip worth fixing.

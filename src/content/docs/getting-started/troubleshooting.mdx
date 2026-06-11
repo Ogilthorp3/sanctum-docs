@@ -13,48 +13,52 @@ This page is for the pilot who just ran the installer and is looking at a red li
 If your specific failure isn't listed, run `sanctum doctor` first and read its output. If `sanctum doctor` is green and something is still wrong, ask in the Sanctum channels with the doctor output attached.
 
 <Aside type="tip">
-The single most useful command when you don't know what's broken is `sanctum self-test`. It runs all 11 probes and prints a per-probe pass/fail line. Whatever's failing tells you which question to ask below.
+The single most useful command when you don't know what's broken is `sanctum self-test`. It runs every probe and prints a per-probe pass/fail line — on a CLI-only install the haus-tier probes (cathedrals, proxyd, Force Flow, chitti, R2D2) come back `n/a` rather than red, so you only see what actually applies to you. Whatever's failing tells you which question to ask below.
 </Aside>
 
 ## Doctor and self-test
 
 <details>
-<summary>`sanctum doctor` says Firewalla is unreachable. Now what?</summary>
+<summary>`sanctum doctor` shows the Firewalla bridge FAILED. Now what?</summary>
 
-The doctor's Firewalla check pings the LAN IP in `sanctum.yaml`'s `firewalla.host`. Default is `192.168.1.1`. If your Firewalla lives elsewhere on your LAN, the doctor is right and the config is wrong.
+`sanctum doctor` walks your `com.sanctum.*` LaunchAgents and reports each one's status. The Firewalla bridge runs under `com.sanctum.firewalla-bridge-watchdog`; if the doctor flags it, the watchdog isn't keeping a healthy bridge alive on `:1984`.
 
-```bash
-# What does sanctum think your Firewalla's IP is?
-grep -A1 '^firewalla:' ~/.sanctum/sanctum.yaml
-
-# Is something there actually answering?
-ping -c 3 192.168.1.1
-```
-
-If the IP is wrong, edit `~/.sanctum/sanctum.yaml`, fix the `firewalla.host` value, and restart the bridge:
+The bridge doesn't read a Firewalla IP from any config file — it discovers the Firewalla and caches the result. So the question is rarely "is the IP wrong," it's "is the bridge process up":
 
 ```bash
-launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla
+# Is anything listening on the bridge port?
+lsof -nP -iTCP:1984 -sTCP:LISTEN
+
+# What IP did the bridge discover for your Firewalla?
+cat ~/.openclaw/firewalla/keys/topology.json
 ```
 
-If the IP is right but `ping` fails, that's a network problem, not a Sanctum problem. Check that you're on the same LAN your Firewalla is on (a different WiFi SSID can put you on a guest subnet that can't reach the Firewalla's management VLAN).
+If nothing's on `:1984`, kick the watchdog and let it respawn the bridge:
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog
+```
+
+If `topology.json` shows an IP but the bridge still can't reach it, that's a network problem, not a Sanctum problem. Check you're on the same LAN as your Firewalla — a different WiFi SSID can drop you onto a guest subnet that can't reach the Firewalla's management VLAN, and discovery will keep serving a stale cache.
 </details>
 
 <details>
-<summary>`sanctum self-test` fails with `probe 02-firewalla-bridge-bearer-auth (rc=1)`</summary>
+<summary>Every authenticated request to the Firewalla bridge gets a 401</summary>
 
-The bridge's bearer token isn't in your Keychain. The bridge invents this token and stores it; if it isn't there, every authenticated request to `localhost:1984` gets refused.
+The bridge's bearer token isn't in your Keychain. The bridge mints this token once and stores it under the service `firewalla-bridge-token`, account `sanctum`; if it isn't there, every authenticated request to `localhost:1984` gets refused.
 
 ```bash
-# Mint a strong token and add it.
-security add-generic-password -s firewalla-bridge-token -a "$(whoami)" -w
-# (paste a hex string when prompted, e.g., from `openssl rand -hex 24`)
+# Is the token there at all?
+security find-generic-password -s firewalla-bridge-token -a sanctum -w
 
-# Restart the bridge so it picks up the new value.
-launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla
+# If that errors, mint a strong one and store it.
+security add-generic-password -s firewalla-bridge-token -a sanctum -w "$(openssl rand -hex 24)"
+
+# Restart the bridge so it re-reads Keychain.
+launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog
 ```
 
-Re-run `sanctum self-test`. Probe 02 should turn green.
+The authed endpoints should stop 401-ing once the bridge comes back up.
 
 <Aside type="note">
 This token is **not** a Firewalla-side credential — it's a local secret the bridge enforces on its own listener. The Firewalla itself authenticates via the FWGroup keys at `~/.openclaw/firewalla/keys/`, which are a separate setup step covered in [Firewalla Pairing](/getting-started/firewalla-pairing/).
@@ -62,74 +66,91 @@ This token is **not** a Firewalla-side credential — it's a local secret the br
 </details>
 
 <details>
-<summary>`sanctum self-test` fails with `probe 06-devices-yaml-parses (rc=1)`</summary>
+<summary>`sanctum devices` says no devices.yaml found</summary>
 
-Either `~/.sanctum/devices.yaml` doesn't exist yet, or it exists but has no `devices:` list. The probe expects at least one device.
+The screen-time device inventory lives at `~/.sanctum/screen-time/devices.yaml` (symlinked into the screen-time module). If `sanctum devices` can't find it — or finds it empty — there's nothing to list.
 
 ```bash
-sanctum devices add FA:CE:DE:CA:CA:01 MyDevice gaming
+# Confirm where sanctum is looking.
+sanctum devices   # prints the two paths it checks when the file is missing
 ```
 
-That seeds the file with one device. Add more for each child's phone, tablet, console, or laptop. The third argument is the category (`gaming`, `social`, `homework`, `streaming` — see `sanctum devices --help` for the full list).
+`sanctum devices` is read-only by design, so there's no `add` subcommand — you seed the file by editing it. The schema is keyed by `family:` (each member has `personal_devices:`) and `shared_devices:`, not a flat list:
+
+```yaml
+family:
+  kid1:
+    name: Sam
+    personal_devices:
+      - { name: "Sam's iPhone", mac: "FA:CE:DE:CA:CA:01" }
+shared_devices:
+  living_room_appletv: { name: "Living Room Apple TV", mac: "FA:CE:DE:CA:CA:02" }
+```
+
+Once Family Pass Phase 2 lands, `sanctum screen-time assign` will fold an auto-discovered device into a category; until then the YAML is the source of truth.
 </details>
 
 <details>
-<summary>`sanctum self-test` fails with `probe 09-sops-roundtrip (rc=1)` or `probe 10-age-key-roundtrip (rc=1)`</summary>
+<summary>sops can't decrypt — the secrets layer is offline</summary>
 
-Your sops/age key was never generated. Sanctum needs it to encrypt and decrypt the secrets it ships with — without it, the secrets layer is offline.
+Your sops/age key was never generated. Sanctum needs it to encrypt and decrypt the secrets it ships with — without `~/.config/sops/age/keys.txt`, every sops decrypt fails and the secrets layer goes dark.
 
 ```bash
+# Is the key there?
+ls -l ~/.config/sops/age/keys.txt
+
+# If not, generate one.
 mkdir -p ~/.config/sops/age
 age-keygen -o ~/.config/sops/age/keys.txt
 ```
 
-The installer should have done this in Step 5; if it didn't, that's a bug — please file it. In the meantime, the command above is the fix.
+Onboarding should have done this for you; if it didn't, that's a bug — please file it. In the meantime, the command above is the fix.
 
 <Aside type="danger">
 **Back up the key immediately.** Without it, your sops-encrypted secrets are unrecoverable.
 
+`sanctum keys backup` exports your Keychain credentials, but it does **not** include the age key — that one you copy by hand:
+
 ```bash
-sanctum keys backup ~/Desktop/sanctum-keys.age
+cp ~/.config/sops/age/keys.txt ~/Desktop/sanctum-age-key.txt
 ```
 
-Move that file off the Mac (USB drive, encrypted disk image, password manager attachment — your call) and treat it like the recovery seed for your Sanctum.
+Move that file off the Mac and treat it like the recovery seed for your Sanctum. Leave it on the Desktop and a dead Mac takes your only copy with it.
 </Aside>
 </details>
 
 ## Install and first-run
 
 <details>
-<summary>My PWA still says "Manoir Nepveu" after install</summary>
+<summary>My screen-time PWA shows someone else's haus name</summary>
 
-`install.sh` Step 8.5 rewrites the PWA's `manifest.json` and `index.html` with the `haushold.name` value from `sanctum.yaml`. Either you edited `sanctum.yaml` *after* running the installer, or Step 8.5 didn't run.
-
-Re-run the installer (it's idempotent, so this is safe), or do the rewrite by hand:
+The PWA's name is hardcoded in its source — `manifest.json` and `index.html` ship with the maintainer's haus name baked in, and there's no onboarding step that templatizes it yet. Until there is, you rename it by hand against the real PWA path:
 
 ```bash
-HN=$(grep -E '^\s*name:' ~/.sanctum/sanctum.yaml | head -1 | sed 's/.*name:\s*//; s/["'\'']//g')
-sed -i '' "s/Manoir Nepveu/$HN/g" /opt/sanctum/sanctum-screen-time/pwa/index.html
-sed -i '' "s/Manoir Nepveu/$HN/g" /opt/sanctum/sanctum-screen-time/pwa/manifest.json
+PWA=~/Projects/sanctum-screen-time/pwa
+sed -i '' 's/Manoir [A-Za-z]*/Your Haus Name/g' "$PWA/index.html"
+sed -i '' 's/Manoir [A-Za-z]*/Your Haus Name/g' "$PWA/manifest.json"
 ```
 
-Refresh the PWA in your browser. If it still shows the old name, hard-reload to bust the service worker cache (Cmd-Shift-R on macOS Safari/Chrome, or uninstall and reinstall the PWA from the share sheet).
+Refresh the PWA in your browser. If it still shows the old name, hard-reload to bust the service worker cache (Cmd-Shift-R on macOS Safari/Chrome, or uninstall and reinstall the PWA from the share sheet — a stale `sw.js` is the usual culprit).
 </details>
 
 <details>
-<summary>`sanctum status` shows everything red</summary>
+<summary>`sanctum self-test` shows every haus-tier probe red at once</summary>
 
-The most common cause is the Lima VM didn't come up on boot. Sanctum's enforcement layer depends on it; if Lima is down, every downstream service looks dead.
-
-```bash
-LIMA_HOME=$HOME/.lima limactl start openclaw-staging --tty=false
-```
-
-If that succeeds, re-run `sanctum status` — most lights should turn green within a minute. If `limactl start` itself fails, look at the autostart log:
+`sanctum status` (disk, backup, telemetry) doesn't depend on the agent layer, so it stays green — but if every haus-tier `self-test` probe (cathedrals, proxyd, Force Flow, chitti) fails together, the usual cause is upstream of all of them: the Lima VM didn't come up on boot. The agent layer lives in the VM; when it's down, everything downstream looks dead.
 
 ```bash
-sanctum logs vm-autostart
+LIMA_HOME=$HOME/.lima limactl start sanctum-vm --tty=false
 ```
 
-The two most common failure modes are (1) `socket_vmnet` isn't running (the installer should have set it up — `brew services list | grep socket_vmnet` to check) and (2) macOS asked for a sudo prompt the autostart script can't answer (the installer's sudoers entry should have prevented that — `sudo -n true 2>&1` to check).
+If that succeeds, re-run `sanctum self-test` — the haus probes should come back within a minute. If `limactl start` itself fails, read the autostart log directly (there's no `sanctum logs` alias for it):
+
+```bash
+tail -n 50 ~/.openclaw/logs/vm-autostart.log
+```
+
+The two usual failure modes: (1) `socket_vmnet` isn't running (`brew services list | grep socket_vmnet` should say `started`), and (2) macOS popped a sudo prompt the autostart script can't answer (the sudoers entry should have prevented it — `sudo -n true 2>&1` to check).
 </details>
 
 ## Operational signals
@@ -137,11 +158,9 @@ The two most common failure modes are (1) `socket_vmnet` isn't running (the inst
 <details>
 <summary>Firewalla bridge log says `60s without successful op (via cache)`</summary>
 
-That's a misleading discovery-checker log line, not a real failure. The bridge's internal discovery loop runs every 60 seconds; if a probe happens to land between Firewalla-API calls, the loop logs the gap and falls back to its cache. The data it returns is still correct.
+That's a misleading discovery-checker log line, not a real failure. The bridge's discovery loop runs every 60 seconds; if a probe lands between Firewalla-API calls, the loop logs the gap and falls back to its cache. The data it returns is still correct.
 
-Look for `[error]` lines instead — those are the real signal. If the only thing you see is the discovery message, the bridge is healthy and you can ignore it.
-
-(We are aware this is confusing log verbiage. Toning it down is on the to-do list.)
+Look for `[error]` lines instead — those are the real signal. If the discovery message is all you see, the bridge is healthy. (We know the verbiage is confusing; toning it down is on the list.)
 </details>
 
 <details>
@@ -184,7 +203,7 @@ The threat model is "Sanctum's Mac dies or gets stolen and you need to recover."
 
 - The `sanctum doctor` output
 - The `sanctum self-test` output
-- The contents of `~/.sanctum/sanctum.yaml` (with any secrets redacted)
+- The contents of `~/.sanctum/instance.yaml` (with any secrets redacted)
 - A description of what you expected to happen and what happened instead
 
 The maintainers read these. The fix usually ships in the next pilot point-release.

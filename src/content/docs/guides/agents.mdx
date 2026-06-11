@@ -4,6 +4,7 @@ description: Multi-agent architecture with specialized roles, model fallback cha
 ---
 
 import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/components';
+import CouncilRoster from '../../../components/CouncilRoster.astro';
 
 Somewhere around the third agent, this stopped being a haus automation project and started being a personnel management problem. Sanctum runs a multi-agent AI system split across two platforms — five specialized agents on the VM, one on the Mac — each with a defined role, shared skills, and the quiet confidence of software that doesn't know it's running on consumer hardware in a basement.
 
@@ -20,7 +21,7 @@ The VM hosts five agents. Yes, five. Each named after a Star Wars Jedi, because 
 | **Yoda**   | Main        | General intelligence, coordination, primary user interface  |
 | **Windu**  | Security    | Network monitoring, threat assessment, security briefings   |
 | **Qui-Gon**| Efficiency  | Resource optimization, automation suggestions, cost analysis|
-| **Cilghal**| Health      | Genomic analysis, health monitoring, wellness insights      |
+| **Cilghal**| Health      | Wearable and scale data, trend detection, daily health briefings |
 | **Mundi**  | Finance     | Financial tracking, budget analysis, investment monitoring  |
 
 All VM agents run through the OpenClaw gateway as a systemd user service. The gateway manages agent lifecycle, message routing, and plugin access. It is, effectively, the Jedi Temple — if the Jedi Temple ran on 12 gigs of RAM and needed its secrets decrypted from a YAML file.
@@ -31,7 +32,7 @@ All VM agents run through the OpenClaw gateway as a systemd user service. The ga
 |-------------|------|-----------------------------------------------|
 | **Jocasta** | CRM  | Contact management, relationship intelligence |
 
-Jocasta runs through the DenchClaw gateway on the Mac (port 1977) with its own configuration profile. She has direct access to Mac-native services and the Affinity CRM integration. Named after the Jedi archivist, because someone has to remember everyone's birthday.
+Jocasta runs through the DenchClaw gateway on the Mac (the `~/.openclaw-dench/` profile, gateway port `19001`, token auth, LAN-bound) with direct access to Mac-native services and the Affinity CRM integration. Named after the Jedi archivist, because someone has to remember everyone's birthday.
 
 ## Model Configuration
 
@@ -39,43 +40,38 @@ Agents use a tiered model strategy with automatic fallback to maintain availabil
 
 ### Tiered Model Strategy
 
-Each agent is assigned a **tier** that determines its primary model and fallback chain. All routing goes through the Sanctum Proxy on port 4040.
+Each agent is assigned a logical **tier** that resolves to a primary model and a fallback chain. All routing goes through the Sanctum Proxy on port 4040, which reads `~/.sanctum/sanctum-proxy/config.yaml` for the resolution.
 
-| Tier | Primary Model | Fallback Chain | Agents |
-|------|--------------|----------------|--------|
-| `council-brain` | Claude Opus 4.7 | minimax-m27 → qwen35-plus → council-code → council-mlx | Yoda, Jocasta |
-| `council-code` | Qwen 2.5 Coder 14B (LM Studio) | lmstudio-qwen → council-mlx → qwen35-plus | Any agent when the request is code-shaped |
-| `council-secure` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → LM Studio | Windu |
-| `council-routine` | Qwen 3.5 Plus (OpenRouter) | qwen35-plus → council-mlx | Qui-Gon, Cilghal, Mundi |
-| `council-heartbeat` | Council MLX (local) | council-mlx → minimax-m25-free | All (heartbeat/status) |
+The mapping below is generated from the live Mini config — not hand-maintained here, because champion models swap often enough that a typed table is wrong within the week. One JSON file owns the truth; every page that shows the roster reads from it.
 
-Claude Code connects directly as `claude-opus-4-7` (not through a tier), with its own fallback chain to qwen35-plus → gemini-25-pro.
+<CouncilRoster variant="tiered" />
 
-<Aside type="note">
-  Requests to OpenRouter are automatically scrubbed of personally identifiable information via Presidio PII anonymization in the guardrail injector. De-anonymization is applied to responses. Your agents talk to the cloud. They just don't tell it who you are.
+The constant across every row is the last fallback: when the cloud is rate-limited or dark, each Jedi cascades down to the local Qwen tier and keeps answering. The whole point of the chain is that the lights stay on even when OpenRouter is having a day.
+
+<Aside type="caution">
+  PII scrubbing for the OpenRouter path is **wired but not yet armed**. The proxy builds a Presidio client at startup (`presidio_client` in `proxy.rs`), but no call site analyzes-and-anonymizes the outbound content blocks yet, and the analyzer/anonymizer services on `:5002`/`:5001` aren't running. Until they are, outbound cloud requests carry whatever the agent said. The plumbing is there; the valve is closed. Don't document it as a guarantee until the valve opens.
 </Aside>
 
 ### Local Models
 
 | Model | Port | Use Case |
 |-------|------|----------|
-| Qwen 2.5 Coder 14B Instruct | 1234 (LM Studio) | Local coding/debugging tier (`council-code`) |
-| Qwen 3.5 35B (A3B) | 1234 (LM Studio) | General reasoning fallback |
-| Qwen 3.5 27B 4-bit + LoRA | 1337 (MLX) | Agent-personalized local inference |
+| Codestral-22B-v0.1-4bit | 3301 (sanctum-mlx) | Local coding tier (`council-code`) |
+| Qwen 3.6 35B (A3B) 4-bit | 1337 (sanctum-mlx, mTLS) | Local council brain — primary and last-resort fallback |
 
-The Council MLX server provides LoRA adapters fine-tuned for each of the six agents, enabling personalized responses at the local tier. Every agent gets its own voice. This is either sophisticated engineering or the early stages of a personality disorder. Possibly both.
+Both are served by the `sanctum-mlx` cathedral binary (`sanctum-rs-cathedral`), not LM Studio. The council brain on `:1337` is mTLS-only; a pair of `socat` tunnels re-expose it as plaintext loopback `:1339` for the proxy and the vmnet bridge, so the config's `council-mlx`/`council-27b`/`council-heartbeat` lanes all point at `:1339` and land on the same Qwen3.6-35B.
 
-`council-code` is intentionally not a prompt trick. The proxy owns that routing decision. When the request is clearly about code, tests, shell, or config surgery, the infrastructure can send it to the local coder tier and log the handoff like any other policy decision.
+`council-code` is intentionally not a prompt trick. The proxy owns that routing decision. When the request is clearly about code, tests, shell, or config surgery, the infrastructure routes it to Codestral on `:3301` and logs the handoff like any other policy decision.
 
-The current local serving split is simple when you stop lying to yourself about it:
-- `1234` is LM Studio, including the `council-code` lane.
-- `1337` is the Sanctum-served Council MLX front-end.
+The current local serving split, once you stop lying to yourself about it:
+- `:3301` is Codestral-22B — the coding specialist (`council-code`).
+- `:1337` (mTLS) / `:1339` (plaintext via `socat`) is Qwen3.6-35B — the local council brain and everyone's final fallback.
 
-One port for the coding specialist, one port for the local council brain. Fewer onions.
+One model for code, one for everything else. LM Studio and the old `:1234` lane are retired; the only thing still answering on `:1234` is a `socat` tunnel pointed at a port that no longer serves. Fewer onions.
 
 ### Sanctum Proxy
 
-The Sanctum Proxy is the **primary routing layer** for all agent model requests. It is a single Rust binary on port 4040 that handles request sanitization, content-based routing, prompt caching, PII scrubbing, assistant prefill stripping, model resolution, fallback routing, and analytics.
+The Sanctum Proxy is the **primary routing layer** for all agent model requests. It is a single Rust binary on port 4040 that handles request sanitization, content-based routing, prompt caching, assistant prefill stripping, model resolution, fallback routing, and analytics. (PII scrubbing has a slot in this pipeline but isn't armed yet — see the caution above.)
 
 See the [Services](/architecture/services/) page for the full 7-step request pipeline.
 
@@ -83,14 +79,14 @@ See the [Services](/architecture/services/) page for the full 7-step request pip
 
 Each platform runs its own gateway instance:
 
-| Platform | Gateway     | Port  | Bind     | Config Location     |
-|----------|-------------|-------|----------|---------------------|
-| Mac      | DenchClaw   | 1977 | LAN      | `~/.openclaw/`      |
-| VM       | OpenClaw    | varies| LAN      | `~/.openclaw/`      |
+| Platform | Gateway     | Port  | Bind     | Config Location       |
+|----------|-------------|-------|----------|-----------------------|
+| Mac      | DenchClaw   | 19001 | LAN      | `~/.openclaw-dench/`  |
+| VM       | OpenClaw    | 1977  | LAN      | `~/.openclaw/`        |
 
-The VM gateway runs as a systemd user service with linger enabled, starting automatically at boot. It uses a SOPS wrapper script to decrypt secrets before launch.
+The VM gateway runs as a systemd user service with linger enabled, starting automatically at boot. It uses a SOPS wrapper script to decrypt secrets before launch. Its `1977` is forwarded to the Mac over the lima port-bridge, so a `curl` to `127.0.0.1:1977` on the Mac actually reaches the VM gateway — a detail that has fooled at least one incident investigation into thinking it was a Mac-native service.
 
-The Mac gateway runs as a LaunchAgent. Both gateways use the same OpenClaw codebase but with independent configurations. Two embassies, one language.
+Both gateways run the same OpenClaw codebase with independent configurations. Two embassies, one language.
 
 ## Council Bridge
 
@@ -99,14 +95,14 @@ The Council Bridge enables communication between Jocasta (Mac) and Yoda (VM). Si
 ### Mac to VM
 
 ```
-Jocasta → SSH to ubuntu@10.10.10.10 →
+Jocasta → SSH to ubuntu@10.0.0.10 →
   openclaw agent --agent main --message "..."
 ```
 
 ### VM to Mac
 
 ```
-Yoda → SSH to operator@10.10.10.1 →
+Yoda → SSH to neo@10.0.0.1 →
   PATH=<node path> openclaw agent --agent main --message "..."
 ```
 
@@ -120,12 +116,12 @@ The bridge skill maintains a heartbeat every 2 hours to confirm bidirectional co
 
 Agents have access to shared plugins that extend their capabilities:
 
-| Plugin         | Description                                          |
-|----------------|------------------------------------------------------|
-| **sanctum-memory**| Persistent memory across conversations               |
-| **Neo4j KG**   | Knowledge graph via Graphiti (port 31416)            |
+| Plugin       | Status | Description                                          |
+|--------------|--------|------------------------------------------------------|
+| **Neo4j KG** | live   | Knowledge graph via Graphiti on `:31416` (VM-side python, backed by a Neo4j container) |
+| **memory-core** | disabled | In-gateway persistent memory; currently `enabled: false` — cross-session state lives in the Memory Vault instead |
 
-Plugins are configured at the gateway level and available to all agents on that gateway instance.
+Plugins are configured at the gateway level and available to all agents on that gateway instance. The gateway's own `memory-core` is off; the persistence agents actually use is the markdown Memory Vault on the Mini, synced over SSH — which is a fancy way of saying the council leaves each other notes.
 
 ## Skills System
 
@@ -135,15 +131,10 @@ Skills are loaded from:
 - The built-in skills directory in the OpenClaw installation
 - Extra skills directories configured in `openclaw.json` (pointing to `~/Projects/openclaw-skills`)
 
-## Holocron Chat Interface
+## Holocron Interface
 
-The Holocron is the family-facing chat interface — the part of this system that doesn't require a terminal. It runs on the Mac at port 1977, using a separate DenchClaw profile (`~/.openclaw-dench/`) with token authentication and LAN binding.
+The Holocron is the family-facing surface — the part of this system that doesn't require a terminal. It is now a signed and notarized native macOS app (`The Holocron.app`, bundle ID `com.manoir.the-holocron`), not a web page. See [Holocron App](/guides/holocron-app/) for the build, signing, and renderer-hardening workflow.
 
-| Setting    | Value                                    |
-|------------|------------------------------------------|
-| Port       | 1977                                    |
-| Hostname   | `holocron` (Firewalla DNS), `holocron.local` (mDNS) |
-| Auth       | Token-based                              |
-| Access     | `http://holocron/` from LAN              |
+The DenchClaw gateway also ships a browser chat profile at `~/.openclaw-dench/` (gateway `:19001`, token auth, LAN-bound, allowed origins `holocron` / `holocron.local`). It's the legacy web path: configured, but not the live interface and not currently listening. If you find yourself `curl`-ing `http://holocron/` and getting nothing, that's why — the family uses the app now.
 
-The Holocron provides a simplified interface for haushold members to interact with the agent system without needing direct gateway access. Because explaining SSH to your family is a different kind of support ticket.
+The point of either surface is the same: let haushold members interact with the agent system without needing direct gateway access. Because explaining SSH to your family is a different kind of support ticket.
