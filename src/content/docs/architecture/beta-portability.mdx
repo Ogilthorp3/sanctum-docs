@@ -1,0 +1,83 @@
+---
+title: Beta Portability & the No-Hardcoded-Endpoints Rule
+description: "How Sanctum keeps per-setup values out of code, so the same build runs on a second haus without breaking or leaking the first operator's identity."
+---
+
+![A pencil sketch of two identical haus keys cut from one master template, teal accent halo](./images/beta-portability.png)
+
+Sanctum has two kinds of constant. **Stable** ones are identical on every
+install — the proxy always listens on `:4040`, the Firewalla bridge on `:1984`.
+**Per-setup** ones differ from one haus to the next: LAN addresses, device MAC
+addresses, the operator's name and phone number, home directory paths, Home
+Assistant entity IDs, the GitHub org. Bake a per-setup value into code and the
+second install either breaks (a service starts on a path that does not exist) or
+leaks (the first operator's identity ships to a stranger's agents).
+
+The rule: **per-setup values live in one source of truth, and code resolves them
+at run time — never as a literal.**
+
+## The source of truth
+
+Every install has exactly one `instance.yaml`. It holds the per-setup values and
+nothing else needs them duplicated. A fresh box gets a minimal scaffold on first
+run; onboarding fills the rest.
+
+## The resolve pattern
+
+Three consumers, one idea — read the source of truth, fall back to a dev default
+only so a not-yet-onboarded box still runs:
+
+- **Shell** uses `sanctum_get <dotted.key> <fallback>`, e.g.
+  `ORBI_HOST="$(sanctum_get network.orbi_lan 100.0.0.5)"`. A launchd plist, which
+  cannot call a function, gets a thin launch-wrapper script that resolves the
+  value and `exec`s the real binary.
+- **Python** uses `config.instance_value("vcs.github_owner", DEFAULT_OWNER)`.
+- **Prompts and other templates** ship with `{{placeholders}}` and `AUTO:` blocks
+  that a render step fills from the source of truth at deploy.
+
+Because the fallback is the original literal, an existing box behaves identically
+while the value becomes per-setup everywhere else.
+
+## What counts as per-setup
+
+| Category | Examples | Resolves from |
+| --- | --- | --- |
+| Network | LAN IP, router IP, Wi-Fi SSID, MAC addresses | `network.*` |
+| Identity | owner name, alert number, email, employer | `notifications.*` |
+| Host / path | home directory, project root, Tailscale name | `$HOME`, `nodes.*` |
+| Home automation | HVAC zones, speakers, family device MACs | `home_assistant.*`, `family.*` |
+| Accounts | GitHub org, deadman repo, bridge host, 1Password account | `vcs.*`, `secrets.*` |
+
+Stable service ports are **not** per-setup and stay as named constants.
+
+## Agents ship empty, render full
+
+The council prompt template carries no operator data. The owner's name, haus
+names, and each child's device MAC addresses are `{{placeholders}}`; the device
+roster is an `AUTO:family` block. The render step substitutes real values into
+the deployed copy from `instance.yaml`. The shipped template reads
+`MAC FA:CE:DE:CA:CA:XX` and `serving {{owner_full_name}}`; only the rendered,
+per-install copy ever holds a real address.
+
+## Onboarding collects it
+
+`sanctum onboard` asks for the values that cannot be discovered: the operator's
+name and alert number, and each child's device MAC addresses (offered as a live
+pick-list from the paired firewall, or typed by hand). Without the MAC addresses
+the screen-time curfews have nothing to enforce, so collecting them is part of
+first run, not an afterthought.
+
+## Proving it with a second haus
+
+Structural assertions — "the key exists" — do not prove portability. The contract
+test builds a **hostile second config**: a different operator (`alice@haus.local`,
+`+15555550142`, org `alice-beta`, child MAC `FA:CE:DE:CA:CA:01`) and feeds it
+through every real consumer — the shell resolver, the prompt render, the CLI
+defaults, the screen-time digest. A pass means two things at once: the second
+operator's values resolve, **and** none of the first operator's identity appears
+anywhere in the output. Run it before any release that touches a per-setup path.
+
+## The rule in one line
+
+If a value would change from one haus to the next, it comes from discovery,
+the source of truth, or an env override — never a literal in code.

@@ -132,6 +132,7 @@ export default defineConfig({
 						{ label: 'The Reliability Doctrine', slug: 'architecture/reliability-doctrine-v1' },
 						{ label: 'Language Maturity', slug: 'architecture/language-maturity' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
+						{ label: 'Beta Portability', slug: 'architecture/beta-portability' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
 						{ label: 'Port Summary', slug: 'architecture/port-summary' },
