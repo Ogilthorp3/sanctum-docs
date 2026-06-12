@@ -26,7 +26,7 @@ The metaphor is load-bearing. When fibre is up and the API budget is not yet exh
 | Kyber | `~/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-4bit` (20 GB on disk, ~16 GB resident at startup) |
 | Vestments | TurboQuant KV compression (1.32× ratio) and a Carmack-passed vision tower (333 tensors, depth 27) |
 | Doors | mTLS on three TLS hosts: `127.0.0.1`, the Tailscale address, and `10.0.0.1` (the bridge to the OpenClaw VM). No door without a client cert. |
-| Discipline | A single global GPU-dispatch Mutex serializes all four chat handlers (sync and stream, text and multimodal). One inference at a time. |
+| Discipline | A dedicated `mlx-inference` executor thread owns every text-path inference — one OS thread, one durable GPU stream, jobs queued FIFO with the dispatch lock held inside each un-cancellable job. Multimodal handlers serialize against it through the same lock. One inference at a time, by construction. |
 | Vows | `KeepAlive=true` under launchd, plus a 60-second supervision check, plus a restart-forensics capture, plus a Sunday 04:00 perf-hygiene cron |
 | Witnesses | A vision-canary every 60 seconds probes `/v1/models` and a 1×1 PNG multimodal request. On three consecutive 1h SLO breaches it flips a kill-switch that downgrades vision in the next restart. |
 

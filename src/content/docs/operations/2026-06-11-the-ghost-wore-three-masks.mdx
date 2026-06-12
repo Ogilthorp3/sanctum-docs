@@ -1,0 +1,59 @@
+---
+title: "2026-06-11: The Ghost Wore Three Masks"
+description: >-
+  The June-2 "no Stream(gpu, 0)" ghost was supposed to die when all inference
+  moved to one thread. It didn't. It came back twice more — once as a stream
+  that died at scope exit, once as a lazy RNG key that crossed a thread
+  boundary — and on the way to killing it for good, the sweep found the
+  Temple's LoRA loader had been deploying every adapter at double its trained
+  strength. Five commits, one merge, one live gate — Qui-Gon served natively
+  by council-code, tool calls end to end.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch séance scene in a stone temple corridor: a single hooded figure holding a lantern faces three translucent ghost masks floating in a row, each mask slightly different — one cracked down the middle, one dissolving into smoke at its edges, one with hollow dice for eyes. Behind the figure, a forge anvil holds a glowing kyber crystal split into two halves of unequal brightness, teal accent halo](./images/the-ghost-wore-three-masks.png)
+
+Since June 2 the Temple had an intermittent ghost: `There is no Stream(gpu, 0) in current thread`, surfacing as HTTP 200 responses with empty content. The spec said the fix was architectural — put every text-path inference on one dedicated OS thread, one mlx context, forever. That patch (S1d) was written, deployed to the Codestral instance, and left uncommitted by a session that ran out of evening.
+
+Tonight's session inherited it, and did what the doctrine asks before believing any "done": re-read the diff, re-ran the gates, and put twenty-nine review agents on the patch before committing it. The review confirmed the executor was right — and found the ghost had two more masks waiting behind the first.
+
+## Mask one: the thread
+
+The executor itself held. But the review's critical finding was about what the executor *changed around it*: the global GPU-dispatch lock was now acquired by the request handler and released the moment a client disconnected — while the un-cancellable inference job kept dispatching GPU work without it. On the council instance, where a vision request can arrive mid-generation, that silently re-opened the exact concurrent-dispatch crash PR #10's mutex was merged to close. A panicking job would also have killed the executor thread permanently — every later request hung while `/v1/models` stayed 200, invisible to the guardian whose only probe that is.
+
+S1e moved the lock inside the job, wrapped every job in panic isolation, and made the executor's failures surface as 503s instead of silence.
+
+## Mask two: the stream
+
+The live logs then contradicted the patch's own theory. The deployed S1d binary — one thread, as designed — was still logging `no Stream(gpu, 5)` on prompt-cache save-back. Same thread. Different stream.
+
+The scoped stream guard (`with_new_default_stream`) creates a stream that dies when its closure exits. Lazy KV that escapes the scope — a saved prompt cache is exactly that — references a stream that no longer exists, and fails to materialize one request later. Worse, the save-back kept the poisoned cache, so the *next* request inherited a slot it could neither truncate nor use.
+
+The fix is one sentence: the executor thread now opens a single durable stream at spawn and runs its entire life inside it. Nothing lazy can outlive its stream, because the stream cannot die before the process does.
+
+## Mask three: the dice
+
+With the durable stream live, every probe passed — and the first real agent request still died at its first sampled token. The difference between the probes and the request was one parameter: temperature.
+
+At `temp=0` the sampler is argmax and touches no randomness. Above zero it walks mlx's global RNG state — created lazily, by whichever thread samples first, as a pending `key(now)` operation bound to *its* stream. Lazy arrays do not cross threads. Concrete arrays do — which is why fifteen gigabytes of model weights cross from the loader thread to the executor without complaint while a 32-byte RNG key kills the request.
+
+The executor now seeds and force-evaluates the RNG state at spawn, and the sampler passes an explicit per-draw key, created and consumed on the same thread. The doctrine line for the wall: **lazy arrays do not cross threads; concrete ones do. Materialize at every boundary, and never let a scoped stream outlive its scope.**
+
+## The coda: a kyber at double strength
+
+The same sweep closed the Qui-Gon blocker — Codestral's vocabulary carries the Mistral control ids (`[INST]`=3, `[TOOL_CALLS]`=5) but its tokenizer never mapped the literal template text onto them, so the model had never once seen a true instruct boundary. Registering the markers as added tokens fixed template echo, double-BOS, and native tool calls in one move; the live gate closed with Qui-Gon answering through `council-tiered/council-code`, 383 completion tokens, native `tool_calls`, no fallback.
+
+And while auditing champion-promotion readiness, the session found the Temple's LoRA loader computing its scaling as `(alpha / rank) × scale`. The trainer's convention is that `scale` *is* the scaling. For every adapter in the fleet — alpha 32, rank 16, scale 2.0 — the loader would deploy at 4.0: double the trained strength. Latent only because the Temple currently serves the bare kyber, no adapter loaded. It was fixed, unit-tested, deployed to both instances, and then proven end to end: a scratch instance loaded the production-champion adapter at `effective_scaling=2.0`, merged 408 of 408 pairs into the quantized weights, and answered.
+
+## Status
+
+| Item | State |
+|---|---|
+| Commits | `1bffb4b` S1d executor, `c83f80b` S1e hardening, `149d13b` S2b control tokens, `e4a9970` S2c tool-call fallback, `043d0e5` S1f RNG seed, `dafa5f2` S1g per-draw keys, `65379dd` LoRA scale |
+| Merge | `d93e008` + `f8aa21b` to `main`, both machines |
+| Instances | `:3301` Codestral and `:1337` council, healthy on the merged binary |
+| Live gate | Qui-Gon via council-code, `completion_tokens=383`, native tool calls, zero `no Stream` errors since deploy |
+| Adapter path | E2E-proven at trained strength; promotion machinery armed, gate calibrated at 0.70 |
+
+The ghost is dead three ways. The kyber is back to its trained strength — and the next champion will be the first adapter the Temple has ever loaded *correctly*.
