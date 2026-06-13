@@ -1,0 +1,46 @@
+---
+title: "2026-06-13: Subscription First"
+description: The council was quietly running on metered per-token APIs while two flat-rate subscriptions sat paid-for and unused. Claude seats moved to the Max proxy, a new Gemini Code Assist proxy put Windu on AI Ultra, Cilghal stayed local for medical privacy, and OpenRouter was demoted to fallback-only.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The owner's directive was one line: *sanctum runs on subscriptions, not metered per-token APIs; OpenRouter is the only metered provider and only as a fallback.* The audit that followed found the council doing almost the opposite.
+
+## The trap
+
+"I use my AI Studio account, so Gemini is on my subscription" is false when the call carries an **API key** to `generativelanguage.googleapis.com`. That path bills per token regardless of any consumer subscription. The same shape held for Claude — `api.anthropic.com` with a key, and `openrouter -> anthropic/*`, are both metered.
+
+A subscription is reached only through its **OAuth-fronted proxy**. Claude Max already had one (`claude-max-proxy`, port 3456). Gemini did not. proxyd is an HTTP key-router, so "use the subscription" means "point the seat at the OAuth proxy," never "use my account's key."
+
+## What the audit found
+
+proxyd's defaults (`config.rs`) routed `anthropic` to the metered API, `gemini` to the metered key (mislabelled "subscription" in the config comments), and `openrouter` to OpenRouter. The result:
+
+- `council-brain` and Yoda's `council-max-thinking` (his primary) — metered.
+- The Gemini seats, including Windu's `council-spacial` — metered.
+- Only `claude-cli-offline` ever touched the Max proxy.
+
+Two flat-rate subscriptions, paid for, barely used.
+
+## The fix
+
+**Claude to Max.** `claude-opus-4-6`, `council-brain`, and `council-max-thinking` now route to `claude-max-proxy` on 3456 (`provider local`, `api_model claude-opus-4`). Verified end-to-end through proxyd.
+
+**Gemini to AI Ultra.** A new `gemini-code-assist-proxy` (`~/.sanctum/bin/gemini-code-assist-proxy.js`, `com.sanctum.gemini-code-assist-proxy`) fronts the Gemini CLI's Code Assist OAuth path, which is the AI Ultra subscription. It is localhost-only, conservatively rate-limited, never logs token material, and refreshes the CLI's own OAuth credentials. Its port is **6543** — the digit-reverse of the Claude proxy's 3456. Every Gemini seat now points there; the metered `GEMINI_API_KEY` is no longer referenced by proxyd.
+
+**Cilghal stays local.** Cilghal handles medical information, so it runs on the local cathedral (`:1337`) and never leaves the house. That was already the case and was left untouched.
+
+**OpenRouter demoted.** No subscription-served model keeps an OpenRouter primary; OpenRouter remains only in fallback chains. `council-code` moved to the live local Codestral (`:3301`), and the obsolete `council-27b` and `lmstudio-qwen` seats were removed.
+
+<Aside type="caution" title="Two costs of the Gemini path">
+Google rate-limits `gemini-3.1-pro` on the Ultra subscription to roughly one request every 40 seconds (`429 RESOURCE_EXHAUSTED`). Only Windu uses Gemini, so single-agent load fits; on a 429 Windu falls back to the local cathedral. And proxying a consumer subscription for backend use is a Google ToS gray area — the same standing tradeoff already accepted for `claude-max-proxy`, accepted again here explicitly by the owner.
+</Aside>
+
+## What remains
+
+- `sanctum-cli`'s `GeminiProvider` (the Yoda hybrid transport) still calls the metered Gemini API directly. It should point at the 6543 sub-proxy; it is another session's working tree, so the change is coordinated through the vault rather than taken unilaterally.
+- `council-routine` is still an OpenRouter primary and should move to a local seat.
+- `proxyd-launch` still exports the now-unused `GEMINI_API_KEY`, removable once `sanctum-cli` migrates.
+
+The doctrine of record lives at `~/.sanctum/PROVIDER-BILLING-DOCTRINE.md`.
