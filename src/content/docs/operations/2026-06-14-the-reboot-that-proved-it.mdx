@@ -1,0 +1,92 @@
+---
+title: "2026-06-14: The Reboot That Proved It"
+description: "A 90 GB iTerm process OOM-panicked the mini and opened a hardening sweep of the Yoda/Signal/R2D2 fabric. Four monitors turned out to be judging health by a proxy that drifts: a retired component's name, a composite banner, a stale keychain field. Then the mini rebooted twice in one night and the fixes held."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A small autonomous helper drone keeping watch over a softly glowing home server through two dawn reboots, its status lights returning to a steady calm glow as the machine reassembles itself, an Abyssinian cat dozing nearby unbothered — pencil sketch, dark background, a single teal accent halo](./images/2026-06-14-the-reboot-that-proved-it.png)
+
+A few days earlier, an iTerm process on manoir had quietly ballooned to roughly
+90 GB and taken the kernel down with it — a clean OOM panic, the kind that
+leaves no note. That panic was the trigger. It opened a hardening sweep across
+the self-healing fabric that keeps Yoda answering on Signal: the boot canary,
+the link sentinel, the keep-warm loops, and R2D2's recipe book. What the sweep
+found, four times over, was the same mistake wearing four costumes.
+
+## Act 1 — the retired name that haunted nine files
+
+The `yoda-chat-consumer` was a placeholder. It had never served the real
+operator; the live path has always been the openclaw gateway's native Signal
+channel. So it was retired. The trouble is that a dormant service still has a
+*name*, and that name was hardcoded across about nine monitoring and healing
+components. The `yoda-boot-canary` still looked for it in `GUEST_SERVICES` and
+paged **"Yoda Signal did NOT self-assemble"** every single cycle. Worse, an
+R2D2 detector — `yoda_warmth_wrapper_missing` — fired every cycle too, and its
+heal would have re-deployed `agent.py`, silently reverting the new dad-voice
+persona, and *then* failed trying to restart a consumer that no longer existed.
+A monitor mourning a service you deliberately killed is not vigilance; it is a
+landmine with the dead man's name on it. The rule that came out of this: before
+you retire anything monitored, `grep -ril <component>` the whole fabric, because
+every file that names it becomes either a false failure or a false heal.
+
+## Act 2 — the sentinel that watched the wrong light
+
+The `signal-link-sentinel` judged whether the Signal link was up by reading
+yoda-chat's overall **"Bridge — OK"** banner. That banner is a composite: it
+folds in the mlx inference backend on `:1339` along with the transport. When a
+concurrent migration took `:1339` down, the sentinel dutifully paged
+**"VM-CONSUMER-DOWN"** — while the Signal transport itself was perfectly
+healthy, carrying messages the whole time. The link sentinel had been grading
+the link on the backend's homework. The fix was to judge only the
+Signal-specific hops and let the inference backend be a different monitor's
+problem. Separation of concerns is not an architecture nicety here; it is the
+difference between an alarm that means something and one that fires when an
+unrelated room goes dark.
+
+## Act 3 — the critical that cried wolf every thirty minutes
+
+Twice an hour, Force Flow lit up with **"Claude Max re-login likely needed."**
+It was wrong every time. The keep-warm loop gated on the keychain OAuth
+`expiresAt` field — and that field had gone perpetually stale, reading minus
+591 minutes and growing more negative each cycle, a clock running backwards
+into a wall. Meanwhile `claude auth status` returned `loggedIn: true` the entire
+time, and a separate `claude -p` probe was failing for reasons of its own. The
+session was fine. The number the loop trusted was not the number that proved it.
+The honest signal had always been `loggedIn`. So the keep-warm became log-only,
+and R2D2 got a proper detector and heal recipe: refresh the token through an
+authenticated call, and escalate the human-only `claude auth login` *only* if
+the refresh token is genuinely dead.
+
+## Act 4 — giving the rollback something to roll back to
+
+R2D2 already knew how to rescue a crash-looping gateway: roll `openclaw.json`
+back to a known-good backup. The gap was that nothing guaranteed a known-good
+backup *existed*. A new recipe, `snapshot-openclaw-gateway-good`, keeps one
+fresh — but with teeth. It snapshots only when the gateway is active, only when
+it has been stably up, and only when the on-disk config's mtime predates the
+gateway's start time. That last gate is the careful one: it means a snapshot can
+never freeze a mid-migration edit and bless it as "good." A safety net woven
+from a bad config is just a slower way to fall.
+
+## The proof
+
+That night the mini rebooted twice — 04:35 and 08:09 — both ordinary macOS
+software updates, no panic in sight. Everything self-assembled. The Signal chain
+re-formed on its own. Every fix from the sweep survived the reboot intact. And
+the self-healing did not merely sit quiet — it *acted*:
+`snapshot-openclaw-gateway-good` fired post-reboot and exited 0, capturing a
+genuinely-good config. The "re-login needed" criticals stopped cold — zero after
+the fix, where there had been one every half hour.
+
+<Aside type="note">
+Four acts, one lesson: probe the thing that proves health, never a proxy that
+drifts away from it. A retired component's name, a composite banner that folds
+in someone else's backend, a keychain field counting backwards — each was a
+stand-in for the truth that was easier to read and quietly wrong. The boot
+canary should ask the live transport, not a ghost. The link sentinel should ask
+the link, not the aggregate. The keep-warm should ask `loggedIn`, not
+`expiresAt`. A reboot is the only auditor that can't be fooled by a proxy,
+because it makes everything answer for itself at once. Twice in one night, the
+fabric answered.
+</Aside>
