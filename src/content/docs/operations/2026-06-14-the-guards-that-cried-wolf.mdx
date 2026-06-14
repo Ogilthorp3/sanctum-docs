@@ -1,0 +1,106 @@
+---
+title: "2026-06-14: The Guards That Cried Wolf"
+description: "After a hardening sweep, an audit found that 283 of 1,105 critical alerts in 48 hours — 25.6% — were false positives. Nearly all shared one root cause: a guard took a single flaky read and called it DOWN. The fix is a small doctrine: confirm before you cry, probe the authoritative signal, and be honestly blind rather than fabricate a failure."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A lone shepherd-sentinel on a dark hillside, lantern raised, pausing to look twice at a wolf-shaped shadow that turns out to be only a bush — pencil sketch on a dark background, a single teal accent glow lighting the moment of doubt before the alarm](./images/2026-06-14-the-guards-that-cried-wolf.png)
+
+The hardening sweep worked. It also, for a few days, made the pager
+unbearable. The operator was drowning in alarms, so we stopped guessing and
+measured: over a 48-hour window, **283 of 1,105 critical and error alerts were
+false positives** — 25.6 percent. One in four pages was a lie.
+
+The audit found something better than a list of bugs. It found a *single shape*
+shared by nearly all of them. A guard would take one flaky read — a `curl`, an
+`ssh`, a `pgrep`, a `launchctl`, an `lsof` that timed out for a single moment —
+map it straight to **DOWN**, and page a critical. The thing it watched was
+perfectly fine the whole time. The guard had not observed a failure. It had
+observed a hiccup in its own eyesight and shouted as if the building were on
+fire.
+
+## The cast of criers
+
+The Claude-Max keep-warm was the loudest. Every thirty minutes it paged
+**"re-login needed"** — gated on a keychain expiry field that had drifted to
+minus 591 minutes, a clock that kept counting further into the past each cycle.
+Meanwhile `claude auth status` returned `loggedIn` the entire time. The session
+was never in trouble. The number the guard trusted simply wasn't the number
+that proved the session.
+
+The castellan canary was scarier, because it cried wolf on the most serious
+alarm in the haus. On one flaky `pgrep`, it fired the panic-class critical
+**"memory arbiter unguarded"** — the alert that means the thing standing between
+the mini and a kernel panic has died. It hadn't. The deadman daemon, pid 337,
+was genuinely running and had been all along. A single missed process listing,
+escalated to a doomsday page.
+
+Then there was signal-health, which fired **46 "Signal Down" criticals** in
+those same 48 hours, each off a single `curl` read, and each one *restarting
+signal-cli* — needlessly bouncing a transport that was carrying messages fine.
+The guard didn't just lie; it acted on its lie, and the action was a small
+self-inflicted outage.
+
+## The deeper cost
+
+Twenty-five percent noise is not merely annoying. A guard that cries wolf on
+the panic-class alarm trains the operator to glance at "memory arbiter
+unguarded" and scroll past it. The false positives weren't a side effect — they
+were eroding the trust in the exact alerts the haus cannot afford to ignore.
+The most expensive thing an alert can do is be wrong about something important,
+because it spends the credibility of every alert that comes after it.
+
+## The doctrine, in one helper
+
+The fix is a shared helper at `~/.sanctum/lib/alert-confirm.sh`, with two
+primitives every guard now leans on:
+
+- **`confirm_down`** — a probe is "down" only if it fails *twice*, a few seconds
+  apart. One timeout is a hiccup. Two, spaced, is a signal.
+- **`alert_cooldown_ok`** — fire a given critical at most once per window, so a
+  real problem pages once and not forty-six times.
+
+And a convention to go with them, three rules deep:
+
+1. **Probe the authoritative signal, not a proxy that drifts.** Ask
+   `loggedIn`, not a keychain expiry field. Ask launchctl `state = running`,
+   not a banner that folds in someone else's backend. Ask for an end-to-end
+   reply when one is cheap. The honest signal is usually the boring one.
+2. **Confirm before a critical.** No panic-class page off a single read, ever.
+3. **Be honestly blind.** When you could not observe the thing, return
+   `unknown` — never fabricate `down`. A guard that admits it couldn't see is
+   worth ten that guess.
+
+## The twist worth telling
+
+The audit flagged two more offenders: the screen-time enforcement guard and a
+backup-snapshot detector. Before "fixing" either, we read the actual code — and
+both were already innocent. The screen-time guard already carried flap-damping
+hysteresis; it had been confirming before crying all along. The snapshot
+detector never paged anyone — it only maintained backups. The audit had seen
+their *names* near the noise and inferred guilt.
+
+That is the haus doctrine rhyming with itself: **verify before you attribute.**
+Read the real code before you "fix" a flagged guard, or you'll harden two
+components that were never the problem and feel productive doing it. Evidence
+before attribution applies to your own audit, too.
+
+## What's true now
+
+After the fixes landed, the count of false criticals went to zero. The Claude-Max
+keep-warm reads `loggedIn` and stopped its half-hourly lie. The castellan canary
+confirms the deadman twice before it dares the panic page. signal-health stopped
+restarting a transport that was never down. The guards still watch everything
+they watched before — they just earn their certainty before they shout.
+
+<Aside type="note">
+The cure for a guard that cries wolf is not a quieter guard. A quieter guard
+misses the real wolf. The cure is a guard that looks twice — that confirms what
+it saw before it shouts, that asks the signal which proves health instead of the
+proxy that merely correlates with it, and that says "I couldn't see" out loud
+rather than inventing a failure to fill the silence. One flaky read is a
+shadow on a hillside. Whether it's a wolf or a bush is exactly the question the
+guard exists to answer — and answering it is the whole job, not a step you get
+to skip on the way to the alarm.
+</Aside>
