@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 # The Endocrine System
 
 **Date:** 2026-06-14
-**Status:** Doctrine (built, off-by-default, awaiting turn-on)
+**Status:** Doctrine — live and **on by default** on manoir (2026-06-15)
 
 Sanctum has, for a while now, been built as a body. Not as a cute label slapped on afterward — as a working division of labor, one organ-system per concern, each with its own metaphor and its own page. By mid-2026 the body had six systems, and exactly one was missing. This page adds it.
 
@@ -65,7 +65,7 @@ And the coupling cuts the right way: when the haus is genuinely on fire — memo
 |---|---|
 | **Gland** (hypothalamus) | `sanctum_cli/endocrine/gland.py` + `gland_daemon.py` — a first-order **leaky-integrator** homeostat that reads the real signals and steps the panel once per tick |
 | **Bloodstream** | [chitti](/architecture/chitti/) samskara (the same `POST /action` contract the health sentinel uses) + a local panel query file; endpoints [discovery-resolved](/architecture/endpoint-resolution/), never hardcoded |
-| **Receptors** | `sanctum_cli/endocrine/receptor.py` — translates a panel into a seat's effective knobs; opted in per seat via `SANCTUM_ENDOCRINE=1` |
+| **Receptors** | `sanctum_cli/endocrine/receptor.py` — translates a panel into a seat's effective knobs; **on by default**, opt out per seat with `SANCTUM_ENDOCRINE=0` |
 | **Control surface** | `sanctum endocrine {creative,calm,panel,status,tick}` |
 | **Immune coupling** | a staged watchdog catalog entry (gland-alive) + a Force-Flow sentinel that pages **only** on a pathological state, [damped](/operations/naming/) via the probe-twice `alert-confirm.sh` |
 
@@ -73,16 +73,16 @@ And the coupling cuts the right way: when the haus is genuinely on fire — memo
 
 The gland is a leaky integrator: each tick moves the panel a fraction toward its target and clamps every level to the unit interval. With the leak between 0 and 1 that map is a contraction — bounded input gives bounded output, always. There is no parameter setting that lets a hormone spiral. This is the structural guarantee that the endocrine system never becomes what it is meant to prevent: an **alert storm**. (The lesson was learned the hard way elsewhere; a regulator that can panic is not a regulator.)
 
-## Safety: additive, off-by-default, subscription-first
+## Safety: additive, fail-soft, subscription-first
 
-<Aside type="caution" title="Nothing is live until you turn it on">
-The receptor is wired into the **real** council payload path, but gated behind `SANCTUM_ENDOCRINE`. With no subscription — the default — a seat's request body is **byte-identical** to today: no temperature, no top_p, persona untouched. The gland daemon's launchd plists ship **staged, not loaded**. Turning the organ on is a deliberate, reversible act.
+<Aside type="note" title="Live and on by default — but fail-soft">
+The receptor is wired into the **real** council payload path and reads the live panel by default. It stays safe by construction: it is **fail-soft**, so with no gland running (no panel published) the read returns nothing → the receptor is a no-op → the request body is **byte-identical** to today. A fresh install behaves exactly as before; the council only shifts once a live panel is actually being published. The kill switch is `SANCTUM_ENDOCRINE=0` (per-invocation or per-seat).
 </Aside>
 
 Three invariants, verified end-to-end:
 
 - **Additive.** New files and a new (staged) service only. No live council daemon was restarted; no `openclaw.json` seat was touched.
-- **Off-by-default.** Absent gland or neutral panel → the receptor is a no-op. There is no code path where a failed read makes a seat hotter.
+- **Fail-soft.** Absent gland or neutral panel → the receptor is a no-op (byte-identical), and `SANCTUM_ENDOCRINE=0` opts a seat out entirely. There is no code path where a failed read makes a seat hotter.
 - **Subscription-first.** The creative path never routes the council to a metered provider. (See *honest scope* below — the live enforcement of this is the next step, not a shipped guarantee.)
 
 ## Governance
@@ -92,19 +92,18 @@ Three invariants, verified end-to-end:
 ## Honest scope — what is real, what is designed
 
 <Aside type="note" title="The adversarial review demoted two claims; this page reflects the truth, not the ambition">
-- **Real, proven end-to-end:** the temperature + divergent-framing modulation through the real `build_completion_payload`. A settled creative panel raises a subscribed seat's temperature (0.7 → ~0.93) and appends the divergent clause; unsubscribed is byte-identical.
+- **Real, proven end-to-end:** the temperature + divergent-framing modulation through the real `build_completion_payload`. A settled creative panel raises a seat's temperature (0.7 → ~0.93) and appends the divergent clause; opted-out (or no gland) is byte-identical.
 - **Real signals:** memory headroom, alert rate, and the clock all read from live sources; chitti broadcast uses the genuine samskara contract.
 - **Designed, not yet wired:** *dynamic model-diversity* (engaging more seats / dropping metered ones under a hot panel). The selector exists and is tested in isolation, but the fan-out does not yet call it — so subscription-first is currently a design intent, not a live invariant. Wiring it into the fan-out is the headline turn-on task.
 - **Scoped out by design:** modulation applies to chat and the voiced turn, **not** the tool-gather turn, which stays at the backend default to keep tool-use deterministic.
 </Aside>
 
-## Turn-on
+## Status + what remains
 
-Off-by-default means there is a switch, and it is yours to throw:
+The organ is **live on manoir**: the gland + sentinel are bootstrapped and healthy, the gland publishes a panel every 120s, and the CLI council reads it **by default**. `sanctum endocrine creative` dials the whole council divergent; `SANCTUM_ENDOCRINE=0` is the per-seat kill switch. What's still ahead:
 
-1. Deploy the staged copies (sentinel → `~/.sanctum/sentinels/`, catalog entry → `~/.sanctum/services/`, both plists → `~/Library/LaunchAgents/`); `sanctum endocrine tick --dry-run` to confirm the gland reads real signals; `launchctl bootstrap` the gland + sentinel.
-2. Opt one seat in with `SANCTUM_ENDOCRINE=1` and tune the thresholds on live signals before widening. Subscribe one, then widen — never mutate live seats wholesale.
-3. Make subscription-first a *live* invariant by wiring the diversity selector into the fan-out, guarded by the same env gate.
+1. **VM-wide rollout.** Point a VM seat's `CHITTI_BASE_URL`/`FORCE_FLOW_URL` at the VM endpoints and enable it there — the CLI surface is done; the openclaw agents are not.
+2. **Make subscription-first a *live* invariant** by wiring the diversity selector into the fan-out (today it modulates sampling + framing, not *which* seats run).
 
 ---
 
