@@ -269,6 +269,91 @@ Full curfew schema in the [Screen Time docs](/screen-time/). To change the stand
 
 ---
 
+## sanctum net check
+
+Read-only audit of your network topology. It works out whether you're behind one NAT or two, names your ISP, finds your default gateway, and explains in one line what it concluded. It changes nothing — run it as often as you like.
+
+```bash
+sanctum net check
+```
+
+It prints three things: the NAT topology (`single`, `double`, or `unknown`), the ISP and gateway it detected, and the reasoning behind the verdict. That last line is the part to read — a double-NAT call is only as good as the evidence it cites.
+
+<Aside type="note">
+`check` is the honest first step before `optimize`. If it says you're already single-NAT, there is nothing to do — and `optimize` will agree and exit clean rather than walk you into a change you don't need.
+</Aside>
+
+---
+
+## sanctum net optimize
+
+The guided path from double-NAT to single-NAT — the configuration where your own router (a Firewalla, typically) holds the public IP instead of the ISP's hub. It is **opt-in and reversible**: it snapshots a rollback baseline before you touch anything, warns you that the cutover briefly drops your internet, and walks an ISP-specific playbook step by step.
+
+```bash
+sanctum net optimize
+sanctum net optimize --plan-only
+sanctum net optimize --yes
+```
+
+It runs `net check` first. If you're already single-NAT — or there's no Firewalla to put in front — it says so and exits `0` without prompting. Otherwise it prints the plan for your detected ISP, captures the rollback snapshot, confirms you're physically at the box (not remote — this drops the link), and then waits for you to run the steps before verifying the result.
+
+### Flags
+
+| Flag | Behavior |
+|------|----------|
+| `--plan-only` | Print the ISP-specific plan and stop — no snapshot, no prompt, no verify loop. The dry-read |
+| `--yes` / `-y` | Skip the "are you at the box?" confirmation. For when you already know |
+
+### The verify loop
+
+After you've done the steps, it probes the result and renders one of three verdicts: `VERIFIED` (the cutover took), `APIPA_ROLLBACK` (the box fell back to a self-assigned `169.254.x.x` address — the change failed, and it prints the rollback commands), or an inconclusive note when it can't tell yet.
+
+<Aside type="caution">
+The Bell traps are real and the wizard surfaces them. Bell's Advanced DMZ hands out a **`/1` WAN netmask** (`128.0.0.0`) that swallows an entire `10.x` LAN — so the wizard checks your LAN subnet first and steers `10.x` users to PPPoE-passthrough instead. It also sets the **WAN MTU to 1492** as a named step (Bell's fibre carries 1492, and a 1500 MTU with no MSS clamp black-holes HTTPS while ping still passes). The full forensic is in [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/).
+</Aside>
+
+---
+
+## sanctum net speedtest
+
+The honest throughput doctor. A multi-gig line routinely "tests slow" because the test is the bottleneck, not the line — a single TCP stream tops out near 2 Gbps, Wi-Fi caps you around 1-2, and the ISP hub's built-in test runs on a weak CPU over one connection. This command runs a *multi-stream* test, reads the link speed of every hop it can see, and names the real ceiling instead of leaving you guessing.
+
+```bash
+sanctum net speedtest
+sanctum net speedtest --streams 16
+sanctum net speedtest --no-test
+sanctum net speedtest --json
+```
+
+It walks the path — your NIC, whether you're on Wi-Fi or wired, and the Firewalla's WAN/LAN ports when it can reach them over SSH — finds the slowest known link, then runs a bounded parallel-stream download and interprets the gap. When a single stream stalls and parallel streams fly, it tells you the single number was the artifact. When you're at the link ceiling, it says so and names the hop to fix.
+
+### Flags
+
+| Flag | Behavior |
+|------|----------|
+| `--streams N` | Parallel download streams (default `8`). Raise it on a very fast line or to escape a single-stream artifact |
+| `--no-test` | Ceiling audit only — read every hop's link speed and interpret it, skip the live download entirely |
+| `--json` | Emit the full report as JSON (hops, bottleneck, verdict, advice) for the menu bar or a script |
+
+### What it exposes
+
+The interpreter encodes the field rules so the lie is visible:
+
+| Artifact | What the doctor says |
+|----------|----------------------|
+| Single-stream cap | A single connection stalls near 1-2 Gbps; the multi-stream figure is the real one — trust it |
+| Wi-Fi ceiling | Wi-Fi caps you at ~1-2 Gbps regardless of the line; go wired and re-test |
+| Slowest port | A 1G switch or a 2.5G NIC anywhere in the chain is your ceiling — no line upgrade moves it |
+| NAT topology | Single- vs double-NAT changes throughput by **zero**; do not chase NAT to go faster |
+| ISP hub test | The hub's built-in test is single-stream on a weak CPU and under-reports; measure from your own machine |
+| PPPoE | CPU-bound on most routers, caps around ~3-3.5 Gbps; the band is named when the WAN uses it |
+
+<Aside type="tip">
+If too few streams complete, `speedtest` calls the number a **FLOOR, not the truth** — the line is at least that fast. Re-run, raise `--streams`, or install the Ookla `speedtest` CLI for a cleaner figure. The whole story of an 8-gig line that benchmarked at 1.8 is in [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/).
+</Aside>
+
+---
+
 ## sanctum keys backup &lt;path&gt;
 
 Export an encrypted bundle of your Sanctum Keychain credentials — OpenRouter, Anthropic, Gemini, Firewalla-bridge, R2, B2. The single most important command in the CLI: `sanctum uninstall` revokes those entries and a dead disk takes them with it. The bundle re-keys a fresh Mac in seconds instead of by hand.
@@ -325,6 +410,9 @@ sanctum --help       # → command roster
 | `sanctum logs <service>` | Tail a known log — `--list` to see them all |
 | `sanctum devices` | Read-only haushold device inventory |
 | `sanctum schedule` | Read-only curfew view |
+| `sanctum net check` | Read-only NAT-topology + ISP audit |
+| `sanctum net optimize` | Guided, reversible double-NAT → single-NAT cutover |
+| `sanctum net speedtest` | Honest multi-stream throughput doctor — names the real ceiling |
 | `sanctum keys backup <path>` | Encrypt your Keychain credentials to a portable bundle |
 | `sanctum chat` / `code` / `vision` | Talk to the router-chosen / Claude / Gemini model |
 | `sanctum onboard` | One-shot first-run: recipe → cloud → first backup → canary |

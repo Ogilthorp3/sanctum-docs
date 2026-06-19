@@ -1,0 +1,73 @@
+---
+title: Diagnosing Your Network
+description: Three sanctum net commands — check, optimize, speedtest — that tell you whether your haus is double-NATed, walk you to single-NAT without bricking the link, and explain why an 8-gig line "tests slow."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background with a single teal accent halo: a calm engineer's desk with a laptop showing a network topology map, a router and a glowing fibre line traced across it, a magnifying glass hovering over a NAT junction beside a speedometer dial — the haus network, examined under a steady hand](./images/diagnosing-your-network.png)
+
+Your network is almost certainly fine. The tools you used to check it probably are not. A speed test lies, an ISP app names the wrong suspect, and a topology you didn't choose quietly costs you nothing — or quietly breaks port-forwarding for the one service you actually wanted to reach. Sanctum ships three `net` commands that diagnose all of this honestly. They live under one verb and you run them in order: **check**, then **optimize** if you must, then **speedtest** when the number looks wrong.
+
+Everything here is in the [CLI reference](/reference/sanctum-cli/). This page is the newcomer's walkthrough.
+
+## Is my network double-NATed?
+
+Start read-only. `sanctum net check` never changes anything — it works out whether your traffic passes through one router or two, names your ISP, and shows the reasoning.
+
+```bash
+sanctum net check
+```
+
+It prints the NAT topology (`single`, `double`, or `unknown`), the ISP and gateway it found, and one line of *why*. Double-NAT means your own router sits behind the ISP's hub, both doing address translation. It usually does no harm to speed — but it complicates port-forwarding, VPN inbound, and anything that needs a stable public address. If `check` says you're already single-NAT, you are done; close the terminal.
+
+<Aside type="note">
+Read the reasoning line, not just the verdict. A double-NAT call is only as trustworthy as the evidence it cites — and the same discipline (read the *whole* alert, not the headline) is what untangled the worst Bell cutover we ever logged.
+</Aside>
+
+## Optimize — single-NAT, with the honest caveats
+
+If `check` found double-NAT and you want your own router holding the public IP, `sanctum net optimize` is the guided path. It is opt-in and reversible: it snapshots a rollback baseline before anything changes, warns you the cutover briefly drops your internet, and follows a playbook tailored to your ISP.
+
+<Steps>
+
+1. **Dry-read the plan.** `sanctum net optimize --plan-only` prints the ISP-specific steps and stops — no snapshot, no prompt, no changes. Read it before you commit.
+
+2. **Be at the box.** This drops the link mid-cutover. Run it physically next to the router, not over SSH from a café. The wizard asks; `--yes` skips the question if you already know.
+
+3. **Run the steps, then let it verify.** It captures a rollback snapshot, you do the steps, and it probes the result — reporting `VERIFIED`, or `APIPA_ROLLBACK` (the box fell back to a self-assigned `169.254.x.x` address; the change failed and it prints the rollback commands), or an inconclusive note.
+
+</Steps>
+
+<Aside type="caution" title="The Bell traps are real — the wizard surfaces them">
+Bell's Advanced DMZ hands out a **`/1` WAN netmask** (`128.0.0.0`) that swallows an entire `10.x` LAN, so the wizard checks your subnet first and steers `10.x` users to PPPoE-passthrough instead. It also sets the **WAN MTU to 1492** as a named step — Bell's fibre carries 1492, and a 1500 MTU with no MSS clamp black-holes HTTPS while ping still passes. Neither is a Sanctum quirk; both are baked in because they cost real hours. The full forensic: [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/).
+</Aside>
+
+## Speedtest — why your 8-gig line "tests slow"
+
+The most common network complaint is a multi-gig line that benchmarks at a fraction of the plan. The line is usually fine. The test is the bottleneck. `sanctum net speedtest` is the honest doctor: it runs a *multi-stream* test, reads the link speed of every hop it can see, and names the real ceiling.
+
+```bash
+sanctum net speedtest
+sanctum net speedtest --streams 16   # more parallel streams on a very fast line
+sanctum net speedtest --no-test      # ceiling audit only, no live download
+sanctum net speedtest --json         # machine-readable report
+```
+
+It walks your NIC, whether you're on Wi-Fi or wired, and the Firewalla's WAN/LAN ports when reachable — then runs a bounded parallel download and interprets the gap. The artifacts it exposes:
+
+- **Single-stream cap.** One TCP stream stalls near 1-2 Gbps no matter how fast the line is. When parallel streams fly, the single number was the lie — trust the multi-stream figure.
+- **Wi-Fi.** Wi-Fi caps you around 1-2 Gbps regardless of the fibre behind it. Go wired and re-test, or you are measuring the air.
+- **Port artifacts.** A 1G switch or a 2.5G NIC anywhere in the chain is your ceiling; no line upgrade moves it. The doctor names the slow hop.
+- **NAT, again.** Single- vs double-NAT changes throughput by zero. Do not chase your topology to go faster — that ghost has wasted more evenings than any real bug.
+
+<Aside type="tip">
+If too few streams complete, `speedtest` calls the number a FLOOR, not the truth — your line is at least that fast. Raise `--streams`, re-run, or install the Ookla `speedtest` CLI for a cleaner figure. The story of an 8-gig line that benchmarked at 1.86: [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/).
+</Aside>
+
+## Deeper reading
+
+The two field notes below are the postmortems these commands were built from — they are where the doctrine came from, written the night each lesson was earned.
+
+- [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/) — the `/1` netmask and the 1492 MTU black-hole, two bugs in one trenchcoat.
+- [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/) — three lies a speed test tells, and the test that tells the truth.
