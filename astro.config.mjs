@@ -138,6 +138,7 @@ export default defineConfig({
 						{ label: 'Services', slug: 'architecture/services' },
 						{ label: 'Port Summary', slug: 'architecture/port-summary' },
 						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
+						{ label: 'Dealflow Intelligence', slug: 'architecture/dealflow-intelligence' },
 						{ label: 'Screen Time', slug: 'architecture/screen-time' },
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
 						{ label: 'R2D2 — Auto-Fix Supervisor', slug: 'architecture/r2d2' },
