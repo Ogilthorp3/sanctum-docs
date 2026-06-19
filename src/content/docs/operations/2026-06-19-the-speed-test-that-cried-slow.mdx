@@ -1,0 +1,67 @@
+---
+title: "2026-06-19: The Speed Test That Cried Slow"
+description: "An 8 Gbps fibre line that benchmarked at 1.8. The line was fine — the test was lying. Single streams cap ~2 Gbps, Wi-Fi caps ~1-2, and the ISP hub's own test runs on a potato. The fix isn't a faster line; it's a test that tells the truth — now shipped as `sanctum net speedtest`."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background: a large speedometer gauge with its needle stuck low near the bottom, while behind and around it an enormous torrent of light-streaks and data rushes past unmeasured and uncaught; a single teal accent glow lights the gap between the tiny measured trickle and the vast real flow](./images/2026-06-19-the-speed-test-that-cried-slow.png)
+
+Eight gigabits per second, symmetric, on glass. The speed test said **1.86 down,
+0.88 up.** Disappointing — until you look closer and realize the number was never
+about the line.
+
+## The tell
+
+The upload gives it away. The plan is symmetric — 8 up, 8 down — but the test
+showed **0.88 Gbps up**, barely a gigabit. A real 8-gig line, measured honestly,
+shows gigabits in *both* directions. `0.88` isn't your fibre; it is the
+*measuring instrument* hitting its own ceiling. That test ran on the ISP
+gateway's modest CPU, over a single connection, to a single server. Every one of
+those is a throttle that has nothing to do with the glass outside.
+
+## Three lies a speed test tells
+
+- **A single TCP stream tops out around 2 Gbps** — regardless of the line —
+  because of latency and window math. One connection to one server cannot fill a
+  multi-gig pipe. (PCWorld measured the same line at ~2 Gbps single-server vs
+  ~8 Gbps multi-server.) The hub's built-in test, a browser test, an ad-hoc
+  `curl`: all single-ish-stream, all land near 2.
+- **Wi-Fi caps you at ~1-2 Gbps** before the line is ever in question. Test over
+  Wi-Fi and you are measuring the air, not the fibre.
+- **The chain is only as fast as its slowest port.** A 1G switch, a 2.5G NIC, a
+  cable in the wrong jack — any one of them is your real ceiling, and no line
+  upgrade moves it.
+
+And the one that sends people down rabbit holes: **single-NAT vs double-NAT
+changes none of this.** NAT is a table lookup, not a toll booth. Chasing your NAT
+topology to go faster is chasing a ghost. (PPPoE, ironically, *can* slow you
+down — it is CPU-bound and caps a prosumer router around 3-3.5 Gbps.)
+
+## The fix is a test that tells the truth
+
+So we built one. **`sanctum net speedtest`** runs a *multi-stream* test alongside
+a single-stream one — and shows you the gap, so the lie is visible:
+
+```
+single stream: 1.8 Gbps    multi-stream: 7.9 Gbps
+=> the line is fine; the old test was the problem.
+```
+
+It reads the link speed of every hop it can see — your NIC, **Wi-Fi vs wired**,
+the router's ports — and *names the bottleneck* instead of leaving you guessing.
+Run it with `--no-test` and it skips the download entirely, just auditing the
+ceiling and explaining it. On a laptop on Wi-Fi it says the quiet part out loud:
+*"On Wi-Fi: yes -> caps ~1-2 Gbps. Go wired to see your real speed."*
+
+No faster line required. Just an honest number.
+
+<Aside type="tip" title="How to actually measure a multi-gig line">
+1. **Go wired** — a 2.5G (ideally 10G) NIC into a matching port. Wi-Fi will never
+   show you the headline number.
+2. **Use a multi-stream test** — the Ookla *desktop app* (it aggregates servers)
+   or `iperf3 -P 16`, not a browser / single-server test.
+3. **Check the whole chain** — the slowest port between you and the ONT is your
+   ceiling.
+4. **Ignore NAT for speed** — single vs double changes throughput by zero.
+</Aside>
