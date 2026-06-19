@@ -50,10 +50,10 @@ You need to do three things: mint a token, drop in the FWGroup credentials, and 
 4. **Restart the bridge.**
 
    ```bash
-   sudo launchctl kickstart -k system/com.sanctum.firewalla
+   launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog
    ```
 
-   It's a system LaunchDaemon (`/Library/LaunchDaemons/com.sanctum.firewalla.plist`), so the kickstart needs `sudo` and the `system/` domain — `gui/$(id -u)/` will tell you it can't find the service.
+   The live service is the gui-domain watchdog `com.sanctum.firewalla-bridge-watchdog`, which runs as your login user — no `sudo`, and the `gui/$(id -u)/` domain is the one that finds it. The original one-shot `com.sanctum.firewalla` system plist is retired; kickstarting it will tell you it can't find the service.
 
 5. **Verify.**
 
@@ -71,10 +71,10 @@ You need to do three things: mint a token, drop in the FWGroup credentials, and 
 
 - **`/hosts` returns `401`** — the bridge didn't get your token. Check the filesystem store first: `cat ~/.sanctum/secrets/firewalla-bridge-token` should print it. If the file is empty or missing, re-run the create step. If you're on a legacy Keychain setup, confirm the item is under the right account: `security find-generic-password -a sanctum -s firewalla-bridge-token -w`. Note the account is `sanctum`, not your login user — the wrapper reads `-a sanctum`, so a token filed under `$(whoami)` is invisible to it.
 
-- **Bridge log shows `[error] GET /hosts: ECONNRESET`** — the FWGroup credentials in `~/.openclaw/firewalla/keys/` are stale, or two bridge processes are racing for the same Firewalla. Confirm only one is running: `pgrep -fl firewalla-bridge.js`. If two, `sudo launchctl kickstart -k system/com.sanctum.firewalla` and let launchd settle the contest.
+- **Bridge log shows `[error] GET /hosts: ECONNRESET`** — the FWGroup credentials in `~/.openclaw/firewalla/keys/` are stale, or two bridge processes are racing for the same Firewalla. Confirm only one is running: `pgrep -fl firewalla-bridge.js`. If two, `launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog` and let launchd settle the contest.
 
 - **You see `periodic check (60s without successful op)` in the log** — this is the bridge's *rediscovery checker*, not a host-query failure signal. It fires when 60s pass with no successful contact and quietly re-runs mDNS to recover a re-IP'd box. Discovery runs separately from your actual `/hosts` calls and complains about its own clock, not yours. Look for real `[error]` lines instead. See [the May 12 fortnight-in-one-night operations note](/operations/2026-05-12-the-fortnight-in-one-night/) for the full story: the actual May 3 culprit was a Lima port collision, not the bridge, and this message was a red herring we deliberately kept loud.
 
 <Aside type="caution">
-  The Firewalla MSP REST API on port 8833 is *not* what Sanctum uses for enforcement. Probes that pass on the MSP side and fail on the SDK side are not a contradiction — they are two different protocols looking at two different views of your network. Trust the SDK probe. The MSP probe exists for diagnostics.
+  The Firewalla MSP REST API — a cloud HTTPS endpoint, reached over your account, not port 8833 — is *not* what Sanctum uses for enforcement. Port 8833 is the local P2P/SDK port the bridge actually speaks over. Probes that pass on the MSP side and fail on the SDK side are not a contradiction — they are two different protocols looking at two different views of your network. Trust the SDK probe. The MSP probe exists for diagnostics.
 </Aside>

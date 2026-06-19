@@ -45,16 +45,21 @@ If `topology.json` shows an IP but the bridge still can't reach it, that's a net
 <details>
 <summary>Every authenticated request to the Firewalla bridge gets a 401</summary>
 
-The bridge's bearer token isn't in your Keychain. The bridge mints this token once and stores it under the service `firewalla-bridge-token`, account `sanctum`; if it isn't there, every authenticated request to `localhost:1984` gets refused.
+The bridge can't find its bearer token. It reads the filesystem secret at `~/.sanctum/secrets/firewalla-bridge-token` **first**, and only falls back to the Keychain item (service `firewalla-bridge-token`, account `sanctum`) for legacy user-session setups. If neither is present, every authenticated request to `localhost:1984` gets refused. Fix the filesystem store first — that's the one the bridge actually reads.
 
 ```bash
-# Is the token there at all?
-security find-generic-password -s firewalla-bridge-token -a sanctum -w
+# Is the filesystem secret there at all?
+cat ~/.sanctum/secrets/firewalla-bridge-token
 
-# If that errors, mint a strong one and store it.
-security add-generic-password -s firewalla-bridge-token -a sanctum -w "$(openssl rand -hex 24)"
+# If it's empty or missing, mint a strong one and write it to the primary store.
+TOKEN=$(openssl rand -hex 24)
+printf '%s' "$TOKEN" > ~/.sanctum/secrets/firewalla-bridge-token
+chmod 600 ~/.sanctum/secrets/firewalla-bridge-token
 
-# Restart the bridge so it re-reads Keychain.
+# Legacy fallback only: if you're on an older Keychain-based setup, store it there too.
+security add-generic-password -s firewalla-bridge-token -a sanctum -w "$TOKEN"
+
+# Restart the bridge so it re-reads the token.
 launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog
 ```
 
