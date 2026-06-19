@@ -1,0 +1,86 @@
+---
+title: Dealflow Intelligence
+description: "How the live VC deal pipeline stays truthful in Affinity, and how Mundi turns it into a Monday-morning brief of exactly what needs you."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A control room of glowing deal cards flowing along a pipeline into a single calm briefing screen](./images/hero-dealflow-intelligence.png)
+
+A venture fund's memory lives in its CRM. If a meeting you took last week never made it into Affinity, or a deal sits at "Term Sheet" in your head but "3rd Meeting" in the database, then the Monday dealflow review runs on fiction — and the fund makes decisions on a pipeline that quietly disagrees with reality.
+
+Dealflow Intelligence is the three-stage pipeline that keeps the disagreement from happening: it pulls the deal list out of Affinity, enriches each active deal with its real meeting history, and hands [Mundi](/architecture/agents/) — the financial-intelligence Jedi — a short brief of what actually needs a human. In the end, it is a machine for making sure the most expensive meetings of the week left a trace.
+
+## The pipeline
+
+Three scripts under `~/.openclaw/scripts/`, each owning one boundary:
+
+```
+Affinity ─▶ v_deal ─▶ prep ─▶ Mundi ─▶ Signal
+  v2 REST    DuckDB   v1 API   4h    Force Flow
+```
+
+| Stage | Script | What it does |
+|---|---|---|
+| Sync | `affinity-sync.py` | Pulls the deal lists from the Affinity **v2** REST API into `workspace.duckdb` (the `v_deal` view). Daily, `com.sanctum.affinity-sync`. |
+| Enrich | `dealflow-meeting-prep.py` | Reads the **active** pipeline from `v_deal`, fetches each deal's real meeting/email recency, and buckets it. |
+| Brief | `mundi-briefing.py` | Every four hours (`com.mundi.briefing`), folds the enrichment into a terse brief and pages it through [Force Flow](/architecture/force-flow/) to Signal. |
+
+The active pipeline is the ~60 deals in a decision status — *Meeting Pending, To be Reviewed, 2nd/3rd Meeting, Due Diligence, Term Sheet, Refer to LP* — not the nine thousand discarded first-screens, and not the standing "Weekly Review" list that fills with deals nobody has touched since 2022.
+
+## What it surfaces
+
+Every healthy active deal lands in one of four buckets (a fifth, OUTAGE, is covered just below), and the brief leads with the only one that matters at 8 a.m.:
+
+- **NEEDS YOU** — you met or emailed them and nothing is booked next. The ball is in your court.
+- **SCHEDULED** — a *future* meeting is on the calendar. (A meeting whose date has passed does not count as scheduled; that was a real bug, and it hid deals that needed action.)
+- **COLD** — an active deal with no contact in three weeks.
+- **UNRESOLVED** — the deal carries a stale CRM id that no longer resolves. Cleanup, not crisis.
+
+<Aside type="caution" title="A failure is never a quiet day">
+The hard rule of the pipeline: an outage must never look like good news. If the Affinity API throws auth/rate-limit/5xx errors, if the sweep can't reach the database, or if the sync has gone stale, the brief says so **loudly** — it never degrades into a cheerful empty "nothing to report." `dealflow-meeting-prep.py` even exits `3` on a systemic outage so the briefing layer can tell a real failure apart from a genuinely quiet pipeline.
+</Aside>
+
+## Boundaries that bite
+
+Most of the engineering here is at the seams between layers, where the obvious thing is wrong.
+
+**Meeting intel comes from the v1 API, not v2.** Affinity's v2 `relationship-intelligence` field returns *zero fields* for most companies — one well-connected deal happened to populate, which masked the gap until a wider sweep exposed it. The reliable source is the v1 `/organizations/{id}?with_interaction_dates=true` endpoint. The lesson is the standing one: a contract that passes on one happy row is not tested.
+
+**The sync is atomic.** `affinity-sync.py` writes both lists inside a single transaction. A partial failure rolls back rather than leaving `v_deal` half-applied yet stamped fresh — which would blind the freshness guard into reporting health over a broken pipeline.
+
+<Aside type="caution" title="workspace.duckdb is single-writer">
+The central store allows one writer at a time. When a sibling ingest job (mail, calendar, messages) holds the write lock, the sync waits and retries with backoff before alerting — it does not crash, and a read that genuinely can't get through is reported as an outage, never as an empty pipeline. If you add a new writer, honor the doctrine: hold the lock for seconds, not minutes.
+</Aside>
+
+**The freshness guard exists because the last sync died silently for two months.** The previous Rube/Composio integration failed quietly and nobody noticed until the pipeline was a quarter stale. Mundi now checks how long it has been since `v_deal` was refreshed and warns past thirty hours — and treats *a failed freshness read itself* as a symptom, not as "fresh."
+
+<Aside type="note" title="Why meeting notes aren't auto-imported">
+Granola holds the richest meeting notes, but its local store is encrypted and its API is interactive-only — unreachable from a scheduled job. So the pipeline reconciles meeting *recency* automatically and leaves note-writing to a human-in-the-loop step, rather than pretend a cron can read an encrypted database.
+</Aside>
+
+## Configuration
+
+```yaml
+# Cadence (launchd)
+com.sanctum.affinity-sync:  daily            # Affinity -> v_deal
+com.mundi.briefing:         every 4 hours    # enrich -> Force Flow -> Signal
+
+# Tunables (in-script constants)
+ACTIVE_STATUSES:  decision-stage statuses only
+cold-days:        21        # quiet-deal threshold
+STALE_HOURS:      30        # sync-freshness alert (daily sync + grace)
+cache:            ~20h      # meeting-intel cache, so the 4h run sweeps once/day
+```
+
+```bash
+# See the active pipeline on demand
+~/.openclaw/scripts/dealflow-meeting-prep.py            # human-readable
+~/.openclaw/scripts/dealflow-meeting-prep.py --json     # for the briefing
+```
+
+## Tested end to end
+
+The pipeline ships with 49 unit tests over the pure logic — bucket classification, status dedup, Affinity field extraction, HTTP-error categorization, the briefing's outage-vs-quiet partitioning — plus an end-to-end harness, `tests/e2e_dealflow.py`.
+
+The harness crosses every real boundary in order — Keychain, Affinity v2, the DuckDB transaction, the `v_deal` read, the v1 interactions call, Mundi's consumer contract, the freshness guard, and a live Force Flow page. Structural assertions prove a field exists; the harness proves a real artifact crossed all of them before it ever reached your phone — which is the only proof a Monday brief is worth trusting.
