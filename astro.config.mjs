@@ -225,6 +225,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-06-21 — ACL as Code', slug: 'operations/2026-06-21-acl-as-code' },
 								{ label: '2026-06-20 — The Post-Quantum Vault', slug: 'operations/2026-06-20-the-post-quantum-vault' },
 								{ label: '2026-06-19 — The Speed Test That Cried Slow', slug: 'operations/2026-06-19-the-speed-test-that-cried-slow' },
 								{ label: '2026-06-15 — The Slash-One That Ate the LAN', slug: 'operations/2026-06-15-the-slash-one-that-ate-the-lan' },

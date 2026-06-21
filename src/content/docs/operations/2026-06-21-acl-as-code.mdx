@@ -1,0 +1,173 @@
+---
+title: "2026-06-21: ACL as Code"
+description: >-
+  The tailnet policy file always promised GitOps in its own header comment, then
+  spent two months getting applied by hand in the admin console. This is the day
+  the promise landed: one source-controlled HuJSON, one `sanctum tailnet apply`,
+  and a least-privilege mobile tier that hands the owner's pocket devices the
+  haus services on their real ports — but no SSH, no wildcard. Plus the
+  OAuth-no-rotation insight that deletes a rotation chore instead of automating
+  it, and a one-command guided onboarding that proves the credential before it
+  stores it.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The tailnet policy file has carried the same line in its header comment for two
+months: *"Apply via the admin console until the GitOps webhook (planned) lands."*
+The policy was already source-controlled. The borders already meant what they
+said — [four tags, eight rules, machine-checked invariants](/operations/2026-04-26-borders-and-edges/).
+What was missing was the boring part: a way to push the file that didn't involve
+a human driving a browser, save round by save round.
+
+That's the part that shipped today. The policy is `acl.hujson`; the push is
+`sanctum tailnet apply`; the admin console is no longer in the loop.
+
+## The GitOps the file always promised
+
+The toolkit is a first-class CLI verb. `sanctum tailnet <cmd>` resolves the
+canonical policy directory, then forwards to the real tool:
+
+| Command | What it does |
+| --- | --- |
+| `validate` | Check `acl.hujson` against the live tailnet — no change. Tailscale runs the invariant tests server-side. |
+| `apply` | Back up the live ACL, validate, then push. The tests gate the push; a failing invariant means nothing moves. |
+| `tag-devices` | Assign the new mobile tag to the owner's iPad/iPhone. |
+| `status` | Show the live tags currently on the mobile devices. |
+| `setup` | One-time guided OAuth onboarding. Human-run — it reads a secret. |
+| `edit` | Open `acl.hujson` in `$EDITOR`. |
+
+The file is the source of truth; the CLI is the only sanctioned way to change
+the live tailnet. No more hand-editing the console, no more "did the fifth save
+round actually take." Apply backs up the current live policy *before* it pushes,
+so a regression is a one-file restore.
+
+<Aside type="tip" title="The push validates before it pushes">
+`apply` doesn't trust itself. It runs `acl/validate` against the live tailnet
+first and refuses to push if the invariants don't hold — then Tailscale runs
+them *again* server-side on the real save. A bad policy fails at the gate, not
+on your devices.
+</Aside>
+
+## A pocket device is convenience, not a trust anchor
+
+The new tag is the **mobile** tier — named to match the existing
+`sanctum-host` / `sanctum-admin` convention. It exists to answer a narrow
+question honestly: what should the owner's own phone and tablet be allowed to
+reach?
+
+The answer is *the haus services, and nothing else*. The mobile tag grants the
+owner's iPad and iPhone the post-quantum service ports — health, command-center,
+the Holocron dashboard, force-flow — on their real ports. It grants them **no
+SSH** and **no wildcard**. A laptop is a dev box; you SSH from it, you trust it
+with arbitrary ports. A phone is a screen you carry in a pocket and occasionally
+leave in a taxi. It gets to *use* the services; it does not get to *administer*
+the haus.
+
+| Tier | Reaches | SSH | Wildcard |
+| --- | --- | --- | --- |
+| `sanctum-admin` (dev box) | every port on the hosts | yes (tag is auth) | yes |
+| `sanctum-mobile` (owner's phone/tablet) | the four service ports only | **no** | **no** |
+| `family` (kids' devices) | the parental-control PWA only | no | no |
+
+The kids' `family` tier is unchanged — it stays restricted to the
+parental-control PWA, exactly as before. Adding a mobile tier for the owner's
+devices doesn't loosen anything for anyone else; least privilege is per-tier, and
+each tier is granted only what its threat model earns.
+
+<Aside type="caution" title="The negative test is the load-bearing one">
+It's easy to assert that the mobile tag *reaches* the service ports. The invariant
+that matters is the one that proves it *can't* do more: the policy ships a test
+that **denies** the mobile tag SSH and the internal bridge port, and an `sshTest`
+that denies it SSH outright. Tailscale refuses the save if either negative
+invariant ever flips. A grant you can't watch get denied somewhere it shouldn't
+reach is a grant you can't trust where it should.
+</Aside>
+
+## OAuth-no-rotation: delete the chore, don't automate it
+
+The interesting decision wasn't how to push the policy — it was how to
+authenticate the push without inheriting a rotation treadmill.
+
+A Tailscale **API key** expires every 90 days. Wire one into `apply` and you've
+signed up for a recurring chore: rotate the key, propagate it, remember it exists,
+get paged when it lapses. The tempting fix is to automate the rotation — script
+the console, refresh the key on a timer. That's automating the *symptom*. The
+chore still exists; you've just hidden it behind more code that can itself break.
+
+A Tailscale **OAuth client** does not expire. So `apply` prefers an OAuth client:
+each run mints a fresh **ephemeral 1-hour token** via the documented
+`client_credentials` grant, uses it for that single push, and lets it die. The
+minted access token is itself a `tskey-…`, so it slots straight into the basic-auth
+the rest of the tool already uses — no second code path. The credential that
+*can* expire is gone; the credential that replaces it has nothing to rotate.
+
+<Aside type="tip" title="The rejected option, named out loud">
+We considered browser-automating the admin console to refresh a 90-day key on a
+schedule. We rejected it: that automates the symptom and leaves the rotation
+chore intact, just buried. The right move was to pick a credential class that
+*cannot* expire — then there is no rotation to automate, because there is no
+rotation. The legacy 90-day key stays as a fallback for back-compat, never the
+recommended path.
+</Aside>
+
+## One command to onboard
+
+The OAuth client still has to be created once. `sanctum tailnet setup` is the
+guided wizard for exactly that, and it's deliberately **human-run** — it reads a
+secret on the terminal, never through an agent, never logged:
+
+1. Opens the OAuth clients page in the browser (guarded — degrades gracefully if
+   there's no `open`).
+2. Reads the Client ID visibly and the Client secret **hidden** (no echo).
+3. **Verifies before it stores** — mints a real test token against the live
+   endpoint. Nothing touches the keychain until a token has actually been minted.
+4. Stores both halves in the keychain, then offers to apply the policy and tag
+   the devices in the same breath.
+
+Step 3 is the doctrine, not a nicety. A wizard that stored the credential and
+*then* discovered it was wrong would leave you with a bad secret on disk and a
+green checkmark. This one proves the credential enforces — a real mint against
+the real endpoint — before it persists anything. Order is everything: mint,
+verify, *then* store.
+
+## Folded into the trifecta
+
+The OAuth secret is registered in the [secret trifecta](/architecture/secrets-trifecta/)
+(1Password → SOPS → keychain) for custody and drift detection — not because it
+needs rotating, but because every secret the haus depends on should have a known
+home and a daily integrity check. It's mirrored for *custody*, not rotation; the
+whole point of the OAuth-no-rotation insight is that there's nothing to rotate.
+The trifecta just makes sure the credential exists where it's supposed to, and
+notices loudly if it ever doesn't.
+
+## What "verified" actually means
+
+The toolkit was put through an end-to-end sweep against the **real** files — no
+live tailnet writes, no secret entered, no OAuth credential present (so `apply`,
+`tag-devices`, and `setup` were proven by structure and logic, never executed
+against the live tailnet). Read-only by construction.
+
+| Surface | Result | How it was proven |
+| --- | --- | --- |
+| CLI wiring (`sanctum tailnet`) | PASS | `--help` lists all six commands; the dispatcher routes `tailnet)` to the lib; `validate` runs the full chain to the live read-only endpoint and fails closed with no credential. `shellcheck -x` clean. |
+| ACL validity + mobile-tier least privilege | PASS | Policy parses as valid HuJSON; the mobile grant targets exactly the four service ports, no wildcard, no SSH; positive and negative invariants agree with the rule; the `family` tier is byte-for-byte unchanged. |
+| Audit gate | PASS | The audit route runs read-only and isolated from the write commands; the policy itself carries **zero** IP literals and zero `.local` names — every port is tag-relative. The only violations found are pre-existing literals in unrelated files. |
+| OAuth-no-rotation auth logic | PASS | `apply` prefers the OAuth client and mints an ephemeral token first, falls back to the legacy key second; the endpoint, grant form, and `{access_token, expires_in: 3600, tskey-…}` response match Tailscale's published docs exactly. |
+| Setup-wizard structure | PASS | Opens the OAuth page (guarded), reads the secret hidden, **verifies by minting before storing**, upserts to the keychain, offers a default-yes apply+tag. `bash -n` clean. Never executed — it reads a secret. |
+| Installer step + trifecta + 3-copy byte-sync | PASS | The install step replayed in a sandbox seeds the canonical policy byte-identical to the repo example; the OAuth secret is registered across all three trifecta tiers with matching keychain names. |
+
+<Aside type="danger" title="A control that can't prove it's enforcing is down">
+The whole sweep ran with **no OAuth credential present**, on purpose. So
+`validate` doesn't quietly pass — it reaches the live read-only endpoint, gets a
+`401`, and **fails closed** with a non-zero exit. That's the design: an unproven
+control defaults to *failed*, never to a silent green. The path is proven to run
+precisely *because* it fails honestly when it can't authenticate.
+</Aside>
+
+---
+
+The doctrine, in one line: **source-control the policy, push it with one verb
+that validates before it writes, grant a pocket device the services but never
+the keys, and pick a credential that can't expire so there's nothing left to
+rotate.**
