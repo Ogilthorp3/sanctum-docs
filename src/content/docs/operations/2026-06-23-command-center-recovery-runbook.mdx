@@ -1,0 +1,87 @@
+---
+title: "Command Center: the break-glass runbook"
+description: "What to do when the dashboard locks you out: lost passkey, cert expiry, terminator down, or Tailscale HTTPS off. Enrollment, recovery, and the cert lifecycle in one place."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A gatehaus keyholder pressing a glowing fingerprint to a teal lock while a small glass-fronted emergency box with a spare key waits on the wall beside the door.](./images/hero-2026-06-23-command-center-recovery-runbook.png)
+
+The command-center dashboard on `:1111` is Touch-ID-only (a WebAuthn passkey for humans, mTLS for machines). That lock is only military-grade if a lost device, an expired cert, or a flipped toggle is a documented procedure and not a panic. This is that procedure. The one rule that makes every scenario easy: **enroll a backup device before you need it.**
+
+## Enroll a backup device (do this now)
+
+Signed in, open `https://manoir.tail7c6d11.ts.net:1111/auth/`, then **Add a backup device** and approve with Touch ID / Face ID on a second authenticator (a phone, a Watch, a second Mac). The store already holds many credentials; a backup means a lost primary is never a lockout. Remove a lost device from the same screen — the dashboard refuses to remove your **last** passkey, so you cannot strand yourself.
+
+## First-time enrollment (or a fresh re-enroll)
+
+Prerequisites: Tailscale **HTTPS Certificates** enabled in the admin console, and a valid Let's Encrypt cert on `:1111` (the renewer keeps it fresh — see the table below). Then:
+
+```bash
+# the bootstrap token exists ONLY while no passkey is enrolled
+cat ~/.sanctum/secrets/command-center-bootstrap.token
+```
+
+Open `/auth/`, paste the token, approve with Touch ID. The token is **single-use**: it is burned the moment the first passkey enrolls, and it is only ever minted while the store is empty. The enrollment page is always reachable; the gate (`CC_AUTH_ENFORCE=true`) only covers `/api`, so you never have to disable enforcement to enroll.
+
+## Recovery scenarios
+
+### Lost a device, but you have another
+
+Sign in on the other device, open `/auth/`, and **Remove** the lost one. If you suspect it was compromised, also press **Sign out everywhere** — that raises the session revocation floor and invalidates every outstanding session instantly, no restart.
+
+### Lost every enrolled device (true lockout)
+
+The enroll page is open, but registration now needs a session you cannot get. Break glass over SSH (the trusted local path) by resetting the passkey store so a fresh bootstrap token is minted:
+
+```bash
+cd ~/.sanctum/secrets
+mv command-center-passkeys.json command-center-passkeys.json.bak.$(date +%s)
+launchctl kickstart -k gui/$(id -u)/com.sanctum.dashboard
+cat command-center-bootstrap.token   # freshly minted because the store is now empty
+```
+
+Open `/auth/` and enroll your replacement device with the new token. Then immediately add a backup. Your old (lost) credentials are in the `.bak` file if you ever need the audit trail.
+
+### "WebAuthn unavailable" or a cert warning in the browser
+
+WebAuthn refuses any origin with a TLS error. Check the terminator and its Let's Encrypt cert:
+
+```bash
+launchctl print gui/$(id -u)/com.sanctum.pq-terminator.1111 | grep state
+openssl x509 -in ~/.sanctum/pq-terminator/certs/le-manoir.crt -noout -enddate
+~/.sanctum/bin/sanctum-cert-renew.sh   # re-issues + reloads only on change
+```
+
+If `tailscale cert` fails, re-check **HTTPS Certificates** in the Tailscale admin console — disabling it is the usual root cause, and `sanctum-cert-renew.sh` will page Force Flow when expiry is under 14 days with renewal failing.
+
+### A cert-expiry or posture alert fired
+
+Force Flow alerts are wired to two daily monitors and one continuous one. Read the alert, then the matching log:
+
+```bash
+tail ~/.sanctum/logs/cert-expiry.log         # which cert, how many days
+tail ~/.sanctum/logs/mtls-cert-renew.log     # did the machine-cert renewer run
+tail ~/.sanctum/logs/security-posture.log    # gate/plaintext/mTLS attestation
+```
+
+The machine-cert renewer re-mints in place and reloads `:1337` + `:3301`, restoring the prior cert and paging red if the post-renew mTLS probe fails — so a red here means investigate, never improvise a hand-rolled cert.
+
+<Aside type="caution">
+`CC_AUTH_ENFORCE` lives in `com.sanctum.dashboard.plist`. If it is ever unset or flipped to anything but `true`, the entire `/api` surface opens. The security-posture sentinel checks this every 15 minutes and pages if the gate goes open — but if you edit the plist, restore `true` and `launchctl kickstart -k` the dashboard.
+</Aside>
+
+## The cert lifecycle, at a glance
+
+| Cert | Path (under `~/.sanctum`) | Renews | How |
+|---|---|---|---|
+| Dashboard LE (`:1111`) | `pq-terminator/certs/le-manoir.crt` | ~90 days | `sanctum-cert-renew.sh`, daily 04:30 |
+| mTLS server (`:1337` `:3301`) | `certs/server.crt` | 5 years | `sanctum-mtls-cert-renew.sh`, daily 04:50 |
+| mTLS clients (yoda, canary, …) | `certs/clients/*.crt` | 5 years | `sanctum-mtls-cert-renew.sh` |
+| mTLS root CA | `certs/ca.crt` | 2031 | manual (5-year root) |
+
+Every cert above is watched by `cert-expiry-sentinel` (daily): Force Flow warns under 30 days and reds under 14. The renewers keep them far from those thresholds, so an alert means a renewer stalled — fix the renewer, not the cert.
+
+## What is watching, always
+
+The `security-posture-sentinel` runs every 15 minutes and pages if the posture regresses: the passkey gate must 401, `:1337` and `:3301` must refuse plaintext, `:3301` must still serve over mTLS, and `:6669` must reject unauthenticated calls. Point-in-time hardening is not military-grade; continuous attestation is.
