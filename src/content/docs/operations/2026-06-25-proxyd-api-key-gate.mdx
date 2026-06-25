@@ -1,0 +1,48 @@
+---
+title: "2026-06-25: The gateway gets a doorman — proxyd's api-key gate + a lint that won't blink"
+description: "The surface sweep put proxyd behind a loopback bind, but it still never checked who was calling — it forwarded the key without reading it. This adds an inbound api-key gate, and locks the whole Rust workspace behind a clippy gate that fails on a single warning."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch gatehaus at night: a doorman in silhouette holds a single lantern at a narrow loopback door, checking a token against a ledger; behind him a long hall of identical doors each sealed with a teal bolt, and a faint amber lint-line runs along the floor like a tripwire.](./images/hero-2026-06-25-proxyd-api-key-gate.png)
+
+The [loopback surface sweep](/operations/2026-06-24-loopback-surface-sweep/) closed the network around proxyd — the model gateway now binds `127.0.0.1` and nothing else. But that doc named a gap it did not yet close: proxyd does not validate its own api-key. It reads the `x-api-key` header off an inbound request and forwards it upstream, but it never checks whether the *caller* was allowed to use the gateway at all. Loopback shuts the network door; it does nothing about a local process that simply opens it. This is the doorman that was missing.
+
+## The doorman: inbound x-api-key validation
+
+proxyd now runs an axum middleware that checks the inbound `x-api-key` before any route handler sees the request. It mirrors the pattern the `:1337`/`:3301` machine backends already use: a constant-time comparison (`subtle::ConstantTimeEq`, so a wrong key takes the same time to reject as a near-miss), fail-closed — anything that is not an exact match of an accepted key gets a `401`, full stop.
+
+This is defense-in-depth, not the primary control. proxyd is loopback-only, so the threat model is a rogue process already on the box, not the LAN. The loopback bind is the wall; the api-key is the lock on the one door through it.
+
+<Aside type="caution" title="Why it ships switched off">
+The gateway fronts every council model. A validation bug that rejects a real key would break the council instantly. So enforcement is gated behind `SANCTUM_PROXY_ENFORCE_AUTH`, which defaults **off** — deploying the new binary changes no runtime behavior at all until the switch is deliberately flipped. Until then the doorman waves everyone through, exactly like the old binary.
+</Aside>
+
+When the time comes to enforce, the rollout is dual-accept so nothing breaks mid-transition. The agents' built-in key `sanctum-local` is always accepted; additional keys come from `SANCTUM_PROXY_INBOUND_KEYS` (comma-separated) and `SANCTUM_PROXY_KEY`. The order of operations is: enumerate every real caller's key into the accept set, set it live, *then* flip `SANCTUM_PROXY_ENFORCE_AUTH=true`, watch the log for `inbound_auth=ENFORCING`, and confirm the council and CLI still get `200`s. `/health` stays exempt so monitoring probes never need a key.
+
+The tests do not re-implement the compare loop and check that — they drive the real middleware through an axum router (tower `oneshot`): enforce-off is a genuine no-op, the dual-accept set passes either key, wrong / missing / length-off keys all `401`, and `/health` passes unauthenticated even while enforcing.
+
+## The lint that won't blink
+
+The same pass made the whole Rust workspace pass `cargo clippy --all-targets -- -D warnings`, and flipped the CI lint job from a tolerant report to a hard gate. One warning — in test code too — now fails the build.
+
+Getting there meant triaging a real dead-code backlog rather than papering over it. The rule was: delete what is genuinely dead, and for code that is intentional but not yet wired, leave an explicit `#[allow(...)]` *with a reason at the site* — never a blanket module-wide silence. That is the difference between a clean report and an honest one.
+
+- **Deleted:** the watchdog daemon's retired Idle Manager — a TCP proxy that used to lazily spawn a council backend, dead since council-mlx moved to mTLS-only on its own port. Gone, along with its now-orphaned imports.
+- **Allowed, with rationale:** the audio-provenance signing module (a complete Ed25519 API shared across two binaries that each use a different half), metrics accessors, and an arg-heavy set of provider-forwarding functions where a context struct would add indirection without removing a field.
+- **Fixed:** a `not_unsafe_ptr_arg_deref` error in the castellan memory-pressure FFI that had been hiding behind the dead-code noise — the function that hands a raw pointer to libdispatch is now correctly `unsafe fn` with a documented safety contract, and its one caller wraps it in `unsafe`.
+
+## Two warts the verification turned up
+
+Final verification is where you find the things nobody meant to ship. Two surfaced, both benign, both worth recording:
+
+`sanctumd` (the watchdog API on `:2187`) is loaded **twice** under one launchd label — once as a system LaunchDaemon and once as a user LaunchAgent. Both run the same binary, whose default is to bind loopback plus the tailnet; they race, so one process wins the loopback listener and the other wins the tailnet one. The posture is still correct — loopback and tailnet, never `0.0.0.0` — so this is a topology wart, not an exposure. The fix keeps the canonical system daemon (the one rendered from `watchdog.yaml`) and retires the stray LaunchAgent.
+
+<Aside type="note">
+The new proxyd binary is **staged, not deployed.** Because enforcement defaults off, there is no urgency, and the restart needs a privileged kickstart of a system LaunchDaemon. Two scripts wait under `~/.sanctum/bin/`: `redeploy-proxyd-auth.sh` (backup, swap, ad-hoc codesign, kickstart, verify loopback bind + health + that auth logs as off) and `dedup-watchdog-job.sh`. The running gateway is unchanged until one of them is run.
+</Aside>
+
+## The doctrine
+
+A closed network door and an unlocked door behind it is one control, not two. The sweep gave proxyd the wall; this gives it the lock — shipped cold so the council never feels it, ready to arm the day a local-process threat is worth arming against. And the lint gate is the same idea pointed inward: the standard only holds if a single new warning is enough to stop the line.
