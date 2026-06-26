@@ -1,0 +1,135 @@
+---
+title: "Service inventory — every daemon and listening port"
+description: "The complete operational registry of Sanctum launchd jobs and listening TCP ports on manoir: what each one is, how often it runs, and who owns each port. Generated from running reality and reconciled against the docs-drift audit."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketched apothecary cabinet at night, dozens of labelled drawers in neat rows, a keeper holding a lantern reading one label; each drawer glows faintly teal, a few amber; one tiny drawer ajar showing a curled wisp.](./images/hero-service-inventory.png)
+
+This is the ground-truth registry of what actually runs on the Mini: every `com.sanctum.*` launchd job and every listening TCP port, each with a one-line purpose. It exists because the weekly docs-drift audit kept finding services that were running but undocumented — this page closes that gap and is the canonical place a new daemon or port earns its row.
+
+<Aside type="note">
+Two audit blind spots were fixed alongside this page: the drift check now reads port numbers from this inventory (and `port-summary.mdx`), not just the three files it scanned before, and it skips the volatile dynamic-port range (49152+) so transient third-party sockets (Lima, OrbStack, Rapport helpers) no longer read as drift. It still only enumerates user LaunchAgents, so a handful of system LaunchDaemons (proxyd, watchdog, castellan) can show as "phantom" — documented but not in its scan — which is a scan limitation, not a real absence.
+</Aside>
+
+## Daemons (launchd jobs)
+
+Every entry is loaded on the Mini. "Domain" is user-agent (`~/Library/LaunchAgents`) unless noted; "cadence" is how it is triggered — a long-running daemon, a fixed interval, a calendar schedule, or a one-shot at boot.
+
+| Label | Domain | Cadence | Purpose |
+|---|---|---|---|
+| `com.sanctum.agent-trace` | user-agent | daemon (KeepAlive/RunAtLoad) | Observe-only sentinel that tails openclaw gateway/agent logs, pairs request/response events by correlation_id, and writes NO_REPLY corpus JSONL to ~/.sanctum/agent-trace (never heals). |
+| `com.sanctum.airlock` | user-agent | interval:600 | Maintenance-airlock executor that runs at most one queued op per tick only when the all-quiet gate is clear, with mandatory verify+rollback and loud alert on failure. |
+| `com.sanctum.android-emulator` | user-agent | daemon (KeepAlive/RunAtLoad) | Keeps a headless SmartLife Android emulator (AVD smartlife) running so ha-self-healer can auto-confirm Tuya devices. |
+| `com.sanctum.boot-forensics` | user-agent | one-shot | Runs at every boot to capture and append the previous shutdown cause / boot reason to a persistent JSONL before the unified log rotates past it. |
+| `com.sanctum.castellan-canary` | user-agent | interval:120 | Observe-only canary that watches the system-daemon castellan memory arbiter for silent crash-loops and pages Force Flow (never restarts/kills). |
+| `com.sanctum.castellan-pattern-disjoint-check` | user-agent | calendar:06:00 daily | Daily wrapper around the castellan regression guard that re-checks then pages Force Flow only on a confirmed capacity.yaml pattern-collision (memory double-count) regression. |
+| `com.sanctum.cathedral-restart-forensics` | user-agent | interval:60 | Every 60s compares the cathedral sanctum-mlx PID to last-known and, on a change, captures forensic context (etime, launchd events, SSH records, exit-handler timestamp) to JSONL. |
+| `com.sanctum.cathedral-supervision-check` | user-agent | interval:60 | Every 60s alerts if the cathedral sanctum-mlx binary is unsupervised (orphaned/missing plist) or crash-looping. |
+| `com.sanctum.cathedral-vision-canary` | user-agent | interval:60 | Every minute probes cathedral :1337 mTLS liveness plus a synthetic multimodal request, tracks memory/SLO, and flips vision_enabled=false on sustained breaches (fail-safe). |
+| `com.sanctum.cathedral-weekly-restart` | user-agent | calendar:Sunday 04:00 | Sunday 04:00 perf-hygiene restart of sanctum-mlx to shed compile-cache/memory drift, validated with a 256-token probe. |
+| `com.sanctum.cert-expiry-sentinel` | user-agent | calendar:05:10 daily | Daily backstop that computes days-to-expiry for every Sanctum TLS cert and pages Force Flow (warn &lt;30d, red &lt;14d) without renewing. |
+| `com.sanctum.chitti` | user-agent | daemon (KeepAlive/RunAtLoad) | Long-running sanctum-rs Rust daemon (sanctum-chitti) that surfaces stuck/crash-looping launchd jobs as a health sentinel. |
+| `com.sanctum.ci-watcher` | user-agent | interval:300 | Every 5 minutes polls recent GitHub Actions runs across Holocron-gated repos and fires a Force Flow alert on transitions into CI failure. |
+| `com.sanctum.claude-max-auth-keepalive` | user-agent | interval:1800 | Runs claude-max-auth-keepalive.py to invoke `claude auth status` on a timer, keeping the Claude Max OAuth access token refreshed so the :3456 proxy/proxyd/council never go dark (log-only, no alerting). |
+| `com.sanctum.crm.imessage-dump` | user-agent | interval:1800 | Runs the sanctum-messages-reader Swift binary to dump the 8000 most-recent iMessages to imessage-dump.json for the CRM ingest pipeline. |
+| `com.sanctum.crm.linkedin-sync` | user-agent | calendar:daily 08:40 | Runs linkedin-sync.sh for a daily light read-only LinkedIn DM pull (recent threads via the persisted clean-room Chrome profile) imported into sanctum-crm, alerting on session expiry rather than hammering. |
+| `com.sanctum.deadman` | user-agent | interval:21600 | Runs sanctum-deadman.py, the operator dead-man's-switch that checks Bert's liveness beat and climbs a notify-only escalation ladder (read-only audit log) if he goes silent. |
+| `com.sanctum.doctrine-watch` | user-agent | interval:3600 | Runs sanctum-doctrine-watch.sh hourly to execute the doctrine-audit binary and page Force Flow on any new or increased doctrine-compliance violations. |
+| `com.sanctum.drill-watch` | user-agent | calendar:Sunday 09:00 | Runs sanctum-drill-watch.sh weekly to enforce the quarterly reboot-drill cadence, alerting Force Flow when the most recent drill record is over 90 days old. |
+| `com.sanctum.endocrine-gland` | user-agent | interval:120 | Runs `sanctum endocrine tick` every 2 minutes to read signals, step the hormone regulator, and broadcast the endocrine/creative-mode hormone panel for the council. |
+| `com.sanctum.endocrine-gland-sentinel` | user-agent | interval:300 | Runs endocrine-gland-sentinel.py, an observe-only watcher that pages Force Flow only on pathological endocrine-gland states (gland down/stale panel or out-of-range hormone level). |
+| `com.sanctum.endpoints-refresh` | user-agent | interval:600 | Runs `sanctum-endpoints generate` to dynamically re-resolve Sanctum host/service endpoints to live IPs (writing endpoints.json/.env), on a timer and on network-config changes. |
+| `com.sanctum.firewalla-confgen` | user-agent | interval:1200 | Runs firewalla-confgen-sentinel.py to detect and auto-recover a wedged Firewalla DNS-policy conf-generator via a synthetic canary-MAC create-then-check-policy.conf probe. |
+| `com.sanctum.firewalla-ssh-keycheck` | user-agent | calendar:08:15 and 20:15 daily | Runs firewalla-ssh-keycheck.sh twice daily to verify durable key-based SSH to the Firewalla box, self-healing via the stored password or alerting Bert via Force Flow if the key was evicted. |
+| `com.sanctum.firewalla-watch` | user-agent | interval:300 | Runs sanctum-firewalla-watch.sh to classify Firewalla-bridge degradation states (network-flap/API-stuck/auth-expired) from the bridge log and auto-recover (kickstart) or alert as appropriate. |
+| `com.sanctum.force-flow-bridge-sentinel` | user-agent | interval:300 | Runs force-flow-bridge-sentinel.py with an authenticated canary against the Firewalla bridge (loopback:1984) to detect/auto-recover a 401 auth-drift or a Lima VM port-shadow of the Mac bridge. |
+| `com.sanctum.force-flow-failsafe` | user-agent | interval:60 | Independent watchdog that probes Force Flow's :4077/health every 60s and, after 5 consecutive failures, sends a P0 iMessage directly via osascript - bypassing the down notifier. |
+| `com.sanctum.git-hygiene` | user-agent | interval:300 | Sentinel auditing every Mac-side and airgapped-VM Sanctum repo for cleanliness, computing a 0-100 score/tier written to state for the Holocron UI. |
+| `com.sanctum.haus-ops-mcp` | user-agent | daemon (KeepAlive SuccessfulExit:false + RunAtLoad) | FastMCP server (uv-run) exposing audited haus operations to remote Claude clients. |
+| `com.sanctum.house-bible-sync` | user-agent | calendar:Sunday 10:30 | Weekly Python tool that keeps HOUSE-BIBLE.md (master Manoir infrastructure reference) from drifting out of date. |
+| `com.sanctum.keychain-sync` | user-agent | calendar:daily 03:45 | Nightly script mirroring VM SOPS source-of-truth cross-tier secrets into the Mini's macOS Keychain (-A) so non-GUI launchd processes can read them without an auth prompt. |
+| `com.sanctum.launchd-health-sentinel` | user-agent | daemon (KeepAlive:true + RunAtLoad) | Meta-sentinel polling launchctl every ~10 min to surface stuck non-zero launchd jobs as info-level chitti samskaras and JSONL logs (no pager alerts). |
+| `com.sanctum.lock-reaper` | user-agent | interval:300 | Scans ~/.openclaw/agents for stale jsonl.lock files (mtime >60min and empty or dead PID) and POSTs findings to Force Flow. |
+| `com.sanctum.mac-reconciler` | user-agent | interval:60 | Launch wrapper that injects the Firewalla bridge bearer token from its canonical on-disk source at runtime and runs the Mac reconciler, preventing keychain token drift/401 loops. |
+| `com.sanctum.macmon-sampler` | user-agent | daemon (KeepAlive:true + RunAtLoad) | Long-running macmon pipe (one JSON sample every 2s) writing atomic system-metric samples for the navigator sidecar to serve. |
+| `com.sanctum.mini-wifi-reattach` | user-agent | one-shot (RunAtLoad, no interval) | Boot-time self-healing WiFi reattach for the headless WiFi-only Mini, retrying to join Nepveu-6G until it gets a 10.0.0.x Firewalla LAN lease. |
+| `com.sanctum.mlx-devstral-rust` | user-agent | daemon (KeepAlive SuccessfulExit:false + RunAtLoad) | Runs the sanctum-mlx Rust inference server serving Devstral-Small-2-24B-4bit over mTLS on loopback:3301 (no-plain). |
+| `com.sanctum.monthly-drills` | user-agent | calendar:Sunday 02:00 (third-Sunday gated) | Runs every Sunday but gated to the third Sunday (day-of-month 15-21) to execute all 10 reliability drills sequentially and post a tally to Force Flow. |
+| `com.sanctum.mtls-cert-renew` | user-agent | calendar:daily 04:50 | Daily renewer that re-mints sanctum-mlx mTLS server/client certs in place (reusing existing keys) when within the expiry window so they never silently expire and 503 council/Yoda hops. |
+| `com.sanctum.navigator-sidecar` | user-agent | daemon (KeepAlive/RunAtLoad) | Runs navigator-sidecar.js (the Holocron Bridge) which collects and reports project stability/health to The Holocron UI. |
+| `com.sanctum.network-control` | user-agent | daemon (KeepAlive/RunAtLoad) | Runs network-control.sh which launches the Mini-hosted Network Control API (port 4007) bridging Orbi admin and the Firewalla bridge (:1984). |
+| `com.sanctum.openclaw.docker-startup` | user-agent | calendar:daily 07:56 + RunAtLoad | Runs launch-after-docker.sh to wait for the OrbStack Docker socket then bring up the signal-cli compose containers at boot. |
+| `com.sanctum.openrouter-audit` | user-agent | calendar:weekly Monday 04:15 | Runs audit-models.sh, a weekly availability audit pinging each OpenRouter model proxyd routes through and reporting catalog drift to chitti/Force Flow. |
+| `com.sanctum.openrouter-autoheal-checkin` | user-agent | calendar:May 15 09:00 (one-shot, flag-gated) | Runs openrouter-autoheal-checkin.sh, a one-shot 14-day post-hoc audit of the 2026-05-01 OpenRouter autoheal, self-gated by a flag file. |
+| `com.sanctum.orbstack-autostart` | user-agent | interval:120 + RunAtLoad (KeepAlive on non-clean exit) | Starts OrbStack via orbctl when the Docker socket is absent, ensuring the container engine stays up. |
+| `com.sanctum.power` | user-agent | daemon (KeepAlive/RunAtLoad) | Runs sanctum-power.py, a daemon polling the EcoFlow Delta 3 battery SoC/AC-input to model grid-vs-battery power state and perform a bounded graceful shutdown before depletion. |
+| `com.sanctum.pq-terminator.1111` | user-agent | one-shot (RunAtLoad, KeepAlive false) | Runs the sanctum-pq-terminator post-quantum TLS terminating proxy listening on tailnet:1111 and forwarding to local backend loopback:1111 (le-manoir cert). |
+| `com.sanctum.pq-terminator.2222` | user-agent | one-shot (RunAtLoad, KeepAlive false) | Runs the sanctum-pq-terminator PQ-TLS proxy on tailnet:2222 forwarding to local backend loopback:2222 (term cert). |
+| `com.sanctum.pq-terminator.2223` | user-agent | one-shot (RunAtLoad, KeepAlive false) | Runs the sanctum-pq-terminator PQ-TLS proxy on tailnet:2223 forwarding to local backend loopback:2222 (term cert). |
+| `com.sanctum.pq-terminator.4078` | user-agent | one-shot (RunAtLoad, KeepAlive false) | Runs the sanctum-pq-terminator PQ-TLS proxy on tailnet:4078 forwarding to local backend loopback:4077 (term cert). |
+| `com.sanctum.r2-breakglass` | user-agent | calendar:daily 04:20 | Runs sanctum-r2-breakglass which restic-backs up the irreplaceable core (secrets/keys/certs/configs/code/memory) to Cloudflare R2 free tier as a geo-redundant cold seed. |
+| `com.sanctum.runtime-snapshot` | user-agent | calendar:weekly Sunday 11:00 | Runs runtime-snapshot.sh which syncs ~/.sanctum/scripts and plists into the sanctum-runtime repo and pushes on change. |
+| `com.sanctum.security-posture-sentinel` | user-agent | interval:900 | Observe-only attestation that manoir hardening is still enforcing (passkey :1111 gate returns 401, :1337/:3301 refuse plaintext, :3301 mTLS serves, :6669 heretic rejects unauth), paging Force Flow only on a twice-confirmed regression. |
+| `com.sanctum.sharepoint-bridge-sentinel` | user-agent | interval:600 | End-to-end authenticated watch of the SharePoint/M365 bridge (bridge.nepveu.name / /opt/sanctum/bridge) proving the full auth+data path that every Triptyq skill depends on is alive, not just that the daemon answers. |
+| `com.sanctum.signal-link-sentinel` | user-agent | interval:300 | Readiness probe and Mac-side self-heal for the 6-hop Yoda-Signal link (phone to signal-cli to socat bridge to VM consumer to openclaw), fail-closed and honest, kicking the VM doctor over SSH when the fault is VM-side. |
+| `com.sanctum.tailscale-skew-canary` | user-agent | interval:600 | Observe-only canary that catches a recurrence of the 2026-06-12 Tailscale version-skew/MagicDNS outage by comparing tailscale vs tailscaled versions, MagicDNS resolution, and the /etc/resolver entry, paging Force Flow on regression. |
+| `com.sanctum.wan-sentinel` | user-agent | interval:60 | Probes independent external anchors (Cloudflare/Google/Quad9 + DNS resolve) to detect WAN-down vs LAN-down, debounced and fail-safe, paging Force Flow and (when armed) flipping the council to offline-mode via sanctum-offline. |
+| `com.sanctum.yoda-agent-watchdog` | user-agent | interval:300 | Self-heal for the LiveKit voice agent: detects when com.sanctum.yoda-agent has no ESTABLISHED LiveKit connection (a dead _connection_task that KeepAlive cannot see) and kickstarts it with miss-threshold, cooldown, and escalate-only-after-N. |
+| `com.sanctum.yoda-canary-internal` | user-agent | calendar:hourly at minute 0 | Hourly internal canary running a LiveKit SIP loopback call to validate Yoda's audio in+out and TTS chain end-to-end. |
+| `com.sanctum.yoda-canary-pstn` | user-agent | calendar:weekly Wed 10:00 | Weekly PSTN canary verifying Yoda phone-path readiness from real voip.ms data (YODA_DID still routes to a SIP endpoint, plus answered-inbound-call evidence over 14 days), since voip.ms offers no call-origination test. |
+| `com.sanctum.yoda-cert-monitor` | user-agent | calendar:daily 09:00 | Daily monitor that parses the council mTLS client cert (~/.sanctum/certs/clients/yoda.crt) notAfter via openssl and fires an iMessage alert when fewer than 30 days remain, so it can be rotated before council hops 503. |
+| `com.sanctum.yoda-honor-probe` | user-agent | interval:86400 | Daily synthetic end-to-end probe of the Yoda warmth chain that invokes dispatch_signal_reply on the VM over SSH and verifies an outbound Signal message is sent with non-NO_REPLY (warmth-substituted) text. |
+
+## Listening TCP ports
+
+Stable listeners only. Volatile dynamic-range ports (49152+) used by Lima/OrbStack/Apple helpers are intentionally omitted — they change across reboots and are skipped by the drift audit. "Owner" is the process and binary path as seen by `lsof`; bind addresses are given as interface descriptors (loopback / vmnet-bridge / tailnet / LAN), never literal IPs.
+
+| Port | Kind | Owner | Purpose |
+|---|---|---|---|
+| `1949` | sanctum-service | Python (sanctum-presence) - /opt/homebrew/Cellar/python@3.12 | sanctum-presence: cross-session lock registry / coordination server (bound on localhost, vmnet-bridge, and Tailscale tailnet) |
+| `1973` | sanctum-service | Python (waitress-serve) - /opt/homebrew/Cellar/python@3.14 | sanctum-dj party kiosk web server (Apple Music request kiosk), bound on LAN |
+| `2188` | sanctum-service | sanctum-chitti - ~/Projects/sanctum-rs/target/rele | sanctum-chitti Rust daemon (Sanctum stability/alert ingester component), localhost |
+| `2223` | sanctum-service | sanctum-pq-terminator - ~/.sanctum/pq-terminator/s | Post-quantum TLS terminator: listens on Tailscale tailnet:2223 with PQC cert/key, proxies to backend http://loopback:2222 |
+| `3030` | sanctum-service | node ./bin/cli.mjs --port 3030 --host loopback (pid 1259) | Node CLI server bound to localhost:3030 (Sanctum-launched Node service) |
+| `3344` | sanctum-service | node - /opt/homebrew/bin/node ~/Documents/Claude_C | The Holocron Bridge / Navigator sidecar UI - unified project-health monitor (localhost + Tailscale) |
+| `3355` | sanctum-service | Python - /opt/homebrew/Cellar/python@3.14/.../Python /Users | 'tommy' supervisor service (OpenClaw Sanctum supervisor process), localhost |
+| `4076` | sanctum-service | Python - ~/.sanctum/msg-bus/bus.py (pid 1239) | sanctum-msg-bus message bus daemon, localhost (documented at :4076) |
+| `4444` | sanctum-service | node - ~/Applications/SanctumBridge.app/Contents/R | SanctumBridge.app bridge server (calendar/EventKit + Jocasta MCP bridge), localhost |
+| `5037` | third-party-service | adb -L tcp:5037 fork-server server (pid 7004) | Android Debug Bridge (adb) server - standard ADB daemon port for the Android emulator toolchain |
+| `5150` | third-party-service | limactl hostagent - /opt/homebrew/bin/limactl (pid 4118) for | Lima VM hostagent for the OpenClaw/Yoda sanctum-vm (Lima/vz), localhost |
+| `5554` | third-party-service | qemu-system-aarch64-headless (Android emulator, avd smartlif | Android emulator console port (standard emulator-5554 console), localhost + ::1 |
+| `5555` | third-party-service | qemu-system-aarch64-headless (Android emulator, avd smartlif | Android emulator adb/transport port (standard emulator-5554 adb), localhost + ::1 |
+| `6402` | third-party-service | netsimd - ~/Library/Android/sdk/emulator/netsimd ( | Android emulator network simulator daemon (netsimd), localhost |
+| `6463` | third-party-service | Discord Helper (Renderer) - /Applications/Discord.app/... (p | Discord RPC/IPC local socket (standard Discord port 6463 for Rich Presence), localhost |
+| `6543` | sanctum-service | node - /usr/local/bin/node ~/.sanctum/bin/gemini-c | Sanctum Gemini Code Assist proxy (local LLM/transport proxy), localhost |
+| `6669` | sanctum-service | sanctum-mlx - ~/Projects/sanctum-rs-cathedral/targ | Cathedral sanctum-mlx inference server (MoE Qwen seat), localhost + ::1 |
+| `7000` | third-party-service | ControlCenter - /System/Library/CoreServices/ControlCenter.a | macOS AirPlay Receiver (Control Center owns :7000 on modern macOS), all interfaces |
+| `7265` | third-party-service | Raycast /Applications/Raycast.app/Contents/MacOS/Raycast (PI | Raycast launcher app local control/extension port on loopback |
+| `7337` | sanctum-service | Python /opt/homebrew/.../Python - ~/.sanctum/livek | Sanctum LiveKit token minter service (bound on Tailscale IP tailnet) |
+| `7474` | third-party-service | limactl /opt/homebrew/bin/limactl (PID 4118) | Lima VM port-forward of Neo4j HTTP (7474 is the Neo4j default browser/HTTP port) on loopback |
+| `7583` | sanctum-service | signal-cli /opt/homebrew/bin/signal-cli (PID 4802) on 127.0 | signal-cli daemon TCP/JSON-RPC socket (signal-cli -a +1514... daemon --tcp localhost:7583), re-exposed on VM-bridge IP vmnet-bridge via socat |
+| `7681` | third-party-service | netsimd ~/Library/Android/sdk/emulator/netsimd (PI | Android emulator network simulator (netsimd, part of Android SDK emulator) on loopback |
+| `7687` | third-party-service | limactl /opt/homebrew/bin/limactl (PID 4118) | Lima VM port-forward of Neo4j Bolt (7687 is the Neo4j default Bolt protocol port) on loopback |
+| `8009` | sanctum-service | Python /opt/homebrew/.../Python - -m workers.stt_server (PID | Sanctum STT (speech-to-text) worker server on loopback |
+| `8080` | sanctum-service | signal-cli /opt/homebrew/bin/signal-cli (PID 4802) | signal-cli daemon HTTP/JSON-RPC endpoint (--http localhost:8080) on loopback |
+| `8181` | third-party-service | kiwix-serve (PID 12613) | Kiwix offline-content server (ZIM library) listening on all interfaces *:8181 |
+| `8182` | third-party-service | kiwix-serve (PID 18524) | Second Kiwix offline-content server instance on *:8182 |
+| `8199` | sanctum-service | node /usr/local/bin/node - ~/.sanctum/scripts/ha-g | Sanctum Home Assistant gateway (ha-gateway.js) on VM-bridge IP vmnet-bridge |
+| `8443` | sanctum-service | Python /opt/homebrew/.../Python - -m sanctum_bridge (PID 325 | Sanctum Bridge service (TLS port 8443) on loopback |
+| `8765` | sanctum-service | Python /opt/homebrew/.../Python - -m orchestrator.server (PI | Sanctum orchestrator server on loopback |
+| `8767` | sanctum-service | Python ~/Projects/sanctum-haus-ops-mcp/.venv/bin/h | Sanctum haus-ops MCP server on loopback |
+| `8901` | sanctum-service | Python /opt/homebrew/.../python@3.14 - ~/.sanctum | Sanctum MLX model server (Qwen3.5-9B-4bit) with capacity caps on loopback |
+| `10101` | sanctum-service | ssh ~/.sanctum/bin/sanctum-health-tunnel (PID 3447 | SSH local-forward tunnel (sanctum-health-tunnel) for the health-ingester endpoint, bound on ::1 and loopback |
+| `18080` | sanctum-service | socat /opt/homebrew/bin/socat (PID 1744) | socat relay on VM-bridge IP vmnet-bridge, forwarding 18080 (likely a Sanctum/VM service re-export) |
+| `18085` | sanctum-service | socat /opt/homebrew/bin/socat (PID 1745) | socat relay on VM-bridge IP vmnet-bridge, forwarding 18085 (likely a Sanctum/VM service re-export) |
+| `18554` | third-party-service | OrbStack (PID 74584) /Applications/OrbStack.app/Contents/Fra | OrbStack VM/container helper service (loopback) |
+| `18555` | third-party-service | OrbStack (PID 74584) OrbStack Helper | OrbStack helper service |
+| `20241` | third-party-service | cloudflared (PID 99682) /opt/homebrew/bin/cloudflared | Cloudflare Tunnel daemon local metrics/management endpoint |
+| `21063` | third-party-service | OrbStack (PID 74584) OrbStack Helper | OrbStack helper service |
+| `31416` | third-party-service | limactl (PID 4118) /opt/homebrew/bin/limactl | Lima VM (OpenClaw/Yoda) port-forward / control endpoint |
+| `32222` | third-party-service | OrbStack (PID 74584) OrbStack Helper | OrbStack SSH gateway to containers/VMs (loopback) |
+| `40631` | third-party-service | limactl (PID 4118) /opt/homebrew/bin/limactl | Lima VM control/forward endpoint |
+| `42069` | sanctum-service | sanctum-memory-vault (PID 1267) ~/.sanctum/bin/san | Sanctum Memory Vault service (cross-session coordination) |
+| `42070` | sanctum-service | Python (PID 1204) Xcode-bundled Python3.9 (/Applications/Xco | Loopback Python service adjacent to sanctum-memory-vault (likely vault helper/sidecar); not a named Sanctum binary |
