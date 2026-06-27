@@ -13,7 +13,7 @@ Five briefings reach the operator's Signal on a schedule. The rule that governs 
 
 The briefings split cleanly by intent.
 
-**Intel** briefings — Jocasta (calendar) and Mundi (dealflow) — exist to put information in front of you. Their content _is_ the thing you want on Signal, so they always page when there is something upcoming or actionable, and stay silent when there genuinely is not.
+**Intel** briefings — Jocasta (calendar) and Mundi (dealflow) — exist to put information in front of you. Their content _is_ the thing you want on Signal, so they page when there is something to act on and stay silent otherwise. Jocasta runs on a forward-looking schedule; Mundi is purely event-driven (below).
 
 **Alert** briefings — Windu (security) and Cilghal (health) — exist to catch problems. Their normal state is a stream of low-grade yellows that are not worth a notification. So they page Signal only on a red (actionable) condition; everything yellow goes to the dashboard as ambient state. This is the [alert doctrine](/operations/2026-04-15-living-force-deployment/) in one sentence: Signal is for reds, the dashboard is for everything else.
 
@@ -26,7 +26,7 @@ The single most important thing to know when debugging a briefing: **the real se
 | Job (launchd) | Sender | Schedule | Type | Behaviour |
 |---|---|---|---|---|
 | `com.jocasta.heartbeat` | `~/.openclaw/scripts/jocasta-heartbeat.py` | 08:00 / 13:00 / 20:00 | intel | Forward-looking calendar; silent when nothing upcoming |
-| `com.mundi.briefing` | `mundi-briefing.py` (sanctum-crm) | every 4h | intel | Active dealflow with real interaction dates; a failure is never a quiet day |
+| `com.mundi.briefing` | `mundi-watch.py` (sanctum-crm) | every 30 min, 07:00-22:00 | intel, event-driven | Fires only on a deal-related email or a due Affinity reminder; inline action brief + :2600 dossier |
 | `com.windu.briefing` | `~/.openclaw/scripts/windu-briefing.py` | every 3h | alert | Red pages Signal; yellow to dashboard |
 | `com.cilghal.briefing` | `~/.openclaw/scripts/cilghal-briefing.py` | every 3h | alert | Red pages Signal; yellow to dashboard |
 | `com.sanctum.morning-briefing` | `~/.sanctum/lib/morning-briefing.sh` | 08:00 | digest | One line clean, expands on problems |
@@ -36,6 +36,12 @@ The single most important thing to know when debugging a briefing: **the real se
 Jocasta's briefing used to show meetings that had already happened. The cause was a self-contained DuckDB query that read date-only rows and _guessed_ whether an event was in the future from text in its name — and defaulted to "future" when there was no time to parse. The fix was to delete that logic and delegate to `~/.openclaw/jocasta-preflight.py`, which queries the calendar through `icalBuddy` with real start times and drops anything that has already ended. The briefing composer now renders exactly what the preflight hands it, so a past meeting cannot leak in — there is no longer any calendar logic in the sender to get wrong.
 
 The window is time-of-day aware: the 08:00 and 13:00 runs show the rest of today; the 20:00 run shows tonight plus tomorrow morning. If nothing is upcoming and no mail is urgent, it sends nothing.
+
+## Event-driven dealflow
+
+Mundi used to push the standing pipeline every four hours — "sixteen deals need you" whether or not anything changed. That is noise. It now polls every thirty minutes during waking hours and fires only on a real event, toward two goals: help the portfolio, and source or advance deals.
+
+A trigger is a deal-related email — from a domain matching a Portfolio, active-pipeline, or Watchlist company in Affinity, or cold inbound from a real person (newsletters filtered out) carrying dealmaking language — or an Affinity reminder come due. On a trigger Mundi enriches from the same Affinity interaction history Jocasta's CRM work feeds, then sends an inline action brief plus a tappable dossier on :2600. It primes its backlog on first run, so deploying it never replays history. Detection lives in `mundi_triggers.py`, unit-tested against the real inbox so a newsletter never fires.
 
 ## Targeted by routing
 
