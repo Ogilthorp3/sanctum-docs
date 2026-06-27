@@ -1,0 +1,50 @@
+---
+title: Briefings
+description: "The five scheduled briefings that reach Signal — how the deterministic launchd senders work, why intel always pages and alerts stay quiet, and the routing that keeps every Signal message worth reading."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark charcoal background: a pre-dawn operations desk, a fanned stack of dated briefing cards under a banker's lamp, a courier owl lifting off carrying a single folded brief toward a breaking dawn; one dossier and the owl's flight-path catch a faint teal halo.](./images/briefings.png)
+
+Five briefings reach the operator's Signal on a schedule. The rule that governs all of them is simple and unforgiving: **if it pinged the phone, it had better have been worth reading.** A briefing that cries wolf at 02:00 about a thermostat is worse than no briefing — it teaches you to ignore the channel. So every briefing here is built to stay silent until it has something, and to send to the dashboard instead of Signal when the something is merely interesting rather than actionable.
+
+## Two families
+
+The briefings split cleanly by intent.
+
+**Intel** briefings — Jocasta (calendar) and Mundi (dealflow) — exist to put information in front of you. Their content _is_ the thing you want on Signal, so they always page when there is something upcoming or actionable, and stay silent when there genuinely is not.
+
+**Alert** briefings — Windu (security) and Cilghal (health) — exist to catch problems. Their normal state is a stream of low-grade yellows that are not worth a notification. So they page Signal only on a red (actionable) condition; everything yellow goes to the dashboard as ambient state. This is the [alert doctrine](/operations/2026-04-15-living-force-deployment/) in one sentence: Signal is for reds, the dashboard is for everything else.
+
+The **Morning** briefing is the cross-cutting digest: one line on a clean day ("quiet night."), expanding with root causes only when the overnight watchdog queue has something.
+
+## The senders are deterministic, not agents
+
+The single most important thing to know when debugging a briefing: **the real senders are deterministic launchd jobs, not the OpenClaw cron agent-turns of the same name.** The cron versions are stale duplicates — the Jocasta one was timing out fourteen runs in a row against its model and never actually sending, while the launchd job quietly did the real work. Find the launchd job. It is the source of truth.
+
+| Job (launchd) | Sender | Schedule | Type | Behaviour |
+|---|---|---|---|---|
+| `com.jocasta.heartbeat` | `~/.openclaw/scripts/jocasta-heartbeat.py` | 08:00 / 13:00 / 20:00 | intel | Forward-looking calendar; silent when nothing upcoming |
+| `com.mundi.briefing` | `mundi-briefing.py` (sanctum-crm) | every 4h | intel | Active dealflow with real interaction dates; a failure is never a quiet day |
+| `com.windu.briefing` | `~/.openclaw/scripts/windu-briefing.py` | every 3h | alert | Red pages Signal; yellow to dashboard |
+| `com.cilghal.briefing` | `~/.openclaw/scripts/cilghal-briefing.py` | every 3h | alert | Red pages Signal; yellow to dashboard |
+| `com.sanctum.morning-briefing` | `~/.sanctum/lib/morning-briefing.sh` | 08:00 | digest | One line clean, expands on problems |
+
+## Forward-looking by construction
+
+Jocasta's briefing used to show meetings that had already happened. The cause was a self-contained DuckDB query that read date-only rows and _guessed_ whether an event was in the future from text in its name — and defaulted to "future" when there was no time to parse. The fix was to delete that logic and delegate to `~/.openclaw/jocasta-preflight.py`, which queries the calendar through `icalBuddy` with real start times and drops anything that has already ended. The briefing composer now renders exactly what the preflight hands it, so a past meeting cannot leak in — there is no longer any calendar logic in the sender to get wrong.
+
+The window is time-of-day aware: the 08:00 and 13:00 runs show the rest of today; the 20:00 run shows tonight plus tomorrow morning. If nothing is upcoming and no mail is urgent, it sends nothing.
+
+## Targeted by routing
+
+Windu and Cilghal compose a briefing of coloured lines — red for hard failures, yellow for the ambient stuff — then hand the whole thing to `~/.sanctum/lib/briefing_routing.py`. `route_by_severity` reads the worst colour present: a red anywhere routes the message to Signal as critical; a briefing of only yellows routes to the dashboard alone. That one function is why a stopped one-shot container or an 81% disk no longer wakes you, while a disabled firewall still does.
+
+<Aside type="caution" title="Probe the right way, or you page a ghost">
+Cilghal once reported `Sanctum (4040)` down on every run. It was probing proxyd's `:4040` with an HTTP `GET /health` — but proxyd is an mTLS passthrough proxy with no plain health route, so the probe always failed and, after the routing change, would have paged that false red to Signal. The liveness check for a proxy is a TCP connect: if it is listening, it is up. Health-check the thing the way it actually answers.
+</Aside>
+
+## Reading the full brief
+
+Pre-meeting briefs are the sixth piece. The Meeting Prep agent writes a dossier to `~/.openclaw/workspace/meeting-prep/`, and `com.sanctum.meeting-briefs-server` renders it as mobile HTML on `:2600` (loopback and tailnet). The Signal notification carries a tappable link straight to it, so the brief is one tap away on the phone rather than a filename you cannot open. The port lives deliberately outside the `407x` Force Flow block — it is a read-only document server, not part of the notification stack.
