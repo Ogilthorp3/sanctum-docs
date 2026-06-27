@@ -1,0 +1,55 @@
+---
+title: "2026-06-26: The council's independent-stack fallback — and the voice stack, settled"
+description: "The council's emergency fallback was rebuilt: a promote-only Python 35B that survives a Rust-binary corruption the two Rust seats cannot. Plus the voice stack settled — Parakeet for STT, and the one mlx version the TTS worker refuses to run on."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch lighthouse on a dark cliff at night: the main lamp is dark, and a second, smaller lamp on a separate mast has just been lit by a keeper, throwing a teal beam over the water while the dead main lamp glows faint amber.](./images/hero-2026-06-26-council-fallback-and-voice.png)
+
+The council runs on a Rust inference binary. Two seats front it — the 35B cathedral on `:1337` and the Devstral coder on `:3301`. For almost every failure, they cover each other and proxyd routes between them. But they share one weakness, and closing it is what this is about.
+
+## The two Rust seats are the same binary file
+
+`com.sanctum.mlx` (cathedral, `:1337`) and `com.sanctum.mlx-devstral-rust` (`:3301`) execute the *same* on-disk binary — `sanctum-mlx`. So a transient problem with one seat (a model hang, an out-of-memory, a crash) is survivable: the other seat is fine and proxyd falls over to it. But a problem with the *binary itself* — a corrupt or codesign-invalid file, the next launchd respawn guaranteed to fail — takes down **both seats at once**. No amount of Rust-seat redundancy helps, because there is only one binary.
+
+That is exactly the failure `council-integrity-check` classifies as "unrecoverable." And the only thing that survives it is a server built on a *different stack*.
+
+## A promote-only Python 35B
+
+The fallback is `com.sanctum.mlx-py-fallback`: a Python `mlx_lm.server` serving **Qwen3.6-35B-A3B-4bit** — the same model the Rust cathedral runs, so a failover keeps the council at full capability parity — on loopback `:8901`. Being Python (mlx-lm, not the vendored mlx-rs compiled into the Rust binary) is the whole point: a corrupt Rust binary cannot touch it.
+
+<Aside type="note">
+This replaces an always-warm Qwen3.5-9B that sat on `:8901` and was never once used. The 9B was small *because* it was always loaded — a resident 35B on top of the always-loaded Rust 35B would push the 64 GB Mac Mini deep into swap. The new seat avoids that by being **promote-only**: its plist is `Disabled` with `RunAtLoad` off, so it holds zero memory until needed. Deleting the unused 9B also freed 5.6 GB.
+</Aside>
+
+When `council-integrity-check` detects an unrecoverable binary failure it boots the broken Rust agent **first** — freeing its ~20 GB — and only then enable-bootstrap-kickstarts the Python 35B into the space just vacated. A cold start of ~30 to 60 seconds to load the weights is a fine price for a rare disaster. The promotion is guarded on the fallback plist actually existing: if the fallback is ever removed again, an unrecoverable failure pages for manual intervention instead of bootstrapping a missing file and silently claiming it failed over.
+
+## Transient failover is a different layer
+
+The promote-only seat is exclusively the escape for *binary* corruption. Everyday transient failures never touch it — they are handled at the routing layer, which previously had a gap: the primary `council-mlx` seat had no fallback chain at all. It now reads:
+
+```yaml
+fallbacks:
+  council-mlx:
+  - council-code        # devstral :3301 — local, free, for a 35B-specific issue
+  - claude-cli-offline  # Claude Max :3456 — flat-rate, independent stack
+```
+
+So a 35B-specific hiccup routes to Devstral; a total-local outage escapes to the Claude Max path, which respects the subscription-first billing rule and does not depend on the Rust binary at all.
+
+## The voice stack, settled
+
+Two voice questions got answers this round.
+
+**STT is Parakeet, and that is correct.** The speech-to-text worker on `:8009` runs `mlx-community/parakeet-tdt-0.6b-v3`. A lingering doctrine note claimed STT should be `mlx-whisper`; the data says otherwise for this workload. On the 2026 Open ASR Leaderboard, Parakeet beats Whisper-large-v3 on English word-error-rate (6.32% vs 7.44%), is comparable multilingual, and is an order of magnitude faster (RTFx 3330 vs 146) — decisive for a real-time phone agent on an ~800 ms budget. Parakeet v3 covers English and French, which is all Yoda needs. Whisper only wins for languages beyond Parakeet's ~25 European, so `mlx-whisper` is not installed.
+
+**TTS is pinned, on purpose.** The Qwen3-TTS worker on `:8008` is held at `mlx 0.31.1` / `mlx-audio 0.4.2`.
+
+<Aside type="caution">
+Upgrading the TTS environment to `mlx 0.31.2` + `mlx-audio 0.4.4` makes the worker *load fine* — `/health` returns ok — but every synthesis fails with `RuntimeError: There is no Stream(gpu, 0) in current thread`, returning HTTP 200 with **zero bytes**. A Metal GPU-stream regression in the request-handling thread. The lesson: `/health` is a false positive here; verify TTS with the worker's own `self-warm 3/3 ok` log line or a synth smoke that returns non-zero bytes. Tracked in `yoda-voice-agent` issue 2; the rest of the mlx stack (the council fallback env, STT, and the argmax-parity reference) is on the current `mlx 0.31.2` / `mlx-lm 0.31.3`.
+</Aside>
+
+## The doctrine
+
+Redundant copies of the same thing are not a fallback — they share its single point of failure. The council's two Rust seats are one binary wearing two hats; the real fallback had to be a different stack entirely, sized to load only into the memory the dead seat leaves behind. And a fallback you never load is a fallback you have not tested — so the verification bar is a real artifact crossing the real boundary, not a green health check.
