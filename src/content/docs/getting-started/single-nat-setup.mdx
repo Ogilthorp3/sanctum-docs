@@ -73,11 +73,11 @@ The catch is that Bell re-hands the poison route on **every WAN lease renewal**.
 
 For the Firewalla to be the *single* NAT, everything behind it must stop doing NAT. Put your Orbi (or any AP) in **AP / bridge mode** so it bridges Wi-Fi onto the Firewalla's LAN instead of translating a second time.
 
-<Aside type="caution" title="AP mode disables the Netgear app — this is by design">
-An Orbi in AP mode shuts off its SOAP control service on port `5000`, and **the Netgear / Orbi app talks to the router over exactly that service.** So the app goes dark: it can't find the router, shows it offline, or refuses to manage it. Nothing is broken. Manage the Orbi from its **web admin** at `http://<orbi-ip>` instead — the full settings surface lives there, app or no app.
+<Aside type="caution" title="AP mode changes how you reach the Orbi — not whether you can">
+An Orbi in AP mode shuts off its **local** SOAP service on port `5000`, so the Netgear app can't reach it on your LAN. But it doesn't need the LAN — it manages the unit through Netgear's **cloud**, which works *as long as the AP itself has internet (a gateway **and** DNS).* Starve the AP and the app shows it offline — that's missing internet, not broken AP mode. The **web admin** at `http://<orbi-ip>` works on the LAN regardless.
 </Aside>
 
-One more new-user step that saves a confusing afternoon: set the Orbi's **management IP to DHCP**, then give it a **reservation on the Firewalla**. DHCP means the AP actually receives a gateway and DNS, so it can still reach the internet for cloud login and firmware updates; the reservation means it always lands on the same address, so `http://<orbi-ip>` is a bookmark and not a scavenger hunt. A static IP with no gateway is the classic trap here — the AP works for Wi-Fi but can never update itself.
+One more new-user step that saves a confusing afternoon: set the Orbi's **management IP to DHCP**, then give it a **reservation on the Firewalla**. DHCP means the AP actually receives a gateway and DNS, so it can still reach the internet for cloud login and firmware updates; the reservation means it always lands on the same address, so `http://<orbi-ip>` is a bookmark and not a scavenger hunt. The real trap is quieter than "no gateway": an AP with a gateway but an **empty DNS field** still reads its internet as down — magenta, no cloud, no firmware — routing works, resolution doesn't. DHCP hands it both; a static IP must set DNS to the Firewalla's LAN address too, or you've built the trap by hand.
 
 ## Verify, and how to back out
 
@@ -98,7 +98,7 @@ To go back: `sanctum net single-nat --rollback` is the clean path. The blunt-ins
 | **Public IP held by** | Your Firewalla | The ISP hub |
 | **Throughput** | Same — NAT count changes it by zero | Same |
 | **Bell poison `/1` route** | Stripped + self-healed every renewal | Not exposed (hub keeps the WAN) |
-| **Orbi / AP management** | Web admin `http://<orbi-ip>` (app off in AP mode) | Netgear app works (router still NATs) |
+| **Orbi / AP management** | Web admin `http://<orbi-ip>`; Netgear app works via cloud once the AP has internet | Netgear app works (router still NATs) |
 | **Recovery if it goes wrong** | `--rollback`, or disable DMZ → double-NAT | Already here |
 
 <Aside type="tip">
