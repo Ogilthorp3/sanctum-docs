@@ -8,9 +8,11 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 ![Firewalla pairing — a brass router on an oak desk wired to a metal vault with three combination dials; a teal handshake at the contact point because handshakes are the only honest way to exchange a secret.](./images/hero-firewalla-pairing.png)
 
-Sanctum drives MAC-level enforcement through the **node-firewalla SDK**, not the MSP REST API. The bridge running on your Mac talks to your Firewalla over the SDK's encrypted P2P protocol. The MSP HTTP API is the loud, well-documented front door — and it lies about which devices it knows. We use the side door, which tells the truth.
+It's 21:31. Curfew dropped eleven minutes ago, your dashboard swears the kid's iPad is BLOCKED in cheerful green — and yet there's lowkey TikTok audio leaking under the bedroom door. The dashboard isn't lying, exactly. It just asked the wrong oracle.
 
-You need to do three things: mint a token, drop in the FWGroup credentials, and restart the bridge.
+Here's the thing: the Firewalla MSP HTTP API is the loud, well-documented front door, and it straight up lies about which devices it actually knows. So Sanctum doesn't use it. We drive MAC-level enforcement through the **node-firewalla SDK** instead — the bridge running on your Mac talks to your Firewalla over the SDK's encrypted P2P protocol. The side door. The one that tells the truth, no cap.
+
+You need to do three things: mint a token, drop in the FWGroup credentials, and restart the bridge. Let's go.
 
 ## Pair
 
@@ -53,7 +55,7 @@ You need to do three things: mint a token, drop in the FWGroup credentials, and 
    launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog
    ```
 
-   The live service is the gui-domain watchdog `com.sanctum.firewalla-bridge-watchdog`, which runs as your login user — no `sudo`, and the `gui/$(id -u)/` domain is the one that finds it. The original one-shot `com.sanctum.firewalla` system plist is retired; kickstarting it will tell you it can't find the service.
+   The live service is the gui-domain watchdog `com.sanctum.firewalla-bridge-watchdog`, which runs as your login user — no `sudo`, and the `gui/$(id -u)/` domain is the one that finds it.
 
 5. **Verify.**
 
@@ -63,7 +65,7 @@ You need to do three things: mint a token, drop in the FWGroup credentials, and 
    curl -s -H "Authorization: Bearer $TOKEN" http://127.0.0.1:1984/hosts | jq '.hosts | length'
    ```
 
-   `/health` returns `200` to anyone and tells you whether the SDK linked up. `/hosts` is the real test: it demands the bearer token and returns the actual device roster from your Firewalla. A non-zero host count means both halves are honest — the token is accepted *and* the SDK is talking. The bridge being up while the SDK is mute is the worst-case silent-success Sanctum has historically shipped, and `/hosts` is the one call that catches it.
+   `/health` returns `200` to anyone and tells you whether the SDK linked up. `/hosts` is the real test: it demands the bearer token and returns the actual device roster from your Firewalla. A non-zero host count means both halves are honest — the token is accepted *and* the SDK is talking. A bridge that's up while the SDK is mute is the worst-case silent failure — green light, zero enforcement — and `/hosts` is the one call that catches it.
 
 </Steps>
 
@@ -73,7 +75,7 @@ You need to do three things: mint a token, drop in the FWGroup credentials, and 
 
 - **Bridge log shows `[error] GET /hosts: ECONNRESET`** — the FWGroup credentials in `~/.openclaw/firewalla/keys/` are stale, or two bridge processes are racing for the same Firewalla. Confirm only one is running: `pgrep -fl firewalla-bridge.js`. If two, `launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla-bridge-watchdog` and let launchd settle the contest.
 
-- **You see `periodic check (60s without successful op)` in the log** — this is the bridge's *rediscovery checker*, not a host-query failure signal. It fires when 60s pass with no successful contact and quietly re-runs mDNS to recover a re-IP'd box. Discovery runs separately from your actual `/hosts` calls and complains about its own clock, not yours. Look for real `[error]` lines instead. See [the May 12 fortnight-in-one-night operations note](/operations/2026-05-12-the-fortnight-in-one-night/) for the full story: the actual May 3 culprit was a Lima port collision, not the bridge, and this message was a red herring we deliberately kept loud.
+- **You see `periodic check (60s without successful op)` in the log** — this is the bridge's *rediscovery checker*, not a host-query failure signal. It fires when 60s pass with no successful contact and quietly re-runs mDNS to recover a re-IP'd box. Discovery runs separately from your actual `/hosts` calls and complains about its own clock, not yours. It's a red herring we deliberately kept loud — ignore it and hunt for real `[error]` lines instead.
 
 <Aside type="caution">
   The Firewalla MSP REST API — a cloud HTTPS endpoint, reached over your account, not port 8833 — is *not* what Sanctum uses for enforcement. Port 8833 is the local P2P/SDK port the bridge actually speaks over. Probes that pass on the MSP side and fail on the SDK side are not a contradiction — they are two different protocols looking at two different views of your network. Trust the SDK probe. The MSP probe exists for diagnostics.
