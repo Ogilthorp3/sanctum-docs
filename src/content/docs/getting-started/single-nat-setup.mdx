@@ -1,0 +1,106 @@
+---
+title: "Single-NAT: modem → Firewalla → Wi-Fi, seamlessly"
+description: One command flips your haus from double-NAT to a single armored NAT seam — the Firewalla holds the public IP, the /32 armor strips Bell's poison route, and your Orbi drops to AP mode behind it.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![Single-NAT — a pencil sketch of one unbroken teal ribbon of light crossing a dark desk through a modem, a glowing firewall vault, a single stone archway, and a bloom of Wi-Fi ripples, with tiny shears clipping a thorny branch off the cable.](./images/hero-single-nat-setup.png)
+
+"Seamlessly" is the right word for once, because the whole point is that there is exactly **one** seam. Today your traffic is translated twice — once by your ISP's hub, once by your own router — which is two seams pretending to be a network. Single-NAT collapses that to one: your Firewalla holds the public address, your hub becomes a dumb bridge, and everything downstream answers to a single policy point.
+
+## What single-NAT is, and what it actually buys you
+
+A NAT is the seam where your private LAN gets translated to a public address. Run two of them — ISP hub *and* your router — and you have **double-NAT**: two translation tables, two firewalls, two devices that each think they own the edge. Inbound rules have to be punched through both. Your IPS sees a private address where the real client should be. Port-forwards chain awkwardly or break.
+
+**Single-NAT** puts your router on the public IP directly. One translation table, one firewall, one place to forward a port, one honest view of who's connecting.
+
+<Aside type="caution" title="It is not a speed upgrade — we measured">
+The internet will tell you double-NAT "caps your throughput." On modern gear it does **not**: NAT topology changes throughput by *zero*. We chased that myth on an 8-gig Bell line and it cost us an evening — the full autopsy is in [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/). Do this for clean inbound rules, public-IP ownership, and a single policy seam. Do **not** do it expecting a faster `speedtest`.
+</Aside>
+
+## Before you flip
+
+| You need | Why |
+|---|---|
+| An **Advanced-DMZ-capable hub** (Bell / Sagemcom) | Single-NAT needs the hub to hand its one public lease to *your* router instead of keeping it |
+| A **router-mode Firewalla** (Gold Pro field-proven) | The device that takes the public IP and becomes the single NAT |
+| An **out-of-band path to the Firewalla** | The recovery gate. If the LAN collapses mid-flip, this is how you drive the rollback |
+
+The out-of-band path is non-negotiable, and it has a trap: it must **not ride the LAN it is about to take down.** A Tailscale node sitting on the `10.x` LAN dies *with* that LAN — it looks like a safety net and isn't. Run the cutover from the hub's own Wi-Fi, a cellular hotspot, or a node whose path is DERP-relayed over the WAN. The preflight gate checks for this; let it.
+
+## The one-command flip
+
+`sanctum net single-nat` is dry-run by default — bare, it prints the staged plan and writes nothing to any device. `--apply` is what actually fires, and it is **attended-only**: there is no cron path, by design. Whole-haus WAN surgery is structurally a thing you watch happen.
+
+<Steps>
+
+1. **Read the plan.**
+
+   ```bash
+   sanctum net single-nat
+   ```
+
+   Seven staged steps, each rollback-safe. Read them. The worst case at any stage is plain double-NAT — online, just not yet armored.
+
+2. **Move your operator host off the LAN**, confirm the out-of-band path, then fire.
+
+   ```bash
+   sanctum net single-nat --apply
+   ```
+
+   It snapshots the hub baseline, then stops at the one human gate: it confirms the Firewalla is reachable out-of-band *before* touching the WAN, and **aborts cleanly** if it isn't. From there it drives every stage — WAN to DHCP, enable Advanced DMZ, reboot the hub to re-key the lease, renew the Firewalla, install the armor, verify — and on any failed verify it **auto-rolls-back** to double-NAT and tells you why.
+
+3. **Reverse it any time.**
+
+   ```bash
+   sanctum net single-nat --rollback
+   ```
+
+   Disables the DMZ, removes the hook, re-leases DHCP, and lands you back on verified-online double-NAT in one command.
+
+</Steps>
+
+## The /32 armor and the poison-sentinel
+
+Bell's Advanced DMZ has a nasty habit: along with your public lease it hands out a **`0.0.0.0/1` poison route** — a single-bit netmask (`128.0.0.0`) wide enough to put a `76.x` public IP and a `10.x` carrier gateway on one wire. The side effect is brutal: that `/1` swallows your entire `10.x` LAN, the Firewalla decides every LAN address is a WAN neighbour, and routing quietly dies. The whole forensic is in [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/).
+
+The **`/32` armor** is the fix the flip installs for you. It pins the WAN to a host route (`/32`) and **strips the poison `0.0.0.0/1`** from both the main routing table *and* every per-WAN policy table — because Bell plants it in both, and cleaning only `main` leaves the policy-table copy to re-break you. It also sets the WAN MTU to 1492 and clamps the MSS, closing the black-hole where ping passes and HTTPS doesn't.
+
+The catch is that Bell re-hands the poison route on **every WAN lease renewal**. So the armor isn't a one-shot — it ships with a **systemd poison-sentinel** baked into the Firewalla's boot hook that re-runs the strip on every renewal. The route comes back; the sentinel takes it off again, forever, without you.
+
+## The downstream router: Orbi in AP mode
+
+For the Firewalla to be the *single* NAT, everything behind it must stop doing NAT. Put your Orbi (or any AP) in **AP / bridge mode** so it bridges Wi-Fi onto the Firewalla's LAN instead of translating a second time.
+
+<Aside type="caution" title="AP mode disables the Netgear app — this is by design">
+An Orbi in AP mode shuts off its SOAP control service on port `5000`, and **the Netgear / Orbi app talks to the router over exactly that service.** So the app goes dark: it can't find the router, shows it offline, or refuses to manage it. Nothing is broken. Manage the Orbi from its **web admin** at `http://<orbi-ip>` instead — the full settings surface lives there, app or no app.
+</Aside>
+
+One more new-user step that saves a confusing afternoon: set the Orbi's **management IP to DHCP**, then give it a **reservation on the Firewalla**. DHCP means the AP actually receives a gateway and DNS, so it can still reach the internet for cloud login and firmware updates; the reservation means it always lands on the same address, so `http://<orbi-ip>` is a bookmark and not a scavenger hunt. A static IP with no gateway is the classic trap here — the AP works for Wi-Fi but can never update itself.
+
+## Verify, and how to back out
+
+```bash
+sanctum net check        # NAT topology: should now read "single"
+sanctum net speedtest    # honest multi-stream throughput (NOT a NAT test)
+```
+
+`net check` is the read-only verdict — it should now say `single` with the Firewalla holding the public IP. `net speedtest` is there to *confirm you didn't lose anything*, not to prove you gained speed (you didn't — see the caution above). Run a real page load and a video stream too; small packets lie, large ones tell the truth.
+
+To go back: `sanctum net single-nat --rollback` is the clean path. The blunt-instrument equivalent is disabling Advanced DMZ in the hub's admin — the Firewalla loses its public lease, re-DHCPs to a private `192.168.2.x`, and you're on known-good double-NAT within a minute.
+
+## What to expect
+
+| | Single-NAT (Firewalla on public IP) | Double-NAT (hub + router) |
+|---|---|---|
+| **Inbound / port-forwarding** | One hop, one rule, clean | Punch through two devices |
+| **Public IP held by** | Your Firewalla | The ISP hub |
+| **Throughput** | Same — NAT count changes it by zero | Same |
+| **Bell poison `/1` route** | Stripped + self-healed every renewal | Not exposed (hub keeps the WAN) |
+| **Orbi / AP management** | Web admin `http://<orbi-ip>` (app off in AP mode) | Netgear app works (router still NATs) |
+| **Recovery if it goes wrong** | `--rollback`, or disable DMZ → double-NAT | Already here |
+
+<Aside type="tip">
+First run is the real cutover, and it's meant to be watched. Be at a machine that survives the LAN, keep the [Firewalla pairing](/getting-started/firewalla-pairing/) recovery path within reach, and let the gate stop you if the out-of-band path isn't honest. The armor is the net; the gate is the rope you check before you walk the wire.
+</Aside>
