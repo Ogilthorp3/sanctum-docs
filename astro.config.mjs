@@ -93,6 +93,8 @@ export default defineConfig({
 						{ label: 'Requirements', slug: 'getting-started/requirements' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run', slug: 'getting-started/first-run' },
+						{ label: 'Firewalla Pairing', slug: 'getting-started/firewalla-pairing' },
+						{ label: 'Single-NAT Setup', slug: 'getting-started/single-nat-setup' },
 						{ label: 'Pricing', slug: 'getting-started/pricing' },
 					],
 				},
@@ -143,6 +145,7 @@ export default defineConfig({
 						{ label: 'Screen Time', slug: 'architecture/screen-time' },
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
 						{ label: 'R2D2 — Auto-Fix Supervisor', slug: 'architecture/r2d2' },
+						{ label: 'The Resilience Doctrine', slug: 'architecture/resilience-doctrine' },
 					],
 				},
 				{
@@ -226,8 +229,6 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-								{ label: '2026-06-21 — ACL as Code', slug: 'operations/2026-06-21-acl-as-code' },
-								{ label: '2026-06-20 — The Post-Quantum Vault', slug: 'operations/2026-06-20-the-post-quantum-vault' },
 								{ label: '2026-06-19 — The Speed Test That Cried Slow', slug: 'operations/2026-06-19-the-speed-test-that-cried-slow' },
 								{ label: '2026-06-15 — The Slash-One That Ate the LAN', slug: 'operations/2026-06-15-the-slash-one-that-ate-the-lan' },
 								{ label: '2026-04-28 — The Clean Stage', slug: 'operations/2026-04-28-the-clean-stage' },
