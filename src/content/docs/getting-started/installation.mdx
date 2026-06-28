@@ -7,13 +7,13 @@ import { Steps, Aside, Tabs, TabItem, Code } from '@astrojs/starlight/components
 
 ![Tommy supervises the Mac Mini setup — quality assurance by feline](./images/tommy-mac-mini.png)
 
-Tommy has sat on every Mac Mini that ever ran Sanctum and rejected exactly none of them. Low bar, but he's never been wrong.
+The Mac Mini's been out of the box maybe four minutes and Tommy's already curled on top of it like he co-signed the lease. (He's vetted every Mini that ever ran Sanctum and rejected exactly none — low bar, but the cat's never wrong.) Terminal's open, cursor blinking, and you're about to hand this little aluminum puck the keys to the whole haus: the lights, the photos, the AI that's been quietly couriering your group chats off to some data center in Virginia. Here's what nobody tells you on setup day — a backup you've never restored is a rumour, and most "smart haus" setups run entirely on rumours. This page is the one that makes sure yours doesn't.
 
-This is the detailed install reference. Want the friendly 4-step version? Start with [Quick Start](./quick-start/) — same canonical flow, terser. This page goes deeper: troubleshooting, a verification protocol, and an operator-grade appendix for running from source.
+Want the friendly 4-step version? Start with [Quick Start](./quick-start/) — same canonical flow, terser. This page goes deeper: troubleshooting, a verification protocol, and an operator-grade appendix for running from source.
 
 ## The canonical install path
 
-Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sanctum`. The tap installs the `sanctum-cli` Python application, which orchestrates everything else — AI provider setup, network-gear pairing, cloud backup, first backup, and a restore canary.
+Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sanctum`. The tap installs the `sanctum-cli` Python application, which orchestrates everything else — AI setup, network pairing, cloud backup, and a restore canary.
 
 <Steps>
 
@@ -23,10 +23,10 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
    ```
 
-   Homebrew installs into `/opt/homebrew/` and asks for your administrator password once. That prompt is from Apple's installer, not Homebrew — it needs to create directories under `/opt/`. When it finishes, `brew --version` should print something like `Homebrew 5.x.x`.
+   Homebrew installs into `/opt/homebrew/` and asks once for your administrator password (that prompt is Apple's installer, not Homebrew — it just needs to create directories under `/opt/`). When it finishes, `brew --version` should print something like `Homebrew 5.x.x`.
 
    <Aside type="tip">
-   On a brand-new Mac, the first `brew install` may also prompt you to install Apple's Command Line Tools. Let it — that's a one-time macOS thing, routed through System Settings → Software Update if your Mac doesn't have them yet.
+   On a brand-new Mac, the first `brew install` may also offer to install Apple's Command Line Tools. Let it — that's a one-time macOS thing.
    </Aside>
 
 2. **Install `sanctum-cli` via the Homebrew tap.**
@@ -35,7 +35,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    brew install ogilthorp3/sanctum/sanctum-cli
    ```
 
-   This installs Python 3.12 and `restic` if you don't already have them (`restic` is the backup engine, now a hard dependency), creates a private virtual environment under Homebrew's `libexec`, pulls `sanctum-cli` v0.10.2 plus its runtime Python dependencies (about 40) from PyPI, and symlinks the `sanctum` command into `/opt/homebrew/bin/sanctum`. One dependency (`jiter`) builds from source so Homebrew can relocate it cleanly, which is why the formula also pulls a Rust toolchain at build time.
+   This installs Python 3.12 and `restic` if you don't already have them (`restic` is the backup engine), creates a private virtual environment under Homebrew's `libexec`, pulls `sanctum-cli` v0.10.2 plus its runtime Python dependencies (about 40) from PyPI, and symlinks the `sanctum` command into `/opt/homebrew/bin/sanctum`.
 
    Confirm:
 
@@ -43,7 +43,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum --help
    ```
 
-   You should see a help screen. The eight commands a new operator actually meets are `status`, `doctor`, `onboard`, `backup`, `cloud`, `chat`, `agent`, and `config`. The full surface is wider (`self-test`, `update`, `logs`, `devices`, `keys`, `proxy`, `bridge`, `screen-time`, `net`…); ignore the operator commands until you need them. `--help` is the authoritative list.
+   You should see a help screen. The eight commands a new operator actually meets are `status`, `doctor`, `onboard`, `backup`, `cloud`, `chat`, `agent`, and `config`; the rest are operator commands you can ignore until you need them. `--help` is the authoritative list.
 
 3. **Run the one-shot onboarding flow.**
 
@@ -51,13 +51,13 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum onboard --recipe family
    ```
 
-   Onboarding is a guided arc with named chapters — **Welcome → Your AI → Your Network → Your Data → You're Alive** — a step counter, and a green check at each step that only lights when something was genuinely configured or verified. It ends on a recap card.
+   Onboarding is a guided arc with named chapters — **Welcome → Your AI → Your Network → Your Data → You're Alive** — a step counter, and a green check at each step that only lights when something was genuinely configured or verified, plus a recap card at the end.
 
-   - **Your AI** connects **Claude** (a Max or Pro subscription used free through the local proxy — the default — or an Anthropic API key) and **Gemini** (a Google AI key). Credentials go to the macOS Keychain, mirrored to the trifecta when the full haus is present. Skippable; the local `mlx_local` seat is always the offline fallback.
+   - **Your AI** connects **Claude** (a Max or Pro subscription used free through the local proxy — the default — or an Anthropic API key) and **Gemini** (a Google AI key). Credentials go to the macOS Keychain. Skippable; the local `mlx_local` seat is always the offline fallback.
    - **Your Network** auto-detects your Bell hub, Firewalla, and Orbi and walks guided pairing. Fail-closed: a wrong password pairs nothing rather than half-pairing. Skippable too.
-   - **Your Data** is what the `family` recipe was built for: a curated ~5 GB backup set, a pre-flight size check against R2's free tier, the backup itself, and a round-trip restore of `~/.zshrc` as a canary. A backup you've never restored is a rumour.
+   - **Your Data** is what the `family` recipe was built for: a curated ~5 GB backup set, a pre-flight size check against R2's free tier, the backup itself, and a round-trip restore of `~/.zshrc` as a canary. That round-trip is the whole point — it's what turns the rumour from the top of this page into a backup you can trust.
 
-   When it finishes, you'll see a green panel: **"Your Sanctum is alive, &lt;your name&gt;."** Manage gear afterward with `sanctum net hub|firewalla|orbi`, and talk to your AI with `sanctum chat`.
+   When it finishes, you'll see a green panel: **"Your Sanctum is alive, &lt;your name&gt;."** Afterward, manage gear with `sanctum net hub|firewalla|orbi` and talk to your AI with `sanctum chat`.
 
    <Aside type="note">
    Other available recipes:
@@ -73,7 +73,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
    sanctum doctor        # full diagnostic
    ```
 
-   `status` should print a single line ending in green text. `doctor` runs deeper checks: the `com.sanctum.*` LaunchAgents, the AI providers it routes to (Claude, Gemini, the local MLX seat), and the restic backup repos — reading the backup key out of Keychain to run a real `restic check` on each. One OK line when healthy, `--full` for every row. Everything green is the goal.
+   `status` should print a single line ending in green text. `doctor` runs deeper checks: the `com.sanctum.*` LaunchAgents, the AI providers it routes to (Claude, Gemini, the local MLX seat), and the restic backup repos — running a real `restic check` on each. One OK line when healthy, `--full` for every row. Everything green is the goal.
 
 </Steps>
 
@@ -89,7 +89,7 @@ Sanctum's public install path is **the Homebrew tap** at `Ogilthorp3/homebrew-sa
 | Audit log of every action | `~/.sanctum/logs/` with bounded rotation | Rolls at 10 MB per file |
 | Credentials in macOS Keychain | `security find-generic-password -a sanctum-backup -s sanctum-backup-key` | Until you rotate them |
 
-No phone-home. Nothing leaves your Mac unless you explicitly configured a cloud backup target — encrypted with a key only you control.
+No phone-home. Nothing leaves your Mac unless you configured a cloud backup target — encrypted with a key only you control.
 
 ## When something goes sideways
 
@@ -112,13 +112,13 @@ If the install dialog doesn't appear, check System Settings → Software Update;
 
 ### "Cloudflare R2 setup failed"
 
-The R2 wizard opens browser tabs for the steps that need your input (account creation, API token, bucket creation). If a tab didn't open or you cancelled partway, re-run it:
+The R2 wizard opens browser tabs for the steps that need your input — account, API token, bucket. If a tab didn't open or you cancelled partway, re-run it:
 
 ```bash
 sanctum cloud setup --backend r2
 ```
 
-(The backend is an option, not a positional, so plain `sanctum cloud setup` already defaults to R2.) The wizard is idempotent — it picks up where you left off. If R2 is slow to provision, wait a few minutes and try `sanctum doctor` again.
+Plain `sanctum cloud setup` already defaults to R2. The wizard is idempotent — it picks up where you left off. If R2 is slow to provision, wait a few minutes and try `sanctum doctor` again.
 
 ### "Permission denied (publickey)"
 
@@ -126,17 +126,17 @@ This shows up if you ran `sanctum onboard` from a different Mac account, or with
 
 ### "The brew tap failed to clone"
 
-If `brew install ogilthorp3/sanctum/sanctum-cli` errors with Git LFS or a cloning failure, your global Git hooks may be blocking the clone. Check:
+If `brew install ogilthorp3/sanctum/sanctum-cli` fails to clone (Git LFS or a cloning error), your global Git hooks may be blocking it. Check:
 
 ```bash
 git config --global core.hookspath
 ```
 
-If that returns a custom path, the hooks in that directory need to soft-fail when their tools aren't found. See [`sanctum-runtime` post-checkout hook](https://github.com/Ogilthorp3/sanctum-runtime) for the canonical pattern.
+A custom path there means those hooks need to soft-fail when their tools aren't found — see [`sanctum-runtime` post-checkout hook](https://github.com/Ogilthorp3/sanctum-runtime) for the canonical pattern.
 
 ### "Permissions prompts every time I run `sanctum`"
 
-If you keep seeing macOS permission dialogs ("node would like to access X"), the canonical fix lives in [`runbooks/node-tcc-stop-the-prompts.md`](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md). Short version: grant Full Disk Access once to the pinned Homebrew node binary at `/opt/homebrew/Cellar/node/<version>/bin/node` (Cmd+Shift+G in the FDA pane to paste the path). FDA is a TCC superset — one grant silences every `SystemPolicy*` prompt for all nine sanctum node services. The catch: TCC keys the grant to the exact versioned path, so `brew upgrade node` orphans it; that's why node is on the brew pin list. (FDA does not cover Automation or Accessibility — separate one-time grants, both in the runbook.)
+If you keep seeing macOS permission dialogs ("node would like to access X"), the canonical fix lives in [`runbooks/node-tcc-stop-the-prompts.md`](https://github.com/Ogilthorp3/sanctum-runtime/blob/main/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md). Short version: grant Full Disk Access once to the pinned Homebrew node binary at `/opt/homebrew/Cellar/node/<version>/bin/node` (Cmd+Shift+G in the FDA pane to paste the path). FDA is a TCC superset, so that single grant silences every `SystemPolicy*` prompt across the sanctum node services. (It does not cover Automation or Accessibility — separate one-time grants, both in the runbook.)
 
 ## What's next
 
@@ -144,10 +144,10 @@ If everything looks green:
 
 - [First Run](./first-run/) — the verification checklist (same sanity-check the daily LaunchAgent runs, on demand)
 - [What Is Sanctum?](./what-is-sanctum/) — context on the why
-- The architecture pages, for how it works under the hood
-- [Family Pass installation](./installation-family-pass/) for sharing the haus (v1.0 in active implementation; the operator path works today)
+- The architecture pages, for how it works underneath
+- [Family Pass installation](./installation-family-pass/) for sharing the haus (the operator path works today)
 
-If something is failing: run `sanctum doctor` and read it carefully, check the audit log at `~/.sanctum/logs/` for the failing service, see [Troubleshooting](./troubleshooting/) for copy-pastable fixes, or open an issue on the relevant GitHub repo.
+If something is failing: run `sanctum doctor` and read it carefully, check the audit log at `~/.sanctum/logs/` for the failing service, see [Troubleshooting](./troubleshooting/), or open an issue on the relevant GitHub repo.
 
 ---
 
@@ -156,10 +156,10 @@ If something is failing: run `sanctum doctor` and read it carefully, check the a
 Running Sanctum from the source tree rather than the published binary uses a separate flow that installs the full audit-wall toolchain and the checked-in renderers.
 
 <Aside type="tip">
-You almost certainly do not want this if you're just trying Sanctum out. The brew path above is the whole beta-tester experience. This appendix is for people who plan to edit the renderer that writes its plumbing.
+You almost certainly do not want this if you're just trying Sanctum out — the brew path above is the whole beta-tester experience. This appendix is for people who plan to edit the renderer itself.
 </Aside>
 
-The legacy `sanctumctl` operator CLI is what older docs reference. Its consumers are mostly the daily audit-wall and the release gate (`tools/sanctum-release.sh`), not new users. If you're maintaining a fork or building from a tag:
+The legacy `sanctumctl` operator CLI drives the daily audit-wall and the release gate (`tools/sanctum-release.sh`), not new users. If you're maintaining a fork or building from a tag:
 
 ```bash
 # From inside the checked-in workspace
@@ -167,4 +167,4 @@ python3 tools/sanctumctl.py bootstrap --write   # writes the ~/.sanctum scaffold
 python3 tools/sanctumctl.py doctor              # runs the audited verification wall
 ```
 
-That creates the `~/.sanctum` scaffold, drops in the annotated `instance.yaml.example`, writes a node identity file, and runs the audited verification wall; `bootstrap` without `--write` previews first. The old by-hand version lives in git history — same schema, same layout, the renderer just stopped trusting you to type it correctly.
+That writes the `~/.sanctum` scaffold (annotated `instance.yaml.example` plus a node identity file) and runs the audited verification wall; `bootstrap` without `--write` previews first. The renderer just stopped trusting you to type it all by hand.
