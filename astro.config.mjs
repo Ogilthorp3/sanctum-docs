@@ -110,6 +110,7 @@ export default defineConfig({
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
 						{ label: 'Briefings', slug: 'architecture/briefings' },
 						{ label: 'The Endocrine System', slug: 'architecture/endocrine-system' },
+						{ label: 'The Chi', slug: 'architecture/chi' },
 							{ label: 'Sanctum Firewalla', slug: 'architecture/sanctum-firewalla' },
 						{ label: 'Council Router', slug: 'architecture/council-router' },
 						{ label: 'Agents Architecture', slug: 'architecture/agents' },
