@@ -96,6 +96,7 @@ export default defineConfig({
 						{ label: 'The First Hello', slug: 'getting-started/the-first-hello' },
 						{ label: 'Firewalla Pairing', slug: 'getting-started/firewalla-pairing' },
 						{ label: 'Single-NAT Setup', slug: 'getting-started/single-nat-setup' },
+						{ label: 'HA Green Setup', slug: 'getting-started/ha-green-setup' },
 						{ label: 'Pricing', slug: 'getting-started/pricing' },
 					],
 				},
