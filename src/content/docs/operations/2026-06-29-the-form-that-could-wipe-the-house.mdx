@@ -1,0 +1,96 @@
+---
+title: "2026-06-29: The Form That Could Wipe the House"
+description: "Automating the mesh router's Wi-Fi meant POSTing to a 2014-era form that carries every WPA passphrase in the house — one wrong field and the whole network goes open or dark. So we built 21 locks, a snapshot, and an auto-rollback around it. Then the end-to-end test caught the bug none of the unit tests could: in AP mode the status page has no Internet field, and the safety check was about to undo every good write it ever made."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The ask was simple, the way the dangerous ones always are: *make the router
+configure its own Wi-Fi.* Rename an SSID, rotate a passphrase, all of it from
+code, the apple way — guided, verified, invisible. The catch is that the only
+door into the mesh router's wireless settings is a single 2014-era CGI form, and
+that form carries **every WPA passphrase in the house** in its body. Submit it
+with one field wrong — a blanked key, a security mode that quietly downgrades —
+and the whole household Wi-Fi goes open, or every device drops at once. The blast
+radius is the entire house.
+
+So the rule wrote itself: **never POST that form blind.**
+
+## The make-or-break question
+
+Before any of the safety scaffolding, one question decided whether a safe write
+was even *possible*: when the form submits, is the passphrase sent as you typed
+it, or is it hashed first? If the page MD5s the key before POSTing, then reading
+the current value and writing it back would double-process it — and lock the
+whole house out on the next reconnect.
+
+The form loads `md5.js`. Promising, ominous. We read it anyway. The one and only
+call site for `calcMD5()` turned out to feed the legacy WEP key generator — dead
+code on a device that blocks WEP entirely. Every WPA field is sent **raw**. A
+read-modify-write that copies the current value back through, untouched, is safe.
+
+That single fact is what made the rest buildable.
+
+## Twenty-one locks
+
+The write path never just writes. It:
+
+1. **Snapshots** the full current form — every field, all seven passphrases — to
+   a `0600` file, and refuses to trust that snapshot as a rollback source if any
+   key reads blank or masked.
+2. **Dry-runs** by default: it computes the exact old→new diff (passphrases shown
+   only as length + hash, never plaintext) and POSTs *nothing* unless you pass
+   `--apply`.
+3. Runs **21 pre-flight guards** before the POST — every passphrase present and
+   strong, no security mode outside its allow-list, no band silently disabled, no
+   field changed except the one you asked for, the body round-tripped to prove no
+   stray key was injected.
+4. POSTs, then **verifies** by re-reading the form and diffing every
+   security-critical field against the snapshot.
+5. **Auto-rolls-back** to the last-known-good snapshot on any mismatch — and
+   classifies a dropped connection mid-write as *indeterminate*, never as a wipe,
+   so a lost socket can never trigger a "restore" that is itself the wipe.
+
+Two rounds of adversarial review and a five-seat council pass later, it had a
+clean bill of health. The unit suite was green. It looked done.
+
+## The status field that wasn't there
+
+It was not done. The end-to-end test — a real passphrase-band rename on the live
+router, then a revert — is where the unit tests' shared blind spot surfaced.
+
+The verify step, after confirming every field applied correctly, did one last
+check: re-read the status page and confirm the Internet is still up. Sensible on
+a gateway. But this router runs as an **access point**, not the gateway — and in
+AP mode its status page has **no `InternetConnectionStatus` field at all**. The
+check read "absent" as "down," declared a perfectly good write a failure, and was
+about to auto-roll-back *every successful change it would ever make.*
+
+Every unit test missed it for the most ordinary reason in the book: the fake
+device in the test harness *served* the field, because the person who wrote the
+test and the person who wrote the code shared the same wrong mental model of the
+page. A test cannot catch a bug it shares. Only the real boundary could.
+
+<Aside type="caution" title="The doctrine, earned again">
+Structural unit tests pass when the test and the code agree — even when they
+agree on something false. "End-to-end tested" has to mean a real artifact crossed
+every real boundary: a real POST to the real router, verified against the real
+status page. Anything less is wishful coverage.
+</Aside>
+
+The fix is small and the lesson is not: an *absent* status field is now treated
+as **skip**, not failure — the field read-back already proved the config applied,
+and an access point is allowed to not know about a WAN it doesn't own. Only a
+status that is present *and* not "up" counts as a real outage.
+
+## How it ended
+
+With the fix in, the live end-to-end ran clean: rename the IoT SSID, verify OK,
+roll it back, verify OK — two real writes through the deployed service, net zero
+change to the house, snapshot advancing each time. The form that could wipe the
+house now changes exactly one thing at a time, proves it, and puts itself back if
+it's wrong.
+
+The dangerous door still exists. It just has twenty-one locks, a memory, and a
+hand on the undo lever — and a test that finally stands where the danger actually
+is.
