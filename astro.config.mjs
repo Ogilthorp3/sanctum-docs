@@ -93,6 +93,7 @@ export default defineConfig({
 						{ label: 'Requirements', slug: 'getting-started/requirements' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run', slug: 'getting-started/first-run' },
+						{ label: 'The First Hello', slug: 'getting-started/the-first-hello' },
 						{ label: 'Firewalla Pairing', slug: 'getting-started/firewalla-pairing' },
 						{ label: 'Single-NAT Setup', slug: 'getting-started/single-nat-setup' },
 						{ label: 'Pricing', slug: 'getting-started/pricing' },
