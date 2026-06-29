@@ -1,0 +1,72 @@
+---
+title: HA Green Setup
+description: "Connect the Home Assistant Green — the haus's home-automation hands for lights, climate, Sonos, and screen-time. A sealed appliance, token-only, with tailnet-private remote access."
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background: a small green home-automation appliance glowing on a shelf, faint lines reaching out to a lamp, a thermostat, and a speaker, a wise cat keeping watch from the corner, one warm amber accent on the appliance's status light](./images/hero-ha-green-setup.png)
+
+Sanctum is the brain. The **Home Assistant Green** is the hands. It is the little appliance that actually flips your lights, nudges the thermostat, fires a Sonos announcement when curfew lands, and gives screen-time enforcement somewhere to bite. Sanctum decides; the Green does.
+
+It is a dedicated, sealed HAOS appliance — not a Raspberry Pi science project, not a Docker container you babysit. On 2026-06-28 it took over from the old Docker-on-Mini Home Assistant for exactly that reason: a control plane this load-bearing should not share a box with anything. Plug it in, and it just runs.
+
+## What you're connecting
+
+The Green appears on your haus network at `homeassistant.local:8123` — or its LAN address, the canonical haus default being `10.0.0.249`. It is deliberately locked down, and that is a feature:
+
+- No host SSH, no Samba. The front door is closed.
+- Sanctum talks to it with an **owner token**, not a password, kept at `~/.sanctum/secrets/ha-token`.
+- The heavy operations (add-ons, backups) ride a WebSocket, and the admin pages open through a browser with that same token — the sealed-appliance way in.
+
+You never have to know any of that. Sanctum's `ha-green-toolkit` already does. It is also why the Green is hard to break: there is almost no surface to break.
+
+## Get it on the haus
+
+<Steps>
+
+1. **Plug it into the Orbi network.** Power and ethernet into the mesh. It boots HAOS and grabs an address — give it a couple of minutes on first boot.
+
+2. **Open it once.** Browse to `http://homeassistant.local:8123` and finish the Home Assistant owner setup: your account, your location, your name.
+
+3. **Mint the owner token.** In Home Assistant, go to your profile, then Security, then Long-Lived Access Tokens, and create one. Drop it at `~/.sanctum/secrets/ha-token` (mode 600). That single token is the key Sanctum uses for everything.
+
+4. **Confirm Sanctum sees it.** `hag-status.sh` gives you the whole Green at a glance — health, add-ons, remote-access state, green-or-red.
+
+</Steps>
+
+<Aside type="tip">
+The Green has no SSH and rejects long-lived tokens on its REST Supervisor proxy, so if you ever poke at it by hand, reach for the toolkit (`hag-*`), not raw curl. It already knows the WebSocket path the appliance actually accepts.
+</Aside>
+
+## Reach it from away — privately
+
+You want the lights from the cabin, not a port forward aimed at the whole internet. The Green joins your **tailnet** through the Tailscale add-on running in `serve` mode: tailnet-only HTTPS, a real certificate, zero public exposure. The Jedi council picked Tailscale over a public tunnel four-to-one for precisely that reason.
+
+```bash
+# one-time, from the Mini
+hag-remote.sh setup
+```
+
+It prints a `login.tailscale.com` URL. **You** authorize it with your own MFA-protected Tailscale account — that interactive login is the security root, and it is the one step nobody can do for you. After that, Home Assistant lives at `https://homeassistant.<your-tailnet>.ts.net`, reachable from any device on your tailnet and absolutely nothing else.
+
+A Mini subnet-route to `10.0.0.249/32` is the recovery path if the add-on ever wedges. It takes a one-time console route-approval, then it is your back door in.
+
+## Day to day
+
+You mostly never touch it — that is the whole point. When you do, the toolkit is the systematic way in, the same one Sanctum uses:
+
+| Command | What it does |
+|---|---|
+| `hag-status.sh` | Health and remote-access at a glance |
+| `hag-remote.sh status` | Is the tailnet path up? |
+| `hag-addon.sh list` | Add-ons, over the WebSocket Supervisor |
+| `hag-backup.sh create` | Snapshot before you change anything |
+
+The Green is the one piece of haus hardware that is allowed to be boring. Sanctum keeps the lights on; the Green is where "the lights" actually live.
+
+## Related
+
+- [Firewalla Pairing](/getting-started/firewalla-pairing/) — the network appliance you paired just before this one
+- [Single-NAT Setup](/getting-started/single-nat-setup/) — the network topology the Green sits inside
+- [First Run](/getting-started/first-run/) — verifying the Sanctum install the Green plugs into
