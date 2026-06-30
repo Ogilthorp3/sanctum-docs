@@ -1,0 +1,47 @@
+---
+title: How Hard to Think
+description: The council allocates a thinking budget per question — fast when it can, deep when it must, measured from data not vibes.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background: a robed figure at a desk turning a single dial between a sprinting hare and a deep-reading owl, three question-cards fanned out in front, one warm amber glow on the dial, a small cat curled at the desk's edge](./images/how-hard-to-think.png)
+
+# How Hard to Think
+
+**Date:** 2026-06-29
+**Status:** Stage 0 — envelope measured, allocator built and dev-proven, per-request thinking control landing in the cathedral
+
+[The Smart Router](./dynamic-model-routing) answers one question: *which brain* gets this request. There is a second question hiding behind every one of them, and for a long time the council never asked it: *how hard should that brain think?*
+
+It matters in both directions. Make a 35B model grind through a chain-of-thought to answer "what is the capital of France" and you have paid latency for nothing. Ask it to settle a multi-step proof in one impatient breath and you get an answer that is fast, confident, and wrong. Same model, same weights — the difference is entirely in the knobs.
+
+## A budget per question
+
+So the council allocates a *thinking budget* the way the router allocates a backend: cheapest match first, escalate only when the question earns it. A trivial lookup answers directly — the fast path, where most haus traffic lives. A design tradeoff or a proof opens the model's `<think>` block so it reasons before it speaks. Code gets greedy sampling, because one wrong-sampled token does not make a program slightly worse — it makes it not compile.
+
+| Question looks like | Thinking | Temperature | Ensemble |
+|---|---|---|---|
+| Trivial lookup ("capital of…") | off — direct answer | 0.5 | 1 |
+| Normal request | off — direct answer | 0.5 | 1 |
+| Insight / proof / design tradeoff | on — ~2048-token budget | 0.5 | 1 |
+| Code | off — direct, greedy | 0.0 | 1 |
+| High-stakes, offline | on — max budget | 0.5 | vote (k=3) |
+
+## Measured, not vibed
+
+The numbers are not guesses. A parameter sweep of the local council found it thinks best *calm*, not hot: cold (~0.5) wins, heat destroys exact-answer reasoning, and insight needs roughly a 2048-token budget — at 512, a multi-step puzzle truncates mid-thought and hands you the setup with no punchline. Code cliffs hardest of all: above temperature 0, one unlucky token breaks the whole program, so code samples greedily.
+
+## The twist that makes it smart
+
+Plenty of systems adapt their effort. What makes the haus council's allocation *smart* rather than merely adaptive is one dimension a cloud router never has to think about: *is there anyone else to ask right now?*
+
+Offline, the local council is the last line of defense, so it spends the most — maximum thinking, an ensemble vote when it is unsure, the works. Online and clearly out of its depth, it does the opposite: it defers to Opus instead of burning compute losing a fight it was going to lose. A cloud model never has to know whether it is the last resort. The council always does, and it spends accordingly.
+
+## One knob, two speeds
+
+Mechanically this is a single per-request flag on the cathedral. A thinking-mode model is primed with one of two openers: an empty `<think></think>` block, which Qwen3 reads as "no chain-of-thought today, answer now," or an open `<think>`, which it fills before answering. Fast path versus deep path, one weight set, chosen per question by a difficulty read of the prompt — cheap keyword-and-length classification today, a draft-model difficulty oracle later.
+
+<Aside type="note">
+This is Stage 0 of the dynamic-allocation design: the measured envelope and the allocator are live and proven on the dev box; the per-request thinking control is rolling through the cathedral. The point was never a bigger brain — on a memory-pinned box you cannot buy one. The point is a better *allocator*: spend thinking-tokens where difficulty pays, and spend the most exactly when there is no one else to ask.
+</Aside>

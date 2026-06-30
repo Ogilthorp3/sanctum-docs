@@ -120,6 +120,7 @@ export default defineConfig({
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Sanctum Cloud Proxy', slug: 'architecture/sanctum-cloud-proxy' },
 						{ label: 'Smart Router', slug: 'architecture/dynamic-model-routing' },
+						{ label: 'How Hard to Think', slug: 'architecture/how-hard-to-think' },
 						{ label: 'Smart Router Cathedral', slug: 'architecture/smart-router-cathedral' },
 						{ label: 'Hybrid Sidecar', slug: 'architecture/hybrid-sidecar' },
 						{ label: 'Sanctum MLX', slug: 'architecture/sanctum-mlx' },
