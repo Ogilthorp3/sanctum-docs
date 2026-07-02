@@ -41,7 +41,7 @@ When a request arrives, it falls through six layers of increasingly opinionated 
 
 
 
-Layer 1 is the velvet rope. `claude-opus-4-7` and `council-secure` are tier 0 -- they go where they're told, always. The proxy does not second-guess these requests. It does not optimize them. It delivers them with the quiet deference of a butler who knows better than to suggest a cheaper wine. Tier 0 gets the real thing. Tout sauf de l'ostie de root beer. If the agent asked for Opus, Opus is what the agent gets.
+Layer 1 is the velvet rope. `claude-opus-max` and `council-secure` are tier 0 -- they go where they're told, always. The proxy does not second-guess these requests. It does not optimize them. It delivers them with the quiet deference of a butler who knows better than to suggest a cheaper wine. Tier 0 gets the real thing. Tout sauf de l'ostie de root beer. If the agent asked for Opus, Opus is what the agent gets.
 
 Layer 6 is the bouncer. When an agent exhausts its daily token budget, every subsequent request gets rerouted to a local model running on Apple Silicon three feet away. The agent can still think. It just thinks smaller. Like being demoted from a corner office to a broom closet -- you can still have ideas, but the ambiance has changed.
 
@@ -113,14 +113,14 @@ host: 0.0.0.0
 port: 4040
 
 models:
-  - name: claude-opus-4-7
+  - name: claude-opus-max
     provider: local                 # via the Claude Max bridge on :3456
-    api_model: claude-opus-4-7
+    api_model: claude-opus-4        # unpinned alias — Max resolves it to the latest Opus (4.8 today)
     api_base: http://127.0.0.1:3456
     quality_tier: 0                  # never reroute
   - name: council-brain
     provider: local
-    api_model: claude-opus-4-7
+    api_model: claude-opus-4
     api_base: http://127.0.0.1:3456
   - name: council-code
     provider: local
@@ -143,7 +143,7 @@ budget:
 
 Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
 
-The important practical split is this: `council-brain` is Opus 4.7, served not from a metered Anthropic key but through the Claude Max bridge (`claude-max-proxy` on `:3456`) so the subscription does the paying. It's the default brain, but the router triages: code tasks drop to the local Codestral-22B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B (`council-mlx`) so nothing small-talk-shaped leaves the haus, and vision and security-domain work go to Gemini 3.1 Pro. `council-secure` -- which handles Cilghal and Mundi's domain-specific work -- is a Gemini 3.1 Pro seat pinned to `quality_tier: 0`, so it never gets rerouted out from under them. The current `council-brain` cross-provider fallback chain is GLM 5.1 then Qwen 3.6 Plus. The proxy does the triage. Every decision is visible in config and in the JSONL usage log (`~/.sanctum/metrics/token-usage.jsonl`) instead of buried in agent prompt folklore.
+The important practical split is this: `council-brain` is Claude Opus (Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today), served not from a metered Anthropic key but through the Claude Max bridge (`claude-max-proxy` on `:3456`) so the subscription does the paying. It's the default brain, but the router triages: code tasks drop to the local Codestral-22B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B (`council-mlx`) so nothing small-talk-shaped leaves the haus, and vision and security-domain work go to Gemini 3.1 Pro. `council-secure` -- which handles Cilghal and Mundi's domain-specific work -- is a Gemini 3.1 Pro seat pinned to `quality_tier: 0`, so it never gets rerouted out from under them. The current `council-brain` cross-provider fallback chain is GLM 5.1 then Qwen 3.6 Plus. The proxy does the triage. Every decision is visible in config and in the JSONL usage log (`~/.sanctum/metrics/token-usage.jsonl`) instead of buried in agent prompt folklore.
 
 ## Claude Code Startup Preflight
 
@@ -152,7 +152,7 @@ Claude Code is no longer treated as a polite client that will either have valid 
 The moving parts are:
 
 - Claude Code points `ANTHROPIC_BASE_URL` at `http://127.0.0.1:4040`
-- the proxy runs as the system LaunchDaemon `com.sanctum.proxyd`, launched through `~/.sanctum/bin/proxyd-launch` -- a wrapper that injects the Gemini and OpenRouter keys from `~/.sanctum/secrets/` and pointedly loads *no* Anthropic key (Opus 4.7 arrives via the Claude Max bridge on `:3456`, so the proxy never holds a metered Anthropic credential)
+- the proxy runs as the system LaunchDaemon `com.sanctum.proxyd`, launched through `~/.sanctum/bin/proxyd-launch` -- a wrapper that injects the Gemini and OpenRouter keys from `~/.sanctum/secrets/` and pointedly loads *no* Anthropic key (the latest Opus arrives via the Claude Max bridge on `:3456`, so the proxy never holds a metered Anthropic credential)
 - the local `claude` command is wrapped by `~/.local/bin/claude-wrapper`
 - that wrapper runs `tools/claude_session_preflight.sh` before executing the real Claude binary
 

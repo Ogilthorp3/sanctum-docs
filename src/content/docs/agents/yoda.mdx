@@ -51,7 +51,7 @@ Yoda is the only agent with explicit sub-agent orchestration. The other agents c
 | IP | 10.10.10.10 |
 | Gateway | `openclaw-gateway.service` (systemd user, linger=yes) |
 | Gateway port | Inherited from OpenClaw gateway |
-| Primary model | `sanctum/council-brain` (resolves to Claude Opus 4.7 with smart-routing) |
+| Primary model | `sanctum/council-brain` (resolves to Claude Opus — Max subscription, latest — with smart-routing) |
 | Model tier | council-brain — smart-routed by category |
 | Fallback chain | GLM 5.1 → Qwen 3.6 Plus |
 | Local fallbacks | `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) and `council-code` (`sanctum-mlx-codestral` serving Codestral-22B-v0.1-4bit on mTLS `:3301`) |
@@ -61,7 +61,7 @@ Yoda is the only agent with explicit sub-agent orchestration. The other agents c
 | Max concurrent tasks | 4 |
 
 <Aside type="caution">
-Yoda's primary model is `sanctum/council-brain`, which `proxyd` on port 4040 resolves to Claude Opus 4.7 with content-based smart routing layered on top. Security and tool sessions stay on Opus 4.7. Code drops to the local Codestral-22B on `sanctum-mlx-codestral` (mTLS `:3301`) for latency and volume. General chat drops to the local `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) so small talk never leaves the haus. Reasoning-heavy prompts are promoted to Opus 4.7 with `--effort max` thinking via the Claude Max proxy on `:3456`. Images go to Gemini 3.1 Pro. If Yoda starts giving you suspiciously vague answers about infrastructure, check `~/.sanctum/sanctum-proxy/usage.jsonl` — the `model_used` field tells the truth even when the agent doesn't know it got rerouted.
+Yoda's primary model is `sanctum/council-brain`, which `proxyd` on port 4040 resolves to Claude Opus (Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today) with content-based smart routing layered on top. Security and tool sessions stay on the latest Opus. Code drops to the local Codestral-22B on `sanctum-mlx-codestral` (mTLS `:3301`) for latency and volume. General chat drops to the local `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) so small talk never leaves the haus. Reasoning-heavy prompts are promoted to the same Opus with `--effort max` thinking via the Claude Max proxy on `:3456`. Images go to Gemini 3.1 Pro. If Yoda starts giving you suspiciously vague answers about infrastructure, check `~/.sanctum/sanctum-proxy/usage.jsonl` — the `model_used` field tells the truth even when the agent doesn't know it got rerouted.
 </Aside>
 
 ## Configuration
@@ -101,11 +101,11 @@ Yoda operates on the `council-brain` tier, which means `proxyd` applies content-
 
 | Content type | Route | Rationale |
 |---|---|---|
-| Tool session (recent `tool_use` / `tool_result`) | stays on Opus 4.7 | tool-use coherence benefits from the strongest model |
-| Security (`password`, `secret`, `credential`, `CVE-…`) | stays on Opus 4.7 | Windu would never forgive a downgrade |
+| Tool session (recent `tool_use` / `tool_result`) | stays on Claude Opus (Max, latest) | tool-use coherence benefits from the strongest model |
+| Security (`password`, `secret`, `credential`, `CVE-…`) | stays on Claude Opus (Max, latest) | Windu would never forgive a downgrade |
 | Code (`implement` / `refactor` / `debug` / fenced block) | `council-code` (`sanctum-mlx-codestral`, Codestral-22B-v0.1-4bit on mTLS `:3301`) | infrastructure work is high-volume — local wins on latency |
 | Vision (image blocks) | `gemini-31-pro` | multimodal routing |
-| Brainy (reasoning verbs or ≥ 500 chars of prose) | `council-max-thinking` (Opus 4.7 `--effort max` via Claude Max proxy) | extended thinking for deep synthesis |
+| Brainy (reasoning verbs or ≥ 500 chars of prose) | `council-max-thinking` (latest Opus, `--effort max` via Claude Max proxy) | extended thinking for deep synthesis |
 | General (anything else) | `council-mlx` (`sanctum-mlx`, Qwen3.6-35B-A3B-4bit on mTLS `:1337`) | chat stays on-device for privacy |
 
 The proxy examines the last user message and decides whether the conversation deserves the expensive model, belongs on a local one, or warrants promotion to max-thinking. Yoda does not get a vote in this process, which is fitting for someone named after a character who famously said things like "do or do not."
