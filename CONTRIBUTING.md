@@ -93,7 +93,7 @@ Three component variants:
 
 - `<CouncilRoster />` — full table (Agent, Logical model, Provider, Resolved model). Use on the canonical roster page and on doctrine pages where the full table *is* the subject.
 - `<CouncilRoster variant="compact" />` — tighter three-column table (Agent, Model, Provider). Use when the full table is too wide for the surrounding prose.
-- `<CouncilRoster variant="inline" />` — natural-sentence summary grouped by model family ("Yoda + Mundi on `claude-opus-4-7`, …"). Use mid-paragraph when you need to mention the assignment in flowing prose.
+- `<CouncilRoster variant="inline" />` — natural-sentence summary grouped by model family ("Yoda + Mundi on `claude-opus-max`, …"). Use mid-paragraph when you need to mention the assignment in flowing prose.
 
 If you find yourself typing the words "Yoda on Opus" or "Windu on Gemini" in any new MDX page, stop, import the component, and embed it instead. The doctrine page is `/architecture/agents/`; everything else links there.
 
@@ -323,7 +323,7 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 **Model Routing** (updated 2026-04-23 after Olympics rework):
 - **Local default — `council-secure`** (Qwen3.6-35B-A3B on `:1337` mTLS): Yoda, Mothma, Windu, Cilghal, Mundi, Jocasta. The 35B-A3B is Olympics rank #2 (0.957) and wins on uniformity; house default.
 - **Coder tier — `coder`** (Qwen2.5-Coder-14B via LM Studio `:1234`): Qui-Gon, Ahsoka. Ahsoka runs on a 16 GB M1 at the chalet and can't fit the 35B; Qui-Gon wants tight code gen at 22 tok/s.
-- **Cloud escalation — `cloud`** (Claude Opus 4.7 via `claude-max-api-proxy` on `:3456`, OpenRouter fallback): Yoda and Mundi only, for novel reasoning and complex finance edge cases. Uses the Max subscription OAuth — zero API credits consumed for routine calls.
+- **Cloud escalation — `cloud`** (Claude Opus, Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus — via `claude-max-api-proxy` on `:3456`, OpenRouter fallback): Yoda and Mundi only, for novel reasoning and complex finance edge cases. Uses the Max subscription OAuth — zero API credits consumed for routine calls.
 - **Spatial escalation — `spatial`** (Gemini 3.1 Pro via Google AI Studio Ultra): Windu only, for network topology / zone map / physical layout reasoning.
 
 Config lives in `~/.sanctum/instance.yaml` under `router:`. Full per-Jedi rationale and Olympics-informed justification: see [The Smart Router](./src/content/docs/architecture/dynamic-model-routing.mdx).
