@@ -57,8 +57,8 @@ router:
       description: "Codestral-22B-v0.1-4bit - pure code + Ahsoka (chalet 16 GB)"
     cloud:
       url: http://100.0.0.55:3456/v1         # Claude Max bridge (separate Mini)
-      models: [opus, opus-4.7, claude-*, cloud, escalation]
-      description: "Claude Opus 4.7 via Max subscription - Yoda/Mundi escalation (0.887)"
+      models: [opus, claude-opus-max, claude-*, cloud, escalation]
+      description: "Claude Opus via Max subscription (unpinned claude-opus-4 alias, latest Opus) - Yoda/Mundi escalation (0.887)"
       fallback_urls: [https://openrouter.ai/api/v1]
       api_key_env: OPENROUTER_API_KEY
     spatial:
@@ -77,8 +77,8 @@ This table reflects the **post-2026-04-28 routing**, when the Council went heter
 
 | Jedi | Primary | Fallback | Why |
 |---|---|---|---|
-| **Yoda** | **cloud — Claude Opus 4.7** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
-| **Mundi** | **cloud — Claude Opus 4.7** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
+| **Yoda** | **cloud — Claude Opus (Max, latest)** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
+| **Mundi** | **cloud — Claude Opus (Max, latest)** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
 | **Qui-Gon** | **coder — Codestral-22B-v0.1-4bit** (`sanctum-mlx-codestral` native MLX `<MINI>:3301`, via the agent-layer `council-code` alias) | council-secure | Dense code gen, infrastructure pragmatism. (Was Qwen2.5-Coder-14B on `:1338` until 2026-06-07; that seat — and the LM Studio `:1234` socat bridge — are now retired, weights deleted, and every model is served by a native MLX seat.) |
 | **Windu** | **spatial — Gemini 3.1 Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
 | **Cilghal** | **council-secure — Qwen3.6-35B-A3B** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
@@ -88,7 +88,7 @@ This table reflects the **post-2026-04-28 routing**, when the Council went heter
 
 Cloud Opus runs through the Claude Max subscription bridge at `<MINI>:3456`, not the metered Anthropic API. Routine Council questions consume zero API credits. Bring-out-the-good-china reasoning happens for the price of the monthly subscription, not per-token.
 
-The Olympics (2026-04-23) informed this lineup: Qwen3.6-35B-A3B at 0.957 is still the haus default for any seat without a domain-specific upgrade — Mothma/Jocasta/Cilghal stay there because their work is privacy-critical or local-by-mandate, and Coder-14B (0.929) stays on the bench for coding-specific work and the chalet where RAM is the constraint. Opus 4.7 and Gemini 3.1 Pro now sit at the head of two seats each, not as escalations. See [Model Comparison](./model-comparison) for the full per-task score breakdown and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for the doctrine that made this routing the default rather than the escalation.
+The Olympics (2026-04-23) informed this lineup: Qwen3.6-35B-A3B at 0.957 is still the haus default for any seat without a domain-specific upgrade — Mothma/Jocasta/Cilghal stay there because their work is privacy-critical or local-by-mandate, and Coder-14B (0.929) stays on the bench for coding-specific work and the chalet where RAM is the constraint. Claude Opus (Max, latest) and Gemini 3.1 Pro now sit at the head of two seats each, not as escalations. See [Model Comparison](./model-comparison) for the full per-task score breakdown and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for the doctrine that made this routing the default rather than the escalation.
 
 ### Two routing layers, one Council
 
@@ -99,7 +99,7 @@ There are now two routers in front of every Council request, and they answer dif
 | **openclaw-gateway agents.list** | `<VM>:1977` then `<MINI>:4040` (proxyd) | Agent identity → primary model | `openclaw agent --agent <id>` calls; the daily Council interface |
 | **sanctum-server Smart Router** (this page) | `<MINI>:8900` | Model name + glob + intent classification | Direct API callers (eval harness, integrations, anyone hitting `/v1/chat/completions` with an explicit `model:`) |
 
-The agent layer chooses the model from the agent's role. The Smart Router chooses the backend from the model name. They compose: an agent call resolves to a model alias on the agent side, then the Smart Router (or proxyd, the per-tier router) maps that alias to a backend. The flow `openclaw agent --agent main → council-max-thinking → :3456 (Claude Max bridge) → Opus 4.7` is the canonical path for Yoda after 2026-04-28.
+The agent layer chooses the model from the agent's role. The Smart Router chooses the backend from the model name. They compose: an agent call resolves to a model alias on the agent side, then the Smart Router (or proxyd, the per-tier router) maps that alias to a backend. The flow `openclaw agent --agent main → council-max-thinking → :3456 (Claude Max bridge) → latest Opus` is the canonical path for Yoda after 2026-04-28.
 
 This is exactly why Qui-Gon reads two ways depending on the door you knock on. `openclaw agent --agent quigon` resolves to `council-code` and lands on Codestral at `:3301` — the agent layer knows Qui-Gon writes code. But hit the Smart Router with `model: "quigon"` and you get the local 35B on `council-secure`, because there "quigon" is just a persona alias, and personas live with the Council. Same name, two layers, two brains — and knowing which door you used is half of debugging a response that doesn't sound right.
 
