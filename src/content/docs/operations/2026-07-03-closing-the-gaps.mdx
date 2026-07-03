@@ -1,0 +1,114 @@
+---
+title: "2026-07-03: Closing the Gaps — the beta-blocker sweep"
+description: >-
+  A deep audit of the estate found 28 beta blockers — signal that lied, secrets
+  that drifted, routers that mis-classified failures. This is how they were
+  closed: 19 fixed and merged, 4 staged behind one root restart, 5 honestly
+  deferred with reasons. Plus the discipline that mattered most — verifying each
+  finding against the code before touching it, because several "bugs" turned out
+  to be deliberate, incident-earned design.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Before a friendly beta tester touches sanctum, the estate got a full-body audit:
+every service read for the failure that lies, the secret that goes missing on
+uninstall, the router that treats a rate-limit like a fatal error. The audit
+surfaced **28 beta blockers**. This is the sweep that closed them — and, just as
+importantly, the ones it deliberately *didn't* close.
+
+## The doctrine: verify before you attribute
+
+The most valuable rule in the whole sweep was the one that stopped work. Every
+finding was read against the live code before a single line changed, because an
+audit is a set of *claims*, not a set of facts. That check paid for itself
+several times:
+
+- The **proxyd UTF-8 truncate panic** — a real, nasty class of bug (a multibyte
+  char straddling a byte-slice boundary crashing the request handler) — was
+  already fixed in the tree, char-boundary back-off and a passing test included.
+  A blind "fix" would have churned code that was already correct.
+- The **Force Flow dedup collapse** looked like a bug: two distinct incidents
+  that differ only by an IP or a counter hash to the same key and the second is
+  suppressed. But that normalization is *deliberate* — it exists because the
+  2026-06-12 bridge roam paged three times, each message carrying a different
+  streak count. Narrowing it to keep incidents apart directly re-opens the
+  flapping-spam it was built to kill. That's a product tradeoff, not a defect.
+- The **rate-limit "severity blindness"** was mostly already handled: the
+  critical and P0 tiers — the only ones that wake anyone — already bypass the
+  hourly cap by doctrine. Only dashboard-tier alerts are ever throttled.
+
+Three "major" findings that a less careful sweep would have "fixed" into
+regressions. Verifying first is not slower; a retraction is slower.
+
+## What closed
+
+Nineteen findings fixed and merged. The themes:
+
+| Theme | Representative fixes | Where |
+|---|---|---|
+| **Signal honesty** | cost estimate read 100× low (cents-as-dollars); a tripped breaker latched Open forever; Force Flow logged "delivered" before delivery, and after the cooldown recorded it; alert log survived an inode swap; alerts JSON written atomically | force-flow, proxyd budget |
+| **Router truth** | server `/health` no longer reports "ok" while routing to a dead backend; a generate call now has a timeout; a 429 fails over instead of aborting; think-buffer content is flushed on stream end, not dropped | sanctum-server |
+| **Provider health** | a 200-then-dropped stream is recorded as a *failure*, so a flapping backend's breaker can finally open (it was hard-coded success before) | proxyd |
+| **Secrets custody** | uninstall now revokes the keys it actually wrote (the list had drifted — `gemini-api-key` was never a real entry); the DR bundle carries the restic passphrase that decrypts the very backups it pairs with; onboarding writes the 1Password credential over stdin, never on argv where `ps` can see it | sanctum-cli |
+| **Family safety** | the screen-time enforcement suite — weekend-night boundary, reaper hour, credit-balance restore on restart, manual-block reconciliation | sanctum-screen-time |
+
+Every fix ships with a test that *fails without it*. The stream-health fix, for
+instance, drives a wrapped stream over `[Ok, Err]` and asserts the provider's
+error rate rises above zero — the exact signal a hard-coded `success: true`
+erased.
+
+## What's staged, and why it needs one root command
+
+Four fixes live in the **proxyd** binary, which runs as a system LaunchDaemon.
+They're built, tested (37 green), signed, and staged at the deploy path — but
+proxyd is the root gateway every council model sits behind, and this haus does
+not hot-patch a root daemon from an agent shell. They land on the next proxyd
+restart:
+
+```
+sudo launchctl kickstart -k system/com.sanctum.proxyd
+```
+
+The four: dead injected fallback chains removed (they pointed at retired
+endpoints; real fallbacks come from config now), prefixed model names routed
+through the full routing stack instead of exact-match-or-bust, a hot-reload
+warning that mTLS/budget/memory changes still need a restart, and the
+stream-health honesty fix above. `RunAtLoad` is set, so a cold boot also lands
+them — the kickstart is just the faster path.
+
+<Aside type="note">
+The one genuinely new network-facing change — a Bearer gate on sanctum-server's
+`/v1/*` and `/metrics` — ships **inert**: it only arms when a server token is
+present in the environment, and on this box none is, so `:8900` stays open on
+loopback exactly as before. The gate is there for the day the service takes
+off-box traffic; it is fail-closed on a non-loopback bind. Shipping a security
+control in its off position, verified dormant, beats flipping it on under a
+service nothing currently calls.
+</Aside>
+
+## What was deferred — with reasons, not silence
+
+Five findings were left open on purpose. A deferred-with-reason is always
+preferable to a rushed fix in the wrong place:
+
+- **Two cathedral inference edges** (a prompt-cache save-back token/KV skew on a
+  MaxTokens stop; a speculative-decode draft-cache truncate) are real, but they
+  live in the 35B inference hot path. This codebase's history — the T_q=1 SDPA
+  divergence, the QK-norm decode corruption, the fused-QKV view aliasing — says
+  inference-internal edits go through the dense-vs-MoE **parity harness** on the
+  dev box, never a hot-patch to the live model during a beta-stability freeze.
+  They're queued for a dedicated cathedral correctness pass.
+- **The two Force Flow findings** above are working-as-designed tradeoffs that
+  need an operator's call on the false-page/false-silence balance, not a
+  unilateral edit.
+- **The net-heal hardening** belongs to another session actively working that
+  surface; stomping it would be its own incident.
+
+## The honest scoreboard
+
+The readiness ruler is machine-checkable and it does not round up. As of this
+sweep: **19 fixed, 4 staged, 0 open, 5 deferred.** The only thing between the
+ledger and all-green is that one root `kickstart` — everything else is merged,
+tested, and either deployed or deferred with a paper trail. Point-in-time
+hardening is a snapshot; the ledger and the ruler are what keep it honest.
