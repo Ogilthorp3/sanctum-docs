@@ -124,3 +124,20 @@ After generating, verify each image against existing illustrations:
 > pencil style, no color except black lines and faint teal on the bolts.
 
 **Alt text:** `Tommy supervises the beta-blocker sweep — most doors bolted, four awaiting one key, five propped open with reasons`
+
+---
+
+## 7. 2026-07-03-the-flakes-that-only-failed-under-load.mdx → `hero-2026-07-03-flaky-tests.png`
+
+**Prompt:**
+> Black and white pencil sketch illustration, wide format, white background. A
+> test-bench workshop where three identical mechanical gauges are mounted on a
+> wall, each labelled with a tiny sign. Two gauges have steady needles pinned
+> firmly in the green "PASS" zone with small clamps. The third gauge's needle
+> flickers — drawn with motion lines wavering between green and red — while an
+> Abyssinian cat (lean, elegant, slightly smug) reaches up with one paw to bolt
+> it steady. On the workbench below sit a stopwatch and a spilled box of springs.
+> Hand-drawn pencil style, no color except black lines and faint green shading on
+> the gauge zones.
+
+**Alt text:** `Tommy bolts the flickering gauge steady while two others hold firm in the green`
