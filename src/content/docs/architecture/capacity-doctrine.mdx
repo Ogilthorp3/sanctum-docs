@@ -17,8 +17,8 @@ The Capacity Doctrine is the immune-system answer: refuse bad loads up front ins
   <Card title="Rule 1: Declare your weight" icon="document">
     Every heavyweight service has a `ram_budget_mb` number in `~/.sanctum/capacity.yaml`. No budget, no admission. The number is measured with `vmmap --summary` at peak inference, then rounded up. A false refuse is strictly cheaper than an OOM freeze.
   </Card>
-  <Card title="Rule 2: Admission controller gates every load" icon="approve-check">
-    `castellan` on port 2189 computes `free = pool − Σ phys_footprint(all loaded) − Σ peak_reserve(pinned)` from `phys_footprint` (the same metric jetsam uses), not RSS — pinned services reserve their *peak*, everyone else only what they hold right now. A load is admitted only if its budget fits that free pool AND none of its `exclusive_with` neighbours are loaded. A budget shortfall returns HTTP 503 with the shortfall and the eviction order; an exclusion clash returns HTTP 409 with the blocking service name.
+  <Card title="Rule 2: Admission gates every load on live memory" icon="approve-check">
+    `castellan` on port 2189 gates every evictable load against three live kernel signals, never a static budget sum. First, the droppable pool — `free + speculative + purgeable` pages straight from `host_statistics64` — which excludes the council's file-backed `mmap`'d weights, so a new load can never reclaim them off disk. Second, a swap tripwire: free swap must cover the load plus a floor, because the kernel reports pressure NORMAL straight through near-full swap. Third, the kernel pressure level, used as a one-way STOP veto. The pinned council is always admitted and is never a shed candidate. A shortfall returns HTTP 503 with the shed order, lowest-priority evictable first; an `exclusive_with` clash returns HTTP 409 with the blocking service name.
   </Card>
   <Card title="Rule 3: Nothing critical gets suspended" icon="shield">
     The council VM, sanctumd, sanctum-mlx, signal-cli, WindowServer are pinned via `evictable: false` in `capacity.yaml`. Castellan programs the kernel's own arbiter: pinned services get jetsam band `critical` (190) and stay there. The active loop will never `SIGSTOP` them; the kernel itself spares them when memory pressure crests.
@@ -34,23 +34,23 @@ The admission ledger is not a state file that can drift from reality. On every `
 
 This means the ledger self-corrects across daemon restarts, unclean exits, and manual `kill -9` — there is no state to repair because there is no stored state to corrupt.
 
-## The Exclusion Graph
+## Pinned, Evictable, Exclusive
 
-Some services cannot coexist on a ~64 GB host. `capacity.yaml` names these explicitly:
+The council seat is pinned and resident; the coder seat is evictable and loads on demand around it. They coexist — the council always wins the box, the secondary borrows what is left:
 
 ```yaml
 sanctum-mlx:
-  ram_budget_mb: 45000         # Qwen3.6-35B-A3B-4bit, :1337
-  exclusive_with: [sanctum-mlx-codestral]
+  ram_budget_mb: 45000         # Qwen3.6-35B-A3B-4bit council, :1337
+  evictable: false             # pinned — always resident, never shed
   priority: 100
 
-sanctum-mlx-codestral:
-  ram_budget_mb: 14000         # Codestral-22B-v0.1-4bit, :3301
-  exclusive_with: [sanctum-mlx]
-  priority: 50
+sanctum-mlx-devstral:
+  ram_budget_mb: 14000         # Devstral-Small-2-24B coder, :3301
+  evictable: true              # on-demand; first to shed under pressure
+  priority: 85
 ```
 
-Exclusion is symmetric and enforced at admission. The higher-priority service wins the tie when both are requested. Priority is also the tiebreaker when the sentinel has to choose between evicting workloads under duress.
+`exclusive_with` is still enforced at admission, but it is now reserved for genuine incompatibilities — a second resident 35B, say, that would OOM the box even when the arithmetic looks fine. Priority is the tiebreaker when the sentinel must choose a victim, and the pinned council is never one.
 
 <Aside type="note">
 Exclusion isn't about RAM arithmetic alone — two 20 GB services could technically coexist on a 48 GB pool. It's about Metal allocation churn, KV-cache fragmentation, and compressor thrashing. Some services just don't play well together, and the doctrine lets us say so explicitly rather than discover it by catastrophic failure.
@@ -60,7 +60,7 @@ Exclusion isn't about RAM arithmetic alone — two 20 GB services could technica
 
 | Layer | Purpose | When |
 |---|---|---|
-| **Kernel-as-arbiter** | Program jetsam priority bands per-PID so the kernel itself shelters Cilghal and sheds Codestral | Every 2s via `memorystatus_control`; birth-floor via plist `JetsamPriority` |
+| **Kernel-as-arbiter** | Program jetsam priority bands per-PID so the kernel itself shelters the pinned council and sheds the evictable coder | Every 2s via `memorystatus_control`; birth-floor via plist `JetsamPriority` |
 | **Admission** | Refuse loads that exceed headroom | Before anything allocates |
 | **Monitor** | Catch half-loaded states and signal-stopped processes | Every 2s tick — pinned-service probe, drift check, SIGSTOP scan |
 | **Recovery** | Unstick what slipped through | `kill -CONT` on a stopped service; `unload_cmd + load_cmd` on a failed probe, rate-limited to one rescue per service per 30 min with backoff after two failures in an hour; deadman SIGCONT if the keeper himself dies |
@@ -92,6 +92,10 @@ hosts:
 ```
 
 The safety margin is non-negotiable. We don't allocate into it even if admission math says we could — it's the buffer that keeps the kernel's own memory-pressure machinery working. Hit the safety margin and you're in the territory where jetsam starts SIGSTOPping random processes, which is where the 2026-04-24 incident came from.
+
+## From Budgets To Live Memory
+
+The first cut summed every service's budget against the pool. On a healthy box that read deeply negative — a 40 GB council plus its peak reserve double-counted itself — and refused every legitimate load. The fix moved the gate onto the kernel's own page counts. One rule was learned the hard way: the council's weights are `mmap`'d from disk and look like reclaimable file cache; count them as free and a new load reclaims them off disk mid-inference, then the box thrashes and freezes. So admission only ever spends the droppable pool — never the council's resident pages, and never memory that can only be freed by writing to an already-full swap.
 
 ## What This Replaces
 
