@@ -107,3 +107,20 @@ After generating, verify each image against existing illustrations:
 - [ ] Pencil sketch / hand-drawn line quality
 - [ ] Metaphor is immediately readable without explanation
 - [ ] Technical concept is embedded in the visual (not just decorative)
+
+---
+
+## 6. 2026-07-03-closing-the-gaps.mdx → `hero-2026-07-03-closing-the-gaps.png`
+
+**Prompt:**
+> Black and white pencil sketch illustration, wide format, white background. A
+> stone gatehaus wall with 28 small doors set in a grid. Most doors are firmly
+> bolted shut with neat teal-tinted latches (about nineteen). Four doors are
+> closed but not yet bolted — a keeper stands holding a single large key ring,
+> about to lock them all at once. Five doors are deliberately propped open with
+> small hand-written tags hanging from them reading "LATER — with reason." An
+> Abyssinian cat (lean, elegant, slightly smug) sits on a ledger-book on a desk
+> in the foreground, one paw resting on an open checklist, supervising. Hand-drawn
+> pencil style, no color except black lines and faint teal on the bolts.
+
+**Alt text:** `Tommy supervises the beta-blocker sweep — most doors bolted, four awaiting one key, five propped open with reasons`
