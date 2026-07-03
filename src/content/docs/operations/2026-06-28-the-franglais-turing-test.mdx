@@ -1,0 +1,220 @@
+---
+title: "2026-06-28: The Franglais Turing Test"
+description: "How a voice clone of Bert went from pure noise to a checkpoint that would fool his banker — the Qwen false start, the English-first pivot, a five-engine cosine bake-off, the multilingual-base lesson, a three-gate eval harness, Yoda's movie-scraped voice, and the one register that data — not compute — still blocks: seamless intra-sentence franglais."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background: a vintage ribbon microphone on a studio desk, two translucent speech waveforms rising from it and braiding into one strand at the top, a teal halo around the mic and a faint amber glow at the seam where the two waveforms join but do not quite fuse, with studio headphones and a tuning fork resting on the desk](./images/2026-06-28-the-franglais-turing-test.png)
+
+This is the private, accurate account of the Bert voice-clone epic — names and
+numbers intact. (A separate anonymized methodology draft exists for community
+release; it is gated on Bert's approval and is not this page.)
+
+The goal was a Turing-grade clone: an on-haus, open-source TTS in Bert's own
+voice, in the right accents — **English like a Californian, French like a
+Québécois**, plus the register he speaks at a Montréal startup dinner,
+**intra-sentence franglais**. On-device Apple Silicon, privacy-first, no cloud
+GPU, no paid voice API. The bar is a same-speaker A/B a familiar listener can't
+reliably call. What follows is the whole arc — the wrong turns included, because
+that is where the lessons live.
+
+## "Only noise"
+
+The first Qwen run produced exactly that. Bert's verdict was blunt: "the qwen you
+made had a sampling problem and was only noise." Two distinct causes hid behind
+the same symptom, and both got root-caused:
+
+1. **The reference text did not match the reference audio.** Qwen3-TTS is
+   end-to-end BPE→codec with no grapheme-to-phoneme stage — it learns the
+   speaker from in-context audio plus its transcript. A truncated transcript
+   corrupts that conditioning and the decoder runs away: a 6-to-8-second line
+   becomes a 96-second babble against the 1200-token / 12.5 Hz codec ceiling.
+   The *exact* matching transcript brings it back to a clean 6-to-8-second clip.
+2. **Over-cooking.** A second run at rank 32, 12 epochs, label-smoothing 0.1
+   drove the adapter into metallic corruption. The winning recipe was the
+   *gentler* one — rank 16, alpha 32, no label smoothing, three epochs,
+   `lr 2e-5` — which Bert heard as "almost like me, much more expressive."
+
+<Aside type="note">
+The decisive realization of the epic: **accent lives in the data, not in a G2P
+table.** Qwen has no phoneme front-end, so its "Parisian-locked French" is a
+*learned prior a fine-tune can shift*, not a hard wall — which is why staying on
+an open, self-hostable stack was viable at all.
+</Aside>
+
+## English-first
+
+The clone kept improving on French while Bert pushed back on the premise:
+"Bert should sound english, not french!" The corpus agreed — roughly **152
+minutes of clean English against 37 of French**, a 4× imbalance. So the project
+re-centered on the Californian-English voice, and the fix was unglamorous: more
+data, more epochs, not reference tricks. That retrain surfaced two failure modes
+that recur everywhere in TTS work — **gibberish is inference over-scale, not bad
+training** (a stronger adapter wants a lower inference scale), and **"echo /
+auditorium" is the reference clip's room** (a dry, close-mic reference beats a
+stage clip by more than any engine swap). The measured sweeps are in the
+[recipe annex](/operations/2026-06-28-voice-clone-recipe-annex/).
+
+## Three gates, one scorer
+
+The single most important piece of infrastructure is the eval harness, because
+ear-checks don't scale or reproduce session to session — and because **a
+clean-audio gate alone green-lights nonsense.** Early dry runs produced clips
+that were spectrally clean and carried enough timbre to score a non-trivial
+cosine, yet transcribed as a degenerate loop like `"nad nad nad ..."` or
+`"Thanks. Thanks. Thanks."` — *speech-shaped gibberish*.
+
+So every clip is scored on three independent gates by one scorer — **noise**
+(spectral flatness), **intelligibility** (Parakeet STT word-overlap), and
+**cosine** (resemblyzer identity vs a real-Bert anchor, ceiling ~0.96). An engine
+differs from a rival only in which wav it produced; scoring is identical. The
+intelligibility gate is what makes the harness trustworthy — cosine is necessary
+but never sufficient. Full gate mechanics, pass criteria, and the Parakeet retry
+logic live in the [recipe annex](/operations/2026-06-28-voice-clone-recipe-annex/).
+
+## The bake-off
+
+With a trustworthy harness, the question stopped being "is our clone good?" and
+became "is our *engine* even the right one?" Five open engines ran zero-shot from
+an identical dry reference, scored on the three gates, ranked by Bert-cosine:
+
+```
+Chatterbox    0.912   <- best zero-shot
+CosyVoice2    0.905
+Qwen LoRA     0.881   (our fine-tune)
+F5-TTS        0.873
+XTTS-v2       0.766
+```
+
+Two zero-shot rivals **beat our own fine-tuned Qwen.** All five were intelligible;
+identity, not intelligibility, was the discriminator at the top. The durable
+lesson: **start from the best zero-shot identity, then adapt it** — don't
+fine-tune a weaker base from scratch. Bert's ear agreed: "chatterbox sounds
+great."
+
+<Aside type="note">
+A Verify-Before-Attribute lesson rode along: CosyVoice2 and F5 were briefly
+mis-called "won't run" and "garbled" off *mid-run* partial logs; the finished
+run reversed both. Wait for completion before attributing a failure — that
+applies to workflow logs, not just incidents.
+</Aside>
+
+The decision was Chatterbox (Resemble AI, San Francisco): MIT-licensed — cleaner
+than the XTTS or Qwen CPML terms — a ~0.5B Llama-style T3 text-to-token backbone
+feeding a frozen S3Gen codec stage, with a built-in PerTh watermark and an
+exaggeration knob. The fine-tune is a **LoRA on the T3 backbone only, S3Gen
+frozen.**
+
+## The English champion
+
+LoRA the T3, freeze the codec, gate every epoch on all three gates, keep the best
+checkpoint. The English champion — `cbx-e10-r24-lo-lr/epoch_7`, mean cosine
+**0.925** — is the one Bert called good enough to "fool my banker." Shipped. (The
+exact training and inference recipe — including the manual teacher-forced loss
+that sidesteps a `t3.loss()` axis bug — is in the
+[recipe annex](/operations/2026-06-28-voice-clone-recipe-annex/).)
+
+## Yoda has a voice now too
+
+The same recipe generalizes to any single speaker with clean clips. Yoda's voice
+came from **86 clean Frank-Oz movie clips scraped from movie-sounds.org**, LoRA'd
+the same way: `cbx-yoda/epoch_2`, **+0.03 cosine over zero-shot** (0.782 mean
+vs the 0.768 bar), intelligibility 0.95. Bert: "good enough, especially with the
+inversion syntax." The character's word order does as much work as the timbre.
+Shipped.
+
+## Pick the base for the harder language
+
+French was where it got interesting. An English-Chatterbox fine-tune produced
+real Québécois *words* but the accent was only "almost there — Qwen was better at
+franglais." The reason is structural and worth stating as a rule:
+
+<Aside type="tip">
+**Fine-tune carries identity; it cannot build a phoneme inventory the base never
+had.** English-Chatterbox ships an English tokenizer and ~zero French
+pretraining — 37 minutes of French can *shift* a phoneme prior, not *create* one.
+Qwen out-did it on French because it was multilingually pretrained. So **pick the
+base for the harder language, and let the fine-tune carry the speaker.**
+</Aside>
+
+The fix was **Chatterbox-Multilingual** — the same Resemble identity that beat
+Qwen on English, now on a 23-language base (`t3_mtl23ls`) with a French tokenizer
+and a required `language_id` parameter, in its own venv (`.venv-cbx-mtl`). The
+result — `cbx-mtl/epoch_2` — gives pure-Québécois-French and franglais that pass
+on real French words. Shipped. (The venv carries a silent watermarker-disabling
+trap; see the [recipe annex](/operations/2026-06-28-voice-clone-recipe-annex/).)
+
+## The one register data still blocks
+
+Every shipped register cleared Bert's ear. The remaining one is **seamless
+intra-sentence franglais** — flipping languages mid-sentence, the way Bert
+actually talks — and here the blocker is not compute. It is data.
+
+Bert's ~200-minute corpus is **diglossic**: he speaks French *or* English by
+context and essentially never mixes them within a sentence. A cathedral
+language-ID pass confirmed it — genuine mid-sentence code-switch is roughly **one
+clip in the entire corpus** (0 of 14 in the sampled batch). A native code-switch
+fine-tune is data-blocked; the data has to be *created*, not mined.
+
+The current best is a DSP splice, evolved across three versions in
+`franglais_synth/`:
+
+```
+v1/v2   choppy seams, audible cuts
+v3      pyworld F0-continuity splice
+        = current best, faint synthetic island
+```
+
+`franglais_v3.wav` takes a French backbone (`fr_whole.wav`, `lang=fr`), drops in
+English islands from one `lang=en` generation (`en_full.wav`), warps each
+island's pitch contour (pyworld F0) to the seam, and equal-power-crossfades the
+joins. Verbatim-intelligible with smooth seams (cosine 0.832 → 0.887 across the
+splice) — but a **faint synthetic timbre on the English islands**. That is the
+ceiling of splicing: it papers over the missing register, it doesn't learn it.
+
+## The roadmap from here
+
+The Jedi Council (`sanctum council`) ranked the paths out, and the ranking is
+deliberately about *data*, not knobs:
+
+0. **One-pass inline language-tagging test** — cheap; the splice may be papering
+   over a tokenization bug, so prove single-pass code-switch can't work first.
+1. **The path: Bert records ~20–30 minutes of elicited franglais → native
+   fine-tune.** Kit at `~/.openclaw/bert-voice-clone/FRANGLAIS-RECORDING-KIT.md`.
+   Talk, don't read a word-list; let the two languages mix the way they would
+   texting a Montréal founder. The real unblock.
+2. **External code-switch corpora** (Bangor-Miami / SEAME) for switch *behavior*
+   with Bert's timbre frozen — the best no-record fallback.
+3. **Voice-convert a real franglais speaker into Bert's voice** as training fuel.
+4. **Ship-now:** re-vocode the *whole* splice through one neural vocoder to kill
+   the synthetic-island timbre — but **never train on our own splice** (it teaches
+   the vocoder the artifact and collapses the model).
+
+<Aside type="note">
+Council operational note: run the native fine-tune *off* the flaky TB5 link
+(cloud/HF GPU or tmux with frequent checkpoints), behind a canary. Integration
+also folds in the audit's open items — the `sanctum-tts :8007` Rust dispatcher
+(built, not deployed) and a quantized MLX-Q8 multilingual backend for the memory
+win.
+</Aside>
+
+## What shipped
+
+| Register | Checkpoint | Verdict |
+|----------|------------|---------|
+| English (Californian) | `cbx-e10-r24-lo-lr/epoch_7` | 0.925 — "fool my banker" |
+| Pure Québécois French | `cbx-mtl/epoch_2` | real QC French, passes |
+| Franglais | `cbx-mtl/epoch_2` | words pass; seamless mid-sentence pending |
+| Yoda | `cbx-yoda/epoch_2` | "good enough, the inversion syntax sells it" |
+
+## The doctrine
+
+A clone that passes a stranger is easy; one that survives a same-speaker A/B is
+not — and the difference is almost never the engine. It is, in order: a harness
+honest enough to fail your own work (three gates, never one); the *base* chosen
+for the language it must pretrain (fine-tune carries identity, it cannot invent a
+phoneme inventory); the acoustics of one reference clip; and — for the last
+register — data you may not have and cannot fake. Three of four voices shipped on
+those rules. The fourth waits on thirty minutes of Bert talking the way he
+already does.

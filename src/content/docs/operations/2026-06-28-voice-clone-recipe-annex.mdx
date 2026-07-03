@@ -1,0 +1,85 @@
+---
+title: "Voice-Clone Recipe & Harness — Annex"
+description: "Reproducible mechanics behind the Bert voice-clone epic: the three-gate scorer internals, the Chatterbox T3 LoRA training and inference recipe, and the Apple-Silicon traps. Companion annex to the 2026-06-28 Franglais Turing Test field note."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil sketch on a dark background: an open lab notebook on a workbench beside a ribbon microphone, three gauge dials sketched on the page labeled noise, words, and identity, a teal halo over the notebook and a faint amber glow on one dial needle, with a soldering iron and a coil of cable at the desk edge](./images/2026-06-28-voice-clone-recipe-annex.png)
+
+This is the reproducible-mechanics companion to
+[The Franglais Turing Test](/operations/2026-06-28-the-franglais-turing-test/).
+Read that page first for the story; read this one to rebuild the rig.
+
+## The three-gate scorer
+
+One scorer (`eval/score_voice.py`) is the source of truth for every engine. A
+candidate differs from a rival only in which wav it produced; scoring is
+identical, so cross-engine comparison is apples-to-apples.
+
+| Gate | Measures | Method | Pass |
+|------|----------|--------|------|
+| Noise | Clean, not hiss | Per-frame spectral flatness `geomean(power)/mean(power)`, silence-gated by RMS energy; fraction of voiced frames above a tonal threshold | `dur < 15s` and frac `< 0.20` |
+| Intel | The right words | Parakeet STT `:9000`, bag-of-words overlap (multiset intersection / expected word count) vs expected text | overlap `>= 0.70` |
+| Cosine | Sounds like Bert | resemblyzer cosine vs a real-Bert anchor (centroid of held-out real clips) | higher = closer; ceiling ~0.96 |
+
+The intelligibility gate is what makes the harness trustworthy. A noise-only or
+noise-plus-cosine harness green-lights *speech-shaped gibberish* — audio that is
+spectrally clean and carries enough timbre to score a non-trivial cosine, yet
+transcribes as a degenerate loop. Identity without intelligibility is a
+hallucinated impostor.
+
+<Aside type="caution">
+Parakeet `:9000` transiently false-zeroes the intel gate under rapid sequential
+load (empty-body responses), which would poison a whole sweep. The scorer
+retries three times with a short linear backoff and treats an empty body as a
+transient hiccup, not a silent wav. A flaky read is not a failing sample.
+</Aside>
+
+## The Chatterbox T3 LoRA recipe
+
+Chatterbox is a ~0.5B Llama-style T3 text-to-token backbone feeding a frozen
+S3Gen codec stage. The fine-tune is a **LoRA on the T3 backbone only, S3Gen
+frozen**.
+
+- **Train against the transformer** (`model.t3.tfmr`) with a **manual
+  teacher-forced cross-entropy**, not the model's own `t3.loss()` — which has an
+  axis bug. Trainer: `train_t3_lora.py`.
+- **Inference:** attach the adapter with `PeftModel.from_pretrained` onto
+  `t3.tfmr`, then `prepare_conditionals(dry_ref)` and generate with the dry
+  reference as the audio prompt.
+- **Inference scale is the gibberish dial.** A strong adapter at alpha 32 /
+  rank 16 (effective scale 2.0) saturates into gibberish. Sweep: scale 0.5 and
+  0.25 → 100% word-overlap; 1.0 → 64%; 2.0 → 0%. Canonical setting near 0.5 —
+  **a stronger adapter wants a lower inference scale.**
+- **Reference acoustics dominate identity.** The model copies the reference
+  clip's room. A dry, close-mic reference beats a stage clip; reference-room
+  acoustics is a bigger lever than any engine swap.
+
+## Multilingual base
+
+Chatterbox-Multilingual is the same identity on a 23-language base
+(`t3_mtl23ls`) with a French tokenizer and a required `language_id` parameter.
+Isolated in its own venv (`.venv-cbx-mtl`). The text must be re-tokenized with
+the multilingual tokenizer, though the S3 speech tokens carry over.
+
+<Aside type="caution">
+A silent trap on the multilingual venv: `pip` pulled `setuptools 82`, which
+dropped `pkg_resources`, which made the PerTh watermarker silently initialize to
+`None` — clips would have gone out unwatermarked with no error. Pin
+`setuptools==80.10.2`.
+</Aside>
+
+## Apple-Silicon notes
+
+- Heavy generation and training run on the MacBook Pro over the TB5 link; the
+  Mini holds the council. Run long fine-tunes off the flaky link (cloud/HF GPU,
+  or tmux with frequent checkpoints).
+- Pin `mlx` / `mlx-audio` exactly. The proven pair is `mlx 0.31.1` /
+  `mlx-audio 0.4.2`; a one-minor bump silently breaks synthesis. Treat a green
+  `/health` as a false positive — verify with a real self-warm that emits
+  non-zero audio bytes.
+- The STT side is Parakeet (`parakeet-tdt-0.6b-v3`), which is multilingual and
+  handles French; measured ~7.7 GB true footprint — the surprise memory hog. The
+  TTS/STT stack is Python; the Rust `sanctum-tts :8007` dispatcher is built but
+  not yet deployed.
