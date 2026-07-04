@@ -83,3 +83,100 @@ dropped `pkg_resources`, which made the PerTh watermarker silently initialize to
   handles French; measured ~7.7 GB true footprint — the surprise memory hog. The
   TTS/STT stack is Python; the Rust `sanctum-tts :8007` dispatcher is built but
   not yet deployed.
+
+## The Québécois campaign (2026-07-04 addendum)
+
+The bilingual clone shipped English at Turing grade and French at
+"way too Parisian" — Bert's native ear, the only accent instrument that
+matters. The campaign to fix it produced three durable artifacts: a locked
+best-of-Chatterbox French recipe, a calibrated accent judge, and an F5-TTS
+fine-tune pipeline that measurably moves a base model's accent prior.
+
+### The locked Chatterbox French recipe
+
+Before pivoting engines, the deployed recipe got its ceiling measured — ~24
+scored candidates across every dial. The keeper, live in
+`sanctum-bert-say.py`:
+
+| Language | Model | cfg | Post |
+|----------|-------|-----|------|
+| EN | `cbx-bert-mlx-q8` (English base) | 0.5 | none — Turing-approved |
+| FR | `cbx-bert-mtl-mlx-q8` (multilingual base, `language_id=fr`) | **0.55** | **no atempo, no chunking** |
+
+FR cfg 0.55 (up from 0.4) killed two birds: the "réalitéééé" stutter was a
+low-cfg sampling degeneracy *amplified by* the old `atempo 0.9` stretch — and
+higher cfg is naturally slower, so the atempo crutch got deleted outright.
+
+The measured ceilings that forced the pivot: **prosody** plateaus flat/robotic
+(~60/100 across 19 candidates — T3-architectural, no dial breaks it) and
+**French accent** is doubly blocked — the multilingual base carries a Parisian
+prior no reference overrides, while the English base has no French phoneme
+inventory at all (it mangles "chu" into a glitch). A leading English word
+("Hey,") even primes the whole utterance anglophone — cold-start language
+bleed, proper nouns ("Bertrand", "Outremont") hit hardest.
+
+### The calibrated forced-choice judge
+
+The old absolute-score Gemini rubric rated a clip Bert heard as flatly
+Parisian at joual **95/100**. Twice-burned rule: **an LLM ear cannot score
+accent on an absolute scale.** It can, however, pick which of two anchors a
+clip sits closer to.
+
+`f5-eval/accent_judge.py`: clip X judged against A = real Bert Québécois and
+B = a France-French TTS anchor (macOS `Eddy (French (France))`), three runs,
+majority vote, plus a resemblyzer identity cosine vs a Bert-FR anchor. Before
+trusting it, it must pass a calibration set with known answers — including
+the exact clip the old rubric blew, which it now calls Parisian, agreeing
+with the native ear. The judge returns *cited phonetic markers* (affrication,
+nasal quality, diphthongization, laxing), which turns it from a scoreboard
+into a debugging instrument.
+
+<Aside type="caution">
+Transcripts feed everything downstream — and Whisper launders joual: measured
+on 40 clips, Whisper preserved **0** joual markers where a verbatim-prompted
+Gemini heard **13** ("pis"→"puis", "chu"→"je suis", fillers dropped). F5's
+ref_text must be exact or the ref-trim leaks reference audio into the output;
+training labels must be verbatim or the model never learns what written joual
+sounds like.
+</Aside>
+
+### F5-TTS: moving the prior instead of fighting it
+
+F5-TTS (flow-matching DiT, full fine-tune only) is the pivot because its
+failure is *fixable*: zero-shot with the only public French base
+(`RASPIAUDIO/F5-French-MixedSpeakers-reduced`, LibriVox European French,
+v0 arch) scored **Parisian 0/9, confidence 100** even with a perfect joual
+reference — the reference cannot beat the base prior — but the prior itself
+moves with training, which is exactly what Chatterbox never offered.
+
+Campaign v1 (886 fr + 95 franglais clips, 47 min, Whisper labels, LR 1e-5,
+5280 updates): the accent climbed in textbook phonetic order — affrication
+[t͡sy] at update 500, diphthongization [lɑʊ̯] by 1000, vowel laxing
+pis→[pɪs] and the first probe-level QUEBEC verdict by 1500-2000 — peaked at
+3/9 québécois votes around updates 2000-3500, then overfit back down to 0/9.
+Native-ear check at the peak: "still parisian, but getting there" — judge and
+ear agree, third time.
+
+v2 attacks v1's measured limits: Gemini-verbatim labels (the joual is in the
+text now), joual-dense clips oversampled ×2-3, the ~106 English-heavy
+"franglais" rows dropped (only one genuinely code-switched clip exists in the
+whole corpus — the diglossia strikes again), and training deliberately stopped
+inside v1's peak zone (~2940 updates).
+
+### Apple-Silicon F5 traps, banked
+
+- `f5-tts-mlx` is v1-arch-hardcoded (`text_mask_padding=True`, no
+  `pe_attn_head`); a converted v0 French checkpoint loads clean and generates
+  garbage. Torch worker until the DiT grows v0 switches. Its `duration` param
+  is *total* (reference + generation) seconds.
+- `finetune_cli` saves checkpoints inside the venv
+  (`files("f5_tts")/../../ckpts/`), copies the `--pretrain` file there, and
+  auto-resumes from `model_last.pt` — so a kill that lands on the every-100-update
+  save truncates the zip and the *relaunch* dies on a miniz error. TERM between
+  saves, never SIGKILL near a ×100 boundary.
+- macOS default 256 fds × 16 dataloader workers respawning per epoch =
+  `EMFILE` at the epoch boundary. `ulimit -n 65536` in the launch line.
+- Full checkpoints are 5.4 GB (model+EMA+optimizer), not the 1.3 GB
+  EMA-only size — budget `keep_last_n` against real disk, and copy any
+  peak checkpoint out before the pruner eats it (v1's two best checkpoints
+  died this way; v2's eval loop preserves best-so-far automatically).
