@@ -1,0 +1,178 @@
+---
+title: "2026-07-04: The Claude Code Lane"
+description: "The 'claude' terminal now rides the sanctum proxy: native Max online, the local Cathedral council offline. The story of a fifteen-line feature that was really a stale one-line assumption in a .zshrc — plus a dead offline seat hiding behind a green test, and a code-signing ghost that SIGKILLs binaries for sport."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Every good routing story starts with a lie the terminal told itself.
+
+The goal was small and reasonable: the `claude` command — Claude Code, the
+coding agent Bert lives in all day — should get **Claude Max when the internet
+is up**, and fall back to the **local Cathedral council** when it isn't. A plane,
+a dead Bell uplink, a chalet with one bar of LTE: none of those should mean the
+coding assistant goes dark. Anthropic when you can reach it. Qwen 3.6 on Apple
+Silicon three feet away when you can't. One seam, two moods.
+
+There was even precedent. A proxy for exactly this used to exist — a retired
+FamilyOS LiteLLM shim that sat in the middle and did the online/offline dance in
+Python. It's gone now, folded like everything else into the native Rust
+`sanctum-proxy` crate: `proxyd`, port `:4040`, loopback-only, PQC-TLS front door.
+So the task looked like "rebuild the retired thing in Rust." It wasn't. The
+retired thing had been solving a problem we no longer had.
+
+## The assumption that flipped the whole design
+
+The `.zshrc` was very confident about one thing. In a tidy little comment, it
+declared: *Claude Code uses its own Team API key.* Route it accordingly. Treat
+it like a metered client holding a corporate credential, translate it, meter it,
+mother it.
+
+That comment was wrong, and it had been wrong long enough to feel like fact.
+
+The Keychain credential Claude Code actually authenticates with is
+`claudeAiOauth` — and the token blob carries `subscriptionType=max`. That is not
+a Team API key. That is a **Max subscription login**, the same one that pays for
+the interactive sessions, an OAuth bearer minted by the person, not billed to a
+project. Claude Code was never holding a metered key. It was holding *Bert's Max
+seat*.
+
+Which collapses the entire design. If the client already carries a first-class
+Max bearer, the proxy's online job is not to translate, not to re-authenticate,
+not to help. Its job is to **get out of the way**: pass the request straight
+through to `api.anthropic.com` carrying Claude Code's own Max token. Native Max,
+full fidelity — extended thinking, `tool_use`, prompt caching, streaming — with
+**zero translation**. The best thing the proxy can do to a healthy Max request
+is nothing at all, quickly.
+
+<Aside type="danger" title="Read the credential, not the comment about the credential">
+  A stale `.zshrc` comment set the architecture for a feature that hadn't been
+  written yet. One `security find-generic-password` against the login keychain
+  — `claudeAiOauth`, `subscriptionType=max` — falsified it in one line. The
+  cheapest verification in the whole session was also the one that changed
+  everything. Check what the system *is*, not what a comment *remembers it
+  being*.
+</Aside>
+
+## Why the council killed Plan A
+
+Two designs went to the jedi council.
+
+**Plan A:** route Claude Code's online traffic through the `:3456` Claude Max
+bridge like the other council seats do. Familiar, symmetric, already wired.
+
+**Plan B:** native passthrough online, Cathedral-only fallback offline. Let the
+Max bearer fly straight to Anthropic; only reach for the local council when
+Anthropic is unreachable.
+
+The council picked B. Unanimously. Two reasons, both fatal to A.
+
+First, **A is lossy on every single online turn.** The `:3456` bridge speaks the
+proxy's internal OpenAI-shaped dialect; sending native Anthropic traffic through
+it means an Anthropic→OpenAI→Anthropic round-trip on the hottest path in the
+system — shedding extended-thinking blocks, mangling `tool_use`, dropping
+prompt-cache breakpoints — to arrive at the same Anthropic endpoint the bearer
+could have reached directly. You'd pay a translation tax to make a first-class
+request worse.
+
+Second — and this is the one that actually ends the argument — **the bridge is
+dead exactly when you need the fallback.** The `:3456` bridge reaches Anthropic
+*over the internet*. The entire point of the offline seat is that the internet
+is gone. A fallback that shares a failure domain with the thing it's supposed to
+back up is not a fallback; it's a second way to fail at the same time. The bridge
+cannot be the offline seat. **Only the local Cathedral can** — because the
+Cathedral is the only council seat whose reachability does not depend on the
+uplink being alive.
+
+## Fifteen lines, because the hard part was already done
+
+Here's the anticlimax: the feature was roughly **fifteen lines of Rust**.
+
+`proxyd` already did native passthrough for `claude-*` models — that reflex was
+built during [the Claude Code Incident](/architecture/proxy/#the-claude-code-incident),
+when the proxy learned to keep its hands off a client's OAuth token. And `proxyd`
+already had the streaming translation machinery to render a local MLX seat's
+output as a well-formed Anthropic SSE stream. Both halves of the mechanism
+existed. The online path worked. The offline *translation* worked.
+
+The gap was one thing, and it was embarrassingly narrow: `fallback_chain(
+"claude-opus-4-8")` returned an **empty vector**. Online, nobody noticed — the
+passthrough answered and the chain was never consulted. Offline, the passthrough
+failed to reach Anthropic, the proxy walked the fallback chain, found nothing,
+and returned a **502**. The council was sitting right there, warm and loaded, and
+the door to it had simply never been wired. Fifteen lines gave
+`claude-opus-4-8` a fallback chain that lands on the local champion. That was the
+whole feature.
+
+## The dead seat behind the green light
+
+Then the whole-branch review earned its keep.
+
+The offline seat, as first written, pointed at `council-heartbeat`. Reasonable
+name. Resolves fine. The test was green. Everyone could have gone home.
+
+Except `council-heartbeat`, in the source-of-truth `config.yaml`, was a **dead
+plain-HTTP seat pointing at the retired 27B** — a model that was decommissioned
+weeks ago and a transport (`http://`, no mTLS) that the live Cathedral doesn't
+even answer on anymore. The seat resolved as a config entry and connected to
+nothing. It was a light switch wired to a room that had been demolished.
+
+And the test *approved of it*, because the test only asserted
+`provider == Local`. That is a **false-green**: it checked that the fallback was
+*labelled* local, never that it was *reachable*. A seat can be local, named,
+config-valid, and stone dead all at once, and the assertion would still pass with
+a smile. The most dangerous test in any suite is the one that verifies a label
+instead of an outcome.
+
+The fix was two-part, and the second part matters more than the first:
+
+- Point the offline seat at **`council-mlx`** — the live champion, Qwen 3.6
+  35B-A3B on `:1337` over mTLS. The actual, answering, current Cathedral.
+- Rewrite the test to assert **`mtls` and `https`**, not just `provider == Local`.
+  Now a seat that *resolves but is dead* — wrong transport, wrong port, retired
+  model — turns the test **red**. Reachability became a property the suite can
+  see.
+
+<Aside type="note" title="A resolve-but-dead seat must turn the light red">
+  "It resolves" and "it answers" are different facts, and only one of them keeps
+  you online in a chalet. Assert the transport (`mtls`, `https`, the real port),
+  not the label. If a fallback can be config-valid and unreachable at the same
+  time, your test has to be able to tell those apart — or it will bless a corpse
+  every night and mean it.
+</Aside>
+
+## The code-signing ghost
+
+One last gremlin, filed under *things that cost an hour and deserve a callout*.
+
+The fresh `proxyd` built cleanly with `cargo` on Apple Silicon. Copied into
+place. Launched. macOS **SIGKILL**'d it at `exec`, instantly, with an empty log
+and a terse `OS_REASON_CODESIGNING`. No panic. No stack trace. No output. Just a
+binary that died the moment it was asked to breathe.
+
+The cause: a fresh cargo build on Apple Silicon carries a **linker-signed adhoc
+signature** (code-signing flags `0x20002`). Copy that binary with `cp` — which
+preserves the signature — into a path the kernel evaluates differently, and the
+adhoc signature no longer validates, so the kernel refuses to run it and doesn't
+feel it owes you an explanation. The fix is one command:
+
+```bash
+codesign --force --sign - /path/to/proxyd
+```
+
+Re-sign it ad-hoc *in place*, and the kernel stops treating it like an intruder.
+An empty crash log plus `OS_REASON_CODESIGNING` on Apple Silicon almost always
+means the signature, not the code.
+
+## Result
+
+The `claude` terminal on **both Macs** now routes through the sanctum proxy.
+Online, it's **native Max** — Bert's own Max bearer straight to Anthropic, full
+fidelity, no translation, no tax. Offline, it's the **Cathedral** — Qwen 3.6
+35B-A3B on `:1337`, rendered back to Claude Code as a clean Anthropic-shaped
+stream so the client never learns it changed rooms.
+
+And it was proven live, not asserted hopefully: a `claude` request that could not
+reach Anthropic came back as a well-formed Anthropic completion **from the local
+council**. The internet was gone. The coding assistant was not. That's the whole
+point — the lane that stays open when the road out of the haus is closed.
