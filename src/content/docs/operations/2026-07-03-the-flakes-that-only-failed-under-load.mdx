@@ -99,26 +99,36 @@ papering over a mystery — a unit test that resolves paths through `Path.home()
 no longer there.
 </Aside>
 
-## The one we didn't fix — and why that's the honest call
+## The one that was a safety decision, not a typo
 
 The workspace sweep also surfaced a test that fails *every* time, not
 sometimes: `sanctum-chitti`'s `attention_quiet_overrides_alert`. That's not
 flakiness — it's a deterministic disagreement between a test and the code, and
-its fix is a **safety decision**, not a mechanical one.
+its fix was a **safety decision**, not a mechanical one.
 
-`classify_posture` checks the Fever breaker (acute pressure ≥ 0.95) *before* the
-"be quiet" override, so a quiet request at Fever-level pressure still returns
-Fever. The test expects Conserving, and a comment one layer up says quiet "wins
-regardless of what the lower koshas say." Those genuinely conflict — and the two
-fixes are opposites: correct the test's input to the Alert band it clearly meant
-(quiet keeps winning over Alert, Fever keeps paging), *or* reorder the code so a
-"be quiet" can silence even a Fever breaker on a live, thermally-stressed box.
-One of those changes a running safety behavior. So it went to the domain owner
-as a question, not a commit. A red test you understand and flagged is pristine;
-a green test you got there by guessing at a safety rule is not.
+`classify_posture` checked the Fever breaker (acute pressure ≥ 0.95) *before* the
+"be quiet" override, so a quiet request at Fever-level pressure still returned
+Fever. The test expected Conserving, and a comment one layer up said quiet "wins
+regardless of what the lower koshas say." Those genuinely conflicted — and the
+two fixes were opposites: correct the test's input to the Alert band (quiet
+overrides Alert, Fever keeps paging), *or* reorder the code so a "be quiet" can
+silence even a Fever breaker on a live, thermally-stressed box. One of those
+changes a running safety behavior. So it went to the domain owner as a question,
+not a commit — the guess a machine shouldn't make on its own.
+
+The owner's call: **quiet wins over everything, Fever included.** An explicit "be
+quiet" — recording, on-call, asleep — is the human's context, and it outranks
+even the saturation breaker. So the `attention_quiet` check moved *above* the
+Fever check (the non-quiet path is byte-for-byte unchanged), a dedicated
+`attention_quiet_overrides_fever` test now pins the precedence, and the live
+`chittid` was rebuilt and restarted to carry it. The interim test-only fix that
+kept the suite green while the question was open got reverted into the real one.
+Ask first, then execute the answer exactly — including the part that changes a
+running service.
 
 ## Where it landed
 
 The council and server flakes are fixed and merged; the First Hello test is
-hardened; the full CLI suite is green across ten runs and both Rust suites are
-green. The estate's tests now fail for reasons, or not at all.
+hardened; the chitti posture rule is decided and shipped to the live daemon; the
+full CLI suite is green across ten runs and every Rust crate is green. The
+estate's tests now fail for reasons, or not at all.
