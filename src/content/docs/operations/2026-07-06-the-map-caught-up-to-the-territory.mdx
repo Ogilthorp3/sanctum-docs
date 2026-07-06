@@ -1,0 +1,108 @@
+---
+title: "The map caught up to the territory"
+description: "A post-migration reconciliation night: 44 catalog-rendered manifests, three ghost architectures retired, a doctrine name restored, and every suite green before sunrise."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![The map caught up to the territory — a pencil-sketch cartographer's desk where an old faded map is half redrawn in fresh ink that finally matches the miniature landscape beyond: tiny Mac Mini buildings, a bridge, and a small temple with a teal-glowing kyber crystal. Retired ghost-buildings on the faded half are gently crossed out.](./images/hero-map-caught-up.png)
+
+The Documents→Projects migration landed weeks of drift in one night's lap.
+When the dust settled, the map — instance.yaml, the runtime catalog, the
+service manifests, the test suites — described a haus that no longer
+existed. This is the field note from the night the map caught up.
+
+## The shape of the drift
+
+Nothing was *down*. That was the trap. The health registry read all-pass,
+the watchdog's damped INFO noise had been stable for weeks, and every
+individual service answered its probe. The drift lived one layer up, in
+the declarations:
+
+- **The renderer pruned what it didn't know.** `render_runtime_services.py`
+  writes the full manifest set and removes strays — so the hand-authored
+  manifests for `endocrine-gland` and the old `sanctum-tts` vanished on the
+  first post-migration render. Both services were alive; both were
+  unmonitored the moment the render ran.
+- **The catalog had renamed a doctrine-constant.** The pre-rename
+  `sanctum-tts` manifest carried an explicit header: *the public name
+  `sanctum-tts` and port 8008 stay constant across backend transitions.*
+  The rescue-commit catalog inverted it — `qwen3-tts` became the node name
+  and the doctrine name disappeared, which is exactly what the
+  runtime-audit graph spec was written to catch.
+- **The vm was modeled as qemu.** The catalog's health check looked for a
+  `qemu-system-aarch64` process. The VM has run under OrbStack since the
+  qemu retirement; the watchdog dutifully "healed" a VM that was never
+  sick by kicking a launcher for a hypervisor that no longer exists.
+- **The tunnel that OrbStack made obsolete.** `ha-tunnel` kept a
+  supplemental catalog entry (and so a manifest, and so watchdog noise)
+  long after OrbStack started mapping `:8123` natively.
+- **The dashboard's ports were a fossil record.** instance.yaml declared
+  `dashboard: 3333` and `command_center: 1111` — two entries, two stale
+  ports, one actual node process serving both the Jocasta shell and the
+  Command Center API on `:3002` behind a passkey gate. (Which also
+  resolves the June 12 audit note: the gate is ENFORCING.)
+
+## What the fix looked like
+
+The renderer learned two small doctrines. `provides:` aliases are now
+first-class dependency tokens, and an override may pin a public `name:` —
+so `sanctum-tts` renders under its constant name with `qwen3-tts` as the
+back-compat alias, and every `requires:` list that referenced either
+resolves. `endocrine-gland` moved from hand-authored stray to cataloged
+supplemental, command-type freshness checks intact. The vm entry now
+models OrbStack: liveness is ssh reachability on the stable vmnet anchor,
+healing goes through `orbstack-autostart`.
+
+Forty-four manifests render clean, `--check` idempotent.
+
+## The tests had drifted too
+
+Half the "failures" were suites asserting the previous world: plain-HTTP
+probes against the mTLS-only Temple (Fort Knox hardening, July 5 — no
+plain listener, client CA required), an http probe against the Rust
+proxy's https, a `last_ingested` field the health-center API renamed to
+`has_data`, an LM Studio bridge assertion for a stack decommissioned in
+June, and a "VM reaches mac MLX" check that Fort Knox deliberately closed
+(the VM holds no client cert; VM workloads ride cloud providers via the
+gateway). Each assert was moved to the verified present rather than
+deleted — the mTLS probe now uses the canary client cert minted for
+exactly this purpose.
+
+<Aside type="tip" title="Silence is not success">
+The MLX server answered an mTLS `/v1/models` in milliseconds all night.
+Every plain-HTTP probe read as "busy" or "down". When a hardened service
+stops answering the old protocol, monitoring that still speaks it
+reports weather, not health.
+</Aside>
+
+## The watchdog's ghosts
+
+`sanctumd` carries one ghost in its compiled body: a Living Force
+roll-call that loads `qwen2.5-coder-14b` through LM Studio on `:1234` —
+dead architecture walking, flagged `lmstudio-coder14b` unhealthy every
+ten minutes for weeks. It is env-gated (`LIVING_FORCE_COUNCIL_ENABLED`),
+so the staged watchdog plist now ships it `false`; the ghost goes silent
+at the next clean lifecycle. Porting the roll-call to the mTLS Temple
+seats is sanctum-rs work for another night.
+
+The board work: the Holocron sidecar wanted three greens. The LinkedIn
+monitor already knew how to say SKIPPED honestly; the OBLITERATUS monitor
+learned the same doctrine (an on-demand research app that isn't running
+is *not running*, not breached — static integrity check instead). Disk
+pressure cleared from 87% to 82% by deleting exactly two cold,
+unreferenced, re-downloadable public model caches — 47 GB of Ornith and
+a Heretic duplicate in the decommissioned LM Studio cache.
+
+## Where it ended
+
+Every suite green: sanctumctl 39/0, runtime-audit 31/0, system-e2e 39/0,
+sanctum-audit 89/0, evolution-loop 15/0, tech-lookout 14/0, kitchen-loop
+19/0, pytest 107/0. Registry 41/41. Watchdog root causes: empty. Holocron:
+OPERATIONAL, kyber green.
+
+The lesson worth keeping: after a migration, the dangerous drift is not
+the service that fails — it's the declaration that still describes the
+old world while everything underneath it moved. Render from one source
+of truth, make the renderer refuse what it can't verify, and let the
+test suites assert the present tense.
