@@ -1,0 +1,104 @@
+---
+title: "The ghost leaves the machine"
+description: "The sequel the reconciliation night promised: the Living Force roll-call ported to the mTLS Temple seats, LM Studio purged from code and ops, and the crash-cart daemon that turned out to be the patient."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![The ghost leaves the machine — a pencil-sketch temple server room where a translucent ghost shaped like an old desktop application drifts out the doorway, two crystal-lit seats etched 1337 and 3301 remain inside, and tiny movers carry crates of weights from a dusty cache shelf to a clean models shelf.](./images/hero-ghost-leaves-the-machine.png)
+
+Last night's field note ended with a promise: *porting the roll-call to the
+mTLS Temple seats is sanctum-rs work for another night.* This was that
+night. By the end of it, LM Studio — decommissioned from the haus in June
+but haunting the code ever since — had left the machine entirely.
+
+## The port
+
+The watchdog's Living Force roll-call was the last living consumer of the
+dead stack: every ten minutes it tried to wake `qwen2.5-coder-14b` through
+an `lms` CLI that no longer exists, then flagged the ghost unhealthy. The
+new `temple.rs` speaks the present tense instead. It probes both Temple
+seats — the cathedral on `:1337`, Codestral/Devstral on `:3301` — over
+mutual TLS with the canary client certificate, and it *discovers* the
+champion model id from `/v1/models` rather than pinning one. The cathedral
+rotates champions (a 27B trial serves today where a 35B did yesterday); a
+hardcoded id would drift into permanent identity-mismatch failures the
+first week it was wrong.
+
+The roll-call itself kept its soul: eight council agents, system prompts
+from `agent_prompts.yaml`, a one-word identity probe each. But it learned
+manners for a seat that serves live traffic. Queries run serially — the
+decode loop is memory-bandwidth bound, so parallel requests just queue
+server-side while burning client timeouts. Stop tokens bound each answer
+to a single word. Two consecutive timeouts bail the whole round rather
+than stacking eight long jobs behind a busy champion. And a sanity-probe
+timeout now means *deferred*, not *down*: the watchdog skips the round and
+only escalates after three consecutive misses.
+
+The live test asked the real cathedral, through the real mTLS client,
+what its name was. It said *Yoda*.
+
+## The purge
+
+The port unblocked the sweep. Twelve source files and two whole modules
+left sanctum-rs; thirteen ops files were edited and eight stale artifacts
+deleted from `~/.sanctum`. The pressure valve dropped its LM Studio
+allowlist entries — its panic-replay fixture still carries the real 8.6 GB
+node shim from the April JetsamEvent, but the test now asserts today's
+picker *ignores* that process instead of matching it. Forensic data stays;
+live pattern-matching against ghosts does not.
+
+The weights moved too. The Devstral seat had been loading from
+`~/.cache/lm-studio/models/` — a live service anchored inside a
+decommissioned app's cache directory. Both model folders now live in
+`~/models/mlx/` beside the cathedral's champion, and the cache directory
+is gone. One trap worth recording: `launchctl kickstart -k` restarts a
+job with the *cached* plist definition, so the repointed `--model`
+argument was invisible until a full `bootout` + `bootstrap` cycle. The
+seat crash-looped on the old path for a minute while looking freshly
+restarted.
+
+## The crash cart was the patient
+
+Redeploying `sanctum-triage` — rebuilt only to drop its dead
+LM-Studio-unload path — exposed something worse than drift. Its
+compiled-in service table still described the pre-migration haus: it
+health-checked the Rust proxy with plain HTTP (the proxy has served
+https since Fort Knox), read the TLS reset as *unhealthy*, and had been
+SIGTERM-ing the live proxyd on every recovery cycle. It also stood ready
+to resurrect a dashboard port that died with the old architecture and to
+spawn a dev vite server as if that were a daemon's job.
+
+The rebuild then surfaced a third layer: the `sysinfo` crate reports zero
+available memory on this macOS, so the fresh binary read a healthy box as
+famine and shed a real service before it was stopped. The fix reads
+available memory from `vm_stat` — the same arithmetic the watchdog
+trusts — and recalibrated every threshold from percentages to absolute
+gigabytes. A 64 GB box that keeps two resident models is *designed* to
+show 12 GB available; percentage thresholds written in the pre-cathedral
+era read that steady state as an emergency, forever.
+
+<Aside type="caution" title="Audit the rescuer">
+A triage daemon inherits total trust and no test suite. This one spent
+weeks killing the healthy service it was built to protect, because its
+map of the haus was compiled in and nobody's suite asserted it. If a
+process is allowed to SIGTERM others, its model of the world deserves
+the same reconciliation discipline as the catalog.
+</Aside>
+
+## What deliberately survives
+
+Three things kept their LM Studio references on purpose. The
+panic-replay fixture, because it reproduces a real night and now proves
+the ghost is ignored. The vendored `mlx-rs` comments, because upstream
+code is not ours to rewrite. And the chalet M1's `local_model` entry,
+because that offline machine may genuinely still run the old stack — its
+coder seat is an open decision, and falsifying the map in either
+direction is the exact disease this week was spent curing.
+
+The ported watchdog binary is staged behind the phantom launchd
+registration and goes live at the next reboot; `~/.lmstudio` still holds
+11 GB of app remnants awaiting a human verdict. Everything else answered
+roll-call by sunrise: both seats serving over mTLS, four hundred tests
+green across six crates, and for the first time since June, no ghost in
+the machine.
