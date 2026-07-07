@@ -1,0 +1,122 @@
+---
+title: "The twin that would not die"
+description: "What looked like a sanctum sidecar was a full Home Assistant clone double-firing the haus for months. Its decommission took four guardians, one resurrection caught red-handed, and an outbound-only bridge that gave the family dashboard back."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![The twin that would not die — a pencil-sketch scene of two identical miniature haus models on a workbench, the left one glowing softly alive, the right one dark with its power cable pulled, while a skeletal clockwork hand reaches from the shadows to plug the dark one back in, and a thin teal thread of light arcs from the living haus to a small computer in the corner.](./images/hero-twin-that-would-not-die.png)
+
+It started as a cost question: with LM Studio gone, why does the Mini
+still run a container engine at all? The ledger said one tenant mattered
+— the Home Assistant docker twin. The plan was an afternoon inventory and
+a quiet `docker stop`. The inventory instead found a second brain that
+had been running the haus in parallel for months, and a machine that
+refused to stay dead.
+
+## The clone nobody meant to keep
+
+The twin was supposed to be a sanctum sidecar: briefings, Force Flow
+polling, a config mirror of the real Home Assistant appliance (the Green,
+`10.0.0.3`). The recorder database told a different story. Every one of
+its thirty-odd automations was live, and the scheduled ones fired **in
+lockstep with the Green's identical copies**: sunset warm-up at 21:09 on
+both brains, climate setpoints at 06:00 on both, bonne-nuit at 23:00 on
+both, and the Qui-Gon resilience test at 04:00 — twice a morning, every
+morning. The twin's hourly auto-healer had fired forty-five times in two
+days, faithfully reloading its own zombie cloud-Tuya integrations,
+because the localtuya migration had only ever happened on the Green.
+
+The split-brain had a shape. Device actions worked from both instances;
+anything touching a Mini loopback service worked only from the twin,
+because Fort Knox binds Force Flow (`:4077`) and sonos-bridge (`:1969`)
+to `127.0.0.1`. The Green's copies of those automations had been failing
+silently since the split — including the family's homework-mode toggle
+and every screen-time dashboard sensor. The twin, meanwhile, was the only
+thing keeping the Windu security reports alive. And one grim bonus: the
+Force Flow failsafe's P0 fallback pushed to the twin's `mobile_app`
+notify service. The phones moved to the Green long ago. The escape hatch
+had been welded shut for months and nobody heard it.
+
+## The cut
+
+The jobs that mattered became launchd agents. `windu-ha-report.py` reads
+live entity states from the Green and posts to Force Flow —
+`com.sanctum.windu-perimeter-check` at 23:00 and
+`com.sanctum.windu-daily-digest` at 03:00, both live-tested. The 04:00
+resilience test became `com.sanctum.resilience-test`, calling the same
+ssh wrapper into the VM — and now runs once a morning instead of twice.
+Every consumer repointed to the Green: `ha-gateway.js` (the VM agents'
+proxy), `sanctum-endpoints`, the doctor and status probes, and the
+failsafe fallback, which now pushes to phones that exist. The service
+registry entry lost its remediation actions so nothing would helpfully
+resurrect the corpse.
+
+Then `docker update --restart=no`, `docker stop`, and the twin was down.
+
+## The resurrection
+
+Twenty-five seconds later it was healthy again.
+
+The tell was in the Force Flow access log: a `HomeAssistant/2026.4.4`
+user agent still polling every thirty seconds after the stop. The restart
+policy had survived, which acquitted docker itself; a second stop-and-watch
+acquitted the castellan watchdog. The fingerprint that convicted was
+arithmetic: the resurrection landed at 21:14:55, and a launchd agent with
+`StartInterval 1800` loaded at the 18:14 boot ticks at exactly :14:55 and
+:44:55. That agent was **ha-self-healer**, whose heal script runs
+`docker start homeassistant` when the container is down. Its own log
+closed the case: *container not running — restarting (closed-loop
+verify). container verified up.*
+
+The twin, it turned out, had four independent guardians: the docker
+restart policy, the castellan service-registry remediation, ha-self-healer
+on its half-hour tick, and service-doctor's `--fix` mode. Decommissioning
+a service means finding every hand that can reach the defibrillator.
+The healer is booted out and its plist renamed; the next tick came and
+went with the twin still cold.
+
+<Aside type="caution" title="The four-guardians lesson">
+Before declaring anything decommissioned, enumerate everything with
+authority to restart it. Heal logs may not live where the service's own
+logs do — ha-self-healer wrote to `~/.openclaw/logs/ha-healer/`, not
+`~/.sanctum/logs/`, which is why the first search for the resurrector
+came back empty.
+</Aside>
+
+## The bridge
+
+What the twin uniquely provided was reach: it sat on the Mini's host
+network, so Green-side intent could become Mini-side action. Its
+replacement is `ha-green-bridge.py` (`com.sanctum.ha-green-bridge`), a
+single outbound websocket from the Mini to the Green. No new listening
+ports, nothing exposed — the Green never calls in; the bridge reaches out.
+
+Three flows ride it. The homework toggle on the family dashboard now
+actually starts and stops homework mode in Force Flow — verified live,
+both directions, about seven seconds end to end. When homework expires in
+Force Flow, the bridge flips the Green's toggle back off. And if Alarmo
+ever enters `triggered`, Force Flow gets a critical notification — the
+sirens and whole-house TTS were never broken, since that response is
+Home Assistant-native and runs on the Green itself.
+
+The dashboard sensors took one registry trick. The Green's screen-time
+package defines `rest:` sensors that poll its own loopback — permanently
+unavailable, and their entity ids were squatted by the dead platform. The
+websocket API renamed them to `*_rest_dead` and disabled them, freeing
+the ids; the bridge now pushes real state into them every minute. The
+proof was the Green's own template sensors computing again: curfew
+`23:00`, countdown `1h12`, schedule type `conge` — July, no school.
+
+## What remains
+
+One Home Assistant. The Mini's container engine now hosts Outline and the
+conduit, nothing else. The twin's config stays on disk at
+`~/.openclaw/homeassistant/` — two gigabytes of history and its own
+nightly backups — until a deliberate decision deletes it. Six automations
+whose actions could never work on the Green sleep with `automation.turn_off`.
+And the colima question that started all this answered itself from the
+incident archive: the old runtime's daemon died three times in one April
+day, which is why OrbStack holds the socket today.
+
+The haus has one brain again. The other one is allowed to rest.
