@@ -209,21 +209,26 @@ Everything outside the architecture sidebar (guides, operations, reference, agen
 
 ### Generation Tool
 
-We use a single canonical tool **in this repo** (`sanctum-docs/tools/gen_hero_image.py`) to generate these via **Google Gemini / Imagen**. It is the only hero generator in the haus — there is deliberately no copy in the parent Claude_Code repo.
+We use a single canonical tool **in this repo** (`sanctum-docs/tools/gen_hero_image.py`) to generate heroes. It is the only hero generator in the haus — there is deliberately no copy in the parent Claude_Code repo. It has two backends behind one entry point:
+
+- **`--backend local` (default)** — Flux.1-dev on-device via `flux_backend.py`. Offline, **$0, no API key**. This is the default so nobody accidentally spends on the API.
+- **`--backend imagen`** — Google Imagen 4 (metered, costs money). Deliberate opt-in only.
 
 ```bash
-# From the sanctum-docs repo root
-~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py \
+# From the sanctum-docs repo root — LOCAL Flux (free, default):
+~/Projects/comfy-lab/.venv-flux/bin/python tools/gen_hero_image.py \
   --prompt "Your detailed prompt here..." \
   --out src/content/docs/[path]/images/hero-name.png
+  # optional: --aspect 16:9  --steps 40
+
+# Deliberately paid (Google Imagen) — run with the cli-venv that has google-genai:
+~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen \
+  --prompt "..." --out src/content/docs/[path]/images/hero-name.png
 ```
 
-The tool automatically:
-- Pulls the API key from macOS Keychain (`gemini-api-key` or `Google AI Studio`).
-- Uses the best available Imagen/Gemini model for image generation.
-- Outputs PNG to the specified path.
+The local backend renders from the locally-cached Flux.1-dev on Apple MPS and writes the PNG. If the local venv/model is missing it **fails loudly** — it never silently falls back to the paid API. Set `SANCTUM_FLUX_VENV` to point at the torch/diffusers venv if it lives elsewhere.
 
-**Never use Rube/Composio for image generation.** Rube is deprecated. Use `gen_hero_image.py` or direct Gemini API calls via the keychain-stored API key. All external service access uses direct APIs or native MCP integrations — no intermediary platforms.
+**Never use Rube/Composio for image generation.** Rube is deprecated. All external service access uses direct APIs or native MCP integrations — no intermediary platforms.
 
 ### Prompt Templates
 
