@@ -1,0 +1,59 @@
+---
+title: The Cathedral Routes by Need
+description: Teaching the proxy to send each request to the right one of three local minds — fast, deep, or code — so the council stays sharp even when the internet is gone.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![Tommy the Abyssinian cat as a railway signal operator at a three-track junction, pulling a lever that switches an incoming request-cart onto one of three tracks labelled FAST, DEEP, and CODE; a storm cloud labelled INTERNET is disconnected in the background while the three local tracks glow on.](./images/hero-2026-07-07-routes-by-need.png)
+
+The Cathedral now holds three local minds — the fast MoE, the deep 27B, and Devstral the coder. Having three models is only half the trick; the other half is *asking the right one*. For a while we weren't: the router pinned everything to the fast MoE, and its idea of a "fallback" was to dump every kind of request onto a single seat — code questions, deep reasoning, all of it — like a switchboard operator who plugs every call into the same jack and hopes.
+
+This is the note where the operator learns which lever to pull. Tommy would like it on the record that he has been pulling levers correctly this whole time.
+
+## The insight that made it matter
+
+Bert said the thing that turned a nice-to-have into a must: **"If the internet goes down, everyone goes to the Cathedral anyway."** When the cloud is up, a router being lazy about local models is a rounding error — the hard questions go to Opus. But the moment the wire goes dark, the three local minds are *all you have*, and routing them badly means a deep medical question gets the fast-shallow model and a code bug gets a general chatbot. The offline path isn't a fallback; it's the whole council.
+
+So the routing brain had to be good enough to be the *only* brain.
+
+## One table, used two ways
+
+The whole thing is a pure function — `local_route(agent, category) → seat` — that maps each request to the mind built for it:
+
+| The request is… | → goes to | because |
+|---|---|---|
+| **code** (or from Qui-Gon) | Devstral (`council-code`) | the specialist |
+| **an image** | MoE (`council-mlx`) | fast, and the only local eyes |
+| **deep reasoning** — analyze, weigh, trade-offs | 27B (`council-local-think`) | quality over speed |
+| **Cilghal + high-stakes health** | 27B (`council-local-think`) | the deliberate deep-reasoner seat — the one we're investing in |
+| everything else | MoE (`council-mlx`) | the fast default |
+
+The same table drives two different moments: it's a *smart-route* decision when a request is already headed local, and it's the *fallback selector* when the cloud is gone. Fix it once, and both the everyday and the apocalypse get smarter.
+
+## The one call that gets the deliberate mind
+
+The health path earned its own rule. When Cilghal — the wellness seat — gets a **high-stakes** question, it routes to the local 27B *even when the internet is up*, instead of the fast MoE or a cloud tier.
+
+An honest aside: on the two hard medical questions we tested it on, the 27B and the fast MoE answered about equally well — both careful, both correct, the 27B just marginally more thorough (it named the drug-interaction *mechanism* and an extra alternative). That tie is consistent with the benchmarks. So this rule isn't "the 27B is dramatically smarter today." It's a deliberate bet: the 27B is the seat we're actively fine-tuning to *become* the careful health specialist, so we route the calls that matter to the model we're investing in — and give it the real-world traffic that will make it better.
+
+<Aside type="caution" title="Fail toward the careful model">
+The high-stakes classifier is deliberately trigger-happy. A false positive spends the slow 27B on a benign question — mildly wasteful. A false negative routes a real emergency to the fast-shallow model — unacceptable. So it escalates on "chest pain," "passed out," "too many pills," "is it safe to take with…," and a long tail of the phrasings a worried person actually types at 2 a.m. It over-fires on "stroke of luck." We are at peace with that.
+</Aside>
+
+Verified live, in the proxy's own log: a Cilghal request of *"I have chest pain, should I go to the ER?"* → `resolved="council-local-think"` → `served provider=local`. The casual *"what's a good morning stretch"* → no reroute. The right lever, every time.
+
+## What shipped
+
+<Steps>
+1. Two pure, tested classifiers (`local_route`, `is_high_stakes`) — 56 unit tests, fail-toward-escalation on the health path.
+2. The Cilghal high-stakes online reroute, guarded so it fires for *only* that agent on *only* high-stakes questions.
+3. The three formerly task-blind offline seams, now all routed through the one table — the "dump it all on one seat" bug is dead.
+4. A new `council-local-think` seat (the 27B) and reasoning/health fallback chains that prefer it.
+</Steps>
+
+Deployed to the production router with the usual belt-and-suspenders — binary backed up, config merged surgically (not overwritten), restarted clean at 27 seats, rollback one command away. The agents keep hitting one door; behind it, the Cathedral now decides which mind answers.
+
+<Aside type="note">
+Three minds, one doorway, zero cloud required. The internet can go dark and the council barely notices — it just routes by need. Tommy resumes his post at the junction, unbothered.
+</Aside>
