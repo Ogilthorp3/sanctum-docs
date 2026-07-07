@@ -209,11 +209,13 @@ Everything outside the architecture sidebar (guides, operations, reference, agen
 
 ### Generation Tool
 
-We use a centralized tool in the main repository to generate these via **Google Gemini / Imagen**.
+We use a single canonical tool **in this repo** (`sanctum-docs/tools/gen_hero_image.py`) to generate these via **Google Gemini / Imagen**. It is the only hero generator in the haus — there is deliberately no copy in the parent Claude_Code repo.
 
 ```bash
-# From the root of Claude_Code
-python3 tools/gen_hero_image.py "Your detailed prompt here..." src/content/docs/[path]/images/hero-name.png
+# From the sanctum-docs repo root
+~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py \
+  --prompt "Your detailed prompt here..." \
+  --out src/content/docs/[path]/images/hero-name.png
 ```
 
 The tool automatically:

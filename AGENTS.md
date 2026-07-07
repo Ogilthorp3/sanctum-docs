@@ -14,8 +14,10 @@ in CI. None of them are suggestions.
 
 1. **Every new page has a unique hero image.** Pencil sketch, dark background,
    one teal or amber accent halo. Generate with `tools/gen_hero_image.py` in
-   the parent Claude_Code repo. The image goes in `<category>/images/` next
-   to the page. No SVGs for heroes. No stock photos. No clip art.
+   this repo (`sanctum-docs/tools/`) — the single canonical generator; there
+   is no copy in the parent Claude_Code repo. The image goes in
+   `<category>/images/` next to the page. No SVGs for heroes. No stock
+   photos. No clip art.
 
 2. **No emojis in prose.** The only allowed files are the Holocron portal
    pages — `index.mdx`, `index-qc.mdx`, and `qc.mdx` — which use `⚜` and
