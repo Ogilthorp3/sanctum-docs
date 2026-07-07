@@ -64,6 +64,8 @@ Things that will bite you go here. Be specific about the bite.
 </Aside>
 ```
 
+**Register every new page in the sidebar.** Starlight does not auto-discover pages: a page without an entry in `astro.config.mjs` is unreachable from navigation. Field notes go in the `Field Notes` group under Operations, newest first, labeled `YYYY-MM-DD — Title`. Add the sidebar entry in the same commit as the page, and run `npx astro build` before pushing — it errors on bad slugs. (Fifteen field notes shipped as sidebar-orphans between 2026-07-02 and 2026-07-07 before this rule was written down.)
+
 **Aside types:**
 - `note` — interesting technical detail or fun fact
 - `tip` — genuinely useful advice
