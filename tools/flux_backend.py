@@ -50,7 +50,25 @@ def main() -> None:
               f"model={a.model} {a.width}x{a.height} steps={a.steps}")
         return
 
-    pipe = FluxPipeline.from_pretrained(a.model, torch_dtype=torch.bfloat16)
+    # Resolve to the local snapshot DIR and load from that path. Loading from a
+    # directory skips hf_hub's snapshot-completeness check (which trips on the
+    # cosmetic files — .gitattributes/LICENSE/README — that a gated repo won't
+    # hand over without a token) and simply loads the diffusers files present.
+    # This is what makes the model usable offline with NO token after download.
+    import glob
+    src = a.model
+    if not os.path.isdir(src):
+        cache = os.path.expanduser("~/.cache/huggingface/hub")
+        snaps = sorted(glob.glob(f"{cache}/models--{src.replace('/', '--')}/snapshots/*"))
+        snaps = [s for s in snaps if os.path.exists(os.path.join(s, "model_index.json"))]
+        if snaps:
+            src = snaps[-1]
+        else:
+            sys.exit(f"flux_backend: no local snapshot with model_index.json for {a.model}; "
+                     f"complete the download (needs a token) before offline use.")
+    pipe = FluxPipeline.from_pretrained(
+        src, torch_dtype=torch.bfloat16, local_files_only=True
+    )
     if torch.backends.mps.is_available():
         pipe = pipe.to("mps")
     else:
