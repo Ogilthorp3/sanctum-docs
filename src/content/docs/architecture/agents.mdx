@@ -29,8 +29,8 @@ As of April 2026, the system runs a strict **True Council Architecture**. The op
     The senior lead of the Sanctum Council. Yoda handles council routing, final synthesis of complex decisions, and the daily "Morning Briefing" digest. Also runs as a dedicated voice agent (Python, port 1138 on Mac Mini) with Sanctum TTS (the Rust post-quantum `sanctum-tts` front door on port 8008, proxying to the Chatterbox `cbx-yoda` voice engine on 8011). He remains the ultimate authority on whether a raccoon constitutes a security breach.
   </Card>
   <Card title="Mon Mothma" icon="rocket">
-    **Operations** — *role, not yet a routed persona*
-    A seat the Council has named but not filled: there's no `mothma` entry in `openclaw.json`, so no model wears this robe yet. The duties — incident correlation, boot sequencing, keeping cross-domain signals from contradicting each other at 4 AM — are carried today by the [Force Flow](/architecture/force-flow/) bus and `sanctum-triage`, no persona required. The chair is reserved.
+    **Operations** — *seated in the CLI council chamber; OpenClaw chair still reserved*
+    Chief of operations — not a Jedi, but the steady hand: deployments, runbooks, drift windows, backups, secret rotation. She holds a full seat in the `sanctum council` REPL (on `council-brain`), one of only two armed with instruments — `sanctum_status`, `sanctum_doctor`, `agent_list`, `logs_tail` — tool turns on Gemini 3.1 Pro. No `mothma` entry exists in `openclaw.json` yet; the 4 AM incident-correlation duties there stay with [Force Flow](/architecture/force-flow/) and `sanctum-triage` until her daemon robe is sewn.
   </Card>
   <Card title="Qui-Gon" icon="setting">
     **Infrastructure**
@@ -75,7 +75,11 @@ These are not persona agents but Rust binaries that run continuously and act on 
 - **sanctum-triage** (`com.sanctum.triage`): Qui-Gon's immune response. Monitors system RAM every 30 seconds and unloads heavy models when pressure exceeds thresholds. Native Rust, zero Python.
 - **sanctum-watchdog** (port 2187): Health monitoring daemon. Checks service liveness at declared intervals.
 - **sanctum-memory** (port 42069): Persistent memory vault with MCP interface. The council's institutional memory.
-- **sanctum-server** (port 8900): Rust smart router fronting four backends — `council-secure` (Qwen3.6-35B-A3B-4bit via `sanctum-mlx` on `:1337`), `coder` (Codestral-22B-v0.1-4bit via `sanctum-mlx-codestral` / `com.sanctum.mlx-codestral` on `:3301`; the former Qwen2.5-Coder-14B `:1338` seat and its `:1234` LM Studio bridge were retired 2026-06-07), `spatial` (Gemini 3.1 Pro), and `cloud` (Claude Opus — Max subscription, the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today — via Max proxy on `:3456`, OpenRouter fallback). Five tiers of routing, observability, breakers, and quality detectors. See [Smart Router Cathedral](/architecture/smart-router-cathedral/) for the full anatomy.
+- **sanctum-server** (port 8900): Rust smart router fronting four backends — `council-secure` (Qwen3.6-35B-A3B-4bit primary plus a Qwen3.6-27B-4bit secondary, dual-residency in one `sanctum-mlx` process on `:1337`, vision enabled), `coder` (Devstral-Small-2-24B-Instruct-2512-4bit via `com.sanctum.mlx-devstral-rust` on `:3301`; the former Qwen2.5-Coder-14B `:1338` seat and its `:1234` LM Studio bridge were retired 2026-06-07), `spatial` (Gemini 3.1 Pro), and `cloud` (Claude Opus — Max subscription, the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today — via Max proxy on `:3456`, OpenRouter fallback). Five tiers of routing, observability, breakers, and quality detectors. See [Smart Router Cathedral](/architecture/smart-router-cathedral/) for the full anatomy.
+
+## The CLI Council Chamber
+
+The roster above is the **OpenClaw runtime** layer — five persona daemons plus Jocasta on the host. The `sanctum council` REPL seats a bench of **seven**: the five Jedi, Jocasta, and Mon Mothma. Yoda and Mothma are the only tool-armed chairs (four read-only, audited instruments; every other seat chat-only by council ruling, 2026-06-12). Same minds, two rooms: the runtime does the continuous work, the chamber answers when summoned.
 
 ## Interactive CLI Agents
 
@@ -95,9 +99,9 @@ The persona layer is not allowed to drift on vibes. The canonical agent markdown
 
 The sync model is deliberately boring:
 
-- local runtime is updated first; remote fanout to the VM and mobile nodes is best-effort, and unreachable hosts are skipped, not treated as hard failures
-- the Mac Mini is the authoritative fanout source; mobile nodes without `~/.sanctum/instance.yaml` run in `fanout-target-only` mode — they update status locally but never try to become an accidental second source of truth
-- the drift check is its own surface today: `sync_agent_markdown.py --check` exits non-zero if any reachable runtime differs from canonical. Folding it into `sanctum doctor` (next to the live MBP audit, so persona drift sits beside runtime manifests and LaunchAgents) is on the list — `sanctum doctor` has no `--quick` knob yet
+- local runtime is updated first; remote fanout to the VM and mobile nodes is best-effort — unreachable hosts are skipped, not treated as hard failures
+- the Mac Mini is the authoritative fanout source; mobile nodes without `~/.sanctum/instance.yaml` run in `fanout-target-only` mode and never become an accidental second source of truth
+- `sync_agent_markdown.py --check` exits non-zero if any reachable runtime differs from canonical; folding it into `sanctum doctor` is on the list
 - machine-readable sync state lands in `~/.sanctum/state/agent-markdown-sync.json`
 
 On the Mac hosts, `install_agent_markdown_sync.sh` installs the lot: a `com.sanctum.agent-markdown-sync` LaunchAgent (at login + every 5 minutes), `mlx-finetune` git hooks (`post-merge`, `post-checkout`, `post-commit`) so fresh pulls and training edits converge on their own, and absolute-path helper scripts under `~/.sanctum/scripts` so launchd doesn't have to improvise its way through macOS privacy theater.

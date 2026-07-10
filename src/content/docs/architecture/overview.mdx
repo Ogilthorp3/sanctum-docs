@@ -16,7 +16,7 @@ That is Sanctum working correctly. Thirty-eight services, two machines, one priv
 
 ## The Shape
 
-Physically, Sanctum is a Mac Mini M4 Pro and a Lima `vmType=vz` Ubuntu VM running on it, connected by a private `bridge100` interface on `10.0.0.0/24`. The Mac is where hardware lives: Apple Silicon inference, Sonos, Signal, HomeKit, anything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: six to nine specialized intelligences with no direct route to the internet — an air-gapped tenant with an indoor-plumbing privilege.
+Physically, Sanctum is a Mac Mini M4 Pro and a Lima `vmType=vz` Ubuntu VM running on it, connected by a private `bridge100` interface on `10.10.10.0/24`. The Mac is where hardware lives: Apple Silicon inference, Sonos, Signal, HomeKit, anything that has to touch a USB port or a microphone. The VM is where the agent cluster lives: five specialized intelligences with no direct route to the internet — an air-gapped tenant with an indoor-plumbing privilege.
 
 <ZoomImage src={networkTopology.src} alt="Sanctum network topology — Mac Mini host and Ubuntu VM connected via bridge100, with Cloudflare Tunnel and Tailscale as the two external on-ramps" />
 
@@ -52,35 +52,35 @@ The flesh is Python — how we find out what a service *is* before we carve it i
 | Muscle | Port | What It's Still Figuring Out |
 |--------|-----:|------------------------------|
 | `force-flow` | 4077 | The unified notification hub. iPhone push, Sonos TTS, Signal via signal-cli daemon, dashboard banners, macOS Notification Center. The channel list keeps gaining members. |
-| `screen-time` | — | Curfew, wind-down, homework mode, credits, guests. Deployed alongside force-flow. The rules here change whenever a teenager finds a loophole. |
-| `yoda-tts-worker` | 8008 | The Python TTS backend answering on `:8008` under the `com.sanctum.yoda-tts-worker` unit. The Rust `sanctum-tts` adapter that's meant to front it is built but not yet the live listener. |
+| `haus-control` | — | Curfew, wind-down, homework mode, credits, guests. Deployed alongside force-flow. The rules here change whenever a teenager finds a loophole. |
+| `yoda-tts-worker` | 8011 | The Python voice backend — Chatterbox `cbx-yoda` — answering on `:8011` under the `com.sanctum.yoda-tts-worker` unit, behind the live Rust `sanctum-tts` front door on `:8008`. |
 
-Flesh hardens. The current `rust_readiness` readout puts `force-flow` alone in the `hardening` stage — feature velocity slowing, but not zero. `screen-time` is still firmly `organic`, the busiest service on the chart with 42 commits in thirty days. It crosses when the guest-approval flow stabilises, and not a day before.
+Flesh hardens. The current `rust_readiness` readout puts `force-flow` alone in the `hardening` stage — feature velocity slowing, but not zero. `haus-control` is still firmly `organic`, the busiest service on the chart with 42 commits in thirty days. It crosses when the guest-approval flow stabilises, and not a day before.
 
 ## The Nerves
 
 Between bones and flesh runs a network of private pathways — `bridge100` on the Mac–VM axis, plus well-known local ports services use to find each other without DNS. The rule is simple: no service reaches across the bridge for a remote call if a local one does the same job. Every cross-service conversation is a few hundred microseconds on loopback, so nothing interesting depends on the router's mood at 3 AM.
 
 ```
- Mac Mini  10.0.0.1
+ Mac Mini  10.10.10.1
  ├─ 1111   command-center
  ├─ 1337   sanctum-mlx (mTLS)
  ├─ 1984   firewalla bridge (Node)
  ├─ 2187   sanctum-watchdog
- ├─ 3301   sanctum-mlx-codestral (coder)
+ ├─ 3301   sanctum-mlx-devstral (coder)
  ├─ 4040   proxyd
  ├─ 4077   force-flow
- ├─ 8008   yoda-tts-worker
+ ├─ 8008   sanctum-tts (→ cbx-yoda :8011)
  ├─ 8900   sanctum-server router
  └─ 42069  sanctum-memory
          │
-    bridge100  10.0.0.0/24
+    bridge100  10.10.10.0/24
          │
- Ubuntu VM  10.0.0.10
+ Ubuntu VM  10.10.10.10
  ├─ openclaw-gateway (systemd)
  ├─ Yoda, Windu, Qui-Gon,
- │  Cilghal, Mundi, Mothma
- └─ outbound → 10.0.0.1 only
+ │  Cilghal, Mundi
+ └─ outbound → 10.10.10.1 only
 ```
 
 Any external dependency — an Anthropic call, a git pull — leaves through a Mac-side proxy or a Tailscale tunnel: either excellent security architecture or the opening scene of a containment thriller. It has been both.
@@ -102,7 +102,7 @@ Each agent is a specialized perception, routed by the Smart Router to the tier t
 | **Ki-Adi-Mundi** | Finance — Triptyq deal flow, personal treasury |
 | **Jocasta** | Archivist — CRM, communications, long memory |
 | **Mon Mothma** | Operations — Force Flow + Living Force orchestration |
-| **Ahsoka** | Satellite — the agent that follows you when you leave the haus |
+| **Ahsoka** | Satellite — the agent that will follow you when you leave the haus (reserved — chalet node, not yet deployed) |
 | **Tommy** | [Guardian Spirit](/agents/tommy/) — the dead cat with strong opinions about network segmentation |
 
 The routing rule is not democratic, and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) explains why a council of one model in seven robes is not a council at all. General chat can be downgraded mid-conversation; the privacy-bound seats cannot. The proxy's JSONL usage log is the ground truth for what actually ran — an agent doesn't always know which tier served its last turn.

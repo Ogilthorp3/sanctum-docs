@@ -56,18 +56,18 @@ The constant across every row is the last fallback: when the cloud is rate-limit
 
 | Model | Port | Use Case |
 |-------|------|----------|
-| Codestral-22B-v0.1-4bit | 3301 (sanctum-mlx) | Local coding tier (`council-code`) |
+| Devstral-Small-2-24B-Instruct-2512-4bit | 3301 (sanctum-mlx) | Local coding tier (`council-code`) |
 | Qwen 3.6 35B (A3B) 4-bit | 1337 (sanctum-mlx, mTLS) | Local council brain — primary and last-resort fallback |
 
-Both are served by the `sanctum-mlx` cathedral binary (`sanctum-rs-cathedral`), not LM Studio. The council brain on `:1337` is mTLS-only; a pair of `socat` tunnels re-expose it as plaintext loopback `:1339` for the proxy and the vmnet bridge, so the config's `council-mlx`/`council-27b`/`council-heartbeat` lanes all point at `:1339` and land on the same Qwen3.6-35B.
+Both are served by the `sanctum-mlx` cathedral binary (`sanctum-rs-cathedral`), not LM Studio. The council brain on `:1337` is mTLS-only; a pair of `socat` tunnels re-expose it as plaintext loopback `:1339` for the proxy and the vmnet bridge, so the config's `council-mlx`/`council-27b`/`council-heartbeat` lanes all point at `:1339` and land on the same process — Qwen3.6-35B primary, plus a Qwen3.6-27B-4bit secondary via dual-residency.
 
-`council-code` is intentionally not a prompt trick. The proxy owns that routing decision. When the request is clearly about code, tests, shell, or config surgery, the infrastructure routes it to Codestral on `:3301` and logs the handoff like any other policy decision.
+`council-code` is intentionally not a prompt trick. The proxy owns that routing decision. When the request is clearly about code, tests, shell, or config surgery, the infrastructure routes it to Devstral on `:3301` and logs the handoff like any other policy decision.
 
 The current local serving split, once you stop lying to yourself about it:
-- `:3301` is Codestral-22B — the coding specialist (`council-code`).
+- `:3301` is Devstral-Small-2-24B — the coding specialist (`council-code`).
 - `:1337` (mTLS) / `:1339` (plaintext via `socat`) is Qwen3.6-35B — the local council brain and everyone's final fallback.
 
-One model for code, one for everything else. LM Studio and the old `:1234` lane are retired; the only thing still answering on `:1234` is a `socat` tunnel pointed at a port that no longer serves. Fewer onions.
+One model for code, one for everything else. LM Studio and the old `:1234` lane are retired; the `socat` bridge that fronted it went with them (retired 2026-06-07), so nothing answers on `:1234` at all. Fewer onions.
 
 ### Sanctum Proxy
 
@@ -95,14 +95,14 @@ The Council Bridge enables communication between Jocasta (Mac) and Yoda (VM). Si
 ### Mac to VM
 
 ```
-Jocasta → SSH to ubuntu@10.0.0.10 →
+Jocasta → SSH to ubuntu@10.10.10.10 →
   openclaw agent --agent main --message "..."
 ```
 
 ### VM to Mac
 
 ```
-Yoda → SSH to neo@10.0.0.1 →
+Yoda → SSH to neo@10.10.10.1 →
   PATH=<node path> openclaw agent --agent main --message "..."
 ```
 

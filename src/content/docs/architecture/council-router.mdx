@@ -17,9 +17,9 @@ The council lives across four nodes, each hosting a subset of agents. Routing is
 
 | Node | Host | SSH User | Agents | Role |
 |------|------|----------|--------|------|
-| `hub` (MM64) | `10.0.0.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
-| `vm` (Manoir VM) | `10.0.0.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
-| `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — remote presence, eventually home automation |
+| `hub` (MM64) | `10.10.10.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
+| `vm` (Manoir VM) | `10.10.10.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
+| `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — reserved; node offline, Ahsoka not yet deployed |
 | `mobile` (MBP128) | `192.0.2.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
 
 Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invoked as `agent --agent main` on the VM, Windu as `--agent windu`, and so on. The router knows all of this, so you don't have to.
@@ -31,7 +31,7 @@ Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invo
 | **Yoda** | vm (main) | Grand Master | Routing, delegation, council sessions, daily digest |
 | **Jocasta** | hub (main) | Intelligence | Email, calendar, CRM, deal flow, Messages archive |
 | **Windu** | vm | Security | Auth logs, Firewalla, Tailscale, intrusion detection, drift sentinel |
-| **Qui-Gon** | vm | Infrastructure | Disk, OrbStack, `sanctum-mlx` + `sanctum-mlx-codestral`, gateways, backups |
+| **Qui-Gon** | vm | Infrastructure | Disk, OrbStack, `sanctum-mlx` + `sanctum-mlx-devstral`, gateways, backups |
 | **Cilghal** | vm | Health | Apple Watch, sleep, HRV, activity |
 | **Mundi** | vm | Finance | Fund models, cap tables, portfolio telemetry |
 | **Ahsoka** | satellite | Remote | Chalet network, home automation (phase 3) |
@@ -80,7 +80,7 @@ The receiving agent parses the header first, the body second. This means Yoda ca
 ```bash
 # Windu tells Yoda about a suspicious login
 ./scripts/send.sh windu yoda alert high \
-  "Unusual SSH login from 203.0.113.42 targeting neo@10.0.0.1"
+  "Unusual SSH login from 203.0.113.42 targeting neo@10.10.10.1"
 
 # Yoda delegates a ticket to Qui-Gon
 ./scripts/send.sh yoda quigon task normal \
@@ -144,10 +144,10 @@ Not every council call is worth an Opus invocation.
 
 | Tier | Model | Who routes here |
 |------|-------|-----------------|
-| Free / local ops | Codestral-22B-v0.1-4bit on `sanctum-mlx-codestral` `:3301` (native MLX seat) | Qui-Gon, Ahsoka, coding sub-tasks |
+| Free / local ops | Devstral-Small-2-24B-Instruct-2512-4bit on `sanctum-mlx-devstral` `:3301` (native MLX seat) | Qui-Gon, Ahsoka, coding sub-tasks |
 | Free / local secure | Qwen3.6-35B-A3B-4bit on sanctum-mlx `:1337` | Cilghal, Mundi (private data stays local) |
-| Cloud | Opus 4.8 (`claude-opus-4`, best subscription) via sanctum-cloud-proxy `:4040`; cathedral fallback, never metered OpenRouter | Windu, Jocasta, Mon Mothma, Yoda digest |
-| Smart-routed | `council-brain` (Jocasta, Mon Mothma) and `council-max-thinking` (Yoda, Mundi) on `:4040` | Opus 4.8 primary, `council-mlx` cathedral fallback — no OpenRouter spill |
+| Cloud | Opus 4.8 (`claude-opus-4`, best subscription) via sanctum-cloud-proxy `:4040`; cathedral fallback, never metered OpenRouter | Windu, Jocasta, Yoda digest |
+| Smart-routed | `council-brain` (Jocasta, Mon Mothma) and `council-max-thinking` (Yoda, Mundi) on `:4040` | `council-max-thinking` rides Opus 4.8; `council-brain` stays local on the cathedral (`qwen3.6-35b-a3b-4bit`) — no OpenRouter spill |
 
 The router doesn't pick the tier; the receiving agent does. But because the router carries the `from/to/type/priority` header, the agent's model-selection logic has everything it needs to refuse Opus for a level-0 `briefing`. The target is ~10-15 Opus calls per day across the whole council. Most days it holds.
 

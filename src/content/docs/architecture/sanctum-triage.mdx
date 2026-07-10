@@ -7,7 +7,7 @@ import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/
 
 ![Sanctum Triage — A futuristic medical bay in a dark command center monitoring glowing memory cores, gracefully unloading heavy digital blocks.](./images/hero-sanctum-triage.png)
 
-When you run a 35B-parameter council model (Qwen3.6-35B-A3B) alongside a Codestral-22B coder seat, you don't have the luxury of memory leaks. Initially, we used three separate Python scripts to monitor memory, pause Docker, and unload idle models. It technically worked, but using an interpreted language to protect a system from memory exhaustion is like hiring an arsonist as a fire marshal. Python itself was part of the problem.
+When you run a 35B-parameter council model (Qwen3.6-35B-A3B) alongside a Devstral-Small-2-24B coder seat, you don't have the luxury of memory leaks. Initially, we used three separate Python scripts to monitor memory, pause Docker, and unload idle models. It technically worked, but using an interpreted language to protect a system from memory exhaustion is like hiring an arsonist as a fire marshal. Python itself was part of the problem.
 
 So we rewrote the entire triage suite in Rust.
 
@@ -57,7 +57,7 @@ In earlier versions, the emergency purge included `killall Mail`. This caused un
 
 ## The MLX Idle Manager
 
-The idle-manager pattern (an async TCP proxy that spawns the inference process on demand, kills it after N seconds of socket silence) was the original Rust-rewrite design. Production has since superseded it with the **cathedral fork's KeepAlive model**: `sanctum-mlx` (Council, `:1337`, mTLS) and `sanctum-mlx-codestral` (the Codestral-22B coder seat, `:3301`) stay resident, Metal-cache caps bound their resident set, and `castellan` handles real OOM pressure with SIGSTOP-then-resume — never SIGKILL on the inference servers, because SIGKILL would corrupt the KV cache. `sanctum-mlx` is even flagged Cilghal-immutable, so castellan refuses to stop it at all and frees memory from its neighbours instead. (The standalone pressure-valve daemon that used to own this was retired 2026-05-29 when castellan absorbed the role; the original coder seat `sanctum-mlx-coder` on `:1338` was retired 2026-06-07 and the port is now free.)
+The idle-manager pattern (an async TCP proxy that spawns the inference process on demand, kills it after N seconds of socket silence) was the original Rust-rewrite design. Production has since superseded it with the **cathedral fork's KeepAlive model**: `sanctum-mlx` (Council, `:1337`, mTLS) and `com.sanctum.mlx-devstral-rust` (the Devstral-Small-2-24B coder seat, `:3301`) stay resident, Metal-cache caps bound their resident set, and `castellan` handles real OOM pressure with SIGSTOP-then-resume — never SIGKILL on the inference servers, because SIGKILL would corrupt the KV cache. `sanctum-mlx` is even flagged Cilghal-immutable, so castellan refuses to stop it at all and frees memory from its neighbours instead. (The standalone pressure-valve daemon that used to own this was retired 2026-05-29 when castellan absorbed the role; the original coder seat `sanctum-mlx-coder` on `:1338` was retired 2026-06-07 and the port is now free.)
 
 The idle-spawn-and-kill flow remains in `sanctum-idle` (vendored in `sanctum-rs/services/sanctum-idle/`) as a reference implementation for future low-traffic models. For the current production workload, paying the ~60 s Metal-cold-start tax on every cold inference dwarfs the memory savings.
 
