@@ -23,26 +23,21 @@ These agents stand up the VM, the gateway, and the firewall bridge. Without them
 | **KeepAlive** | No |
 | **RunAtLoad** | Yes |
 
-Runs the startup script that launches the Ubuntu VM via Lima (`limactl start sanctum-vm --tty=false`, vmType=vz on Apple Virtualization), waits for the VM to boot, configures the bridge interface IP via `sudo ifconfig`, and restores the VM-facing Mac service bridges after the network comes back. The host-only Mac↔VM bridge rides on `socket_vmnet`, so that has to be running first. In the current runtime that specifically includes the LM Studio bridge exposed on `10.0.0.1:1234`. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
+Runs the startup script that launches the Ubuntu VM via Lima (`limactl start sanctum-vm --tty=false`, vmType=vz on Apple Virtualization), waits for the VM to boot, configures the bridge interface IP via `sudo ifconfig`, and restores the VM-facing Mac service bridges after the network comes back. The host-only Mac↔VM bridge rides on `socket_vmnet`, so that has to be running first. Requires the `vmnet-bridge` sudoers entry at `/etc/sudoers.d/vmnet-bridge`.
 
 The first domino. Everything else assumes the VM is running and the bridge exists. If this one fails, enjoy your very expensive aluminum rectangle doing absolutely nothing useful.
 
 ---
 
-### com.sanctum.lmstudio-bridge
+### com.sanctum.lmstudio-bridge (retired 2026-06-07)
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.lmstudio-bridge` |
 | **Purpose** | Expose the Mac-local LM Studio listener to the VM bridge address |
-| **Required Service** | `vm` |
-| **KeepAlive** | Yes |
-| **RunAtLoad** | Yes |
-| **Port** | `10.0.0.1:1234` |
+| **Status** | Retired 2026-06-07, alongside the LM Studio coder seat |
 
-This small bridge LaunchAgent forwards the VM-facing `10.0.0.1:1234` listener to the Mac-local LM Studio process bound on `127.0.0.1:1234`. The VM does not need the whole desktop. It needs one reliable door.
-
-`com.sanctum.vm-autostart` is responsible for ensuring this bridge exists once the bridge network comes back. The bridge itself is launchd-managed so it stays resident after the one-shot VM bootstrap work is finished.
+This small bridge LaunchAgent forwarded the VM-facing `10.0.0.1:1234` listener to the Mac-local LM Studio process bound on `127.0.0.1:1234`. The VM did not need the whole desktop. It needed one reliable door — until the local coder seat moved onto a Rust MLX server (`com.sanctum.mlx-devstral-rust` on `:3301`) and the door led nowhere.
 
 ---
 
@@ -74,10 +69,10 @@ The bundle ID is `ai.openclaw.denchclaw` and the TCC/Full-Disk-Access grants are
 | **Required Service** | `firewalla` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
-| **Bridge Port** | `1984` (bound on all interfaces, reachable from the VM) |
+| **Bridge Port** | `1984` (loopback-bound) |
 | **Discovery Port** | `8833` (Firewalla P2P) |
 
-The original one-shot `com.sanctum.firewalla` plist is retired (`.pre-w7.disabled`); the bridge is now babysat by this watchdog instead. It supervises `firewalla-bridge.js`, which discovers the Firewalla box over the P2P port `8833` and exposes a bearer-token HTTP API on `1984`, bound on all interfaces so the VM can reach it at `10.0.0.1:1984`.
+The original one-shot `com.sanctum.firewalla` plist is retired (`.pre-w7.disabled`); the bridge is now babysat by this watchdog instead. It supervises `firewalla-bridge.js`, which discovers the Firewalla box over the P2P port `8833` and exposes a bearer-token HTTP API on `1984`, bound on loopback.
 
 A watchdog for a bridge to a bridge. Networking is turtles all the way down, and at least one of the turtles needs a turtle-sitter.
 
@@ -92,13 +87,13 @@ The agents that give the haus its opinions. One serves a 35-billion-parameter Mo
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.yoda-tts-worker` |
-| **Purpose** | Qwen3-TTS text-to-speech via mlx-audio (`workers.tts_server`) |
+| **Purpose** | `sanctum-tts` (Rust) TTS front on `:8008`, forwarding to the Chatterbox `cbx-yoda` engine on `:8011` |
 | **Required Service** | `tts` |
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 | **Port** | `8008` |
 
-Provides TTS for the voice agent. Replaced `com.sanctum.xtts-server` on 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. Old XTTS plist retained as `.retired` for archaeology, not load.
+Provides TTS for the voice agent. Replaced `com.sanctum.xtts-server` on 2026-04-19 once Qwen3-TTS proved equal quality with lower memory pressure. Old XTTS plist retained as `.retired` for archaeology, not load. The engine has since turned over again: today `sanctum-tts` (Rust) fronts the port, forwarding to Chatterbox `cbx-yoda` on `:8011`.
 
 ---
 
@@ -142,11 +137,11 @@ Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. The 27B
 | **KeepAlive** | Yes |
 | **RunAtLoad** | Yes |
 | **Port** | `127.0.0.1:8900` |
-| **Model** | `Qwen3.5-27B-4bit` |
+| **Backends** | `council-secure` → `:1337` Qwen3.6-35B-A3B (mTLS) · `coder` → `:3301` Devstral-Small-2-24B · `cloud` → `:3456` Claude Opus via the Max bridge · `spatial` → Gemini 3.1 Pro |
 
-The `com.sanctum.server` label is the **routing** MLX server — `sanctum-server`, launched via `~/.sanctum/bin/sanctum-server-launch` against `Qwen3.5-27B-4bit` with `--router-config instance.yaml`, on loopback `:8900` (`/health` reports `mode: routed`). It does not own port 4040, and it is not `proxyd` — a long-standing doc conflation that this entry exists to kill.
+The `com.sanctum.server` label is the **routing** MLX server — `sanctum-server`, launched via `~/.sanctum/bin/sanctum-server-launch` with `--router-config instance.yaml`, on loopback `:8900` (`/health` reports `mode: routed`, four backends usable). It loads no resident model of its own — pure router. It does not own port 4040, and it is not `proxyd` — a long-standing doc conflation that this entry exists to kill.
 
-**`proxyd` is a separate binary** (`sanctum-rs`) on `*:4040`: the bouncer-and-bartender doing sanitization, content routing, prompt caching, PII scrubbing, prefill stripping, model resolution, and tiered fallback. It currently runs as a resident process, not a loaded LaunchAgent, with keys injected from `~/.sanctum/secrets/`. If it ever earns a plist, label it `com.sanctum.proxyd` — never `com.sanctum.server`.
+**`proxyd` is a separate binary** (`sanctum-rs`) on `*:4040`: the bouncer-and-bartender doing sanitization, content routing, prompt caching, PII scrubbing, prefill stripping, model resolution, and tiered fallback. It runs as the system LaunchDaemon `com.sanctum.proxyd` — single instance, HTTPS with mTLS on `:4040`, keys injected from `~/.sanctum/secrets/`. It earned its plist in the end: `com.sanctum.proxyd` — never `com.sanctum.server`.
 
 ---
 
@@ -235,7 +230,7 @@ Runs the `cloudflared` tunnel daemon for the configured tunnel name (e.g., `sanc
 | **RunAtLoad** | Yes |
 | **Ports** | `18080` (HTTP), `18085` (API) |
 
-Forwards VM traffic from `10.0.0.1:18080` to the Orbi web UI (`:80`) and `:18085` to the Orbi API (`:5000`), because the VM has no direct LAN access. The Orbi's LAN IP is **not hardcoded** — `orbi-bridge.sh` resolves it from `endpoints.env` (`SANCTUM_ORBI_LAN`) or `instance.yaml` (`network.orbi_lan`), per the no-hardcoded-endpoints doctrine that earned a memory entry the day the old Bell-subnet literal went stale.
+Forwards VM traffic from `10.10.10.1:18080` to the Orbi web UI (`:80`) and `:18085` to the Orbi API (`:5000`), because the VM has no direct LAN access. The Orbi's LAN IP is **not hardcoded** — `orbi-bridge.sh` resolves it from `endpoints.env` (`SANCTUM_ORBI_LAN`) or `instance.yaml` (`network.orbi_lan`), per the no-hardcoded-endpoints doctrine that earned a memory entry the day the old Bell-subnet literal went stale.
 
 If neither source is set — say the Orbi got unplugged at the Gold Pro cutover — the bridge idles with one clear log line instead of forwarding to a dead address, then self-heals on the next `launchctl kickstart -k`. A socat tunnel through the Mac that has the good sense to stay quiet when there's nothing on the other end.
 
@@ -290,18 +285,18 @@ The system's white blood cells. It only acts when the body is under pressure, an
 
 ---
 
-### com.sanctum.watchdog (retired as a launchd job)
+### com.sanctum.watchdog
 
 | Property | Value |
 |----------|-------|
 | **Label** | `com.sanctum.watchdog` |
 | **Binary** | `sanctumd` (`sanctum-rs`) |
 | **Purpose** | Periodic health sweep + auto-heal via `service-doctor` |
-| **Status** | Not loaded (`com.sanctum.watchdog-rust.plist.pre-w6.disabled`) |
+| **Status** | Loaded — system LaunchDaemon (`com.sanctum.watchdog-rust.plist`), status API on `127.0.0.1:2187` |
 
-For a long time this was the most relatable agent in the fleet: every so often it woke up, looked around, made sure nothing was on fire, and went back to sleep. The Rust binary `sanctumd` did the sweep and auto-healed through `service-doctor`, with an intentional file-vs-label drift — `com.sanctum.watchdog-rust.plist` on disk, `com.sanctum.watchdog` as the label inside.
+For a long time this was the most relatable agent in the fleet: every so often it woke up, looked around, made sure nothing was on fire, and went back to sleep. The Rust binary `sanctumd` does the sweep and auto-heals through `service-doctor`, with an intentional file-vs-label drift — `com.sanctum.watchdog-rust.plist` on disk, `com.sanctum.watchdog` as the label inside.
 
-It is no longer loaded (`.pre-w6.disabled`). The generic sweep-and-heal role was carved up among specialists — `council-guardian` heals the MLX seat, `launchd-health-sentinel` surfaces stuck jobs, `r2d2` runs the classify-and-fix loop. A stray `sanctumd` may still be resident from an old session, but nothing in launchd starts it now. The most relatable agent in the fleet was, in the end, also the most replaceable.
+It took one retirement (`.pre-w6.disabled`) while the generic sweep-and-heal role was carved up among specialists — `council-guardian` heals the MLX seat, `launchd-health-sentinel` surfaces stuck jobs, `r2d2` runs the classify-and-fix loop — and then came back as a live system LaunchDaemon. The most relatable agent in the fleet turned out to be the hardest to replace after all.
 
 ---
 
@@ -315,7 +310,7 @@ It is no longer loaded (`.pre-w6.disabled`). The generic sweep-and-heal role was
 
 Built 2026-04-24 after a multi-hour outage where macOS App Nap SIGSTOP'd LM Studio's `llmworker` children and never reaped them — thirteen zombies accreted in thirty minutes before anyone noticed. The guardian woke every minute, SIGCONT'd any `STAT=T` workers, killed orphans, and restarted the app if the `:1234` API hung for three minutes (behind a 3-restarts-per-5-min circuit breaker).
 
-Retired 2026-06-07 alongside the LM Studio coder seat itself — the local coder moved onto `sanctum-mlx-codestral` (Codestral-22B on `:3301`), which needs no SIGCONT nursemaid. The guardian's old habit of re-loading an `EXPECTED_MODEL` every 60s kept fighting manual `sanctum-admit` releases anyway. The triage daemon now covers what's left of the memory-pressure unloads.
+Retired 2026-06-07 alongside the LM Studio coder seat itself — the local coder moved onto a Rust MLX seat on `:3301` (Codestral-22B at the time; today `com.sanctum.mlx-devstral-rust` serving Devstral-Small-2-24B-Instruct-2512-4bit), which needs no SIGCONT nursemaid. The guardian's old habit of re-loading an `EXPECTED_MODEL` every 60s kept fighting manual `sanctum-admit` releases anyway. The triage daemon now covers what's left of the memory-pressure unloads.
 
 ---
 
@@ -346,7 +341,7 @@ Five separate plists is more than the average homelab needs. Five separate plist
 | **RunAtLoad** | No |
 | **StartCalendarInterval** | 1st of each month at 03:30 |
 
-Runs on a calendar schedule, not at boot. Rotates secrets stored in 1Password and the macOS Keychain. The only agent that doesn't start at login — it waits for its appointed hour like a well-mannered assassin.
+Runs on a calendar schedule, not at boot. Rotates the Keychain- and SOPS-held secrets (gateway tokens, API keys) — 1Password stays the human-edited source of truth; automation never touches it. The only agent that doesn't start at login — it waits for its appointed hour like a well-mannered assassin.
 
 ---
 

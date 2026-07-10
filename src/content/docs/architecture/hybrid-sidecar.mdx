@@ -21,7 +21,7 @@ Two planes, a strict division of labor.
 
 **The Host Plane (macOS Native)** is the Hardware Abstraction Layer. It drives the Apple Neural Engine via MLX, owns the macOS networking stack (firewall, DNS), runs the user-facing interfaces, and hosts the [Sanctum Proxy](/architecture/proxy/). Everything that needs Metal or native macOS TTY registration lives here — including `signal-cli`, which containerization breaks outright.
 
-**The Container Plane (Lima VM + OrbStack)** is the Logic Execution Engine. The OpenClaw core runs inside a Lima VM (`sanctum-vm`, Apple `vz` hypervisor, aarch64, 4 CPU / 8 GiB), reached from the host on `127.0.0.1:1977`. OrbStack is also present, but it runs only the *ancillary* containers — Home Assistant, Outline and its Postgres/Redis/MinIO — not OpenClaw. The VM is a sidecar: it doesn't replace the host, it augments it. (Colima ran the ancillaries through 2026-04-27; OrbStack replaced it, and the leftover Colima LaunchAgent was retired 2026-05-16. See [The Vajrayogini Cut](/operations/2026-04-27-the-vajrayogini-cut/).)
+**The Container Plane (Lima VM + OrbStack)** is the Logic Execution Engine. The OpenClaw core runs inside a Lima VM (`sanctum-vm`, Apple `vz` hypervisor, aarch64, 4 CPU / 8 GiB), reached from the host on `127.0.0.1:1977`. OrbStack is also present, but it runs only the *ancillary* containers — Outline and its Postgres/Redis/MinIO — not OpenClaw. (Home Assistant isn't among them: it runs on the dedicated HA Green box at `10.0.0.3`, its own tailnet node.) The VM is a sidecar: it doesn't replace the host, it augments it. (Colima ran the ancillaries through 2026-04-27; OrbStack replaced it, and the leftover Colima LaunchAgent was retired 2026-05-16. See [The Vajrayogini Cut](/operations/2026-04-27-the-vajrayogini-cut/).)
 
 The two planes talk over loopback TCP: `limactl hostagent` forwards the guest's `:1977` to the host's `127.0.0.1:1977` over the `bridge100` vmnet interface. The guest never touches a physical interface or hardware accelerator directly — it asks politely, over loopback, and the host decides whether to comply.
 
@@ -32,12 +32,12 @@ The Council decreed strict segregation of duties. Here's where everything lives.
 | Component | Plane | Port | Interface | Notes |
 |-----------|-------|------|-----------|-------|
 | `signal-cli` | Host | 8080 (HTTP), 7583 (TCP) | `127.0.0.1` | Native — containerization breaks TTY registration and device pairing |
-| Coder MLX (`sanctum-mlx-codestral`) | Host | 3301 | `127.0.0.1` | Codestral-22B-v0.1-4bit, the CODER role; `rust+mlx-rs`, plain HTTP on loopback. Replaced the retired `socat`/LM-Studio coder bridge on 2026-06-07. |
+| Coder MLX (`com.sanctum.mlx-devstral-rust`) | Host | 3301 | `127.0.0.1` | Devstral-Small-2-24B-Instruct-2512-4bit, the CODER role; `rust+mlx-rs`, mTLS on loopback (`--no-plain`). Replaced the retired `socat`/LM-Studio coder bridge on 2026-06-07. |
 | Sanctum Proxy (`proxyd`) | Host | 4040 | `*` | Rust LLM-routing daemon — fans requests across OpenRouter / Gemini / local providers (`smart_route`). See [Sanctum Proxy](/architecture/proxy/). |
 | MLX Runtime (`sanctum-mlx`) | Host | 1337 (mTLS) | `127.0.0.1` + Tailscale | High-performance inference path via Metal; TLS cert + key per the `com.sanctum.mlx` plist. See [Dynamic Model Routing](/architecture/dynamic-model-routing/). |
 | OpenClaw Core | VM | 1977 | `127.0.0.1` (forwarded) | Runs *inside* `sanctum-vm`; surfaced to host loopback by `limactl hostagent`. `/health` returns `{"ok":true,"status":"live"}`. |
 | Sanctum Bridge | Host | 8443 | `127.0.0.1` | Python `sanctum_bridge` — the Apple-side bridge (iMessage / Calendar / Contacts), loopback only. |
-| OrbStack (Docker) | Host | — | — | Native macOS container runtime for the *ancillary* services (Home Assistant, Outline) — not OpenClaw. |
+| OrbStack (Docker) | Host | — | — | Native macOS container runtime for the *ancillary* services (Outline and its Postgres/Redis/MinIO) — not OpenClaw. |
 
 <Aside type="caution">
 Port 1977 is the guest's, not the host's — forwarded to `127.0.0.1` only, never to the LAN. If you find it answering on a non-loopback address, someone changed the Lima `portForwards` block. They shouldn't have. Stop them.

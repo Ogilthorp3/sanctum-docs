@@ -82,7 +82,7 @@ When creating the Ubuntu VM with Lima, use these settings:
 | Bridge network | Host Only via `socket_vmnet` (vmnet host mode) |
 | Internet | NAT interface, managed by Lima |
 
-The VM carries two interfaces. A host-only bridge (`lima0`) puts the Mac at `10.0.0.1` and the VM at `10.0.0.10` — that private wire is how every agent on the VM reaches services on the hub. A second NAT interface gives the VM its own outbound path to the internet for `apt` and `git`. Not solitary confinement, then; more like a studio apartment with one locked door to the haus and one window to the outside world.
+The VM carries two interfaces. A host-only bridge (`lima0`) puts the Mac at `10.10.10.1` and the VM at `10.10.10.10` — that private wire is how every agent on the VM reaches services on the hub. A second NAT interface gives the VM its own outbound path to the internet for `apt` and `git`. Not solitary confinement, then; more like a studio apartment with one locked door to the haus and one window to the outside world.
 
 ## Optional Components
 
@@ -108,9 +108,9 @@ brew install --cask tailscale
 
 A domain managed through [Cloudflare](https://cloudflare.com) enables secure public access to specific services (such as the Home Assistant dashboard or health endpoints) via Cloudflare Tunnel. The free Zero Trust plan is sufficient.
 
-### Local OpenAI-compatible inference (port 1234)
+### Local inference (ports 1337 and 3301)
 
-Sanctum expects a local OpenAI-compatible model server on port 1234, used as a primary or fallback provider. [LM Studio](https://lmstudio.ai) is the easy on-ramp — install the app (or its `lms` CLI) and point it at `:1234`. The running hub currently serves that port with `mlx_lm.server` instead; the provider behind the socket is interchangeable as long as it speaks the OpenAI API on 1234.
+Sanctum serves local models through `sanctum-mlx`, its own Rust inference server — Qwen3.6-35B-A3B-4bit on port 1337 (mTLS-only), and Devstral-Small-2-24B-Instruct-2512-4bit on port 3301 for code work. There is no third-party model app to install; the models themselves are the only heavy download, so budget disk and RAM accordingly.
 
 ### iPhone Apps
 
@@ -137,14 +137,14 @@ Modem / ONT
   |
 Firewalla WAN (Router mode)
   |
-LAN (192.0.2.0/24, gateway .1)
-  |-- Mac Mini (.10) -- Host Only bridge (10.0.0.0/24) -- Ubuntu VM (.10)
+LAN (10.0.0.0/24, gateway 10.0.0.1)
+  |-- Mac Mini (DHCP reservation) -- Host Only bridge (10.10.10.0/24) -- Ubuntu VM (.10)
   |-- Orbi / Wi-Fi AP (AP mode)
   \-- Smart devices, speakers, etc.
 ```
 
 <Aside type="caution">
-  The host-only bridge (`10.0.0.0/24`) is the only path between the VM and hub services — agent workloads on the VM talk to the Mac over that private wire and nowhere else. The VM does keep a separate NAT interface for outbound `apt` and `git`, so it is not air-gapped: it is firewalled by topology, not by amputation. If you want a true air-gap, drop the NAT NIC and proxy package installs through the Mac — but then you own the proxy, forever.
+  The host-only bridge (`10.10.10.0/24`) is the only path between the VM and hub services — agent workloads on the VM talk to the Mac over that private wire and nowhere else. The VM does keep a separate NAT interface for outbound `apt` and `git`, so it is not air-gapped: it is firewalled by topology, not by amputation. If you want a true air-gap, drop the NAT NIC and proxy package installs through the Mac — but then you own the proxy, forever.
 </Aside>
 
 ## Verification

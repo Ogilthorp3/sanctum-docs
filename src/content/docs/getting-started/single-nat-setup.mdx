@@ -57,7 +57,7 @@ The out-of-band path is non-negotiable, and it has a trap: it must **not ride th
    sanctum net single-nat --rollback
    ```
 
-   Disables the DMZ, re-leases DHCP, and lands you back on verified-online double-NAT in one command. The armor hook and sentinel stay installed but go inert — on a normal private lease they are a safe no-op.
+   Disables the DMZ, re-leases DHCP, and lands you back on verified-online double-NAT in one command. The armor hook stays installed but goes inert — on a normal private lease it is a safe no-op.
 
 </Steps>
 
@@ -67,7 +67,7 @@ Bell's Advanced DMZ has a nasty habit: along with your public lease it hands out
 
 The **`/32` armor** is the fix the flip installs for you. It pins the WAN to a host route (`/32`) and **strips the poison `0.0.0.0/1`** from both the main routing table *and* every per-WAN policy table — because Bell plants it in both, and cleaning only `main` leaves the policy-table copy to re-break you. It also sets the WAN MTU to 1492 and clamps the MSS, closing the black-hole where ping passes and HTTPS doesn't.
 
-The catch is that Bell re-hands the poison route on **every WAN lease renewal**. So the armor isn't a one-shot — it ships with a **systemd poison-sentinel** baked into the Firewalla's boot hook that re-runs the strip on every renewal. The route comes back; the sentinel takes it off again, forever, without you.
+The catch: Bell re-hands the poison route on **every WAN lease renewal**. The armor originally shipped with a **systemd poison-sentinel** in the Firewalla's boot hook that re-ran the strip each renewal; both it and the standalone poison-route healer were retired on 2026-07-08, leaving the `/32` armor itself as the strip.
 
 ## The downstream router: Orbi in AP mode
 
@@ -97,7 +97,7 @@ To go back: `sanctum net single-nat --rollback` is the clean path. The blunt-ins
 | **Inbound / port-forwarding** | One hop, one rule, clean | Punch through two devices |
 | **Public IP held by** | Your Firewalla | The ISP hub |
 | **Throughput** | Same — NAT count changes it by zero | Same |
-| **Bell poison `/1` route** | Stripped + self-healed every renewal | Not exposed (hub keeps the WAN) |
+| **Bell poison `/1` route** | Stripped by the `/32` armor | Not exposed (hub keeps the WAN) |
 | **Orbi / AP management** | Web admin `http://<orbi-ip>`; Netgear app works via cloud once the AP has internet | Netgear app works (router still NATs) |
 | **Recovery if it goes wrong** | `--rollback`, or disable DMZ → double-NAT | Already here |
 

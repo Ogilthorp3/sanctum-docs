@@ -1,15 +1,32 @@
 ---
 title: Home Assistant Integration
-description: Running Home Assistant in Docker on the Mac Mini with host networking under OrbStack, HomeKit, a native Sonos Bridge, and remote access via Cloudflare tunnel.
+description: Home Assistant on the dedicated Green appliance — tailnet node, static 10.0.0.3 — with HomeKit, a native Sonos Bridge on the Mac Mini, Tailscale remote access, and the Docker-on-Mini era that taught the networking lessons.
 ---
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-Home Assistant is Sanctum's haus automation hub. It runs as a Docker container on the Mac Mini with **host networking under OrbStack**, integrating HomeKit devices and providing remote access through a Cloudflare tunnel. Sonos speakers are managed by a separate native bridge running directly on the Mac, because Docker bridge networking and Sonos callbacks have a relationship best described as "irreconcilable differences."
+Home Assistant is Sanctum's haus automation hub. Since 2026-06-28 it runs on a dedicated **Home Assistant Green** appliance — its own tailnet node, holding static `10.0.0.3` on the LAN — after earlier lives in the VM and as a Docker container on the Mac Mini. Sonos speakers are managed by a separate native bridge running directly on the Mac, because Docker bridge networking and Sonos callbacks had a relationship best described as "irreconcilable differences."
 
 ![The robot butler — your haus automation concierge](./images/pool-robot-butler.png)
 
+<Aside type="note">
+  Much of what follows is the engineering record of the retired Docker-on-Mini deployment, decommissioned 2026-07-06 — see [the twin that would not die](/operations/2026-07-06-the-twin-that-would-not-die/). Do-not-resurrect; the lessons stay because they were expensive.
+</Aside>
+
 ## Architecture
+
+Today's layout, refreshingly boring by design:
+
+```
+┌──────────────────────────────┐          ┌─────────────────────────────────┐
+│ Home Assistant Green         │          │ Mac Mini                        │
+│  10.0.0.3 (static, LAN)      │◄─────────│  ha-green-bridge (outbound WS)  │
+│  Port 8123 → Web UI          │          │  ha-gateway (:8199)             │
+│  Tailnet node → remote access│          │  Sonos Bridge (native, :1969)   │
+└──────────────────────────────┘          └─────────────────────────────────┘
+```
+
+The retired Docker-on-Mini layout, preserved for the record:
 
 ```
 ┌────────────────────────────────────────────────┐
@@ -40,7 +57,7 @@ HA moved from the VM to Mac Docker because SLIRP networking couldn't keep up wit
 
 ## Docker Configuration
 
-The container uses `network_mode: host`. On macOS that was the impossible setting for years — Docker Desktop runs containers inside a Linux VM, so "host networking" meant the VM's host, not the Mac's. OrbStack is the runtime that actually delivers it: the container shares the Mac's real network stack, which is the whole reason it can see the mDNS and SSDP broadcasts that HomeKit and Sonos discovery depend on.
+The container used `network_mode: host`. On macOS that was the impossible setting for years — Docker Desktop runs containers inside a Linux VM, so "host networking" meant the VM's host, not the Mac's. OrbStack is the runtime that actually delivers it: the container shares the Mac's real network stack, which is the whole reason it can see the mDNS and SSDP broadcasts that HomeKit and Sonos discovery depend on.
 
 ### Key Settings
 
@@ -55,7 +72,7 @@ The container uses `network_mode: host`. On macOS that was the impossible settin
 
 ### Compose File
 
-The `compose.yaml` at `~/.openclaw/homeassistant/` defines the container with these essential directives:
+The `compose.yaml` at `~/.openclaw/homeassistant/` defined the container with these essential directives:
 
 - **Network mode**: `host` — no `ports:` block, because there's no NAT to traverse. 8123 and 21063 bind straight to the Mac.
 - **Volume mount**: Local config directory into `/config`
@@ -75,7 +92,7 @@ The startup chain is intentionally sequential:
 
 1. `com.sanctum.orbstack-engine-autostart` runs `orbctl start` at boot
 2. `com.sanctum.openclaw.docker-startup` runs `~/.openclaw/launch-after-docker.sh`, which waits for the socket (`docker info` succeeds) before acting
-3. Once the socket is live, it brings up the Home Assistant container (the signal-cli stack rode along until it was retired in the Colima cut)
+3. Once the socket was live, it brought up the Home Assistant container (the signal-cli stack rode along until it was retired in the Colima cut)
 
 The migration was uneventful, which is the highest compliment infrastructure work can receive. The Ecobee sensors appeared in HA's discovery panel within seconds. They had been broadcasting the entire time. The VM just couldn't hear them.
 
@@ -85,7 +102,7 @@ The migration was uneventful, which is the highest compliment infrastructure wor
 
 ## Sonos Integration
 
-Sanctum manages 10 Sonos speakers across the haus, but **not** through HA's built-in Sonos integration — that's disabled. Instead a native Python service, the Sonos Bridge, runs directly on the Mac Mini, bypassing Docker entirely. It listens on port 1969 and exposes a REST API for speaker control, TTS announcements, and media playback; HA calls it via `rest_command` entries in `configuration.yaml`.
+Sanctum manages 10 Sonos speakers across the haus, but **not** through HA's built-in Sonos integration — that's disabled. Instead a native Python service, the Sonos Bridge, runs directly on the Mac Mini. It listens on port 1969 and exposes a REST API for speaker control, TTS announcements, and media playback. In the container era HA called it via `rest_command` entries; today its callers are Mini-side (haus-control's curfews chief among them), and Green-side intent rides the outbound `ha-green-bridge` websocket.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -95,12 +112,12 @@ Sanctum manages 10 Sonos speakers across the haus, but **not** through HA's buil
 │  │ Sonos Bridge (port 1969)              │  │
 │  │  SoCo → SSDP → 10 speakers on LAN     │  │
 │  │  Chatterbox → Yoda voice generation   │  │
-│  └──────────┬────────────────────────────┘  │
+│  └──────────▲────────────────────────────┘  │
 │             │ REST API                      │
-│  ┌──────────▼────────────────────────────┐  │
-│  │ Docker: Home Assistant                │  │
-│  │  rest_command.sonos_tts → :1969/tts   │  │
-│  │  rest_command.sonos_announce → :1969  │  │
+│  ┌──────────┴────────────────────────────┐  │
+│  │ Mini-side callers                     │  │
+│  │  haus-control → :1969/tts (curfews)   │  │
+│  │  Green intent ← ha-green-bridge WS    │  │
 │  └───────────────────────────────────────┘  │
 └─────────────────────────────────────────────┘
 ```
@@ -113,7 +130,7 @@ The native bridge uses SoCo directly on the Mac's LAN interface. SSDP discovery 
 
 ### HA REST Commands
 
-HA scripts and automations call the bridge through two REST commands:
+In the container era, HA scripts and automations called the bridge through two REST commands — `host.docker.internal` being the container's window back to the Mac:
 
 ```yaml
 rest_command:
@@ -133,7 +150,7 @@ Severity maps to volume: `low` (30%), `medium` (50%), `high` (80%), `critical` (
 
 ### Text-to-Speech
 
-The bridge generates speech through the sanctum-tts server on port 8008 — an OpenAI-compatible `/v1/audio/speech` endpoint with Qwen3-TTS behind it today (mlx-audio backend; XTTS-v2 retired 2026-04-19), resolved by model id so the backend can change without touching the bridge. It saves the WAV locally and tells Sonos to fetch it from `http://<mac-lan-ip>:1969/<id>.wav`. The voice is Yoda. There was a discussion. Yoda won.
+The bridge generates speech through the sanctum-tts server on port 8008 — an OpenAI-compatible `/v1/audio/speech` endpoint with the Chatterbox `cbx-yoda` worker on port 8011 behind it today (XTTS-v2 retired 2026-04-19), resolved by model id so the backend can change without touching the bridge. It saves the WAV locally and tells Sonos to fetch it from `http://<mac-lan-ip>:1969/<id>.wav`. The voice is Yoda. There was a discussion. Yoda won.
 
 ### Bridge Management
 
@@ -163,16 +180,16 @@ launchctl kickstart -k gui/$(id -u)/com.openclaw.sonos-bridge
 
 ## SSH Agent Forwarding
 
-Some HA automations need SSH access to the VM. The Mac's SSH agent socket at `/run/host-services/ssh-auth.sock` is mounted as a volume in the compose file, so scripts inside the container can `ssh openclaw` using the Mac's loaded keys — no private keys ever stored in the container. Wrapper scripts live at `~/.openclaw/ha-scripts/` and exec SSH to the VM with agent forwarding enabled.
+In the container era, some HA automations needed SSH access to the VM. The Mac's SSH agent socket at `/run/host-services/ssh-auth.sock` was mounted as a volume in the compose file, so scripts inside the container could `ssh openclaw` using the Mac's loaded keys — no private keys ever stored in the container. Wrapper scripts lived at `~/.openclaw/ha-scripts/` and exec'd SSH to the VM with agent forwarding enabled.
 
 ## Network Configuration
 
-The `configuration.yaml` carries network-specific settings so HA reports the right client IP behind the tunnel:
+The `configuration.yaml` carries network-specific settings so HA reports the right client IP when a request arrives through a proxy hop:
 
 ```yaml
 homeassistant:
-  internal_url: "http://192.0.2.10:8123"
-  external_url: "https://ha.example.net"
+  internal_url: "http://10.0.0.3:8123"
+  external_url: "http://homeassistant.<your-tailnet>.ts.net:8123"
 
 http:
   use_x_forwarded_for: true
@@ -181,30 +198,22 @@ http:
     - 192.168.64.0/20
 ```
 
-The trusted proxies cover the OrbStack and Tailscale ranges, letting HA read the real client IP from `X-Forwarded-For` when a request arrives through the Cloudflare tunnel instead of attributing every visitor to the proxy.
+The trusted proxies let HA read the real client IP from `X-Forwarded-For` instead of attributing every visitor to the proxy; the ranges date to the container era's OrbStack and Tailscale hops.
 
 ## Remote Access
 
-There are two remote access paths into HA, each serving a different purpose — because one way in would have been too simple, and simplicity is what other people have.
+Remote access is Tailscale, full stop. The Green joins the tailnet as its own node through the Tailscale add-on, so there is no tunnel, no reverse proxy, and no extra login page — WireGuard end to end, HA's own auth on top. (The container era's Cloudflare tunnel retired with the container; the council picked Tailscale over a public tunnel four-to-one.)
 
-### Browser Access (Cloudflare Tunnel)
+### Browser Access (Tailscale)
 
-For the HA web UI from a browser, a Cloudflare tunnel provides HTTPS with Zero Trust access controls.
-
-| Component            | Details                               |
-|----------------------|---------------------------------------|
-| Tunnel name          | `manoir-hub` (token-mode)             |
-| LaunchAgent          | `com.sanctum.tunnel`                  |
-| External URL         | `https://ha.example.net`              |
-| Route                | `ha.example.net` to `localhost:8123`  |
-| Auth                 | Cloudflare Access OTP                 |
+`http://10.0.0.3:8123` on the LAN; `http://homeassistant.<your-tailnet>.ts.net:8123` from anywhere on the tailnet.
 
 ### iPhone Companion App (Tailscale)
 
-The HA Companion app cannot handle Cloudflare Access's login page, so it connects via Tailscale instead. Tailscale provides end-to-end WireGuard encryption, so HTTPS is not needed.
+The HA Companion app connects the same way. Tailscale provides end-to-end WireGuard encryption, so HTTPS is not needed.
 
 <Aside type="caution">
-  With `network_mode: host`, HA binds 8123 on every interface (not just `127.0.0.1`), which is exactly what Tailscale access needs. Safe because HA has its own auth, and LAN access is required anyway for HomeKit and Sonos.
+  HA binds 8123 on the Green's interfaces (not just `127.0.0.1`), which is exactly what Tailscale access needs. Safe because HA has its own auth, and LAN access is required anyway for HomeKit.
 </Aside>
 
 #### Companion App Setup
@@ -217,8 +226,8 @@ The HA Companion app cannot handle Cloudflare Access's login page, so it connect
 
    | Field | Value |
    |-------|-------|
-   | **Internal URL** | `http://<mac-lan-ip>:8123` |
-   | **External URL** | `http://<tailscale-ip>:8123` |
+   | **Internal URL** | `http://10.0.0.3:8123` |
+   | **External URL** | `http://homeassistant.<your-tailnet>.ts.net:8123` |
 
 5. Under **Internal Connection**: add your haus Wi-Fi SSID so the app uses the LAN when haus
 6. Enable **Local Push** for instant notifications on haus Wi-Fi
@@ -242,6 +251,8 @@ The pairing code is generated per-bridge and lives in HA's UI — never hardcode
 
 ## Management
 
+These commands operated the retired container — kept for the record; running them today resurrects the decommissioned twin.
+
 ### Starting and Stopping
 
 ```bash
@@ -260,7 +271,7 @@ cd ~/.openclaw/homeassistant && docker compose restart
 
 ### Rollback
 
-If the Mac Docker instance has issues, a rollback path exists to the VM:
+When the Mac Docker instance had issues, a rollback path existed to the VM:
 
 <Steps>
 1. Stop the Mac container: `docker compose down`
@@ -269,5 +280,5 @@ If the Mac Docker instance has issues, a rollback path exists to the VM:
 </Steps>
 
 <Aside type="note">
-  The VM still has a preserved HA configuration at `~/.openclaw/homeassistant/`. The VM instance is stopped but not removed, making rollback straightforward. Think of it as a parachute — you hope you never need it, but you'd be a fool to cut it loose.
+  The VM kept a preserved HA configuration at `~/.openclaw/homeassistant/`, stopped but not removed, making rollback straightforward. Think of it as a parachute — you hope you never need it, but you'd be a fool to cut it loose. Today the whole plane is retired; the Green is the deployment.
 </Aside>

@@ -13,7 +13,7 @@ Yoda's voice answers the phone. Mothma narrates the morning briefing. Someday so
 
 Every TTS engine brings its own Python environment, model format, and cloning quirks. Qwen3-TTS lives inside mlx-audio's venv. OpenVoice v2 clashes with it on torch/transformers pins. Coqui XTTS had its own world before we retired it. Keeping them in separate processes, each behind its own LaunchAgent, is the only sane way to add new engines without deps wars.
 
-`sanctum-tts` is the Rust dispatcher on `:8007`. Callers ask for a voice by name; the daemon hands the request to whichever adapter the registry declares. Python never enters the dispatcher's process — adapters are thin HTTP proxies, kept in their own venvs the way you'd keep two cats in separate rooms.
+`sanctum-tts` is the Rust dispatcher on `:8008`. Callers ask for a voice by name; the daemon hands the request to whichever adapter the registry declares. Python never enters the dispatcher's process — adapters are thin HTTP proxies, kept in their own venvs the way you'd keep two cats in separate rooms.
 
 <Aside type="note" title="Status: live on :8008 (post-quantum front door)">
 The dispatcher is deployed and listening on `:8008` (launchd `com.sanctum.tts`), with post-quantum TLS in the crypto provider — hybrid X25519MLKEM768 key exchange, ML-DSA-aware, TLS1.3. It proxies via `QwenAdapter` to the Python voice engine on `:8011` (`com.sanctum.yoda-tts-worker`, now the Chatterbox `cbx-yoda` MLX model, not Qwen3). It serves both `/speak` and an OpenAI-compatible `/v1/audio/speech` shim, so existing callers were not broken at the cutover. Auth is permissive-localhost for now; the mTLS + ML-DSA-cert + Ed25519-signing hardening is the next step.
@@ -21,8 +21,8 @@ The dispatcher is deployed and listening on `:8008` (launchd `com.sanctum.tts`),
 
 ```
            ┌──────────────┐       ┌──────────────┐
-clients ──▶│ sanctum-tts  │──────▶│ qwen3-tts    │
- (mTLS)    │   :8007      │       │   :8008 (py) │
+clients ──▶│ sanctum-tts  │──────▶│ cbx-yoda     │
+ (mTLS)    │   :8008      │       │   :8011 (py) │
  Bearer ──▶│  dispatches  │──────▶│ openvoice    │
            │  by voice    │       │   :8009 (py) │ (planned)
            │  signs WAV   │       └──────────────┘
@@ -120,11 +120,10 @@ Adding Neo as a digital twin once OpenVoice v2 lands becomes two entries — `ne
 
 ## Next
 
-- Build the release binary and load `com.sanctum.tts` so the front door on `:8007` actually opens.
 - Record Neo's reference.
 - Stand up the OpenVoice worker — but find it a port first, since `:8009` is currently the STT server.
 - Flip `OpenVoiceAdapter` from `NotImplemented` to real proxy.
-- A/B blind-test Neo-English through Qwen3 vs OpenVoice.
+- A/B blind-test Neo-English through Chatterbox vs OpenVoice.
 - Neo-in-French becomes a YAML line.
 - Later: perceptual watermarking layer for re-encode robustness.
 

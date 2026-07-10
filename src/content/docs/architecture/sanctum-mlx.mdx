@@ -23,15 +23,15 @@ The active inference layer is the **cathedral fork** at `~/Projects/sanctum-rs-c
 
 | Binary | Port | Model | Role |
 |--------|------|-------|------|
-| `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
-| `sanctum-mlx-codestral` | `:3301` | Codestral-22B-v0.1-4bit | Coder seat + Qui-Gon's code path |
+| `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) plus a Qwen3.6-27B-4bit secondary via dual-residency | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
+| `sanctum-mlx` (label `com.sanctum.mlx-devstral-rust`) | `:3301` | Devstral-Small-2-24B-Instruct-2512-4bit | Coder seat + Qui-Gon's code path |
 
-A disaster fallback (`com.sanctum.mlx-py-fallback`) sits promote-only on `:8901`, serving the same Qwen3.6-35B-A3B-4bit as `:1337` but via an independent Python mlx-lm stack — so a corrupt or missing Rust binary (which kills both the council and codestral seats, since they share one binary file) leaves a different-stack server able to take over at full parity. It is not always-warm: an always-resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken Rust agent first to free the RAM, then enabling and kickstarting the Python seat. Transient (non-binary) failover is handled separately at the proxyd routing layer (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust MLX binaries run under LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-codestral`) with KeepAlive and load weights from disk, and neither ever binds `0.0.0.0`. The two binaries differ in exactly the ways their threat models differ:
+A disaster fallback (`com.sanctum.mlx-py-fallback`) sits promote-only on `:8901`, serving the same Qwen3.6-35B-A3B-4bit as `:1337` but via an independent Python mlx-lm stack — so a corrupt or missing Rust binary (which kills both the council and devstral seats, since they share one binary file) leaves a different-stack server able to take over at full parity. It is not always-warm: an always-resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken Rust agent first to free the RAM, then enabling and kickstarting the Python seat. Transient (non-binary) failover is handled separately at the proxyd routing layer (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust MLX seats run under launchd (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`) with KeepAlive and load weights from disk, and neither ever binds `0.0.0.0`. The two seats differ in exactly the ways their threat models differ:
 
-- **Council `:1337`** gates the listen socket on an **ed25519-signed** manifest (`ed25519` over `shasum -a 256`) and binds three interfaces — loopback, the Mini's Tailscale IP, and bridge100 (`10.0.0.1`) for the VM path. It is mTLS-only: the plist passes `--no-plain`, so there is no plain-HTTP or bearer path left to bypass.
-- **Codestral `:3301`** gates on a **plain SHA-256** manifest (no `.sig` is shipped for it yet) and binds **loopback only** — `127.0.0.1:3301`, nothing on the Tailnet, nothing on the bridge. The coder seat is local-only by design; the VM and MBP reach it through the council router, not directly.
+- **Council `:1337`** gates the listen socket on an **ed25519-signed** manifest (`ed25519` over `shasum -a 256`) and binds three interfaces — loopback, the Mini's Tailscale IP, and bridge100 (`10.10.10.1`) for the Lima VM path. It is mTLS-only: the plist passes `--no-plain`, so there is no plain-HTTP or bearer path left to bypass.
+- **Devstral `:3301`** gates on a **plain SHA-256** manifest (no `.sig` is shipped for it yet) and binds **loopback only** — `127.0.0.1:3301`, nothing on the Tailnet, nothing on the bridge. The coder seat is local-only by design; the VM and MBP reach it through the council router, not directly.
 
-The earlier coder seat (`sanctum-mlx-coder` / `com.sanctum.mlx-coder` on `:1338`, plain `:1234` via socat, running Qwen2.5-Coder-14B-Instruct-4bit) was retired 2026-06-07 — its GGUF was archived and weights deleted when the role moved to Codestral. LM Studio itself is decommissioned; native MLX seats serve every model now. The one piece of LM Studio plumbing still twitching is `com.sanctum.lmstudio-bridge` — a `socat` shim that still LISTENs on `10.0.0.1:1234` and forwards to a `127.0.0.1:1234` that nothing answers anymore. It is a no-op orphan, not a live LM Studio server, but until the bridge is booted out the `:1234` socket is technically still open.
+The earlier coder seat (`sanctum-mlx-coder` / `com.sanctum.mlx-coder` on `:1338`, plain `:1234` via socat, running Qwen2.5-Coder-14B-Instruct-4bit) was retired 2026-06-07 — its GGUF was archived and weights deleted when the role moved to Codestral. LM Studio itself is decommissioned; native MLX seats serve every model now. The last piece of LM Studio plumbing to stop twitching was `com.sanctum.lmstudio-bridge` — a `socat` shim that kept LISTENing on `10.0.0.1:1234`, forwarding to a `127.0.0.1:1234` that nothing answered anymore. That orphan has since been booted out too: the agent is unloaded and the `:1234` socket is closed.
 
 The `sanctum-server` smart router on `:8900` ([Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and routes requests with five tiers of defense — breaker, budget, latency EMA, quality detectors.
 
@@ -50,7 +50,7 @@ Cross-request prompt-cache reuse via longest-common-prefix matching is on. The c
 
 ### Prompt-Lookup Decoding (PLD) as a self-speculation art piece
 
-The cathedral runs PLD by default on the council `:1337` binary, where the plist wires it explicitly (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `SANCTUM_MLX_PLD_NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Codestral's plist doesn't set the PLD env vars, so the coder seat runs on whatever the code default is rather than an explicit, `ps`-visible override. Branch `feat/cathedral-pld` started this; the path is now mainline.
+The cathedral runs PLD by default on the council `:1337` binary, where the plist wires it explicitly (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `SANCTUM_MLX_PLD_NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Devstral's plist doesn't set the PLD env vars, so the coder seat runs on whatever the code default is rather than an explicit, `ps`-visible override. Branch `feat/cathedral-pld` started this; the path is now mainline.
 
 ### Architecture coverage
 
@@ -61,7 +61,7 @@ The cathedral runs PLD by default on the council `:1337` binary, where the plist
 | `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
 | `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
 | `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not currently the production champion. |
-| `mistral` | Production | Codestral-22B-v0.1-4bit (Llama-arch dense, text-only) on `:3301`. The loader's `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
+| `mistral` | Production | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only) on `:3301`. The loader's `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
 | Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Anything else `model_type` is refused outright with a message that names the four it does load. |
 
 ### Architecture
@@ -79,7 +79,7 @@ The cathedral runs PLD by default on the council `:1337` binary, where the plist
   ├─ Zero-copy GQA in the SDPA kernel
   ├─ Multimodal: vision tower for Qwen3.5-VL canary
   ├─ SSE streaming + non-streaming completions
-  └─ /metrics (Prometheus), bearer auth on plain, cert auth on mTLS
+  └─ /metrics (Prometheus), client-cert auth — mTLS-only, no plain/bearer listener
 ```
 
 The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint. It supports LoRA adapter hot-swap (covers quantized + batched-quantized + 3-D `switch_mlp` layers — needed for the MoE expert grids). Models load directly from safetensors files into mlx-rs arrays. The full model graph runs on the Metal GPU without ever touching Python, NumPy, or the existential dread of `pip install`.
@@ -637,7 +637,7 @@ All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedra
 | `services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift agents; canonical copies for drift check |
 | `services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | End-to-end mTLS canary battery |
 | `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
-| `~/Library/LaunchAgents/com.sanctum.mlx-codestral.plist` | Coder `:3301` runtime config (Codestral-22B-v0.1-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
+| `~/Library/LaunchAgents/com.sanctum.mlx-devstral-rust.plist` | Coder `:3301` runtime config (Devstral-Small-2-24B-Instruct-2512-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
 | `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | RETIRED 2026-06-07 — was the coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs); removed when the coder role moved to Codestral |
 | `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with LM Studio decommission |
-| `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | STILL LOADED (orphan) — `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend). A no-op since LM Studio was decommissioned; boot it out to actually close `:1234` |
+| `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | RETIRED — was the orphan `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend) that outlived the LM Studio decommission; now unloaded, and `:1234` is closed |

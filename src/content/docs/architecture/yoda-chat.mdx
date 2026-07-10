@@ -22,7 +22,7 @@ The Holocron Bridge is the system that keeps the chat alive: the transport, the 
                          signal-cli daemon (Mac)
                           TCP localhost:7583
                                    │
-                       socat bridge 10.0.0.1:7583
+                      socat bridge 10.10.10.1:7583
                                    │
                                    ▼
                     ┌───────────────────────────┐
@@ -44,7 +44,7 @@ The Holocron Bridge is the system that keeps the chat alive: the transport, the 
                                    │
                                    ▼
                   council-local provider via TLS bridge
-                   http://10.0.0.1:1339 → :1337
+                  http://10.10.10.1:1339 → :1337
                                    │
                                    ▼
                       sanctum-mlx (Mac, 64 GiB)
@@ -54,7 +54,7 @@ The Holocron Bridge is the system that keeps the chat alive: the transport, the 
 |---|---|---|---|---|
 | 1 | Signal Server | cloud | — | The thing that delivers messages between phones |
 | 2 | `signal-cli` daemon | Mac | TCP `:7583`, HTTP `:8080` | Long-poll Signal Server, expose JSON-RPC |
-| 3 | `socat` bridge | Mac → VM | `10.0.0.1:7583` | NAT-friendly TCP forward to VM |
+| 3 | `socat` bridge | Mac → VM | `10.10.10.1:7583` | NAT-friendly TCP forward to VM |
 | 4 | `yoda-chat-proxy` | VM | `:5150` | HTTP-JSON-RPC ⇄ TCP-JSON-RPC for openclaw |
 | 5 | `yoda-chat-consumer` | VM | (subscribes) | inbound `receive` → agent dispatch |
 | 6 | openclaw agent CLI | VM | (subprocess) | `openclaw agent --agent main --json` — we own delivery |
@@ -84,9 +84,9 @@ This used to route through the openclaw **gateway** daemon on `:1977`. That HTTP
 $ yoda-chat status
 The Holocron Bridge — OK
 
-  ✓  signal-cli TCP 10.0.0.1:7583            27ms  v0.14.4.1
+  ✓  signal-cli TCP 10.10.10.1:7583          27ms  v0.14.4.1
   ✓  signal-proxy :5150                       12ms  healthy
-  ✓  mlx bridge http://10.0.0.1:1339         24ms  1 model(s)
+  ✓  mlx bridge http://10.10.10.1:1339       24ms  1 model(s)
   ✓  yoda-chat consumer log                    0ms  active (7s ago)
   ✓  Yoda session                              4ms  session d73c1c95, 4 turns
   ✓  Workspace bootstrap state                 0ms  all workspaces stamped complete
@@ -140,7 +140,7 @@ Six rows, not seven — the gateway probe came out when the gateway came out of 
 </Steps>
 
 <Aside type="note" title="Codename glossary">
-**Yoda** is the persona; the openclaw agent id is `main`. The runtime workspace is `~/.openclaw/workspace`; the persistent identity sandbox is `~/.openclaw/sandboxes/agent-main-<uuid>`. The **operator** and Yoda's account are both Signal numbers (redacted here; live defaults live in `config.py`). The Mac Mini is `manoir.local`; the VM is `yoda` at `10.0.0.10`.
+**Yoda** is the persona; the openclaw agent id is `main`. The runtime workspace is `~/.openclaw/workspace`; the persistent identity sandbox is `~/.openclaw/sandboxes/agent-main-<uuid>`. The **operator** and Yoda's account are both Signal numbers (redacted here; live defaults live in `config.py`). The Mac Mini is `manoir.local`; the VM is the Lima instance `sanctum-vm` at `10.10.10.10`.
 </Aside>
 
 ## When the chat goes silent — diagnose in 60 seconds
@@ -153,7 +153,7 @@ Six rows, not seven — the gateway probe came out when the gateway came out of 
 
 3. **If `signal-cli TCP` is red:** the Mac daemon is down or the bridge is broken. On Mac: `launchctl list | grep com.sanctum.signal` should show `com.sanctum.signal-cli` and `com.sanctum.signal-tcp-bridge`. Kickstart with `launchctl kickstart -k gui/$(id -u)/com.sanctum.signal-cli`.
 
-4. **If `signal-proxy` is red but `signal-cli TCP` is green:** the VM proxy is down. `ssh ubuntu@10.0.0.10 systemctl --user restart yoda-chat-proxy`. The doctor timer will catch this within 10 min anyway.
+4. **If `signal-proxy` is red but `signal-cli TCP` is green:** the VM proxy is down. `ssh ubuntu@10.10.10.10 systemctl --user restart yoda-chat-proxy`. The doctor timer will catch this within 10 min anyway.
 
 5. **If `mlx bridge` is red:** sanctum-mlx is down or the TLS-termination bridge isn't running. The bridge is `com.sanctum.yoda-plain-bridge` (it terminates TLS at `:1339` onto sanctum-mlx at `:1337`); launchd `KeepAlive` usually respawns it, but if it's wedged, manual: `launchctl kickstart -k gui/$(id -u)/com.sanctum.yoda-plain-bridge`.
 

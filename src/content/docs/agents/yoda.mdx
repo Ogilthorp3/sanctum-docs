@@ -33,7 +33,7 @@ Yoda is the general intelligence layer. He:
 | Full toolkit access | All OpenClaw skills and tools available |
 | Agent coordination | Can invoke Windu, Qui-Gon, Cilghal, Mundi as sub-agents |
 | Council sessions | Chairs weekly planning and incident review |
-| Memory search | Local embeddings via `text-embedding-nomic-embed-text-v2-moe` |
+| Memory search | Disabled (`memorySearch.enabled: false`) — the old local-embeddings path ran through the retired LM Studio `:1234` bridge |
 | Context pruning | `cache-ttl` mode, 1-hour TTL |
 | Heartbeat | Every 2 hours |
 | Sub-agents | Up to 8 concurrent |
@@ -54,14 +54,14 @@ Yoda is the only agent with explicit sub-agent orchestration. The other agents c
 | Primary model | `sanctum/council-brain` (resolves to Claude Opus — Max subscription, latest — with smart-routing) |
 | Model tier | council-brain — smart-routed by category |
 | Fallback chain | GLM 5.1 → Qwen 3.6 Plus |
-| Local fallbacks | `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) and `council-code` (`sanctum-mlx-codestral` serving Codestral-22B-v0.1-4bit on mTLS `:3301`) |
+| Local fallbacks | `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) and `council-code` (`sanctum-mlx-devstral` serving Devstral-Small-2-24B-Instruct-2512-4bit on mTLS `:3301`) |
 | Workspace | `~/.openclaw/workspace-yoda/` |
 | Skills directory | `~/Projects/openclaw-skills` |
 | Sandbox mode | Off |
 | Max concurrent tasks | 4 |
 
 <Aside type="caution">
-Yoda's primary model is `sanctum/council-brain`, which `proxyd` on port 4040 resolves to Claude Opus (Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today) with content-based smart routing layered on top. Security and tool sessions stay on the latest Opus. Code drops to the local Codestral-22B on `sanctum-mlx-codestral` (mTLS `:3301`) for latency and volume. General chat drops to the local `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) so small talk never leaves the haus. Reasoning-heavy prompts are promoted to the same Opus with `--effort max` thinking via the Claude Max proxy on `:3456`. Images go to Gemini 3.1 Pro. If Yoda starts giving you suspiciously vague answers about infrastructure, check `~/.sanctum/sanctum-proxy/usage.jsonl` — the `model_used` field tells the truth even when the agent doesn't know it got rerouted.
+Yoda's primary model is `sanctum/council-brain`, which `proxyd` on port 4040 resolves to Claude Opus (Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today) with content-based smart routing layered on top. Security and tool sessions stay on the latest Opus. Code drops to the local Devstral-Small-2-24B on `sanctum-mlx-devstral` (mTLS `:3301`) for latency and volume. General chat drops to the local `council-mlx` (`sanctum-mlx` serving Qwen3.6-35B-A3B-4bit on mTLS `:1337`) so small talk never leaves the haus. Reasoning-heavy prompts are promoted to the same Opus with `--effort max` thinking via the Claude Max proxy on `:3456`. Images go to Gemini 3.1 Pro. If Yoda starts giving you suspiciously vague answers about infrastructure, check `~/.sanctum/sanctum-proxy/usage.jsonl` — the `model_used` field tells the truth even when the agent doesn't know it got rerouted.
 </Aside>
 
 ## Configuration
@@ -103,7 +103,7 @@ Yoda operates on the `council-brain` tier, which means `proxyd` applies content-
 |---|---|---|
 | Tool session (recent `tool_use` / `tool_result`) | stays on Claude Opus (Max, latest) | tool-use coherence benefits from the strongest model |
 | Security (`password`, `secret`, `credential`, `CVE-…`) | stays on Claude Opus (Max, latest) | Windu would never forgive a downgrade |
-| Code (`implement` / `refactor` / `debug` / fenced block) | `council-code` (`sanctum-mlx-codestral`, Codestral-22B-v0.1-4bit on mTLS `:3301`) | infrastructure work is high-volume — local wins on latency |
+| Code (`implement` / `refactor` / `debug` / fenced block) | `council-code` (`sanctum-mlx-devstral`, Devstral-Small-2-24B-Instruct-2512-4bit on mTLS `:3301`) | infrastructure work is high-volume — local wins on latency |
 | Vision (image blocks) | `gemini-31-pro` | multimodal routing |
 | Brainy (reasoning verbs or ≥ 500 chars of prose) | `council-max-thinking` (latest Opus, `--effort max` via Claude Max proxy) | extended thinking for deep synthesis |
 | General (anything else) | `council-mlx` (`sanctum-mlx`, Qwen3.6-35B-A3B-4bit on mTLS `:1337`) | chat stays on-device for privacy |

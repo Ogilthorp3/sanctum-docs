@@ -35,7 +35,7 @@ The components that matter are the ones still on disk. The table below tracks wh
 bash ~/Projects/sanctum-rs/services/sanctum-proxy/test_e2e_proxy.sh   # proxyd e2e
 python3 ~/Projects/sanctum-olympics/test_olympics.py                  # olympics
 bash  ~/.sanctum/scripts/secret-rotation.sh --full                    # secret sweep
-python3 ~/Documents/Claude_Code/sanctum-docs/scripts/contrib-check.py src/content/docs/architecture/engineering-discipline.mdx
+python3 ~/Projects/Claude_Code/sanctum-docs/scripts/contrib-check.py src/content/docs/architecture/engineering-discipline.mdx
 ```
 
 Every suite can be run by a human who just woke up and doesn't remember what day it is. That is a design requirement, not an accident — and the same discipline is why the rows that lost their code lost their place in the table.
@@ -102,7 +102,7 @@ The 51 GB of stale adapters were 11 directories from previous training experimen
 
 ## Container Doctrine
 
-Most of Sanctum runs natively — Rust binaries, Python services, Node sidecars, all under launchd. When we do reach for a container, it is for software we did not write (Home Assistant, Outline, Postgres, Redis) and which we cannot meaningfully shrink. Those upstream images are 2.67 GB and 1.23 GB respectively, and they stay that way.
+Most of Sanctum runs natively — Rust binaries, Python services, Node sidecars, all under launchd. When we do reach for a container, it is for software we did not write (Outline, Postgres, Redis) and which we cannot meaningfully shrink — Home Assistant left the fleet for a dedicated HA Green box. Outline's upstream image is 1.5 GB, and it stays that way.
 
 For our own containers the default is **Chainguard `wolfi-base` plus a multi-stage build**. Build the artifact in a stage with the full toolchain, then copy just the binary and its runtime deps into a `wolfi-base` final stage. The popular guidance — `node:22-slim` → `node:22-alpine` → `gcr.io/distroless/nodejs22-debian12` — is the right direction, but it stops one tier short. `wolfi-base` is built rolling with Wolfi packages, ships with `glibc` (not `musl`, no surprise `libpython` symbol mismatches), and carries a smaller CVE surface than distroless because the apk package graph is curated for image-only use.
 
@@ -122,7 +122,7 @@ The trade-off is real: native modules with `glibc` symbol requirements (Pillow, 
 
 ## Cloud Proxy Hardening
 
-The cloud proxy (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sanctum-proxy`, on `:4040`) sits between the council and the upstream providers. It started life as a Python script and is a Rust binary now — the usual Sanctum arc: Python while a thing is feature-organic, Rust once it's load-bearing. It exists because giving six AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
+The cloud proxy (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sanctum-proxy`, on `:4040`) sits between the council and the upstream providers. It started life as a Python script and is a Rust binary now — the usual Sanctum arc: Python while a thing is feature-organic, Rust once it's load-bearing. It exists because giving seven AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
 
 | Layer | What It Does |
 |-------|-------------|
@@ -132,7 +132,7 @@ The cloud proxy (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sa
 | **Audit trail** | Every call logged to `~/.sanctum/logs/cloud-proxy-audit.jsonl`: agent, model, tokens, cost, latency |
 | **Rate limiting** | Budget exhaustion trips a 503 before the request ever reaches a provider |
 
-The fallback chain is the interesting part, and the interesting part is that it's *data*. Each primary model names its understudies in `config.yaml` — `council-brain` falls to `council-code` (the `qwen2.5-coder-14b-instruct` seat on `:1234`), which falls to `council-27b`, and so on down the map. `proxy.rs` walks that chain at request time; no recompile to reorder it. When every link is exhausted, the proxy returns an honest error instead of a hallucinated response. Graceful degradation, not graceful lying.
+The fallback chain is the interesting part, and the interesting part is that it's *data*. Each primary model names its understudies in `config.yaml` — `council-brain` falls to `council-code` (the `Devstral-Small-2-24B-Instruct-2512-4bit` seat on `:3301`), and so on down the map. `proxy.rs` walks that chain at request time; no recompile to reorder it. When every link is exhausted, the proxy returns an honest error instead of a hallucinated response. Graceful degradation, not graceful lying.
 
 ## The Standard
 

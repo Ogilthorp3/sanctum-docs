@@ -29,7 +29,7 @@ Every hub node runs all of them. No exceptions, no "I'll enable that later." Lat
 | Service | Port | LaunchAgent / Unit | Description |
 |---------|------|--------------------|-------------|
 | DenchClaw Gateway | 1977 | `com.sanctum.gateway` (retired) | Mac-side agent gateway, RETIRED. It ran Jocasta (the Archivist — CRM data and communications) and exposed the agent API. The :1977 gateway now lives inside the VM (see [VM Services](#vm-services)); the Mac-side unit is no longer loaded. |
-| Home Assistant | 8123 | Docker container | Home automation hub. Bridge-networked Docker container with HomeKit bridge on port 21063. |
+| Home Assistant | 8123 | HA Green box (10.0.0.3) | Home automation hub. Runs on its own dedicated Home Assistant Green box — a tailnet node at static `10.0.0.3` — with HomeKit bridge on port 21063. The Mini side reaches it through the HA gateway on :8199. |
 | Command Center | 3333 / 1111 | `com.sanctum.dashboard` | Web dashboard for service status, agent activity, and system health. Frontend UI on :3333, backend API on :1111. |
 | Health Center | 2222 | `com.sanctum.health-center` | Digital twin portal — health, wellness, and haushold telemetry. Twin twos for the twin. |
 | Holocron (Dench) | -- | `com.sanctum.dench` (not loaded) | Family chat interface. Defined in `instance.yaml` (`dench: enabled: true`) but no unit is loaded on any hub node right now — see the disabled note below. Designed to be LAN-bound and token-authenticated, reachable at `http://holocron/`. |
@@ -68,7 +68,7 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
-| Coder MLX | `1338` | — | `com.sanctum.mlx-coder` (retired) | RETIRED 2026-06-07. Hosted `Qwen2.5-Coder-14B-Instruct-4bit` on a pure-Rust `sanctum-mlx-coder` server, having replaced the LM Studio app. Retired once Codestral 22B on `:3301` proved a sufficient single coder seat; GGUF archived, weights reclaimed, the `:1338` seat torn down. (A separate LM-Studio-era `:1234` socat bridge is *not* gone — see the note below.) |
+| Coder MLX | `1338` | — | `com.sanctum.mlx-coder` (retired) | RETIRED 2026-06-07. Hosted `Qwen2.5-Coder-14B-Instruct-4bit` on a pure-Rust `sanctum-mlx-coder` server, having replaced the LM Studio app. Retired once Codestral 22B on `:3301` proved a sufficient single coder seat; GGUF archived, weights reclaimed, the `:1338` seat torn down. (The separate LM-Studio-era `:1234` socat bridge went with it — retired 2026-06-07; see the note below.) |
 | Council MLX | `1337` | leet — the local workhorse | `com.sanctum.mlx` | Pure-Rust `sanctum-mlx` server. Serves Qwen3.6-35B-A3B-4bit with TurboQuant Slice 4a fused Metal kernel. mTLS-only. The 27B-distilled era ended 2026-04-22 when the council moved to the 35B MoE. |
 | TTS Voice | `8008` | BOOB — Yoda's mouth | `com.sanctum.tts` | Rust post-quantum `sanctum-tts` front door (X25519MLKEM768/ML-DSA, signed, audited) proxying to the Chatterbox `cbx-yoda` engine on `8011` (`com.sanctum.yoda-tts-worker`). Migrated from Qwen3-TTS 2026-06-29; XTTS retired 2026-04-19. |
 | Voice Agent | 1138 | — | `com.sanctum.yoda-agent` | Yoda voice interface (LiveKit agent). Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
@@ -104,10 +104,10 @@ The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step p
 
 ```yaml
 services:
-  mlx_codestral:
+  mlx_devstral:
     enabled: true
     port: 3301                         # CODER role — replaced mlx_coder :1338 (retired 2026-06-07)
-    model_path: ~/.cache/huggingface/hub/models--mlx-community--Codestral-22B-v0.1-4bit
+    model_path: ~/models/mlx/Devstral-Small-2-24B-Instruct-2512-4bit
   council_mlx:
     enabled: true
     port: 1337                         # mTLS
@@ -125,7 +125,7 @@ services:
 ```
 
 <Aside type="note">
-The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and the CODER role is now Codestral-22B on `:3301` — the `sanctum-mlx-coder` `:1338` seat retired 2026-06-07. The clean ending stops just short of clean: `com.sanctum.lmstudio-bridge` is still loaded and a `socat` listener still answers on `:1234` (a plain-HTTP forward across the Mac↔VM bridge), and `com.sanctum.council-guardian` is still loaded too. The retirement is logically done; the plists haven't been booted out yet. A lock nobody holds is still a lock — these two are next.
+The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and the CODER role is now Devstral-Small-2-24B on `:3301` (`com.sanctum.mlx-devstral-rust`) — the `sanctum-mlx-coder` `:1338` seat retired 2026-06-07. The clean ending finally got clean: the `com.sanctum.lmstudio-bridge` job was booted out and nothing answers on `:1234` anymore (the plain-HTTP forward across the Mac↔VM bridge was retired 2026-06-07). `com.sanctum.council-guardian` is the one that stayed — still loaded, slimmed since, and watching the council rather than a retired app.
 </Aside>
 
 ## Network Services
@@ -137,22 +137,23 @@ Eight of them. One is an SSH tunnel. One is an mDNS broadcaster. One talks to th
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
 | SanctumBridge | `4078` | The FDA Neighbor | `com.sanctum.bridge` | Read-only HTTP proxy to FDA-protected SQLite databases (iMessage, WhatsApp, Contacts, Calendar). Jocasta-mcp queries through it so the MCP server itself doesn't need Full Disk Access. |
-| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla-bridge-watchdog` | HTTP bridge to the Firewalla Purple router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. The bare `com.sanctum.firewalla` one-shot plist is retired; the watchdog supervises the bridge now. |
+| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla-bridge-watchdog` | HTTP bridge to the Firewalla Gold Pro router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. The bare `com.sanctum.firewalla` one-shot plist is retired; the watchdog supervises the bridge now. |
 | Sonos Bridge | `1969` | — | `com.openclaw.sonos-bridge` | Native Mac SoCo REST API for 10 Sonos speakers. Replaces HA's built-in Sonos integration. Handles TTS via the sanctum-tts dispatcher (Rust PQ front door on port 8008, Chatterbox `cbx-yoda` engine on 8011; migrated from Qwen3-TTS 2026-06-29), volume control, grouping, and announcements. KeepAlive enabled. |
 | Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (`192.0.2.X` ports 80 and 5000). KeepAlive enabled. |
-| Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `manoir-hub`, token-mode (`cloudflared tunnel run`, no local config.yml — the routes live in the Zero Trust dashboard, the token in Keychain as `cloudflare-tunnel-token`). Exposes `health.example.net` and `ha.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
+| Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `manoir-hub`, token-mode (`cloudflared tunnel run`, no local config.yml — the routes live in the Zero Trust dashboard, the token in Keychain as `cloudflare-tunnel-token`). Exposes `health.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
 | Network Control | `4007` | 007 — licensed to ping | Lima port-forward | Forwards `127.0.0.1:4007` to the VM for Home Assistant integrations. Used to be a dedicated SSH-tunnel LaunchAgent (`com.sanctum.ha-tunnel`, retired 2026-05-01); Lima/vz now provides the forward itself, so the agent was retired and never replaced. |
 | Health Ingester | `10101` | binary heartbeat | `com.sanctum.health-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |
 | mDNS Alias | -- | `com.sanctum.mdns-docs` | Broadcasts haus aliases (`sanctum-hub.local`, `holocron.local`, etc.) via mDNS for LAN discovery. KeepAlive enabled. Consolidated from the old `mdns-alias` / `mdns-dench` split. |
 
 ### Tunnel Routes
 
-Two subdomains. Two Cloudflare Zero Trust routes. The entire external attack surface of the instance, right here in a table small enough to fit on a sticky note. That's the goal. If your external exposure can't fit on a sticky note, you have too much external exposure.
+One subdomain. One Cloudflare Zero Trust route. The entire external attack surface of the instance, right here in a table small enough to fit on a sticky note. That's the goal. If your external exposure can't fit on a sticky note, you have too much external exposure.
 
 | Subdomain | Local Target | Purpose |
 |-----------|-------------|---------|
 | `health.example.net` | `localhost:10101` | Health data ingestion endpoint |
-| `ha.example.net` | `localhost:8123` | Home Assistant remote access |
+
+Home Assistant is no longer a tunnel route at all — it lives on its own Green box at `10.0.0.3`, and remote access rides the tailnet instead of Cloudflare. The sticky note got shorter.
 
 <Aside type="caution">
   The Firewalla Bridge requires cloud authentication to `firewalla.encipher.io` before it can issue local P2P commands. The bridge token lives at `~/.sanctum/secrets/firewalla-bridge-token`. So yes -- to talk to the router sitting three feet away, we first authenticate through a cloud service. Home networking in 2026.
@@ -228,22 +229,23 @@ The VM is, in the most literal sense, a brain in a jar. An air-gapped brain in a
 
 | Service | Port | Codename | Systemd Unit | Description |
 |---------|------|----------|-------------|-------------|
-| OpenClaw Gateway | `1977` | Star Wars — the year hope was born | `openclaw-gateway.service` (user) | VM agent gateway with 1.5 GB heap. Runs 6 agents: Yoda (grand master), Mon Mothma (operations), Qui-Gon (infrastructure), Windu (security), Cilghal (health), Ki-Adi-Mundi (finance). |
+| OpenClaw Gateway | `1977` | Star Wars — the year hope was born | `openclaw-gateway.service` (user) | VM agent gateway with 1.5 GB heap. Runs 5 agents: Yoda (grand master), Windu (security), Qui-Gon (infrastructure), Cilghal (health), Ki-Adi-Mundi (finance). |
 | Docker | -- | `docker.service` | Container runtime for any VM-side containers. |
 | SSH | 22 | `ssh.socket` | Remote access. Key-only auth with PQ key exchange enabled. |
 
 ### Agent Details
 
-Six agents. One gateway. 1.5 gigabytes of heap memory. This is either a well-orchestrated council or a timeshare dispute waiting to happen. So far, the council metaphor holds. We'll let you know if Windu stages a coup.
+Five agents. One gateway. 1.5 gigabytes of heap memory. This is either a well-orchestrated council or a timeshare dispute waiting to happen. So far, the council metaphor holds. We'll let you know if Windu stages a coup.
 
 | Agent | Role | Specialization |
 |-------|------|---------------|
 | **Yoda** | Grand Master | Senior council lead. Orchestration, council routing, final synthesis of complex decisions. |
-| **Mon Mothma** | Operations | Force Flow and Living Force orchestrator. Incident correlation, boot sequences, cross-domain alignment. |
 | **Qui-Gon** | Infrastructure | System health, Docker stability, automated recovery, memory triage. |
 | **Windu** | Security | Security audits, Firewalla and PF rules, perimeter monitoring, daily security briefings. |
 | **Cilghal** | Health | Wellness monitoring via Apple Health, cognitive profile analysis, genome-informed scaffolding. |
 | **Ki-Adi-Mundi** | Finance | Triptyq Capital deal flow, personal fiscal health, expense categorization. |
+
+Mon Mothma (operations) holds no VM chair. Her seat is on the seven-seat `sanctum council` bench in sanctum-cli — tool-armed on `council-brain` per the 2026-06-12 council ruling — alongside Jocasta, who runs on the Mac host via Claude Code. Five personas in the jar; seven at the bench.
 
 The gateway uses SOPS+age encryption for secrets. The `sops-start.sh` wrapper decrypts environment variables at startup and never writes plaintext to disk. Secrets exist in cleartext only in RAM, only while the process runs. Paranoid? Maybe. But Windu insisted, and you don't argue with the security agent.
 
@@ -255,13 +257,13 @@ The gateway uses SOPS+age encryption for secrets. The `sops-start.sh` wrapper de
 
 ```bash
 # Restart the VM gateway
-ssh ubuntu@10.0.0.10 'systemctl --user restart openclaw-gateway'
+ssh ubuntu@10.10.10.10 'systemctl --user restart openclaw-gateway'
 
 # Check status
-ssh ubuntu@10.0.0.10 'systemctl --user status openclaw-gateway'
+ssh ubuntu@10.10.10.10 'systemctl --user status openclaw-gateway'
 
 # View logs
-ssh ubuntu@10.0.0.10 'journalctl --user -u openclaw-gateway -f'
+ssh ubuntu@10.10.10.10 'journalctl --user -u openclaw-gateway -f'
 ```
 
 ## Developer Tools
