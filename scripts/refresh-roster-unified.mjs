@@ -57,7 +57,7 @@ for(const id of ORDER_RT){
 }
 
 const cliSeats = [
-  {id:"jocasta",label:"Jocasta",role:"Keeper of records — iMessage, Calendar, Contacts, Mail, CRM, tech-lookout; answers from what is written.",layer:"CLI REPL",logical_model:"council-brain",provider:"local",provider_label:"sanctum-mlx (local, mTLS)",api_model:"qwen3.6-35b-a3b-4bit",api_base:"https://127.0.0.1:1337",fallbacks:[]},
+  {id:"jocasta",label:"Jocasta",role:"Keeper of records — iMessage, Calendar, Contacts, Mail, CRM, tech-lookout; answers from what is written.",layer:"CLI REPL",logical_model:"council-local/Qwen3.6-27B-4bit",provider:"local",provider_label:"sanctum-mlx (local, mTLS)",api_model:"Qwen3.6-27B-4bit",api_base:"https://127.0.0.1:1337",fallbacks:[],note:"Dense 27B fine-tuned on the Memory Vault — the archivist's own mind."},
   {id:"mothma",label:"Mon Mothma",role:"Chief of operations — deployments, runbooks, drift, backups, secret rotation; tool-armed.",layer:"CLI REPL",logical_model:"council-brain",provider:"local",provider_label:"sanctum-mlx (local, mTLS)",api_model:"qwen3.6-35b-a3b-4bit",api_base:"https://127.0.0.1:1337",fallbacks:[]}
 ];
 
