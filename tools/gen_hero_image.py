@@ -98,6 +98,15 @@ def gen_imagen(a) -> None:
         out.write_bytes(data)
     else:
         image.save(str(out))
+    # Metered call ($0.02-0.06/image) — ledger it in the haus spend meter, fail-open.
+    meter = pathlib.Path.home() / "Projects/Claude_Code/tools/gcp_spend.py"
+    if meter.exists():
+        try:
+            subprocess.run([sys.executable, str(meter), "record", "--service", "imagen",
+                            "--model", a.model, "--note", "gen_hero_image"],
+                           capture_output=True, timeout=15)
+        except Exception:
+            pass
     print(f"OK {out} ({out.stat().st_size} bytes)")
 
 
