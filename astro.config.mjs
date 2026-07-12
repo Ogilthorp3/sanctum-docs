@@ -233,7 +233,6 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-							items: [
 								{ label: '2026-07-11 — The Third Gate Opens', slug: 'operations/2026-07-11-the-third-gate-opens' },
 								{ label: '2026-07-11 — The Doctor That Fainted at Every Diagnosis', slug: 'operations/2026-07-11-the-doctor-that-fainted-at-every-diagnosis' },
 								{ label: '2026-07-07 — The Cathedral Routes by Need', slug: 'operations/2026-07-07-the-cathedral-routes-by-need' },
