@@ -1,0 +1,109 @@
+---
+title: "CI comes home"
+description: "The 2000 free minutes died quietly — every run failing in three seconds while a 53-commit batch landed unchecked. Moving CI onto the haus's own silicon made it free, faster, and immediately caught a CVE the dead gates had been missing."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![CI comes home — a technical pencil sketch of a small haus with a conveyor belt running out the front door toward a distant cloud factory, the belt snapped mid-air; inside the haus a workbench now runs the same belt in a tight loop past five inspection stations, each with a small stamped seal. An Abyssinian cat sits on the workbench watching the first item pass inspection, one amber halo on the station that just caught a cracked part.](./images/hero-ci-comes-home.png)
+
+The month's 2,000 free GitHub Actions minutes ran out, and the question
+was whether a local Jenkins would be the free replacement. It would have
+been free. It also would have been the wrong tool — and the audit that
+answered the question found something worse than a quota problem: CI had
+been dead for days, and main was broken underneath it.
+
+## The 10x multiplier
+
+The burn was never really 2,000 minutes. `sanctum-rs` runs its test jobs
+on `macos-14` because the code needs macOS — `security-framework` wants a
+Keychain, and the mlx crates want Apple silicon. GitHub bills
+macOS-hosted runners at a **10x multiplier**: a twenty-minute cargo build
+charges 200 minutes of quota. Ten pushes a month is the whole allowance.
+The ubuntu jobs were a rounding error; the macOS jobs were the bill.
+
+And once the quota died, every run — macOS and ubuntu alike — failed in
+three seconds flat. Not a compile error, not a test failure: the job
+simply never started. In the run list this is nearly indistinguishable
+from a real failure, and nothing pages you about it.
+
+<Aside type="caution" title="A 3-second failure is not a failure">
+A CI run that fails in seconds with zero steps executed is a
+quota/billing block, not broken code. The tell: the job has no step
+conclusions at all. Days of pushes wore red X's that nobody read as
+"CI is not running" — and a 53-commit batch merged to main during the
+blackout, checked by nothing.
+</Aside>
+
+## Jenkins would have been a second haus
+
+The Jenkins path meant rewriting every workflow as a Jenkinsfile, wiring
+webhooks through a firewall that rightly admits nobody, losing the
+GitHub-native PR checks, and adopting a plugin treadmill as a hobby.
+
+The better answer was already inside GitHub Actions: **self-hosted
+runners are free**. Minutes on your own hardware bill nothing, the
+workflows stay exactly as they are except the `runs-on:` line, and the
+runner *polls outbound* — no inbound holes, no tunnel, nothing for the
+firewall to forgive. One binary under launchd, the same way everything
+else in the haus runs:
+
+```
+actions.runner.Ogilthorp3-sanctum-rs.manoir  (launchd, KeepAlive)
+```
+
+The hardware argument settles it. GitHub's `macos-14` runner is a
+throttled M1 with 7 GB of memory. The haus's own silicon runs the same
+jobs several times faster, with a warm cargo cache that hosted runners
+rebuild from nothing every single run.
+
+## The first honest run in days
+
+The runner came online and the first sweep told the truth main had been
+hiding. Three of five jobs failed — none of them because of the runner.
+
+`sanctum-proxy` did not compile. The proxyd-hardening batch had pushed
+three call sites of `ModelEntry::ttfb()` but never the method itself —
+the definition sat uncommitted in a side worktree. Half a feature
+merged, and dead CI said nothing. The fix took the missing field and
+method verbatim from that worktree, so the in-flight work lands clean
+later. Clippy's `-D warnings` hard gate then flagged what else had
+slipped through the blackout: an unused variable in the same batch, and
+a `question_mark` lint in the swap-usage parser.
+
+Then the `deny` job — the dependency-advisory hard gate, which had been
+quota-blocked on ubuntu since it costs nothing to run *when CI is
+alive* — executed for the first time in days and immediately earned its
+keep: **RUSTSEC-2026-0204**, an invalid pointer dereference in
+`crossbeam-epoch` 0.9.18, transitive via rayon and image. One
+`cargo update -p crossbeam-epoch` to 0.9.20, no code changes. cargo-deny
+only reads `Cargo.lock`, so the job now rides the macOS runner too —
+nothing in the repo bills a hosted minute anymore.
+
+Third push: all five jobs green.
+
+## Two fences
+
+<Aside type="danger" title="Never attach a self-hosted runner to a public repo">
+A fork PR against a public repo executes the fork's code on your runner
+— on your machine, inside your tailnet. sanctum-rs is private, and its
+`pull_request` jobs only run same-repo branches. sanctum-docs is public
+and keeps its cheap 1x ubuntu jobs on GitHub's hosts, forever. This is
+not a preference; it is the line.
+</Aside>
+
+The second fence was quieter. The runner directory lives under
+`~/.sanctum` — which is itself a git repo with a GitHub remote. The
+runner's `.credentials` and `.credentials_rsaparams` (RSA key material
+for its GitHub session) were sitting untracked, one careless
+`git add -A` from a public leak. `gh-runner/` went into `.gitignore`
+before the first green run finished. A control that authenticates as
+you deserves the same fencing as the secrets it replaces.
+
+## What changed
+
+CI cost: zero, permanently. CI speed: minutes instead of tens of
+minutes, warm caches. CI truth: the gates run on every push again, and
+the first thing the resurrected gates did was catch a real CVE. The
+quota was never the story — the story was that the haus spent days
+believing it had CI, and it had a red light nobody was wired to read.
