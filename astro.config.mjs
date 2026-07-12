@@ -233,6 +233,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-11 — The Gateway Falls on Its Feet', slug: 'operations/2026-07-11-gateway-falls-on-its-feet' },
 								{ label: '2026-07-11 — CI Comes Home', slug: 'operations/2026-07-11-ci-comes-home' },
 								{ label: '2026-07-11 — The Doctor That Fainted at Every Diagnosis', slug: 'operations/2026-07-11-the-doctor-that-fainted-at-every-diagnosis' },
 								{ label: '2026-07-07 — The Cathedral Routes by Need', slug: 'operations/2026-07-07-the-cathedral-routes-by-need' },

@@ -1,0 +1,48 @@
+---
+title: "2026-07-11: The gateway learns to fall on its feet"
+description: "proxyd was crash-looping and answering 'all models failed' inside three minutes. The cause was a flat 10s timeout that killed every model in the fallback chain at once, plus a scattering of unwrap()s that turned recoverable errors into panics. This is the hardening pass: per-model TTFB budgets, panic elimination, and a 38-agent audit that found nine more ways the gateway lied about success."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The [doorman doc](/operations/2026-06-25-proxyd-api-key-gate/) gave proxyd a lock on its one door. This note is about what happened when the room behind that door kept catching fire. Over one evening the gateway went from a service that panicked on a missing config file and answered `all models failed` seven times in three minutes, to one that fails the way a load-bearing service should: quietly, with a logged reason, and onto the next model instead of onto the floor.
+
+## The incident: one timeout, every model dead
+
+The `all models failed` bursts had a single root cause, and it was not that the models were down. proxyd wrapped the entire upstream call — request-body upload *plus* the wait for the first byte — in one flat `tokio::time::timeout(10s, …)`. Anthropic's average time-to-first-byte under load was **12.8 seconds**. The timeout was set *below the average*, so a large-context request from Claude Code was guaranteed to trip it. Worse, it tripped on *every* model in the fallback chain in turn — `claude-fable-5` → `glm-52` → `council-local-think`, each dying at its own 10s mark — so the client waited 30-plus seconds only to be told nothing worked. The fallback chain was not a safety net; it was three identical trapdoors.
+
+<Aside type="danger" title="The timeout was measuring the wrong thing">
+A 10s ceiling on *time-to-first-byte* is reasonable. A 10s ceiling on *upload + queue + first-byte* for a multi-megabyte prompt is a guillotine. The fix separates the two: a short connect timeout catches genuinely dead hosts in ~3s, and a generous **per-model TTFB budget** (default 30s, overridable per seat via `ttfb_timeout_secs` in `config.yaml`) covers the legitimate wait. Once headers arrive, the stream flows unbounded — a slow *generation* is not a failure.
+</Aside>
+
+## The panics: unwrap() is a deployed time bomb
+
+The crash-restart storm — thousands of panics with zero log context — came from `unwrap()` and `expect()` on the hot path and at startup. A missing config file `expect()`ed its way into a launchd KeepAlive loop; the log appender itself panicked *before* logging was initialized, so the reason went to a stderr that launchd silently drops. The pass replaced every one of them:
+
+- **Startup** fails with a logged reason and a real exit code (`EX_CONFIG` / `EX_SOFTWARE`) instead of a panic, so KeepAlive throttling paces the restart instead of a stack-trace flood.
+- **The log appender** is now built fallibly and falls back to stdout if the log directory is unwritable — the behavior the comment always claimed but never had.
+- A **panic hook** routes any residual panic into `proxyd.log` with its `file:line` before the default handler runs. No more silent deaths.
+- The per-request JSON transforms (`route.rs`, `transform.rs`) no longer `unwrap()` `as_object_mut()` — a malformed request passes through to a clean `400` instead of taking down the handler.
+
+## The audit: nine more ways the gateway lied about success
+
+A 38-agent parallel audit (each finding adversarially verified before it counted) surfaced fifteen confirmed reliability defects. The unifying theme of the worst ones: **the gateway reporting success it had not achieved.**
+
+- An OpenRouter `200` carrying a `{"error":…}` body with no `choices` was translated into a fabricated empty `end_turn` — a fake answer that never triggered fallback. Now it returns an error and the chain advances.
+- A mid-stream `{"error":…}` SSE chunk (which OpenRouter sends *after* a 200 when a provider dies mid-generation) was silently dropped, so a failed generation ended as a clean `end_turn`. Now it surfaces an Anthropic `error` event.
+- The streaming translator ran `from_utf8_lossy` on each raw network chunk, so a multi-byte character (an accented name, an emoji) split across a chunk boundary was corrupted to `�` and forwarded to the client. The buffer is now byte-based and only decodes complete events.
+- Prompt-cache injection marked unbounded `cache_control` breakpoints, manufacturing a `400` past Anthropic's four-breakpoint limit that the fallback chain could not catch. Now budgeted to four.
+
+Alongside those: the passthrough path was building a fresh, timeout-less HTTP client per request (a full TLS handshake to `api.anthropic.com` every call, and a hung upstream that pinned the task forever) — now the shared pooled client; keychain lookups are memoized so `securityd` is hit once per provider, not once per request; agent budget buckets are capped so a header-supplied id can't grow the map without bound; and a non-loopback caller can no longer bypass the auth gate with a throwaway `Authorization` header.
+
+<Aside type="note" title="Verified, not asserted">
+All 63 proxy unit tests pass, including a new regression that a non-loopback peer with a garbage `Authorization` header gets a `401`. The end-to-end payload test (a 150MB body through `/v1/messages`) runs against the live `:4040` daemon and must be re-run after deploy — it validates the running binary, not the built one.
+</Aside>
+
+## Deploy shape
+
+The binary the launchd daemon runs is `~/.sanctum/bin/proxyd`, which `proxyd-launch` execs after loading provider keys from `~/.sanctum/secrets/`. The launcher now carries a singleton guard — it defers to a healthy incumbent on `:4040` rather than `pkill`-ing it, which is what caused the old mutual-kill bind-race between the user LaunchAgent and the system LaunchDaemon. Deploys go through `deploy_proxyd.sh`: back up the live binary, copy the fresh build in, `launchctl kickstart -k system/com.sanctum.proxyd`, wait for `/health`, and auto-roll-back if it does not come up in 30s.
+
+## Still open
+
+- **`claude-3-5-sonnet-or`** in `config.yaml` maps to `google/gemini-1.5-pro`, which is retired from OpenRouter, with a nonsensical `max_tokens: 2000000`. It is an orphan seat (no fallback chain references it), so it causes no live failures — but it should be deleted or repointed to `google/gemini-2.5-pro`.
