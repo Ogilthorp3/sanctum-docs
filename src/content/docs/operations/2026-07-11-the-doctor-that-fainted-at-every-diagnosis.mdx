@@ -1,0 +1,166 @@
+---
+title: "The doctor that fainted at every diagnosis"
+description: "Six controls across two machines, all blind since the reboot — and the common cause was never where each one broke. A gateway crash-loop, a deaf verifier, a stale proxy, and a twenty-day drift, all traced to swallowed stderr and PATHs that weren't there."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![The doctor that fainted at every diagnosis — a technical pencil sketch in the Sanctum docs house style, hand-drawn black-and-white, wide 16:9. A doctor in a white coat has fainted sideways on the floor of a small haus, his stethoscope unplugged and trailing into a dark gap between the floorboards. Six cracked wall gauges behind him have their glass faces turned away, readings invisible; a clipboard by his hand reads only 'exit 4'. An Abyssinian cat on a drafting table watches the gap in the floorboards, not the doctor; one subtle amber halo rises from the open gap.](./images/hero-the-doctor-that-fainted.png)
+
+A full Sanctum health sweep opened with a critical alert: *Yoda Signal
+did not self-assemble after boot*. It was the right instinct, the wrong
+diagnosis. The gateway was crash-looping, yes, but the consumer unit it
+named didn't exist, and the real break was upstream of all of them. Six
+controls across two machines were blind, and the thread connecting them
+was not obvious from any single one. Each had to be found before the
+pattern showed.
+
+## The wrapper that swallowed its own death
+
+`openclaw-gateway` was at 6,830 restarts and climbing, every instance
+exiting `4/NOPERMISSION`. The unit file ran it through `sops-start.sh`, a
+wrapper that decrypts `secrets.enc.yaml` and maps values to service env
+vars before `exec`-ing the real binary. A direct `node` invocation ran
+clean — `ready` in twelve seconds, Signal channel attached. The wrapper
+was the difference.
+
+The wrapper asked sops for `--output-type dotenv`. On 2026-07-08 a nested
+value landed in the secrets file, and sops's dotenv dumper cannot flatten
+a structure — it exits `4` with a message on stderr. The wrapper
+redirected that stderr to `/dev/null`:
+
+```bash
+"$SOPS" -d --output-type dotenv "$SECRETS_FILE" > "$ENVFILE" 2>/dev/null
+```
+
+So sops died, the wrapper died, systemd recorded `NOPERMISSION` (exit 4,
+the sops code, mistaken for a permissions fault), and restarted it five
+seconds later. Forever. Four services share that wrapper — gateway,
+graphiti-server, firewalla-bridge, health-ingester — and all four were
+silently crash-looping the same way, distinguished only by which one
+noticed first.
+
+<Aside type="danger" title="The stderr that was sent to /dev/null">
+A control that discards its own diagnostic output cannot tell you why it
+failed. systemd sees exit 4 and guesses permissions. The operator sees
+permissions and checks keys, ACLs, file modes — all fine. The actual
+message — *cannot use complex value in dotenv file* — was on a fd that
+went nowhere. Every wrapper that suppresses stderr is a future
+misdiagnosis waiting its reboot. The fix decrypted as JSON (which
+tolerates nested values, skipping non-scalars loudly on stderr) and
+*stopped discarding stderr*. The death is now diagnosable.
+</Aside>
+
+## The verifier that couldn't see its own subject
+
+The vault inbox was repeating an alert every three minutes:
+*identityverifierblind — only 1/8 agents could be verified (partition /
+VM unreachable)*. The archive held weeks of the same message. Eight
+signed agent identities are checked on a sweep — jocasta locally on the
+MBP, seven Jedi workspaces inside the Lima VM on manoir — fetched over
+`ssh manoir tail7c6d11.ts.net "limactl shell sanctum-vm -- ..."`. The
+MBP-to-manoir hop was fine. The manoir-to-VM hop returned
+`command not found: limactl`.
+
+`limactl` lives at `/opt/homebrew/bin/limactl`. The verifier's ssh runs a
+non-interactive shell, and non-interactive zsh on manoir never had
+`/opt/homebrew/bin` on its PATH. The `~/.zshenv` — the file that runs for
+*every* shell, interactive or not — sourced cargo and configured the SOPS
+age key but never added Homebrew. The 2026-06-19 hardening rewrite of the
+verifier had started calling bare `limactl`, and from that day every
+sweep silently failed the VM leg and reported 1/8.
+
+The fix was one line in manoir's `~/.zshenv`:
+
+```bash
+export PATH="/opt/homebrew/bin:$PATH"
+```
+
+<Aside type="caution" title="Don't edit the verifier to fix the verifier">
+The verifier is hash-pinned and tamper-guarded — its own script, its
+launchd plist, and the genesis manifest are checked against stored
+self-pins, and a mismatch trips a `TRUST-ROOT tamper` HALT. The break was
+in the *environment the verifier runs in*, not the verifier. Adding the
+PATH line to `.zshenv` (a dotfile the verifier doesn't hash) fixes the
+blindness without touching the trust root. Editing the script would have
+fired the alarm the fix was trying to silence.
+</Aside>
+
+After the line landed, a kickstarted sweep wrote `8/8` to the heartbeat.
+Twenty days of blindness had hidden nothing — the identities were intact —
+but a control that cannot prove it is enforcing is down, not open.
+
+## The proxy that pointed at its old self
+
+A builder session hardened `proxyd` — no `unwrap`/`expect` in the hot
+path, per-model TTFB timeouts, a panic hook that logs `file:line`. The
+binary was copied to `~/.sanctum/bin/proxyd`. The deploy note said:
+`sudo launchctl kickstart`, then `cp`, then kickstart again. Two gaps hid
+in that recipe.
+
+First, `sudo` from this environment needs a terminal password it cannot
+get. Second — and this was the real one — the LaunchDaemon doesn't exec
+the binary directly. It execs `proxyd-launch`, a wrapper that loads
+provider keys from a secrets dir and then `exec`s a `BINARY` whose path
+is *hardcoded in the wrapper*. That path still pointed at the old
+`~/Projects/sanctum-rs/target/release/proxyd`. So the hardened binary
+sat at `~/.sanctum/bin/proxyd` unused, and any restart would have
+relaunched the pre-hardening build.
+
+The deploy doctrine says the system LaunchDaemon's `KeepAlive` respawns
+after a `kill <pid>` — no sudo needed. So the fix was: repoint the
+wrapper's `BINARY=` line, kill the old PID, let `KeepAlive` bring up the
+new one through the corrected wrapper. Verified by e2e — a chat
+completion through `council-mlx` returned `OK`, and the singleton guard
+that replaced an old mutual-kill `pkill` fired correctly during the
+respawn race.
+
+## The drift that pointed the wrong way
+
+`com.sanctum.council-drift` had exited `1` on every hourly run for twenty
+days. Two deploy files had fallen behind prod: the `com.sanctum.mlx.plist`
+(repo described the old 27B-only config; prod runs the 35B cathedral with
+a 27B draft, memory bumped) and `council-drift-check.sh` itself (prod had
+a `redact_secrets` improvement that reports drift on structure, never on
+the secret value). In both cases prod was the intended state, so the fix
+was reconcile prod→repo.
+
+`sanctum-plist reconcile` captures the live plist back into the repo and
+commits. The first commit blocked: a `no-hardcoded-ip` pre-commit hook
+flagged the `10.10.10.1` vmnet bridge anchor. The raw capture had *dropped*
+the inline `ip-allow` comment that justifies that literal — the comment
+is what the hook requires. Restoring it in the repo wasn't enough; prod
+and repo had to match byte-for-byte, so the same harmless comment was
+added to the prod plist. A comment-only edit to a running plist doesn't
+affect the live process (launchd only re-reads on reload), so it was safe.
+
+<Aside type="note" title="The drift checker reads a worktree, not main">
+The checker is pinned to `SANCTUM_MLX_REPO` resolving to the
+`deploy-health-gate` worktree, not main. A reconcile committed only
+on main would not clear the alert; the same commits had to land in the
+worktree the checker actually compares against. Cherry-pick to
+`deploy-health-gate`, kickstart the check, read `drift_ok`.
+</Aside>
+
+## Two smaller items
+
+A stale `ironclaw` SSH host entry — a Lima VM on `127.0.0.1:3100` that no
+longer exists on manoir (only `sanctum-vm` is running) and was never part
+of the verifier's eight — was pruned from `~/.ssh/config`. And a fresh
+`bert-cli` mTLS client cert was minted into `~/.sanctum/certs/clients/`
+so the CLI can probe the `--no-plain` servers on `:1337`/`:3301`/`:4040`.
+The `000` responses that opened the LLM audit were a missing-client-cert
+artifact, not dead services — the servers were healthy all along.
+
+## The pattern
+
+Six controls. A gateway crash-loop, a deaf identity verifier, a proxy
+pointing at its old self, a twenty-day drift, a dead SSH alias, a
+missing client cert. The first three share a cause that none of them
+advertises: *the failure was diagnosable, but the diagnosis was sent
+somewhere nobody looked*. sops wrote it to `/dev/null`. The verifier's
+`limactl: command not found` went to the same place. The proxy's stale
+path hid behind a wrapper that looked correct on its surface. A control
+that suppresses the channel it uses to explain itself is, in the
+doctrine of the fifth guardian, down — not open. The fix for each was
+small. Finding each was the work.

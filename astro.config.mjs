@@ -233,6 +233,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-11 — The Doctor That Fainted at Every Diagnosis', slug: 'operations/2026-07-11-the-doctor-that-fainted-at-every-diagnosis' },
 								{ label: '2026-07-07 — The Cathedral Routes by Need', slug: 'operations/2026-07-07-the-cathedral-routes-by-need' },
 								{ label: '2026-07-07 — The Fifth Guardian', slug: 'operations/2026-07-07-the-fifth-guardian' },
 								{ label: '2026-07-06 — The Twin That Would Not Die', slug: 'operations/2026-07-06-the-twin-that-would-not-die' },
