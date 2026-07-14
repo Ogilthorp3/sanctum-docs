@@ -1,0 +1,51 @@
+---
+title: "2026-07-14: The ladder with one paid rung"
+description: "The gateway had learned to fall on its feet; the open question was where it fell to. The fallback chains had grown into a thicket of half a dozen metered models stacked in someone's idea of wisdom order. This is the pass that collapsed them into one doctrine — subscription primary, one sanctioned paid rung, local tail — and the two bugs that had been hiding inside the old thicket."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![The ladder with one paid rung — a technical pencil sketch in the Sanctum docs house style, hand-drawn black-and-white, wide 16:9. A tall ladder descends through a haus floor hatch into shadow with only three rungs: a broad flat top rung, a single middle rung stamped with one small meter dial, and a solid bottom rung on the cellar floor. A heap of a dozen mismatched, broken extra rungs lies swept into the corner. An Abyssinian cat perched at the top watches the one metered rung, not the drop; a single amber halo rests on that middle rung.](./images/hero-the-ladder-with-one-paid-rung.png)
+
+The [gateway learned to fall on its feet](/operations/2026-07-11-gateway-falls-on-its-feet/): quietly, with a logged reason, onto the next model instead of onto the floor. That fixed *how* it falls. It left open a more expensive question — *where to*. Because the place it fell to had, over months, grown into a thicket.
+
+## The thicket
+
+Every council seat carried its own fallback chain, and every chain had accreted its own hand-ranked pile of metered models — a different mix of qwen, minimax, deepseek and grok tiers, each ordered by whoever's sense of which was wiser on the day it was added. Half a dozen paid models in rotation across the roster: each a separate bill, each a separate thing to remember was still alive. Nobody could say, at a glance, which metered model a given seat would reach for on its third bounce.
+
+The instinct that built the thicket was a reasonable one — always keep one more option. But an option you can't reason about isn't a safety net. It's surface area.
+
+## The doctrine: one ladder, three rungs
+
+The pass replaced every seat's bespoke chain with the same shape:
+
+1. **Subscription primary.** The seat's real champion, reached through a flat-rate subscription. Already paid for; a per-token bill avoided.
+2. **One sanctioned metered rung.** Exactly one paid escape — the current best general model on OpenRouter (`glm-52` today). When a better one ships, you swap a single name, not six chains.
+3. **Local blackout tail.** The on-box models, so a total cloud outage still answers instead of returning `all models failed`.
+
+Every other metered model came out of the chains. The point was never that the others were bad — it's that a ladder you can hold in your head is one you can trust at 2 AM. One paid rung, one name to watch, one line to change when the market moves.
+
+<Aside type="note" title="Why a subscription beats a cheaper API call">
+A model billed per token can be *nominally* cheaper than a subscription and still be the wrong default. The subscription is a sunk flat rate, so every call routed to it is marginal-zero — and every call routed *around* it to a metered model is money spent twice. The ladder prefers the thing you already bought.
+</Aside>
+
+## Two bugs the thicket was hiding
+
+**A cost-optimizer that outsmarted itself.** One seat — the routine tier — carried a `smart_route` flag that let the gateway override the declared primary and hunt for the cheapest model available. It had latched onto a free-tier slug that OpenRouter has since retired, so the "cheapest" option answered every call with a `404` and a cheerful note to use the paid version instead. The seat's actual subscription primary sat right there the whole time, unused, while the optimizer chased a model that no longer existed. Removing the flag let the declared primary stand. The cheapest model, it turns out, is the one that answers.
+
+**A credential that starved on an idle seat.** One seat authenticates through a rotating OAuth subscription — the kind where each refresh mints a new refresh token and invalidates the last. That refresh only fired when the seat took traffic. So a quiet stretch with no calls meant no refresh; the token aged past its window; and the next call after the lull failed against a lapsed credential. The fix is a 10-minute in-process keep-warm: the credential refreshes on a timer whether or not anyone is asking, so it's warm *before* the first real call rather than because of it.
+
+## What stays on the ground
+
+Three seats never got a cloud rung at all, by design:
+
+- The **health and genome** seat and the **private-messaging** seat keep a local-only tail. Their inputs are the two things in the haus that most emphatically should not be handed to a third-party API as a routine fallback, and no cost argument moves that line.
+- The **heartbeat** seat — because a heartbeat that can fall back to the cloud will happily report "alive" while the local brain it was meant to be watching is face-down on the floor. A liveness check that outlives the thing it checks is worse than no check at all.
+
+## Verified against the live gateway
+
+Each changed seat was probed through the running `:4040` daemon, not just eyeballed in the config. The subscription primaries answered on the subscription; the single metered rung and the local tail both answered when asked directly; and one coder seat, whose local champion happened to be down, was caught mid-fall — landing cleanly on the shared local model one rung below. The ladder holds weight.
+
+## Still open
+
+The subscription bridge carries exactly one generation of its provider's models, exposed under unpinned aliases. Ask it for a newer generation, or a specific point-release, and it does not error — it silently hands back the nearest thing it has. That's precisely what you want for "give me the current best," and a quiet downgrade for "give me *that specific* model." Pinning a named frontier version means routing around the subscription to the metered API — which is the exact rung this ladder was built to stop reaching for out of reflex. The doctrine and the pin want opposite things. For now the doctrine wins, and the pin is a conscious, logged exception for the day it's worth paying for.
