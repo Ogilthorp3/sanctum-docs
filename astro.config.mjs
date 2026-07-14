@@ -234,6 +234,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-14 — The Ladder With One Paid Rung', slug: 'operations/2026-07-14-the-ladder-with-one-paid-rung' },
 								{ label: '2026-07-13 — The Maester Lost His Mind', slug: 'operations/2026-07-13-the-maester-lost-his-mind' },
 								{ label: '2026-07-11 — The Gateway Falls on Its Feet', slug: 'operations/2026-07-11-gateway-falls-on-its-feet' },
 								{ label: '2026-07-11 — CI Comes Home', slug: 'operations/2026-07-11-ci-comes-home' },
