@@ -131,6 +131,7 @@ export default defineConfig({
 						{ label: 'Turboquant Slice 4 Scoping', slug: 'architecture/turboquant-slice-4-scoping' },
 						{ label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
 						{ label: 'Eval Harness', slug: 'architecture/eval-harness' },
+						{ label: 'The Champion Gate', slug: 'architecture/champion-gate' },
 						{ label: 'Sanctum Olympics', slug: 'architecture/sanctum-olympics' },
 						{ label: 'Model Comparison', slug: 'architecture/model-comparison' },
 						{ label: 'Model Tournament', slug: 'architecture/model-tournament' },
@@ -233,6 +234,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-13 — The Maester Lost His Mind', slug: 'operations/2026-07-13-the-maester-lost-his-mind' },
 								{ label: '2026-07-11 — The Gateway Falls on Its Feet', slug: 'operations/2026-07-11-gateway-falls-on-its-feet' },
 								{ label: '2026-07-11 — CI Comes Home', slug: 'operations/2026-07-11-ci-comes-home' },
 								{ label: '2026-07-11 — The Doctor That Fainted at Every Diagnosis', slug: 'operations/2026-07-11-the-doctor-that-fainted-at-every-diagnosis' },

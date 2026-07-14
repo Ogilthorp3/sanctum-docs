@@ -1,0 +1,120 @@
+---
+title: "The maester lost his mind"
+description: "The Dragonpit's Aemon bot stayed alive for six days while silently serving on the wrong brain — a coder model instead of the council champion. A consolidation the discovery heuristic was never taught about."
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+![The maester lost his mind — a pencil-sketch stone dragonpit alcove where a wise old maester reads a glowing book while, behind him, the great dragon silently metamorphoses into a smaller mechanical serpent of gears and code-scrolls he has not noticed. An Abyssinian cat sits beside him, observing. One teal halo glows around the open book.](./images/hero-2026-07-13-the-maester-lost-his-mind.png)
+
+The Dragonpit — a Matrix room where a self-hosted maester bot answers
+preppers' and hackers' questions from the local cathedral LLM — was,
+by every surface check, healthy. The process was up, the homeserver was
+up, the room was joined. It had simply been answering from the wrong
+model for days, and nobody had asked it a question to notice.
+
+## The shape of the drift
+
+Nothing was *down*. That was the trap. `aemon.py` had been running since
+a 2026-07-10 restart; the Conduit homeserver was up in its OrbStack
+container; the bot was parked in `sync_forever` connected to the room.
+The only signal that something was off was six days of silence — and
+silence in a chat bot is indistinguishable from "nobody's talking to it."
+
+The drift lived one layer up, in the **cathedral topology** the bot
+discovers its brain from. Over the prior days the cathedral was
+consolidated: the three served models — a 35B-A3B primary, a 27B
+secondary, and a Devstral-24B coder on a separate port — collapsed into a
+single `:1337` process. The 27B was demoted from a servable seat to a
+speculative-decode *draft* model; Devstral was promoted from its own
+`:3301` daemon into the secondary seat the 27B had vacated.
+
+Aemon's `discover_model()` was never told. It still ran the heuristic it
+was written with: **prefer an id containing "qwen", else the first
+non-opaque id.** After the consolidation the `:1337` `/v1/models` endpoint
+advertised two ids:
+
+- `38740b847e4cb78f352aba30aa41c76e08e6eb46` — the 35B-A3B primary,
+  exposed as a bare 40-char snapshot hash (opaque, no "qwen" substring)
+- `Devstral-Small-2-24B-Instruct-2512-4bit` — the coder, human-readable
+
+There was no "qwen" id to prefer. The 35B primary was an opaque hash. So
+the heuristic fell through to *the first non-opaque id* — which was
+**Devstral**, a code model. The maester had been answering questions in
+the voice of a coding assistant for six days.
+
+<Aside type="note">
+The bot's pinned fallback (`MODEL = "Qwen3.6-27B-4bit"`) would have been
+<i>more correct</i> than what discovery returned — but the fallback only
+fires when discovery <em>fails entirely</em>, not when it returns the
+wrong model.
+</Aside>
+
+## Why the heuristic missed it
+
+The original `discover_model()` had two reasonable assumptions that the
+consolidation broke:
+
+1. **The primary is always human-readable.** It wasn't — the Rust
+   cathedral exposes the primary by its snapshot hash, which the
+   `_HEX_HASH_RE` treated as "opaque, skip."
+2. **Any human-readable id is a valid maester brain.** It isn't — the
+   coder secondary (Devstral) is a fine model for Qui-Gon's code seat,
+   but it's the wrong brain for a maester who's supposed to reason about
+   the mesh, not write Rust.
+
+The heuristic preferred the *form* of an id (readable vs opaque) over its
+*role* (champion vs coder). When the consolidation put a coder in the
+readable slot and a champion in the opaque slot, the heuristic picked the
+coder.
+
+## The fix
+
+A role-aware discovery: prefer a Qwen id; else the first id that is **not
+a coder/devstral secondary** (accepting the primary even as an opaque
+hash, since the primary is listed first); else the first id; else the
+pinned fallback. The patch is six lines of a `_NON_MAESTER` denylist
+inserted between the qwen-pref and the fallback:
+
+```python
+_NON_MAESTER = ("devstral", "coder", "code-")
+chosen = None
+for mid in ids:
+    if "qwen" in mid.lower():
+        chosen = mid; break
+if chosen is None:
+    for mid in ids:
+        if not any(neg in mid.lower() for neg in _NON_MAESTER):
+            chosen = mid; break
+if chosen is None and ids:
+    chosen = ids[0]
+```
+
+Post-patch, `discover_model()` resolves to
+`38740b84…e6eb46` — the 35B-A3B primary. The bot was restarted (KeepAlive
+resurrected it under a new PID), re-joined the room, and a live-room
+probe confirmed the running process logs `discovered cathedral model:
+38740b84…e6eb46` on its first real question. The privacy guard still
+fires — a probe asking it to name its model got the maestro-voice
+decline, *"That is not for the pit, friend."*
+
+## The doctrine it taught
+
+This is the working-twin diff in miniature. A config/topology change —
+the cathedral consolidation — landed without a matching change to the
+one consumer that depended on the old topology. The failure mode wasn't
+a crash; it was a **silent role swap** that only surfaces when someone
+asks a question and notices the answer is in the wrong voice. Two
+hardening steps fell out of it:
+
+- **Role-aware discovery, not form-aware.** "Human-readable" is not a
+  proxy for "the right brain." Name the roles you don't want (coder) and
+  exclude them, don't try to name the role you do want by substring.
+- **A liveness heartbeat.** Six days of silence is indistinguishable from
+  a wedged bot. A periodic self-ping would have surfaced "still here,
+  still on the right brain" without a human needing to ask.
+
+The dragonpit directory was also in the durability doctrine's forbidden
+third state — untracked *and* not gitignored. It's now tracked in
+`sanctum-config` (the bot, its facts, and setup scripts); secrets and
+logs are gitignored.
