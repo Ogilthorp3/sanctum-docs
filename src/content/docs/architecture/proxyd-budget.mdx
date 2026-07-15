@@ -1,0 +1,96 @@
+---
+title: "Proxyd budget.yaml + CLI route banners"
+description: Hot-reloaded USD budget for Claude CLI ($50/day shared pool), sanctum subs+local only, green/red iTerm2 banners, and degraded local context fit.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+The live `proxyd` on manoir (`:4040`) is a **Rust** binary. Operator knobs live in YAML so you never recompile to change the daily cap or model rates.
+
+## Files
+
+| Path | Role |
+|------|------|
+| `~/.sanctum/sanctum-proxy/budget.yaml` | Live policy (hot-reloaded) |
+| `~/.sanctum/sanctum-proxy/config.yaml` | Models + fallback chains |
+| `services/sanctum-proxy/src/budget_policy.rs` | Loader + pricing + sanctum seat filter |
+| `services/sanctum-proxy/src/proxy.rs` | Green ROUTE / red DEGRADED banners |
+| `services/sanctum-proxy/src/transform.rs` | `fit_context_to_budget` for cathedral ~32k |
+
+Override path: `SANCTUM_PROXY_BUDGET=/path/to/budget.yaml`.
+
+## Claude CLI pool ($50)
+
+- Agent id: `claude-code` (from `User-Agent: claude-code…`)
+- **One shared USD/day** across every seat that CLI can land on (Fable, Opus, glm-52, …)
+- **Max / Gemini free / local** charge **$0** when free-path flags are on
+- **Token soft-breaker off** for CLI (`token_circuit.enabled: false`) — USD only
+- At cap: metered seats dropped → **local only**
+
+Edit live:
+
+```yaml
+claude_cli:
+  daily_cap_usd: 50.0
+  token_circuit:
+    enabled: false
+```
+
+proxyd logs `budget policy hot-reloaded … claude_cli_cap_usd=…` within ~1s. No restart.
+
+## Sanctum house agents
+
+Everyone **not** in `claude_cli.agents` is sanctum by default:
+
+- Metered OpenRouter **stripped**
+- Subscription bridges + local only (`only_subscription_and_local: true`)
+- OpenRouter `*:free` still allowed if `allow_openrouter_free: true`
+
+## iTerm2 banners (one line)
+
+| Color | Meaning |
+|-------|---------|
+| **Green** (`\x1b[32m`) | Route diversion — healthy ops notice |
+| **Red** (`\x1b[91m`) | Context truncated — **quality DEGRADED** |
+
+Examples:
+
+```text
+[sanctum-proxy] ROUTE claude-fable-5 → glm-52 (openrouter · z-ai/glm-5.2) · via [claude-fable-5✗…]
+[sanctum-proxy] ⚠ DEGRADED CONTEXT · 136000→27500 tok (cap 28000) · actions=[drop-middle-history+…] · double-check facts
+```
+
+## Local context fit (the oversized-session hack)
+
+Cathedral operational cap is ~32k. When a **local / mTLS** seat would 413, proxyd:
+
+1. Drops middle history  
+2. Squashes huge `tool_result` payloads  
+3. Hard-tail keep  
+4. Nuclear tail (last 2) if needed  
+5. Re-estimates (double-check); sets `still_over` if still above cap  
+
+Tune:
+
+```yaml
+local_context:
+  enabled: true
+  max_prompt_tokens: 28000
+```
+
+## Pricing table
+
+`pricing.models` / `pricing.providers` — USD per **1M tokens**. Lookup: seat name → api_model → provider default.
+
+## Ops checks
+
+```bash
+curl -sk --cacert ~/.sanctum/certs/ca.crt https://127.0.0.1:4040/stats | jq .agents
+# claude-code.cap_usd should be 50
+
+bash ~/Projects/sanctum-rs/services/sanctum-proxy/test_e2e_budget_route.sh
+```
+
+<Aside type="caution">
+Red DEGRADED means history was cut. The answer can still complete, but facts from dropped turns may be missing — treat as best-effort local, not full-session Claude.
+</Aside>
