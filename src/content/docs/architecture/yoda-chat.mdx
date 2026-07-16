@@ -55,13 +55,24 @@ The Holocron Bridge is the system that keeps the chat alive: the transport, the 
 | 1 | Signal Server | cloud | — | The thing that delivers messages between phones |
 | 2 | `signal-cli` daemon | Mac | TCP `:7583`, HTTP `:8080` | Long-poll Signal Server, expose JSON-RPC |
 | 3 | `socat` bridge | Mac → VM | `10.10.10.1:7583` | NAT-friendly TCP forward to VM |
-| 4 | `yoda-chat-proxy` | VM | `:5150` | HTTP-JSON-RPC ⇄ TCP-JSON-RPC for openclaw |
-| 5 | `yoda-chat-consumer` | VM | (subscribes) | inbound `receive` → agent dispatch |
-| 6 | openclaw agent CLI | VM | (subprocess) | `openclaw agent --agent main --json` — we own delivery |
-| 7 | `sanctum-mlx` | Mac | TLS `:1337` (via `:1339`) | Qwen 3.6 35B inference |
+| 4 | `yoda-chat-proxy` | VM | `:5150` | HTTP-JSON-RPC ⇄ TCP-JSON-RPC **and SSE** for openclaw |
+| 5 | openclaw-gateway Signal channel | VM | `:1977` | Subscribes to proxy SSE `/api/v1/events`, runs agent |
+| 6 | `sanctum-mlx` / proxyd | Mac | TLS `:4040` → cathedral | Local (or tiered) inference for the reply |
 
-<Aside type="caution" title="The gateway was a hop; now it's a binary">
-This used to route through the openclaw **gateway** daemon on `:1977`. That HTTP hop was retired from the chat path on 2026-04-23 (see `~/.sanctum/SECURITY-EXCEPTIONS.md`); the daemon may still answer `:1977/health`, but nothing in this pipeline talks to it. Delivery now shells straight into the `openclaw` CLI with `--json` — `yoda-chat` owns the Signal send itself, so there is one fewer port to watch die at 3am.
+<Aside type="caution" title="Inbound is SSE, not the CLI subprocess">
+Live Bert→Yoda traffic is **openclaw-gateway** on the sanctum-vm, with
+`channels.signal.httpUrl = http://127.0.0.1:5150`. The gateway holds a long
+SSE connection to the proxy and parses `event: receive` frames. Operator
+tooling (`yoda-chat e2e`, honor probes) may still shell `openclaw agent
+--deliver`. Both paths must stay green — outbound CLI success does **not**
+prove inbound SSE is healthy. See the 2026-07-16 silent-inbound post-mortem.
+</Aside>
+
+<Aside type="danger" title="SSE data shape is load-bearing">
+OpenClaw does `payload = JSON.parse(event.data); envelope = payload?.envelope`.
+The proxy **must** emit `data: {"envelope":…,"account":…}` (signal-cli params),
+**not** `data: {"method":"receive","params":{…}}`. Nested params → silent drop
+with green health. Goldens + R2D2 `SSE-CONTRACT-BROKEN` guard this.
 </Aside>
 
 ## Three rules that make it boring
@@ -73,8 +84,8 @@ This used to route through the openclaw **gateway** daemon on `:1977`. That HTTP
   <Card title="No silent failures" icon="approve-check">
     Every hop has a structured log. Every envelope is classified — data / receipt / typing / sync / other. Receipts and typing indicators are visibly logged so silence in the log reflects an actual silence, not a misparse. The `Connection closed unexpectedly` line that used to look terrifying is now a footnote — it's signal-cli's normal long-poll cycle.
   </Card>
-  <Card title="Self-heal in 10 minutes" icon="shield">
-    A `yoda-chat-doctor.timer` runs every 10 min on the VM. It stamps any unstamped workspace, archives any poisoned session, and restarts any dead service. On the Mac, plain launchd `KeepAlive` respawns `com.sanctum.signal-cli`, `com.sanctum.signal-tcp-bridge`, and `com.sanctum.mlx`, while the `com.sanctum.signal-health` sentinel kicks signal-cli when it wedges without dying. The chat heals itself before you notice.
+  <Card title="Self-heal on two sides of the airgap" icon="shield">
+    **VM:** `yoda-chat-doctor.timer` every 10 min (workspaces, poisoned sessions, `yoda-chat-proxy` restart). **Mac:** launchd KeepAlive for signal-cli/bridge, plus `com.sanctum.signal-link-sentinel` readiness every ~5 min and R2D2 recipe `heal-yoda-signal-link` every 10 min — including channel-disabled, SSE-contract-broken, and gateway-down (the 2026-07-16 class). Tracked goldens under `~/.sanctum/yoda-chat/`.
   </Card>
 </CardGrid>
 
@@ -99,13 +110,11 @@ The Holocron Bridge — OK
   Calm, the Force is.
 ```
 
-Six rows, not seven — the gateway probe came out when the gateway came out of the path.
-
 `yoda-chat doctor` walks the same checks but applies remediation:
 
 - Workspace state missing `setupCompletedAt`? Stamp it.
 - Session JSONL has two consecutive bootstrap-pending replies? Archive it.
-- Proxy or consumer down? `systemctl --user restart`.
+- Proxy down? `systemctl --user restart yoda-chat-proxy` (and bounce openclaw-gateway so it re-subscribes to SSE).
 
 `yoda-chat e2e` is the no-mercy regression test. It exercises every hop in order — `signal-cli` TCP version probe, proxy `/api/v1/check`, mlx `/v1/models`, an agent CLI round-trip that demands the word PONG, then (unless `--no-deliver`) a real `proxy → operator` send and an `agent --deliver` round-trip — and prints a green checkmark per stage with a duration. If it's all green, the chat works. If not, the failing stage names the problem.
 
@@ -137,6 +146,12 @@ Six rows, not seven — the gateway probe came out when the gateway came out of 
 
    The shell that's running `pkill` matches the pattern. Use specific PIDs, `pkill -x` (exact match), or `pkill -f <very-specific>`.
 
+7. **Outbound green ≠ inbound healthy (2026-07-16).**
+
+   Agent `--deliver` and proxy `send` can succeed while Bert→Yoda is mute. Causes that stayed green under naive health: `channels.signal.enabled=false` on the **VM** gateway config; yoda-chat SSE wrapping envelopes under `method/params` so OpenClaw never saw `payload.envelope`. Always check inbound readiness:
+   `python3 ~/.sanctum/sentinels/signal-link-sentinel.py --check` and
+   `ssh yoda 'python3 ~/.openclaw/yoda-chat/scripts/inbound-readiness.py'`.
+
 </Steps>
 
 <Aside type="note" title="Codename glossary">
@@ -157,6 +172,6 @@ Six rows, not seven — the gateway probe came out when the gateway came out of 
 
 5. **If `mlx bridge` is red:** sanctum-mlx is down or the TLS-termination bridge isn't running. The bridge is `com.sanctum.yoda-plain-bridge` (it terminates TLS at `:1339` onto sanctum-mlx at `:1337`); launchd `KeepAlive` usually respawns it, but if it's wedged, manual: `launchctl kickstart -k gui/$(id -u)/com.sanctum.yoda-plain-bridge`.
 
-6. **If everything is green and you still feel something is off:** run `yoda-chat e2e`. It will send two test messages to the operator's Signal — proof of life from every hop.
+6. **If everything is green and you still feel something is off:** run `yoda-chat e2e`. It will send two test messages to the operator's Signal — proof of **outbound** life. Then run the **inbound** probe: `ssh yoda 'python3 ~/.openclaw/yoda-chat/scripts/inbound-readiness.py'` — all five fields must be `true`. If `sse_contract_ok` is false, re-apply goldens: `~/.sanctum/yoda-chat/apply-inbound-goldens.sh`. Full story: [2026-07-16 silent inbound](/operations/2026-07-16-yoda-signal-silent-inbound/).
 
 </Steps>
