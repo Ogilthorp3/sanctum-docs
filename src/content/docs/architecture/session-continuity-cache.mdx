@@ -1,0 +1,71 @@
+---
+title: Session Continuity Cache
+description: "A design for smoothing mid-session model switches — so a fallback from one seat to another doesn't feel like waking a stranger who read your diary but never met you."
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![The proxy hands a still-lit conversation thread from one AI seat to the next mid-flight — the thread never goes dark, even as the brain behind it changes](./images/hero-session-continuity-cache.png)
+
+<Aside type="caution" title="Design, not shipped">
+This page describes a **planned** proxy capability, not a live one. It is on the [Roadmap](/operations/roadmap/) under *Later*. Nothing here runs yet. It exists so the idea is written down honestly instead of living in one operator's memory.
+</Aside>
+
+The [Sanctum Proxy](/architecture/proxy/) walks a fallback chain: `Max → Gemini → Grok → glm-52 → cathedral`. When the top seat runs out of quota mid-conversation, the next seat takes over. The routing works. The *feeling* does not: the reply after a switch can read like you handed your notebook to a new person who skimmed it and started talking. This page is about closing that gap.
+
+## The problem is not what it looks like
+
+The intuitive story is "the proxy dropped my context when it switched models." That story is **wrong**, and it matters that it's wrong, because it points the fix at the wrong layer.
+
+The proxy is **stateless**. On every request it forwards the *entire* `messages` array untouched and rewrites exactly one field — `"model"` — and nothing else. There is no truncation, no per-session memory, no summarization. The new seat receives the complete transcript the old seat had. Verified in the router: the reroute path mutates only `obj.insert("model", …)` and passes the body through.
+
+So if the full history arrives at the new model, why does continuity feel broken? Two real causes, neither of which is "lost context":
+
+<CardGrid>
+<Card title="Different brain, same notebook" icon="random">
+A fallback crosses model *families* — Anthropic → Google → xAI → Zhipu → a local 27B. Each weights the same history differently: instruction-following, tool discipline, how strongly it honours an earlier decision. Identical `messages`, different latent state. The reply changes because the *reader* changed, not because the text went missing.
+</Card>
+<Card title="The client blinks" icon="warning">
+The other failure mode is upstream of the proxy entirely. If Claude Code sees the switch as a 429 storm or a connection error and bails out of the turn — or the operator restarts the CLI — the *client's* in-memory transcript is what falls out. That is the copy-paste-the-history recovery, and it happens in the client, not the router.
+</Card>
+</CardGrid>
+
+<Aside type="tip" title="The cheap win exists today">
+For the client-blink case, the fix already ships: Claude Code persists transcripts to disk. `claude --resume <session-id>` rehydrates the whole conversation — no copy-paste. The cache below is for the *first* cause, which `--resume` cannot touch.
+</Aside>
+
+## What the cache would do
+
+Give the proxy a small amount of memory, keyed by session, whose only job is to make a seat change *legible* to the new model — to hand the newcomer not just the notebook but a one-paragraph "here's where we are and what's already decided."
+
+<CardGrid>
+<Card title="Session affinity" icon="seti:lock">
+A stable per-conversation key (a session id header, or a content hash of the system prompt + first turns). It carries no history itself — it is the handle everything else hangs off, and the thing that lets the proxy notice "this is the same conversation as 30 seconds ago, now on a different seat."
+</Card>
+<Card title="Continuity preamble" icon="document">
+Per session, the proxy keeps a short, rolling state note: the task, the decisions already made, the tone. On a *seat change only*, it injects that note as a system-level preamble ahead of the forwarded history, so the incoming model orients the way the outgoing one had — instead of re-litigating settled ground.
+</Card>
+<Card title="Stable prefix / KV reuse" icon="rocket">
+Where a seat supports prefix caching (local cathedral especially), pin a stable prefix per session so repeated hits reuse KV instead of re-prefilling a 200k-token transcript from cold. This is a latency and cost lever as much as a continuity one.
+</Card>
+<Card title="Bounded and forgettable" icon="trash">
+The cache is in-memory, size- and TTL-bounded, and evaporates on restart. It is not a memory system and must not become one — [Jocasta](/architecture/jocasta-mcp/) owns durable memory. This layer forgets on purpose.
+</Card>
+</CardGrid>
+
+## The honest tradeoffs
+
+<Aside type="caution" title="Statefulness is a cost, not a feature">
+The proxy's statelessness is *why* it does 142k req/s at sub-millisecond overhead and survives restarts without ceremony. Adding per-session state trades some of that away. This feature has to justify that trade, and it only does so if mid-session switches are frequent enough to hurt — which the wisdom-ladder chain makes *more* likely, since every rung is a different family.
+</Aside>
+
+- **Privacy.** A continuity preamble is a distilled copy of conversation content held in the router. It must obey the same seat rules as the traffic it summarises — a preamble built from `council-crm` or `cilghal-health` context can never ride along to a cloud seat. The cache inherits the [privacy doctrine](/architecture/proxy/), it does not get an exemption.
+- **Correctness.** A stale or wrong preamble is worse than none — it actively misleads the new seat. It must be rebuilt from the live transcript, never trusted past its turn.
+- **Who writes the note.** The preamble has to come from somewhere. A cheap local model summarising each turn adds load to the very cathedral we are trying to protect; deriving it mechanically from the transcript is cheaper but blunter. Open question.
+- **Scope creep.** The line between "continuity preamble" and "the proxy has a memory now" is thin and load-bearing. If this feature starts remembering things across sessions, it has failed and become a shadow Jocasta.
+
+## Status
+
+`later` on the roadmap. It is downstream of productization, and it is a genuine architecture change — session affinity plus a bounded cache in front of the router — not a config toggle. The mitigations that exist today (`--resume`, and pinning a *similar* model as the first fallback rung when continuity matters more than cost) cover the common cases well enough that this can wait until the switch-frequency actually earns it.
+
+See also: [Sanctum Proxy](/architecture/proxy/) · [Smart Router](/architecture/dynamic-model-routing/) · [Jocasta MCP](/architecture/jocasta-mcp/) · [Roadmap](/operations/roadmap/)
