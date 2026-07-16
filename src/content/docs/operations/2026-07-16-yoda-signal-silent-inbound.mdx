@@ -1,0 +1,149 @@
+---
+title: "2026-07-16 — The reply that never left the bridge"
+description: Outbound Signal probes were green while Bert→Yoda was mute. Two faults stacked: channels.signal.enabled=false, and yoda-chat SSE nested envelopes where OpenClaw expected top-level data.envelope. Fixed, R2D2-healed, goldens tracked.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The most important interface in Sanctum is a Signal thread with Yoda. When it
+goes quiet, every other green dashboard is a lie.
+
+On 2026-07-16 the operator saw our outbound probes arrive on his phone and
+still got **no answers** to his own messages. Health said OK. The bridge was
+"up." The silence was inbound-only.
+
+## Symptom
+
+| Check | Result |
+|-------|--------|
+| `signal-cli` / socat / yoda-chat-proxy | Up |
+| Outbound send (`openclaw message send`, agent `--deliver`) | **SUCCESS** |
+| Operator receives Yoda-originated texts | **Yes** |
+| Operator texts Yoda | **No reply** |
+| Proxy `recent_events` | Contained `dataMessage` from Bert (`"hi"`) |
+| openclaw-gateway journal after that `hi` | **No agent run** |
+
+Outbound green + inbound mute is the tell: the transport works; the **inbound
+parser or channel gate** is dropping.
+
+## Root causes (stacked)
+
+### 1. Channel disabled on the live gateway
+
+VM `~/.openclaw/openclaw.json`:
+
+```json
+"channels": {
+  "signal": {
+    "enabled": false,
+    "httpUrl": "http://127.0.0.1:5150",
+    ...
+  }
+}
+```
+
+The Mac Mini host config still had Signal enabled. The **gateway that matters
+runs on the sanctum-vm** — that copy was off. Enabling it made the provider
+start (`[signal] starting provider`) but still did not process messages.
+
+### 2. SSE payload shape mismatch (the silent drop)
+
+`yoda-chat` proxy emitted:
+
+```
+event: receive
+data: {"method":"receive","params":{"envelope":{...},"account":"..."}}
+```
+
+OpenClaw's Signal monitor does:
+
+```js
+payload = JSON.parse(event.data);
+const envelope = payload?.envelope;  // undefined when nested under params
+if (!envelope) return;               // silent drop
+```
+
+So every real inbound envelope arrived at the proxy, was recorded in
+`/api/v1/status`, and was **discarded by OpenClaw** without a log line loud
+enough to page.
+
+Fix (proxy SSE write path):
+
+```python
+# data MUST be the signal-cli params object (top-level envelope)
+payload = json.dumps(params if isinstance(params, dict) else {"value": params})
+self.wfile.write(f"event: {method}\ndata: {payload}\n\n".encode("utf-8"))
+```
+
+Proof after fix: synthetic inject → typing → send →  
+`[signal] delivered reply to +16502658350`. Operator confirmed live reply.
+
+## Self-heal (R2D2 / signal-link-sentinel)
+
+The Mac-side **signal-link-sentinel** (wrapped by R2D2 recipe
+`heal-yoda-signal-link`) now treats inbound readiness as first-class.
+
+| State | Heal |
+|-------|------|
+| `SIGNAL-CHANNEL-DISABLED` | Re-enable `channels.signal` + restart gateway |
+| `SSE-CONTRACT-BROKEN` | Re-apply SSE payload shape from goldens + restart |
+| `GATEWAY-DOWN` | Restart `openclaw-gateway` + `yoda-chat-proxy` |
+| (existing) `SIGNAL-CLI-DOWN` / `BRIDGE-DOWN` / `VM-CONSUMER-DOWN` | kickstart / doctor |
+
+Probe script on the VM (called over SSH):
+
+```
+~/.openclaw/yoda-chat/scripts/inbound-readiness.py
+```
+
+Tracked golden copies live under:
+
+```
+~/.sanctum/yoda-chat/   # sanctum-config
+  scripts/inbound-readiness.py
+  patches/proxy.py
+  patches/doctor.py
+  apply-inbound-goldens.sh
+```
+
+## Operator commands
+
+```bash
+# Readiness (Mac)
+python3 ~/.sanctum/sentinels/signal-link-sentinel.py --check
+
+# Force heal (what R2D2 runs)
+bash ~/.sanctum/scripts/r2d2/heal-yoda-signal-link.sh yoda-signal-link
+
+# Re-deploy goldens to the VM after a rebuild
+~/.sanctum/yoda-chat/apply-inbound-goldens.sh
+
+# VM inbound facts only
+ssh yoda 'python3 ~/.openclaw/yoda-chat/scripts/inbound-readiness.py'
+```
+
+Healthy inbound facts look like:
+
+```json
+{
+  "signal_channel_enabled": true,
+  "sse_contract_ok": true,
+  "gateway_running": true,
+  "gateway_sse_subscribed": true,
+  "proxy_ok": true
+}
+```
+
+## Lessons
+
+1. **Outbound success is not inbound health.** Always require a
+   `dataMessage` → agent run → reply chain for the primary channel.
+2. **The gateway config on the VM is the source of truth for Signal**, not
+   the Mac Mini's twin `openclaw.json`.
+3. **Silent drops are worse than crashes.** If a monitor early-returns on
+   missing fields, log at warn with the raw payload shape once.
+4. **Liveness ≠ readiness.** Process up + port open is necessary; channel
+   enabled + SSE contract + subscriber connected is sufficient.
+
+See also: [The Holocron Bridge](/architecture/yoda-chat/),
+[Signal Troubleshooting](/operations/signal-troubleshooting/).
