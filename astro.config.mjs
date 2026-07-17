@@ -182,6 +182,7 @@ export default defineConfig({
 						{ label: 'More Time', slug: 'parents-guide/more-time' },
 						{ label: 'Bedtime Now', slug: 'parents-guide/bedtime-now' },
 						{ label: 'Homework Mode', slug: 'parents-guide/homework-mode' },
+						{ label: 'Budgets', slug: 'parents-guide/budgets' },
 					],
 				},
 				{
