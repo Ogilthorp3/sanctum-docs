@@ -181,6 +181,7 @@ export default defineConfig({
 						{ label: 'Block Now', slug: 'parents-guide/block-now' },
 						{ label: 'More Time', slug: 'parents-guide/more-time' },
 						{ label: 'Bedtime Now', slug: 'parents-guide/bedtime-now' },
+						{ label: 'Homework Mode', slug: 'parents-guide/homework-mode' },
 					],
 				},
 				{
