@@ -183,6 +183,7 @@ export default defineConfig({
 						{ label: 'Bedtime Now', slug: 'parents-guide/bedtime-now' },
 						{ label: 'Homework Mode', slug: 'parents-guide/homework-mode' },
 						{ label: 'Budgets', slug: 'parents-guide/budgets' },
+						{ label: 'Schedules and Holidays', slug: 'parents-guide/schedules-and-holidays' },
 					],
 				},
 				{
