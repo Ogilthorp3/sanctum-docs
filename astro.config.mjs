@@ -175,6 +175,12 @@ export default defineConfig({
 					],
 				},
 				{
+					label: "Parents' Guide",
+					items: [
+						{ label: 'Overview', slug: 'parents-guide' },
+					],
+				},
+				{
 					label: 'Agents',
 					items: [
 						{ label: 'Tommy \u2014 Guardian Spirit', slug: 'agents/tommy' },
