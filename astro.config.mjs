@@ -185,6 +185,12 @@ export default defineConfig({
 						{ label: 'Budgets', slug: 'parents-guide/budgets' },
 						{ label: 'Schedules and Holidays', slug: 'parents-guide/schedules-and-holidays' },
 						{ label: 'Troubleshooting', slug: 'parents-guide/troubleshooting' },
+						{
+							label: 'Mirrors',
+							items: [
+								{ label: 'Apple iOS', slug: 'parents-guide/mirrors/apple-ios' },
+							],
+						},
 					],
 				},
 				{
