@@ -190,6 +190,7 @@ export default defineConfig({
 							items: [
 								{ label: 'Apple iOS', slug: 'parents-guide/mirrors/apple-ios' },
 								{ label: 'Meta Quest', slug: 'parents-guide/mirrors/meta-quest' },
+								{ label: 'Nintendo Switch', slug: 'parents-guide/mirrors/nintendo-switch' },
 							],
 						},
 					],
