@@ -184,6 +184,7 @@ export default defineConfig({
 						{ label: 'Homework Mode', slug: 'parents-guide/homework-mode' },
 						{ label: 'Budgets', slug: 'parents-guide/budgets' },
 						{ label: 'Schedules and Holidays', slug: 'parents-guide/schedules-and-holidays' },
+						{ label: 'Troubleshooting', slug: 'parents-guide/troubleshooting' },
 					],
 				},
 				{
