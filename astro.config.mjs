@@ -107,6 +107,7 @@ export default defineConfig({
 						{ label: 'The Temple of the Kyber', slug: 'architecture/temple-of-the-kyber' },
 						{ label: 'The Castellan', slug: 'architecture/the-castellan' },
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
+						{ label: 'Emergence & Φ', slug: 'architecture/emergence-and-phi' },
 						{ label: '(Neuro)diversity is Paramount', slug: 'architecture/neurodiversity-doctrine' },
 						{ label: 'Chitti — The Fascial Layer', slug: 'architecture/chitti' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
