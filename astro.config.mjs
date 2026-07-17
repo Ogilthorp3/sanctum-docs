@@ -179,6 +179,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Overview', slug: 'parents-guide' },
 						{ label: 'Block Now', slug: 'parents-guide/block-now' },
+						{ label: 'More Time', slug: 'parents-guide/more-time' },
 					],
 				},
 				{
