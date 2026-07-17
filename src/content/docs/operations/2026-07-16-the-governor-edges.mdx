@@ -1,0 +1,30 @@
+---
+title: "The Governor Edges"
+description: "Wiring sanctum-triage to Castellan admission, reading Chitti posture directly, and deploying the spend tracker loop for Thalamus."
+date: 2026-07-16
+---
+
+# The Governor Edges
+
+**Date:** 2026-07-16
+
+The plan for the P4 Governor (as aligned in `01-architecture-alignment.md`) was implemented today. The goal was never to build a new governor from scratch, but rather to finish the edges of the one that already exists (`Castellan` + `sanctum-triage`).
+
+## 1. Wiring Triage to Castellan
+Previously, `sanctum-triage` ran its own manual memory polling (parsing `vm_stat` outputs) and made independent L2 SIGTERM decisions on Apple bloat when free memory dropped below 8GB. This resulted in a three-way fragmentation of metabolic authority between Castellan, triage, and the watchdog memory sentinel.
+
+Today, we stripped the manual memory polling out of `sanctum-triage`. It now queries Castellan's `/status` endpoint (`:2189`) and respects its `headroom_mb` calculation. If Castellan reports a negative headroom (meaning admission control is actively shedding or denying), triage executes the Apple bloat sweep as a backstop.
+
+## 2. Reading Chitti Posture
+The alignment document specified that when Castellan sheds/denies, or when Chitti posture spikes to `>= Alert`, we should post a Thalamus item. Since Castellan's `api.rs` already posts to Thalamus upon admission denial, we only needed to add the Chitti posture check.
+
+`sanctum-triage` now continuously polls Chitti's `/mood` endpoint. If the posture spikes to `alert` or `fever`, triage posts a high-priority alert to Thalamus, providing the cortex with immediate visibility into the body's acute stress. 
+
+## 3. The Spend Tracker
+To fulfill the requirement for daily per-agent digests and 80% budget alerts, we added an asynchronous `spend_tracker_loop` to `sanctum-triage`.
+
+This loop runs every 5 minutes, securely pulling `/stats` from Proxyd over HTTPS (using the local CA bundle). It tracks token consumption across all seated models.
+- **Spend Digest:** It writes a daily summary to `~/.sanctum/memory/inbox/spend-YYYY-MM-DD.md`, ensuring the data eventually consolidates into the Vault.
+- **Budget Alerts:** If any agent crosses 80% of their allocated daily budget (`tokens_used / daily_limit`), it fires a critical Thalamus alert to intercept runway behavior before it hits the hard cap.
+
+The updated `sanctum-triage` binary was cross-compiled on the MBP and deployed directly to the Mac Mini host, completing the P4 Governor implementation.
