@@ -1,0 +1,47 @@
+---
+title: JCRM Pipelines & Routing
+description: How we sync, enrich, and route intelligence into the read-only DuckDB backend without burning down the house.
+---
+
+import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+
+![Jocasta pipeline visualizing deal states flowing gracefully into the memory vault](../../../assets/illustrations/jocasta_pipeline.png)
+
+The JCRM (Jocasta CRM) is fundamentally stateless. It is a read-only GUI sitting on top of `workspace.duckdb`. Data only flows in through autonomous sync agents, which means if the UI burns down, we lose exactly zero bytes of intelligence. It is also, let's be honest, an over-engineered sqlite viewer that happens to run our entire pipeline.
+
+## How It Works
+
+The architecture relies on a Single Source of Truth (`workspace.duckdb`). Background agents hydrate this truth.
+
+- **`linkedin-sync.py`**: Pulls LinkedIn profiles and maps the `contact` object to our `person` schema. This keeps the Full Name fields intact so the UI doesn't look like an anonymous witness protection database.
+- **`osint-sync.py`**: Scrapes domains from unarchived entries in `v_deal` and feeds them to SpiderFoot for raw OSINT extraction. 
+
+<Aside type="note">
+The `v_deal` view strictly filters on `archived_at IS NULL`. If a deal disappears, someone achieved it. If 3,700 deals disappear, you ran a bad migration.
+</Aside>
+
+## The Enrichment Workflow
+
+Raw SpiderFoot JSON is dense and unreadable. `bin/osint-enrich.sh` runs in the background, feeding the raw data to the cathedral, and writing a "Jocasta Executive Brief" straight into the `interactions` table. The CRM timeline displays this instantly.
+
+```bash
+# How the OSINT enrichment hits the proxy
+curl -sf -m 180 \
+    --cacert ~/.sanctum/certs/ca.crt \
+    --cert ~/.sanctum/certs/clients/sanctum-server.crt \
+    --key  ~/.sanctum/certs/clients/sanctum-server.key \
+    -X POST https://127.0.0.1:4040/v1/chat/completions \
+    -H "Authorization: Bearer no-key" \
+    -H "Content-Type: application/json" \
+    -d '{ "model": "jocasta", ... }'
+```
+
+<Aside type="caution">
+Never hit the raw MLX port `:1337` directly unless you are writing a liveness canary. The workflow agents must hit the `proxyd` gateway on `:4040` using the `Authorization: Bearer no-key` header. If you hardcode the port, you break the routing logic when we upgrade the champion model.
+</Aside>
+
+## Model Routing Parity
+
+Every active workflow agent—including `aemon.py` in the Dragonpit, `sanctum-dreams-backfill.py`, `confirm_franglais.py`, and the `talk_to_bert.py` persona—now correctly hits `proxyd`. 
+
+They request logical aliases (like `jocasta`) instead of hardcoding `mlx-community/Qwen3.6-35B-A3B-4bit`. The proxy decides which weights actually serve the request. It is a highly robust system that will inevitably fail the one time you actually need it during a demo.
