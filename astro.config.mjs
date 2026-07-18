@@ -195,6 +195,14 @@ export default defineConfig({
 								{ label: 'Xbox & PlayStation', slug: 'parents-guide/mirrors/xbox-playstation' },
 							],
 						},
+						{
+							label: 'Québécois',
+							items: [
+								{ label: 'Guide des parents', slug: 'parents-guide/qc' },
+								{ label: 'Bloque ça drette-là', slug: 'parents-guide/qc/block-now' },
+								{ label: 'Dodo maintenant', slug: 'parents-guide/qc/bedtime-now' },
+							],
+						},
 					],
 				},
 				{
