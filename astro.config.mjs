@@ -192,6 +192,7 @@ export default defineConfig({
 								{ label: 'Meta Quest', slug: 'parents-guide/mirrors/meta-quest' },
 								{ label: 'Nintendo Switch', slug: 'parents-guide/mirrors/nintendo-switch' },
 								{ label: 'Steam', slug: 'parents-guide/mirrors/steam' },
+								{ label: 'Xbox & PlayStation', slug: 'parents-guide/mirrors/xbox-playstation' },
 							],
 						},
 					],
