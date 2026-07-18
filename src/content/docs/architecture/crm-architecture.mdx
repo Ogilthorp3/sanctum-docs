@@ -1,0 +1,187 @@
+---
+title: Sanctum CRM
+description: One relationship memory — every channel in, two surfaces out. You see the full archive. Partners never see the family.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Jocasta routing deal and relationship state into one memory vault, with a partition down the middle](../../../assets/illustrations/jocasta_pipeline.png)
+
+A partner sits down at the fund laptop and opens the deal timeline. In the same haus, on the same Mac, lives every text you have sent your spouse, every note from your kid's school, the angel cheque you would rather nobody priced. The partner sees none of it. That gap — full archive for you, work graph for them — is the entire job of Sanctum CRM.
+
+[Jocasta](/agents/jocasta/) keeps the archive. This page is about the wall she runs down the middle of it.
+
+Every conversation that lands on the Mac — mail, iMessage, SMS, Signal, WhatsApp, Telegram, LinkedIn — is ingested into one local DuckDB store. Affinity deal flow and a personal angel ledger sit beside it. The Archives UI is a thin, read-only window on that store: if the UI burns down, zero bytes of intelligence burn with it.
+
+What matters for a human operator is not the pipeline diagram. It is **who can see what**.
+
+## Two surfaces
+
+| Surface | Who | What they see |
+|---------|-----|----------------|
+| **Personal** | You | Full timeline, family threads, Angel & LP |
+| **Work** | Partners / fund session | Work-graph only — Affinity people, deal domains, firm addresses |
+
+There is no LLM reading your texts to decide “sounds professional.” Classification is **who the counterparty is**, not what they said.
+
+- **Work** = already on the work graph (Affinity contact, [deal](/architecture/dealflow-intelligence/) website domain, `@triptyq.vc`).
+- **Personal** = household roster (instance family + Firewalla/[screen-time](/architecture/screen-time/) devices) plus phones and emails that show up in family threads.
+- **Unknown** = treated as personal for partners. Fail-closed.
+
+Personal always wins when both match (spouse at a portfolio company stays personal).
+
+```
+ingest (hourly) ──▶ workspace.duckdb ──▶ v_timeline          (you)
+                         │
+                         ├── contact_silo + work_allowed_handles
+                         │
+                         └──▶ v_timeline_work                 (partners)
+                              workspace-work.duckdb          (export)
+```
+
+## Where you open it
+
+| Role | UI | Data |
+|------|----|------|
+| You | Archives **`:3346`** | `~/.openclaw/workspace/workspace.duckdb` |
+| Partners | Archives **`:3347`** (`CRM_SESSION=work`) | Prefer **`workspace-work.duckdb`** — personal rows never copied |
+
+Both ports require a token. Each session mints its own 0600 file on first start — `~/.sanctum/secrets/jocasta-crm-personal.token` for `:3346`, `…-work.token` for `:3347` — and they are not interchangeable: the work token on the personal port is a 401, and so is the reverse. A request without one gets a 401 carrying `WWW-Authenticate: Basic`, so a browser prompts and you paste the token as the password with an empty username.
+
+Both ports also bind the tailnet, which is deliberate — the archive is reachable from the MBP. It is only safe because of the paragraph above. It was not always: until 2026-08-11 `:3346` answered `/api/angel` with the full Angel & LP ledger to anything that could reach the port, and `:3347` had never started, so the *only* surface answering was the personal one. Auth landed first, then the partner port was turned on; the other order would have published a second open door.
+
+The partner export is physical isolation, not a filter you hope nobody bypasses. Raw channel tables, the full timeline, and Angel & LP are simply not in that file — `/api/angel` on `:3347` is a 403 even with a valid work token.
+
+One correction worth carrying, because it is the more common shape of this mistake: the export's row filter was never the leak. Its `contacts` table was built with `SELECT *` over a 30-column view, so business rows arrived carrying home addresses, birthdays and personal notes. Rows were right; columns were not. It now ships a six-column allowlist — name, email, company, title, type, Affinity ID — and `sanctum-crm doctor` fails critical if a future `SELECT *` widens it again.
+
+## CLI that matters
+
+```bash
+# Health of the dual surface
+sanctum-crm status
+sanctum-crm silo-status
+sanctum-crm doctor              # must be all-critical green before a partner session
+
+# Your full archive
+sanctum-crm who "François Rioux"
+sanctum-crm timeline "demute"
+sanctum-crm needs-reply
+
+# Partner-safe (same commands, work graph only)
+sanctum-crm timeline "demute" --work
+CRM_SESSION=work sanctum-crm needs-reply
+
+# After Affinity sync or family roster changes
+sanctum-crm silo-seed
+sanctum-crm work-export         # → workspace-work.duckdb
+```
+
+Affinity sync re-seeds the work graph automatically on success. Family identity is reloaded from `instance.yaml` and Firewalla-backed `devices.yaml` on every seed — you do not hand-maintain household members in a side file unless someone is missing.
+
+## What lands in the store
+
+| Channel | How | Table |
+|---------|-----|--------|
+| Email | Mail.app / Graph | `email_history` |
+| iMessage / SMS | Signed FDA reader → dump | `imessage_history` |
+| Signal | Desktop SQLCipher + Keychain | `signal_history` |
+| WhatsApp | `ChatStorage.sqlite` (busy-timeout hardened) | `whatsapp_history` |
+| Telegram | MTProto session | `telegram_history` |
+| LinkedIn | Voyager / harvest | `linkedin_history` |
+| Deals | Affinity v2 → `v_deal` | dealflow |
+| Angel & LP | Curated ledger | `angel_investments` (you only) |
+
+Unified view: **`v_timeline`**. Partner view: **`v_timeline_work`**. Cross-channel “ball in your court”: **`v_needs_reply`** / **`v_needs_reply_work`**.
+
+<Aside type="caution" title="Single-writer DuckDB">
+`workspace.duckdb` allows one writer at a time, and the mutex has a name: `lib.acquire_flock()`, an advisory `fcntl` lock every writer takes, which also snapshots the database once per run before the first write.
+
+The ordering is the whole discipline: **fetch first with no connection open, then take the lock, then connect, then one short transaction.** DuckDB takes its file lock at *connect*, not at `begin` — so a writer that connects before it fetches holds the archive hostage for the length of a network call. Moving `begin` later does nothing; moving `connect` is the fix.
+
+A failure pages Force Flow. So does silence: each ingest script counts consecutive runs that *read* nothing and pages on a streak, and an hourly sentinel checks every channel against its own freshness SLA.
+</Aside>
+
+<Aside type="caution" title="Timestamps are UTC instants, rendered local">
+Storage is always true-UTC `TIMESTAMPTZ`; the views render in `America/Toronto` so a human reads "you texted at 4pm". Every writer pins its session to UTC, because DuckDB interprets a naive timestamp string in the *session* zone — on a non-UTC host, an unpinned write lands as the wrong instant. The repair migration for that class of bug is guarded by a primary key in `crm_meta` inside the same transaction, so it can apply exactly once; a second pass would shift a quarter-million rows by four hours.
+
+The hourly freshness sentinel reads `v_timeline.ts` (already local wall-clock) and **must** compare it to `now() AT TIME ZONE 'America/Toronto'`. Comparing to UTC `now()` adds the EDT/EST offset to every channel's age. On 2026-08-20 that turned a 2.7h quiet stretch into a 6.7h CRITICAL while mail ingest was still inserting — see [The Offset That Cried Wolf](/operations/2026-08-20-the-offset-that-cried-wolf/). R2D2 will kickstart the matching ingest job only when the *source table* is past SLA on the UTC clock; a Toronto-offset false page is refused.
+</Aside>
+
+## Digital twins: multi-modal communication collage
+
+Beyond simple contact retrieval, Sanctum CRM acts as a multi-modal collage of over 111,000 communications: mail (`email_history`), iMessage / SMS (`imessage_history`), Signal (`signal_history`), WhatsApp (`whatsapp_history`), Telegram (`telegram_history`), and voice notes (`is_audio_message`).
+
+[Jocasta](/agents/jocasta/) uses this archive to maintain authentic digital twins for the household:
+
+| Persona | Role | Voice &amp; Lexicon Profile | Communication Volume |
+|---|---|---|---|
+| **Neo** (`neo` / `me`) | Operator / GP | Visionary, direct, bilingual (Joual/FR + Silicon Valley EN), punchy, low-friction | 104,957 interactions (18k mail, 80k imsg, 4.8k signal) |
+| **Wife** (`wife`) | Academic Researcher | Thoughtful, articulate, organized, warm, logistical coordination | 6,574 interactions (1.8k mail, 4.6k imsg) |
+| **Kid** (`kid`) | Student / Gamer | Casual youth Quebec French texting, ultra-concise, playful requests | 344 interactions (337 imsg, 5 mail) |
+
+### Jocasta persona drafting
+
+Jocasta can draft emails and messages in the exact voice, rhythm, and vocabulary of each persona:
+
+```bash
+# Inspect digital twin personas and communication volume
+sanctum-crm twin list
+sanctum-crm twin show neo
+sanctum-crm twin collage neo --channel email --limit 5
+
+# Draft an authentic email or message (defaults to neo)
+sanctum-crm draft --to "Charles" "Let's review the Series A term sheet tomorrow at 10am"
+sanctum-crm draft --persona wife --to "École" "Notre enfant sera absent jeudi"
+sanctum-crm draft --persona kid --to "Papa" --channel imessage "demande de temps d'écran"
+
+# Open live outgoing draft directly in Apple Mail
+sanctum-crm draft --persona neo --to "charles@triptyq.vc" --open "Follow up on term sheet milestone"
+```
+
+### The Bert Turing test: chat against yourself
+
+To rigorously benchmark digital twin fidelity, Sanctum CRM features the **Bert Turing Test**:
+- **Interactive mirror chat (`sanctum-crm turing chat`)**: Chat directly with your digital twin in real time. Jocasta analyzes your messages, retrieves matching historical exemplars from the 104,000+ archive, and drafts in character while calculating real-time authenticity scores (Brevity, Directness, Joual Quebec markers, and Emoji cadence).
+- **The Imitation Game (`sanctum-crm turing duel --rounds 5`)**: A blind A/B challenge where candidate [A] and candidate [B] are presented for a real past scenario (one authentic historical message vs one synthetic Jocasta twin). You guess which was truly written by you, tracking your self-recognition vs twin deception rate.
+
+```bash
+# Interactive mirror chat with your digital twin
+sanctum-crm turing chat
+
+# Play the blind A/B Imitation Game
+sanctum-crm turing duel --rounds 5
+```
+
+The Jocasta Archives GUI on `:3346` features a dedicated **Bert Turing Test** arena with live mirror chat and interactive card-based duel testing.
+
+### Privacy doctrine: shielding the family
+
+Under Sanctum privacy doctrine, family digital twins (`wife`, `kid`) are strictly personal. When a session runs in work mode (`CRM_SESSION=work` or `:3347`):
+- Family digital twins are completely hidden from the roster and API.
+- Drafting as `wife` or `kid` returns `403 Forbidden`.
+- Neo's digital twin is dynamically restricted to work-graph communications (`@triptyq.vc`), with all family iMessages, Signal chats, and personal threads omitted from the collage.
+- `sanctum-crm doctor` enforces `digital_twin_family_shield` as a critical gate before every partner session.
+
+The Archives GUI on `:3346` features a **Digital Twins** studio where you can inspect real-time collage volume across all modalities and compose messages with one-click Apple Mail draft creation.
+
+## Partner session checklist
+
+1. `sanctum-crm doctor` — all critical checks green  
+2. `sanctum-crm work-export` — fresh partner DB  
+3. `curl -sf -u ":$(cat ~/.sanctum/secrets/jocasta-crm-work.token)" http://127.0.0.1:3347/` — confirm the partner surface answers 200 before you seat anyone in front of it. It runs under `KeepAlive`, so it should already be up; if it is not, `launchctl kickstart -k gui/$(id -u)/com.sanctum.jocasta-crm-work`.
+4. Hand partners the `:3347` token, or **only** `workspace-work.duckdb`  
+5. Never share `workspace.duckdb`, the personal Archives on `:3346`, or the `:3346` token
+
+Both ports listen on the tailnet as well as loopback, so "it is only on my machine" is not one of the guarantees. The token is.
+
+Work access is audited at `~/.openclaw/logs/crm-work-access.log`.
+
+The wall is physical, not aspirational. A partner can read every deal in the room and never learn the family was ever in the building — which is how one Mac in a Quebec haus holds both a fund and a household without either one leaking into the other.
+
+## Related
+
+- [Jocasta — CRM Agent](/agents/jocasta/) — who runs the archive  
+- [Affinity filing](/architecture/affinity-filing/) — mail + Granola onto Affinity (the work CRM, different store)  
+- [Dealflow Intelligence](/architecture/dealflow-intelligence/) — Affinity → Mundi briefs  
+- [Screen Time](/architecture/screen-time/) — Firewalla family roster that seeds personal silo  
+- Repo: `~/Projects/sanctum-crm/`
