@@ -1,45 +1,77 @@
 ---
 title: Haus-Control
-description: Network-level parental controls. No MDM, no apps, no cooperation required. If it touches the WiFi, it follows the rules.
+description: Network-first parental controls in three rungs — network, mirror, agent. Every hold expires, budgets follow the child, and nothing shows green unless Firewalla confirms it.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 ![Haus-Control — a holographic parental control dashboard with glowing shield protecting sleeping orbs, network lines connecting to gaming consoles and TVs with teal status indicators](./images/hero-screen-time.png)
 
-Every parental control app on the market assumes you can install something on the device you want to control. That assumption is wrong roughly four times: the PS5, the Apple TV, the grandmother's iPad, and whatever Android tablet your kid's friend brought over for a sleepover. MDM profiles are invasive, device-specific, and one factory reset away from irrelevant.
+Every parental control app assumes you can install something on the device you want to control. That assumption fails at the PS5, the Apple TV, the grandmother's iPad, and whatever tablet a sleepover guest brought. Haus-control runs inside [Force Flow](/architecture/force-flow/) on port 4077 and starts from the opposite premise: **the network is the only authority that can't be uninstalled**. If a MAC address exists on the haus WiFi, Firewalla can pause it or block services on it.
 
-Haus-control (formerly screen-time) takes a different approach. It runs inside [Force Flow](/architecture/force-flow/) on port 4077 and enforces curfews at the network level via Firewalla. No agent on the device. No MDM profile. No app to uninstall. If it has a MAC address and it's on your WiFi, it follows the rules of the haus.
+v4 keeps that premise and adds what it was missing: an explicit ladder for the screens the network can't fully see, holds that cannot outlive their author's memory, and budgets that follow the child instead of the device.
 
-The key insight that makes this work: **the network is the only authority that can't be uninstalled**. Every device in the haus routes through Firewalla. If a MAC address exists on this subnet, Firewalla can pause it, block specific services on it, or cut it off entirely. No app to delete. No profile to remove. No clever workaround that doesn't involve physically leaving the building.
-
-## Enforcement Model
+## The v4 Enforcement Ladder
 
 ![Three enforcement tiers as concentric network rings — phone presence in the center drives blocking decisions for gaming devices and screens](./images/inline-screen-time-enforcement.png)
 
-Three tiers, because not every screen is the same screen.
+Three rungs, chosen per screen by one rule: the cheapest layer that actually reaches it.
 
-### Tier 1: Personal Apple Devices
+| Rung | Reaches | Mechanism | Confirmed by |
+|------|---------|-----------|--------------|
+| **Network** | anything with a MAC on the haus WiFi | Firewalla pause / service-level DNS blocks | Firewalla policy read-back |
+| **Mirror** | platform accounts that travel off the WiFi (iOS, Switch, Xbox/PS, Steam, Quest) | platform-native parental controls, kept in step via the mirror pages | manual re-check, on a cadence |
+| **Agent** | Windows PCs | Rust agent, server-authoritative clock | agent heartbeat |
 
-**Not blocked.** Apple's built-in Screen Time handles a child's iPhone and iPad. Doubling up with network-level blocking would create conflicts and confuse the device-level reporting that a parent actually checks. Leave Apple to Apple.
+Network first, because it has no uninstall button. Mirrors where the device leaves the haus: each mirror page ([Apple iOS](/parents-guide/mirrors/apple-ios/), [Nintendo Switch](/parents-guide/mirrors/nintendo-switch/), [Xbox & PlayStation](/parents-guide/mirrors/xbox-playstation/), [Steam](/parents-guide/mirrors/steam/), [Meta Quest](/parents-guide/mirrors/meta-quest/)) walks the platform's own steps under the platform's own titles, and every one ends with the same stale-mirror paragraph — a mirror nobody re-checks stops being enforcement and becomes surveillance. The agent rung exists for exactly one platform, covered below.
 
-### Tier 2: Shared Gaming Devices
+### The network rung: three tiers
 
-**Hard curfew.** The PS5 and any auto-discovered consoles (Switch, Steam Deck) block at the earliest active child curfew and unblock at his wake time. No phone-presence heuristics, no "is he awake?" guessing. Curfew means curfew. Parents who want to use the PS5 after hours can manually unblock via the API, PWA, or by asking an agent.
+| Tier | Policy | Why |
+|------|--------|-----|
+| 1 — personal Apple devices | **Not blocked.** Apple Screen Time handles them, kept honest via the iOS mirror page | doubling up with network blocks confuses the reporting a parent actually checks — leave Apple to Apple |
+| 2 — shared gaming consoles | **Hard curfew** at the earliest active child curfew, unblock at wake | phone-presence gating was tried and retired: a charging phone kept the PS5 blocked all night, airplane mode unblocked everything; presence now feeds the weekly digest, not enforcement |
+| 3 — screens (TVs, PCs) | **Hard curfew with service precision** — per-screen schedules, `mode: services` where needed | the HomeKit-hub Apple TV blocks streaming while HomeKit and Bell Fibe stay alive |
 
-This tier once gated on phone-presence detection (phone on WiFi = child awake), but it wasn't reliable enough -- a phone charging in the bedroom kept the PS5 blocked all night; airplane mode unblocked everything instantly. The decision is now pure hard curfew (`_get_effective_schedule()` plus the earliest active child curfew, no presence gate). The engine still polls presence every 30 seconds and reports `phone_on_wifi` / `considered_awake` in `/screen/status`, but that feeds the weekly digest, not the question of whether the PS5 turns off.
+The haus doesn't stop being smart just because it's bedtime.
 
-### Tier 3: Screens (TVs and PCs)
+## Holds With Mandatory Expiry
 
-**Hard curfew with service-level precision.** Each screen carries its own schedule: the Apple TVs cut at 22:00 (10 PM), the VRVANA-PC at 21:30, all unblocking at 10:00 (study mode pulls them to 21:00 / 07:00 like everything else). The First Floor Apple TV doubles as the HomeKit hub, so it runs `mode: services` -- Netflix, YouTube, Disney, Crave, Twitch and seven other streaming slugs get blocked while HomeKit and Bell Fibe TV traffic survive. The haus doesn't stop being smart just because it's bedtime.
+v3 shipped a landmine: a manual Block Now was sticky. It survived engine restarts and quietly suppressed the morning wake-unblock; one child's PC stayed dark for two days before anyone connected the dead machine to a button pressed the week before. v4 retires the class, not just the bug. Every hold is a *(who, until)* pair:
 
-<Aside type="caution">
-Service-level blocking depends on Firewalla's domain-group rules. If Netflix rotates CDN domains faster than the block list updates, you'll get brief windows of access. This is a known tradeoff of not running a full proxy. In practice, a 12-year-old navigating CDN rotation at 11 PM deserves the access.
-</Aside>
+| Rule | v4 behavior |
+|------|-------------|
+| Manual block | expires at next wake by default — nothing blocks forever |
+| Pause | requires a **who** and a **duration**; maximum is *jusqu'au réveil* (that child's wake time, never past it) |
+| Override | capped at 120 minutes |
+| Every hold | displays its owner and its expiry, in the PWA and the Holocron panel alike |
+
+The most dangerous state in a parental-control system is the one nobody remembers creating.
+
+## Per-Child Budgets
+
+New in v4: time budgets metered at the network, by category, summed **per child across every device**. Ninety minutes of YouTube is ninety minutes whether it arrived through the iPad, the TV, or the PC. This is the whitespace the whole market leaves open:
+
+| Product | Budget unit |
+|---------|-------------|
+| Google Family Link | per-device |
+| Nintendo parental controls | per-console |
+| Firewalla, native | no budgets at all |
+| Haus-control v4 | per-child, across all devices |
+
+Budgets ship in **shadow mode** — log-only until a parent arms them, so the family sees a week of honest numbers before anything enforces. The industry meters the thing instead of the child because things are easier to count; the children worked out the difference years ago and simply rotate devices. Parent walkthrough: [Budgets](/parents-guide/budgets/).
+
+## Honest Enforcement
+
+A block is not a block until the box confirms it. Every action closes the loop: haus-control reads the policy back from Firewalla, and on failure the UI shows **red — never a fake green** inferred from a 200 response. The doctrine was paid for: [the closed-loop edition](/operations/screen-time-enforcement/) documents the nights the engine logged `BLOCKED` while an Apple TV streamed Netflix. A system that lies about doing its job is worse than none, because it also spends your credibility at breakfast.
+
+## The Windows Agent
+
+The one rung that needs software on the device is the platform that gives parents the least: a Windows gaming PC. The v4 agent is a small Rust binary with two commitments. A **server-authoritative clock**: the schedule's time comes from manoir, not the machine, because rolling the local clock back is the oldest trick on the platform. And a **24-hour fail-safe**: lose the server for a full day and the agent stands down rather than keep enforcing stale rules — a rule enforced past its author's intent is the sticky-block bug in a trench coat. The local clock belongs to the child; bedtime does not.
 
 ## Schedule Intelligence
 
-Four schedule tiers, resolved in priority order by `_get_effective_schedule()`. The child schedule below drives curfew; per-device screens carry their own schedule block (the Apple TVs cut at 22:00, wake at 10:00):
+Four schedule tiers, resolved in priority order by `_get_effective_schedule()`:
 
 | Priority | Schedule | Curfew | Wake | Source |
 |----------|----------|--------|------|--------|
@@ -48,161 +80,58 @@ Four schedule tiers, resolved in priority order by `_get_effective_schedule()`. 
 | 3 | Weekend (Fri/Sat night) | 23:00 | 09:00 | Day-of-week check |
 | 4 (default) | Weekday | 21:30 | 07:00 | Default config |
 
-Study mode is the override that means business: `POST /screen/study-mode/{child}` cuts every one of a child's screens at 21:00 and sits above holiday and weekend, so a Friday night during finals is still a 9 PM Friday night. It expires on the date in `study_mode.until` -- no one has to remember to turn it off.
-
-Holiday detection uses a curated `holidays.yaml` with Quebec school calendar dates -- semaine de relache, Noel, summer break. The file is maintained manually because Quebec's school calendar is published as a PDF, which is exactly the kind of government decision this system was built to route around.
-
-<Aside type="tip">
-Weekend detection: Friday is `weekday() == 4`, Saturday is `weekday() == 5`. Sunday night is a weekday night. This matches "the night before a school day" logic, not calendar weekends. If your kid is arguing that Sunday is technically the weekend, they are technically correct and operationally irrelevant.
-</Aside>
+Study mode outranks holiday and weekend — a Friday night during finals is still a 9 PM Friday night — and expires on its own date. The holiday file is hand-maintained because Quebec publishes its school calendar as a PDF, exactly the kind of government decision this system was built to route around. Sunday is a school night; kids arguing it's technically the weekend are technically correct and operationally irrelevant.
 
 ## Gradual Wind-Down
 
-Curfew isn't a cliff -- it's a slope. Three phases of progressive service blocking:
+Curfew is a slope, not a cliff:
 
 | Offset | Action |
 |--------|--------|
-| -30 min | Social media blocked (TikTok, Instagram, Snapchat, Discord, Reddit, Twitter, Facebook) |
+| -30 min | Social media blocked (TikTok, Instagram, Snapchat, Discord, Reddit) |
 | -15 min | Gaming blocked (Steam, Epic, Roblox, Minecraft, Fortnite) |
 | 0 min | Everything blocked (full curfew) |
 
-Wind-down blocks are explicitly cleaned up at wake time. The system tracks which MACs had services blocked during wind-down and sends batch-unblock commands when daytime resumes. No orphaned DNS rules surviving into the next day.
-
-The `service_categories` config in `devices.yaml` defines which domains belong to which category. Adding a new service is one YAML entry, not a code change.
-
-### The Dimmer (Bandwidth Wind-Down)
-
-On boxes with a QoS engine (Purple and the Gold family -- the bridge reports
-`capabilities.qos` + `qos_engine` so nobody has to memorize a SKU chart),
-there's a second, sneakier slope: `wind_down_minutes: 30` on a child throttles
-their network-enforced devices to a dial-up-cosplay **1 Mbit** (configurable
-via `wind_down_mbit`) for the last N minutes before their effective curfew.
-YouTube buffers into oblivion, Fortnite's ping becomes a war crime, but
-iMessage still works -- the kid *chooses* to stop, which is the whole point.
-At curfew the hard block takes over and the throttle self-expires on the box.
-
-Three honesty guarantees: it follows the **effective** schedule (study mode,
-holidays, weekends -- not wall-clock superstition); if a parent grants an
-override mid-window, the throttle is **lifted**, not left strangling the
-evening; and it applies exactly once per window -- no per-tick hammering of
-the box API. Configure via `POST /screen/winddown`, the Holocron panel
-toggle, or plain YAML. Ships off by default: throttling a child's internet
-is a decision a parent makes, not a default a vendor sneaks in.
+Wind-down blocks are batch-cleaned at wake — no orphaned DNS rules. On QoS-capable boxes the last 30 minutes throttle to 1 Mbit: YouTube buffers into oblivion, iMessage still works, and the kid *chooses* to stop — the whole point. The throttle lifts on override and ships off by default: throttling a child's internet is a parent's decision, not a vendor default.
 
 ## Smart Features
 
-### Homework Mode
+**Homework mode** (`POST /screen/homework`) blocks gaming, social, and streaming — block-list-only, no allowlist to maintain — and self-deactivates after 2 hours. **Guest devices** are auto-discovered via ARP, get haus rules immediately, and expire after 24 hours. The **weekly digest** (Sunday 18:00, Signal + push) names names: average bedtime, overrides, credits, and a per-kid top-3 app line from the box's app tracker.
 
-`POST /screen/homework` with `{"action":"start"}` activates a focused mode: gaming, social media, and streaming are blocked. Everything else -- educational sites, Google Workspace, reference tools -- stays reachable, because homework mode is block-list-only: it removes the three categories that lose a kid an afternoon, with no allowlist to maintain. Triggered via PWA, Siri shortcut, or Home Assistant. Deactivates automatically after 2 hours, or immediately via `POST /screen/homework` with `{"action":"stop"}`.
+**Earned credits** let a kid buy screen time with the real world:
 
-### Earned Credits
+| Preset | Duration |
+|--------|----------|
+| Tâches ménagères | 15 min |
+| Devoirs | 30 min |
+| Lecture | 20 min |
+| Exercice | 15 min |
 
-A kid can earn screen time extensions by doing real things in the real world:
-
-| Preset | Duration | Description |
-|--------|----------|-------------|
-| Tâches ménagères | 15 min | Haus tasks verified by parent |
-| Devoirs | 30 min | Homework completion |
-| Lecture | 20 min | Reading (physical book, not a screen) |
-| Exercice | 15 min | Physical activity |
-
-The presets are French because the family is, and homework pays more than chores because the incentives should. Credits cap at **90 minutes per day**. They accumulate via `POST /screen/credit` and are consumed via `POST /screen/credit/redeem`. Unused credits do not roll over. This is a parental control system, not a loyalty program.
-
-### Guest Device Handling
-
-New devices on the network are auto-discovered via ARP scanning and classified by OUI (manufacturer) lookup. Unknown devices get haus rules applied immediately. Parents approve or remove guests via the PWA. Guest permissions expire after 24 hours.
-
-MAC randomization detection: if a device with a locally-administered MAC bit appears and no known device has disconnected, it's flagged as a potential randomized address. Not bulletproof, but it catches the obvious cases.
-
-### Weekly Digest
-
-Every **Sunday at 6 PM**, a digest is sent via Signal and push notification. Contents: average bedtime for the week, number of overrides, credits earned and redeemed, any guest device activity -- and, on QoS-class boxes, a per-kid **top-3 app line** straight from the Firewalla's native app tracker (`Kid apps: Youtube 4h12 · Fortnite 0h45`). Apple Screen Time tells you "Entertainment: 6 hours" and calls it insight; the box names names. It's the parental equivalent of a sprint retrospective, except the sprint is "did the 12-year-old go to bed on time."
-
-### Box Compatibility Gate
-
-Not every Firewalla enforces equally, and finding that out from a kid who
-discovered the gap is the wrong telemetry channel. `sanctum screen-time
-compat` (CLI), `GET /screen/compat` (API), and the Holocron's compat card all
-run the same five assertions: bridge paired, box API live, **in-path mode**
-(router/DHCP enforce unconditionally; spoof-mode Red/Blue boxes only enforce
-ARP-monitored devices -- the gate names every unmonitored kid MAC), policy
-capacity headroom (Red caps at 1,000 rules; everyone else 3,000), and QoS
-availability for the dimmer. `--strict` turns warnings into onboarding
-failures. Five greens or you hear about it before the kids do."
+Presets are French because the family is; homework pays more than chores because the incentives should. Credits cap at 90 minutes per day and don't roll over. This is a parental control system, not a loyalty program.
 
 ## Enforcement Resilience
 
-The system enforces curfews through Firewalla's API, but APIs fail. The box is a Firewalla Gold Pro; the earlier Purple's `policy:delete` returned "invalid policy" for every PID, a firmware bug that meant trusting the API alone got devices blocked at night and never unblocked in the morning. The bug is fixed upstream now, but the defenses it forced are load-bearing and stay.
+Four layers, each bought with an incident:
 
-Three layers of defense:
+| Layer | Defense | The incident that bought it |
+|-------|---------|-----------------------------|
+| 1 | Persisted block state (SQLite) | a 3 AM restart forgot the morning unblock |
+| 2 | SSH iptables fallback | the box API returned "invalid policy" for every rule ID |
+| 3 | Daily idempotent safety-net unblock | lost state, now caught within 30 seconds |
+| 4 | Closed-loop reconciler + conf-gen sentinel: tri-state policy read-back, fail-closed escalation after a 20-minute grace, fresh-MAC canary with an mtime guard | the box wedged silently while the engine logged success |
 
-### 1. Persisted Block State
-
-Every block and unblock is recorded in a `blocked_state` SQLite table. On startup, Force Flow restores in-memory state from the DB. A restart at 3 AM no longer means the system "forgets" what's blocked and skips the morning unblock.
-
-### 2. SSH Iptables Fallback
-
-The Firewalla bridge wraps every `policy:delete` call with an SSH fallback. If the API fails, the bridge SSHes directly into the Firewalla box and removes the iptables rules by their comment tag. Same for `policy:create` — if the MAC-level block rule can't be created via API (stale policy ID), the bridge adds DROP rules via SSH. Batch operations use a single SSH call for all PIDs.
-
-### 3. Daily Safety Net
-
-Every enforcement tick checks: if it's daytime and a device should be unblocked, send the unblock command even if the in-memory state says "not blocked." This fires once per day per device. It's idempotent — a redundant unblock on an already-unblocked device is a no-op. But if the state was lost (restart, crash, Firewalla reboot), the safety net catches it within 30 seconds of the next enforcement cycle.
-
-<Aside type="note">
-The bridge endpoint `POST /host/:mac/unrules` batch-removes all DNS block rules scoped to a MAC with SSH fallback. One call cleans up 30+ wind-down rules in seconds. The alternative — individual API deletes with per-PID SSH fallback — would take minutes.
-</Aside>
-
-### 4. Closed-Loop Reconciler + Conf-Gen Sentinel
-
-The first three layers handle API failures. They do not handle the worse case where the API returns 200, the policy lands, and yet Firewalla's `firemain` quietly fails to translate it into a dnsmasq `policy_N.conf` on disk. That happened on 2026-05-29 at 8 PM: an Apple TV had a curfew block recorded everywhere except the one place that drops DNS packets, and a kid stayed up watching Netflix. The fix treats enforcement as a control loop, not a one-shot command.
-
-Every 30 seconds the **reconciler** asks the box, for each services-mode device, whether a DNS-block policy actually scopes this MAC and an intended domain. It asks via the bridge's policy API (`GET /policies?mac=&type=dns&action=block`), not by SSH-grepping `policy_*.conf` -- once `policy:delete` was fixed upstream, the policy list became the model-agnostic truth and the box's SSH key stopped being a dependency. The check is tri-state: `True` (blocked), `False` (positively absent), `None` (bridge unreachable -- skip, never read as drift). If `False` persists past a 20-minute grace it **fails closed**, escalating from services-mode to a full MAC-level pause. HomeKit gets sacrificed; the kid does not stay up.
-
-The **conf-gen sentinel** catches the wedge before the reconciler has to. Every 20 minutes it fires a canary -- a short-lived netflix block on a **fresh, locally-administered MAC** -- and polls the box for a `policy_*.conf` naming it, with `find -newermt @<create_ts>` so only confs written after the canary count. Fresh MAC plus mtime guard kills the false-HEALTHY mode that hid the original incident. No conf within 40 seconds and it restarts `firemain` (30-min cooldown); if the bridge is unreachable it defers to the bridge watchdog rather than restart blindly.
-
-<Aside type="caution">
-A canary that reuses the same MAC every cycle is worse than no canary: a leftover conf from a prior cycle satisfies the grep, the sentinel reports HEALTHY, and the wedge ships through. Fresh MAC plus mtime guard is the whole defense -- anything less is theatre.
-</Aside>
-
-Layer 4 then failed in a way only a real curfew could expose. On 2026-05-30 the fail-closed escalation tried to pause three of an Apple TV's iCloud-Private-Address MACs; two succeeded, one hit `Connection reset by peer`, and the reconciler set `escalated=True` *unconditionally* -- never retrying the failed MAC. The TV's rotation landed on the unpaused address and 2.5 hours of Netflix followed. The postmortem closed five symmetric gaps: partial success no longer counts as full (re-attempt next tick instead of latching `escalated`); a MAC paused via the iptables fall-back now reports `observed_blocked=True` instead of generating false drift; `_drift_state` persists to `~/.sanctum/force-flow/drift_state.json` so a restart doesn't reset the grace timer; `wake (verify)` retries per-MAC instead of locking the whole device for the day; and an unknown MAC joining mid-curfew is auto-paused (payload-agnostic, survives Private Relay) and auto-unpaused at wake -- a sleepover friend is online at 07:00, a new-device bypass is closed. The full runbook, including the iCloud-Private-Address multi-MAC trap that made one partial failure lethal, lives in the vault at `~/.sanctum/memory/procedures/troubleshooting/firewalla-confgen-wedge.md`. The Rust bridge port (see [Sanctum Firewalla](/architecture/sanctum-firewalla/)) makes the `Connection reset by peer` retry first-class.
-
-### Migration Export
-
-`GET /export` on the bridge (port 1984) dumps the full Firewalla configuration: all hosts, active policies, custom DNS records, and service domain mappings. Combined with `firewalla-export.sh` / `firewalla-import.sh`, the entire enforcement state backs up and restores on a new box without reconfiguring anything by hand -- which is exactly how the Purple-to-Gold-Pro move went.
+The full narrative — including the iCloud-Private-Address multi-MAC trap that made one partial failure cost 2.5 hours of Netflix — lives in [the closed-loop edition](/operations/screen-time-enforcement/) and the vault runbook `firewalla-confgen-wedge.md`.
 
 ## Interfaces
 
-Haus-control exposes four interfaces because every family member interacts with the haus differently.
+| Interface | Details |
+|-----------|---------|
+| PWA | `http://force.home/pwa/` — iOS standalone, dark OLED theme, French UI |
+| Home Assistant | `packages/screen_time.yaml` — REST commands, sensors, homework toggle sync |
+| Siri shortcuts | 6 French invocations ("Mode devoirs", "Prolonger 30 min", "Couvre-feu maintenant"...) via Tailscale MagicDNS |
+| Holocron panel | `ScreenTimePanel.tsx` — countdown ring, holds with owner + expiry, quick actions |
 
-### PWA (http://force.home/pwa/)
-
-Progressive Web App served directly from Force Flow. iOS standalone mode (Add to Home Screen), dark OLED theme, French UI. All features accessible: override, homework mode, credits, guest management, schedule view. Resolves via local DNS -- no Tailscale required when home.
-
-### Home Assistant
-
-Integration in `packages/screen_time.yaml`:
-- **REST commands** for all actions (block, unblock, override, homework, credit)
-- **Sensors** for curfew state and homework status, plus `presence` and `connectivity` binary sensors
-- **Automations** that sync a `homework_mode_toggle` input boolean with the engine -- toggle on starts homework mode, toggle off stops it, and a third automation flips the toggle back when the 2-hour timer expires on the API side
-
-No Lovelace card or Sonos automation lives in this package: the Lovelace card is a separate `ha-lovelace-screentime.yaml`, and the Sonos wind-down announcements come from the engine itself (`_sonos_warning`).
-
-### iOS Shortcuts (6 Siri Shortcuts)
-
-| Shortcut | Action |
-|----------|--------|
-| "Mode devoirs" | Activate homework mode |
-| "Fin devoirs" | Deactivate homework mode |
-| "Credit corvees" | Grant chores credit |
-| "Credit lecture" | Grant reading credit |
-| "Prolonger 30 min" | 30-minute curfew extension |
-| "Couvre-feu maintenant" | Immediate full curfew |
-
-All shortcuts route through Tailscale to the Mac Mini's MagicDNS name (`http://manoir.local:4077` here; the real tailnet name is in `ios-shortcuts-guide.md`) -- deliberately the name, not a `100.0.0.x` literal that would break the day the tailnet hands out a new address. A Siri shortcut that 404s at bedtime helps no one. French invocations. Works from any family member's iPhone via "Hey Siri."
-
-### Holocron Panel
-
-Native React component in the-holocron Electron app — `ScreenTimePanel.tsx`. A `ShieldAlert` icon (lucide-react) in the nav, and a curfew countdown ring animated with a plain CSS `stroke-dashoffset` transition, no Framer Motion. Displays: countdown ring, phone presence indicator, quick action buttons, weekly schedule, per-screen status. Designed to match the Holocron's existing dark aesthetic without looking like a corporate parental control dashboard.
+Shortcuts route to the MagicDNS name (`http://manoir.local:4077` here), never a `100.0.0.x` literal. A Siri shortcut that 404s at bedtime helps no one.
 
 ## API Reference
 
@@ -210,10 +139,10 @@ All endpoints on port 4077 under the `/screen` prefix.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/screen/status` | Current curfew state, active blocks, phone presence |
-| POST | `/screen/override` | Temporary curfew override (duration in minutes) |
-| POST | `/screen/block` | Manually block a device by MAC |
-| POST | `/screen/unblock` | Manually unblock a device by MAC |
+| GET | `/screen/status` | Current curfew state, active holds (owner + expiry), presence |
+| POST | `/screen/override` | Temporary override (duration in minutes, cap 120) |
+| POST | `/screen/block` | Manual block by MAC — expires at next wake by default |
+| POST | `/screen/unblock` | Manual unblock by MAC |
 | GET | `/screen/report` | Usage report (daily/weekly/custom range) |
 | GET | `/screen/devices` | All known devices and their current state |
 | POST | `/screen/assign` | Assign a device to a family member |
@@ -228,18 +157,15 @@ All endpoints on port 4077 under the `/screen` prefix.
 | GET | `/screen/guests` | List detected guest devices |
 | POST | `/screen/guest/approve` | Approve a guest device |
 | DELETE | `/screen/guest/remove` | Remove a guest device |
-| GET | `/pwa/` | PWA index |
-| GET | `/pwa/{filename}` | PWA static assets |
-| GET | `/pwa/manifest.json` | PWA manifest |
-| GET | `/pwa/sw.js` | PWA service worker |
+| GET | `/pwa/` | PWA index and static assets |
 
 <Aside type="note">
-Every `/screen/*` path -- reads included, not just mutations -- goes through the `screen_auth_guard` middleware. Loopback and on-box callers (Home Assistant, the engine's own tools) are trusted; everything else must carry `Authorization: Bearer <token>`, compared in constant time. The token comes from the `SCREEN_CONTROL_TOKEN` env var or `~/.sanctum/secrets/screen-control-token` -- never from `devices.yaml`. That guard is what closes the LAN-kid bypass: a phone on the WiFi is non-loopback, carries no token, gets a 401. This is not OAuth. This is a family in Quebec. The threat model is a 12-year-old with curl, not a nation-state.
+Every `/screen/*` path — reads included — passes the `screen_auth_guard` middleware: loopback trusted, everyone else carries `Authorization: Bearer <token>` (constant-time compare, sourced from env or `~/.sanctum/secrets/screen-control-token`, never `devices.yaml`). This is not OAuth. This is a family in Quebec. The threat model is a 12-year-old with curl, not a nation-state.
 </Aside>
 
 ## Configuration
 
-The entire system is driven by `~/.sanctum/screen-time/devices.yaml`. `family`, `shared_devices`, and `screens` are name-keyed maps; each child and screen carries a four-layer `schedule` block, and `service_categories` are bare service slugs the bridge resolves to domains:
+Everything is driven by `~/.sanctum/screen-time/devices.yaml` — name-keyed maps, four-layer schedules, service slugs the bridge resolves to domains:
 
 ```yaml
 family:
@@ -281,11 +207,6 @@ service_categories:                       # slugs, not domains — bridge maps t
 credits:
   enabled: true
   max_daily_minutes: 90
-  presets:
-    - { name: "Tâches ménagères", minutes: 15 }
-    - { name: "Devoirs",          minutes: 30 }
-    - { name: "Lecture",          minutes: 20 }
-    - { name: "Exercice",         minutes: 15 }
 
 guest_rules:
   enabled: true
@@ -295,65 +216,16 @@ guest_rules:
   expire_hours: 24
 ```
 
-The control token is **not** in this file -- a config the whole family can read is the wrong place for the one secret that gates the API. It lives in the env or `~/.sanctum/secrets/screen-control-token`.
-
-## Troubleshooting
-
-### "Device didn't block"
-
-Two blocking modes exist and they fail differently:
-
-- **Soft pause** (service-level): DNS block rules per domain, scoped to the device MAC. Check that the domain list in `service_categories` is current. Some services use CDN domains that rotate. `nslookup` from the device to verify what it's resolving.
-- **Hard block** (MAC-level): ACL=false plus iptables DROP rules. If ACL-only is set (no iptables rules), existing connections survive — the device stays online until it tries to open something new. Check the bridge logs for "[pause] MAC block rule API failed" — this means the API couldn't create the rule and the SSH fallback should have kicked in.
-
-### "Device didn't unblock in the morning"
-
-Check in this order:
-
-1. **Force Flow running?** `lsof -i :4077` on manoir. If it restarted, the `blocked_state` DB should have restored state. Check logs for "RESTORED blocked state."
-2. **Bridge running?** `lsof -i :1984`. The bridge handles the actual Firewalla API calls and SSH fallback.
-3. **Stale iptables rules?** SSH to Firewalla and check: `sudo iptables -S | grep <MAC>`. If rules exist but Force Flow thinks the device is unblocked, the safety net should catch it within 30 seconds. If not, manually unblock via `POST /screen/unblock`.
-4. **Stale DNS rules?** `POST /host/:mac/unrules` on the bridge (port 1984) batch-removes all DNS blocks for a MAC with SSH fallback.
-
-### "URL doesn't resolve" (force.home)
-
-Three DNS layers in the haus, and they don't always agree:
-
-| Layer | Resolver | Where it applies |
-|-------|----------|-----------------|
-| Firewalla DNS | Network-wide | All devices on WiFi |
-| Tailscale MagicDNS | Tailnet only | Devices with Tailscale installed |
-| `/etc/hosts` | Per-machine | Mac Mini, dev machines |
-
-If `force.home` works on the Mac but not on an iPhone, the Firewalla DNS override for `force.home` is missing. Add it via Firewalla app > DNS > Local DNS Records.
-
-### "Wrong schedule applied"
-
-Check in this order:
-
-1. **Holiday calendar**: `holidays.yaml` might have a stale entry or missing date. Holidays take highest priority -- if today is flagged as a holiday, weekend/weekday logic is irrelevant.
-2. **Weekend detection**: Remember, Friday night (`weekday() == 4`) and Saturday night (`weekday() == 5`) are weekends. Sunday night is a school night. The code uses the night-of, not the next-morning calendar day.
-3. **Manual override**: An active override (via PWA or API) supersedes all schedule logic. Check `GET /screen/status` for `override_active: true`.
+The control token is **not** in this file — a config the whole family can read is the wrong place for the one secret that gates the API. Parent-facing debugging: [Parents' Guide troubleshooting](/parents-guide/troubleshooting/). Operator-depth failure modes: [the closed-loop edition](/operations/screen-time-enforcement/).
 
 ## Architecture Decisions
 
-### Why Python, Not Rust
+**Why Python, not Rust.** Haus-control is a control plane, not a data plane: it wakes every 30 seconds to compare intent against the box and toggle a handful of rules. The [sanctum-proxy](/architecture/proxy/) is Rust because it handles thousands of requests per second; haus-control toggles a few rules a minute. The one Rust piece is the Windows agent, because it lives on hostile territory.
 
-Haus-control is a control plane, not a data plane. Its enforcement loop wakes every 30 seconds to compare intended state against the box and toggle a handful of rules. It does not process packets, route traffic, or carry any load that would justify the compilation overhead of Rust. The [sanctum-proxy](/architecture/proxy/) is Rust because it handles thousands of requests per second; haus-control toggles a few rules a minute. A ~4,600-line Python module inside Force Flow is the right tool -- and most of those lines are the resilience layers above, not anything a packet would notice.
-
-### Why Not Apple MDM
-
-MDM (Mobile Device Management) is the "enterprise" answer to parental controls. It's also:
-
-- **Invasive**: Full device management profile. Visible to the child. Creates an adversarial dynamic.
-- **Platform-locked**: Doesn't touch the PS5, the PC, or grandma's Android tablet.
-- **Fragile**: One "Remove Profile" tap and it's gone. Network-level enforcement has no uninstall button.
-- **Overkill**: We need bedtime enforcement and homework mode, not remote wipe and app whitelisting.
-
-Apple Screen Time on personal devices + Firewalla at the network layer covers every device in the haus without installing anything on any of them. The only software that runs is on the Mac Mini, which is the one machine in the building that no 12-year-old has the SSH key to.
+**Why not Apple MDM.** Invasive, platform-locked (no PS5, no PC), and one "Remove Profile" tap from irrelevant. Apple Screen Time on personal devices plus Firewalla at the network layer covers every device in the haus without installing anything the kids can find — except one Rust agent on one PC, which is exactly why it doesn't trust the clock it sits next to.
 
 <Aside type="tip">
-The entire haus-control engine is one file: `~/.sanctum/force-flow/screen_time.py`. Config at `~/.sanctum/screen-time/devices.yaml`. Database at `~/.sanctum/screen-time/usage.db`. The Firewalla bridge at `~/.openclaw/firewalla-bridge.js` handles the hardware layer with SSH fallback. If you're debugging, that's four files. Not a microservice mesh. Four files.
+The engine is one file: `~/.sanctum/force-flow/screen_time.py`. Config, database, and PWA under `~/.sanctum/screen-time/`. The bridge at `~/.openclaw/firewalla-bridge.js`. If you're debugging, that's four files. Not a microservice mesh. Four files.
 </Aside>
 
 ## Service Details
