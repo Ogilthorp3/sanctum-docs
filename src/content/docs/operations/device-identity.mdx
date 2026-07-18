@@ -1,0 +1,113 @@
+---
+title: Device Identity
+description: How Sanctum keeps enforcing the right devices when MACs rotate, names lie, and consoles hide — columbo pinning, the paused-MAC ledger, and the 2026-07-18 naming audit.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A curfew rule is a promise attached to a MAC address. Both halves of that
+sentence rot: iOS and SteamOS rotate MACs by design, mesh extenders re-translate
+them on every reconnect, and the labels every dashboard shows were copied from
+whichever system guessed first. On 2026-07-18 we discovered how far the rot had
+gone — and rebuilt identity handling so it cannot recur silently.
+
+## The discovery: enforcement theater
+
+The consoles' enrolled MACs (PS5, Switch) were absent from the Firewalla's
+**entire post-April host history** — 184 devices, zero matches. Every console
+"block" since the network migration had been a valid policy applied to an
+address nothing wears: the closed loop verified the *rule*, never the *device*.
+Meanwhile a live Xbox One sat ungoverned at `10.0.0.147`, mislabeled as a
+parent's iPhone, and two TCL smart-TV panels streamed nightly past the 23:00
+curfew because the "TV" screens enforced an ESP32 sensor and a lawn sprinkler.
+
+<Aside type="caution" title="The lesson">
+Closed-loop verification must close the loop on the **device**, not the rule.
+A policy can be perfectly applied to a ghost. The fix is identity that follows
+the hardware: names and pins derived from what the device *broadcasts*, not
+what a dashboard once guessed.
+</Aside>
+
+## Columbo screen pinning
+
+Consoles don't advertise mDNS device-info, but their DHCP lease hostnames are
+stable identities (`XboxOne`, `PS5-*`, `steamdeck`). Columbo
+(`~/.sanctum/bin/columbo/phonebook.py`, launchd every 120 s) already pinned
+family phones via Bonjour; it now also reads the box's dnsmasq leases and pins
+each screen's hostname → current MAC into `phonebook.json` under `_screens`,
+keeping a 14-day history of previous MACs.
+
+The engine enforces **static config ∪ live pins** at every site — curfew loop,
+holds, wake, reconciler ground truth, drift repair, daily reaper, and the
+parent-facing Block Now / override / homework handlers. Worst-case latency from
+a mid-curfew rotation to re-block: ~4 minutes (columbo pass ≤120 s + 60 s
+phonebook TTL + one reconciler tick).
+
+Hardening that survived a 30-agent adversarial panel (25 confirmed findings,
+3 critical, all fixed pre-deploy):
+
+- **Last-known-good reads** — a corrupt/missing phonebook serves stale pins,
+  never `{}`; columbo aborts its pass rather than save emptiness over pins.
+- **Collision guard** — a pin may never claim a family phone or static device
+  MAC (hostname spoofing, extender aliasing). Refused + alerted.
+- **Stability under multi-lease** — the current pin holds while its lease is
+  live; extra matching MACs merge quietly into history. Notifications throttle
+  to one per (screen, MAC) per 6 h.
+- **DHCPv6 IAID lines are skipped** — field 2 must parse as a MAC.
+
+## The paused-MAC ledger
+
+Firewalla pauses have **no expiry**. Before the ledger, a MAC that rotated away
+while blocked could stay paused forever with no code path left to release it.
+Now every pause the engine applies is recorded in `paused_macs` and cleared
+only on verified unpause; a per-tick sweep releases any ledger MAC that no
+active enforcement state still claims. The ledger only ever contains Sanctum's
+own pauses, so the sweep can never release a block a parent set in the
+Firewalla app.
+
+## The naming audit
+
+A 6-judge + adversarial-verify panel audited all 181 devices across every
+naming surface. Thirteen Firewalla renames landed, three `devices.yaml`
+structural defects were fixed (Apple TV slot collision, an Amazon Echo
+masquerading as an Apple TV, a phantom Orbi-alias device), and the classifier
+gained a family-device catalog — console/streamer/TV OUIs plus hostname hints,
+with a new `tv` category so smart-TV panels auto-enroll like consoles instead
+of streaming silently.
+
+**Trust order for device identity** (highest first):
+
+1. **OUI vendor** — authoritative for manufacturer, never for role.
+2. **DHCP lease hostname** — self-reported, strong (`XboxOne`,
+   `bhyve-bh1-*`), but spoofable: never let it *unlock* anything.
+3. **Live mDNS / port fingerprints** — Cast 8009/8443, AirPlay 7000/62078,
+   Roku 8060, Echo 55443+4070.
+4. **HA registry** — good for integrated devices.
+5. **Firewalla user name** — now corrected; keep it corrected.
+6. **Firewalla auto-bname** — junk. Historically the source of every impostor:
+   the Xbox as "Lise's iPhone", the Lutron bridge as "Albert's iPhone", a
+   Nuheat floor thermostat as "Bert's Mac Mini M4 Pro".
+
+The Orbi holds no independent names (it mirrors DHCP); its toolkit registry
+(`orbi-registry.sh`) is now seeded with the canonical identities. Access the
+Orbi **only** through the Network Control API (`localhost:4007` on the Mini) —
+the admin refuses SOAP in AP mode and direct scraping is what created stale
+copies in the first place.
+
+## Verifying it works
+
+```bash
+# Columbo pins (should show every powered-on console)
+python3 ~/.sanctum/bin/columbo/phonebook.py report | jq ._screens
+
+# A screen's live enforce set = static ∪ pins
+curl -s -H "Authorization: Bearer $(cat ~/.sanctum/secrets/screen-control-token)" \
+  http://127.0.0.1:4077/screen/status | jq '.screens[] | select(.key=="xbox_one")'
+
+# Ledger should be empty when nothing is intentionally blocked
+sqlite3 ~/.sanctum/screen-time/usage.db 'SELECT * FROM paused_macs'
+```
+
+Live E2E on ship day: block → box shows the pinned MAC paused → ledger row →
+expiry → verified release → ledger clear, in under 15 seconds — run on the
+Xbox and the TCL Google TV, on the deployed binary.
