@@ -1,83 +1,124 @@
 ---
 title: Satellite Setup
-description: Adding a satellite node to your Sanctum deployment.
+description: Adopt a second Mac as a Sanctum satellite node — one command on your laptop, one double-click on the new Mac.
 ---
 
-A satellite node is a lighter Sanctum installation at a secondary location that syncs with your hub. Congratulations on deciding that one location running an AI-powered haus intelligence platform wasn't enough. You are now operating a distributed system. Every distributed systems paper ever written is trying to warn you about something, and you're doing it anyway.
+import { Steps, Aside } from '@astrojs/starlight/components';
+
+A satellite node is a second Sanctum machine at another location — the cottage, the chalet, a parent's place — that joins your tailnet and syncs with your hub. Congratulations on deciding that one location running a haus intelligence platform wasn't enough. You are now operating a distributed system. Every distributed-systems paper ever written is trying to warn you about something, and you're doing it anyway. The good news: setup is now two moves, not an afternoon.
 
 ![Satellite assembly — IKEA instructions for distributed systems](./images/satellite-ikea.png)
 
+## The shape of it
+
+You have two machines: the **console** (the laptop you're sitting at) and the **new Mac** (the one in the closet you want to adopt). You never carry a keyboard down to the closet. You run one command on the console, double-click one installer on the new Mac, and the console takes it from there over the tailnet.
+
+<Aside type="note" title="Why one physical touch is unavoidable">
+A brand-new headless Mac has **no remote way in** — SSH, Screen Sharing, and remote management are all off out of the box. Something has to open the first door. That "something" is a signed installer you double-click **once**. After that, the machine is yours to drive remotely forever.
+</Aside>
+
 ## Prerequisites
 
-- Mac Mini at the satellite location
-- Tailscale installed on both hub and satellite
-- The satellite Mac on the same Tailscale network as your hub
-- A willingness to debug networking problems in a location you don't live in full-time
+- A Mac at the satellite location (Apple Silicon, 16 GB+), powered on.
+- Tailscale on both machines, on the same tailnet. A fresh Mac often joined during first-run already; `sanctum node scan` will tell you.
+- `sanctum-cli` on your console. That's it.
 
-## Step 1: Mac Setup
+## Step 1 — Find the new Mac
 
-On the satellite Mac, set hostname, enable SSH and Screen Sharing, and install Tailscale via the open-source Homebrew formula:
-
-```bash
-brew install tailscale
-```
-
-Use the formula, not the App Store / GUI build — the sandboxed App Store build cannot host an SSH server, which is exactly the reachability the rest of this step depends on. Screen Sharing is non-negotiable for the same reason: you need to reach this machine remotely, and "drive hours to a remote property to restart a LaunchAgent" is not an acceptable runbook.
-
-## Step 2: Install Sanctum
+On the console:
 
 ```bash
-mkdir -p ~/.sanctum/lib
-echo "satellite" > ~/.sanctum/.node_id
+sanctum node scan
 ```
 
-Copy `instance.yaml` and `lib/` from the hub (via iCloud sync or scp). The node identity file is a single word that tells the system who it is. Philosophy students may find this reductive. The system does not care.
+This is read-only. It lists candidate Macs — tailnet peers and machines on your LAN — and marks which are **adoptable now** (reachable) versus **needs bootstrap** (on the network, but no door open yet). A closet-fresh Mac shows up as the latter: present, pingable, SSH off.
 
-## Step 3: Add Node to Config
-
-Add the satellite to `instance.yaml`:
-
-```yaml
-nodes:
-  chalet:
-    type: satellite
-    host: ''                      # empty — remote nodes are reached over Tailscale, not LAN
-    tailscale_ip: 100.0.0.30
-    tailscale_name: chalet
-    ssh_user: neo
-    sync:
-      hub: manoir                 # the hub NODE NAME, not the literal "hub"
-      skills_rsync: true
-      state_reconcile: true
-    services:
-      home_assistant:
-        enabled: true
-        port: 8123
-      heartbeat:
-        enabled: true
-        interval: 300
-```
-
-`host` is only meaningful for nodes on the hub's LAN; a satellite over Tailscale leaves it empty and is addressed by `tailscale_name`. The `hub:` under `sync` must name the hub node (`manoir`), not the literal string `hub` — the system resolves it back to a node, and "hub" resolves to nothing.
-
-## Step 4: Install Services
+## Step 2 — Make the installer
 
 ```bash
-brew install node
-pnpm add -g openclaw
-~/.sanctum/generate-plists.sh
+sanctum node bootstrap-script --name chalet
 ```
 
-Match the hub's Node line rather than pinning a version — the haus runs Node 26, and a satellite stranded on an older track is just version skew waiting to surface during a sync. And it is `pnpm`, not `npm`: the workspace went pnpm-only to kill lockfile drift, and one `npm install` on a remote box reintroduces exactly the drift the migration buried.
+By default this produces a **double-click `.pkg` installer** — the frictionless hand-off, no Terminal required on the new Mac. It also prints a **six-digit pairing code** tied to your console's key, so you can confirm the installer that lands on the new Mac is the one you just made.
 
-Install OrbStack for Home Assistant if needed — the haus runtime since the Colima retirement. OrbStack manages memory dynamically with native networking, so there is no 4 GB knob to agonize over. This is, genuinely, one fewer decision than you used to have.
+The installer, when run, does exactly four things and nothing else: turns on Remote Login, authorizes *your console's* key so only your laptop can drive it, applies the headless-reliability settings (never sleep, wake-on-LAN, restart-after-power-loss — so a closet Mac comes back on its own after an outage), and, only if you passed `--sudo-nopasswd`, grants passwordless sudo so the console can maintain it unattended.
 
-## Step 5: On-Site Setup
+<Aside type="tip" title="Getting it there">
+AirDrop the `.pkg` straight to the new Mac — that's the frictionless path, and `sanctum node bootstrap-script` reveals the file in Finder so it's ready to share. For a headless box with no one to click, a `--format script` fallback emits a plain shell one-liner instead.
+</Aside>
 
-Configure integrations requiring physical presence: cameras, alarm systems, smart switches. Note the local router IP and update `instance.yaml`. This is the step that requires you to actually be in the building, pressing buttons on physical objects, like some kind of cave person. Every other step can be done remotely.
+## Step 3 — Double-click it on the new Mac
 
-## Ongoing Sync
+On the new Mac: double-click the `.pkg`, click through the installer, enter the Mac's password once. Done. No Terminal, no typed commands.
 
-The satellite's `sync` block declares its intent — `hub: manoir`, `skills_rsync: true`, `state_reconcile: true` — and the schema is wired for a hub that pushes skills, config, and secrets over Tailscale the way a branch office gets memos from corporate.
+<Aside type="caution" title="If macOS says it can't verify the installer">
+The installer Sanctum **distributes** is signed and notarized — it opens clean. If you generated your own with the CLI and don't yet have an Apple Developer ID Installer certificate plus notarization set up, Gatekeeper blocks it on first run. That is expected, not a failure. Open **System Settings, Privacy and Security**, scroll to the Security section, click **Open Anyway** next to the blocked installer, then run it.
+</Aside>
 
-The push driver itself is not built yet. Today the contract is honest about the satellite's appetite but there is no LaunchAgent doing the rsync; bringing a chalet current is still a manual `scp` of `lib/` and `instance.yaml`, same as Step 2. The flags are a promise, not a cron job — which is the most corporate thing about the whole arrangement.
+## Step 4 — Adopt it from the console
+
+Back on the console:
+
+```bash
+sanctum node adopt chalet --wait
+```
+
+`--wait` polls until the new Mac's SSH comes up — walk back upstairs while it waits — then runs an **honest-verify scorecard** across six layers: reachability, key authentication, identity, key hygiene, headless posture, and registration. Each line is PASS or FAIL from a real check on the machine, not a hopeful assumption. The node is written into your `instance.yaml` **only** if the real layers pass; a failed adoption registers nothing and tells you why.
+
+That's the whole flow. The satellite is now a first-class node on your tailnet.
+
+## What runs on a satellite
+
+A satellite carries the **node-reliability core**, not the hub's model stack — a 16 GB Mac can't and shouldn't run the cathedral or the council. It gets tailnet membership, the always-on reliability settings, the memory-vault sync, heal-actions and sentinels, the deadman beat, and a signed node identity. The heavy inference stays on the hub; the satellite is a reliable, backed-up edge presence that phones home to nobody but your own tailnet.
+
+---
+
+## Under the hood (the manual path)
+
+`sanctum node adopt` automates everything below. You would only do this by hand to understand it, or to recover a half-adopted node.
+
+<Steps>
+
+1. **Mac setup.** On the satellite Mac, set the hostname, enable Remote Login and Screen Sharing, and install Tailscale via the open-source Homebrew formula — not the App Store build, whose sandbox cannot host an SSH server, which is the reachability everything else depends on.
+
+   ```bash
+   brew install tailscale
+   ```
+
+2. **Node identity.**
+
+   ```bash
+   mkdir -p ~/.sanctum/lib
+   echo "satellite" > ~/.sanctum/.node_id
+   ```
+
+   Copy `instance.yaml` and `lib/` from the hub. The node identity is a single word that tells the system who it is.
+
+3. **Register the node** in `instance.yaml`:
+
+   ```yaml
+   nodes:
+     chalet:
+       type: satellite
+       host: ''                    # empty — reached over Tailscale, not LAN
+       tailscale_name: chalet
+       ssh_user: bert
+       sync:
+         hub: manoir               # the hub NODE NAME, not the literal "hub"
+         skills_rsync: true
+         state_reconcile: true
+       services:
+         heartbeat:
+           enabled: true
+           interval: 300
+   ```
+
+   `host` is only meaningful for nodes on the hub's LAN; a satellite over Tailscale leaves it empty and is addressed by `tailscale_name`. The `hub:` under `sync` must name the hub node (`manoir`), not the literal string `hub` — "hub" resolves to nothing.
+
+4. **Install services.** Match the hub's runtime rather than pinning versions; a satellite stranded on an older track is version skew waiting to surface during a sync.
+
+</Steps>
+
+## On-site setup
+
+Some things still require you to be in the building, pressing buttons on physical objects like a cave person: cameras, alarms, smart switches, and noting the local router. Every other step is remote. That is the point.
