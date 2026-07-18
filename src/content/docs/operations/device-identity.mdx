@@ -41,7 +41,10 @@ The engine enforces **static config ∪ live pins** at every site — curfew loo
 holds, wake, reconciler ground truth, drift repair, daily reaper, and the
 parent-facing Block Now / override / homework handlers. Worst-case latency from
 a mid-curfew rotation to re-block: ~4 minutes (columbo pass ≤120 s + 60 s
-phonebook TTL + one reconciler tick).
+phonebook TTL + one reconciler tick). A **never-seen console joining
+mid-curfew** is faster: discovery fires an immediate columbo pass (the
+"nudge") and busts the phonebook TTL, so the pin lands and the normal curfew
+path blocks it in **~60–90 seconds**.
 
 Hardening that survived a 30-agent adversarial panel (25 confirmed findings,
 3 critical, all fixed pre-deploy):
@@ -93,6 +96,38 @@ The Orbi holds no independent names (it mirrors DHCP); its toolkit registry
 Orbi **only** through the Network Control API (`localhost:4007` on the Mini) —
 the admin refuses SOAP in AP mode and direct scraping is what created stale
 copies in the first place.
+
+## The evasion ladder
+
+Every way a device can present itself lands on a blocking path, ordered here
+from most to least cooperative:
+
+1. **Enrolled MAC** — blocked directly by static config at curfew.
+2. **Rotated MAC, recognizable hostname** — columbo pin follows it;
+   first-join gets the nudge (~60–90 s), mid-curfew rotation ≤4 min.
+3. **Any MAC, recognizable vendor OUI** — auto-assigned to shared devices,
+   reconciler blocks within ~2 min.
+4. **Spoofed MAC and renamed hostname, joining during curfew** — the
+   unknown-device backstop pauses it at the iptables level in ~30 s.
+5. **Spoofed, renamed, and parked online *before* curfew** — the
+   curfew-start sweep catches it: at the rising edge of any child curfew,
+   every present-but-never-reviewed unknown device gets the same guest
+   pause (auto-released at wake, exempted by Holocron approval). This
+   closed the last hole: Xbox's manual "Alternate MAC address" setting plus
+   a console rename plus patience used to survive the night.
+
+The sweep is edge-triggered: a parent's manual mid-curfew unpause is
+respected until the next curfew start. Devices that join during the *day*
+still sit un-paused in the review queue until curfew — a deliberate
+operator decision (2026-05-24: review-before-bed, not phone-buzzing) — but
+curfew now catches them even when nobody reviewed.
+
+<Aside type="note" title="Xbox and MAC randomization">
+Xbox OS has **no automatic MAC randomization** — the pinned console wears
+its real Microsoft hardware OUI. The threat model is the manual "Alternate
+MAC address" setting: rung 4 and 5 exist because any teenager can type a
+MAC. iOS/Android private addresses and SteamOS randomization are rung 2.
+</Aside>
 
 ## Verifying it works
 
