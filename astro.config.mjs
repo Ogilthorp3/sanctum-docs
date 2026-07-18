@@ -247,6 +247,7 @@ export default defineConfig({
 						{ label: 'Privacy', slug: 'operations/privacy' },
 						{ label: 'Secret Rotation', slug: 'operations/secret-rotation' },
 						{ label: 'Tooling', slug: 'operations/tooling' },
+						{ label: 'Device Identity', slug: 'operations/device-identity' },
 						{ label: 'Verify', slug: 'operations/verify' },
 						{ label: 'Upgrade Path', slug: 'operations/upgrade-path' },
 						{ label: 'Operational State', slug: 'operations/operational-state' },
