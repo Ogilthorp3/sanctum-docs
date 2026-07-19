@@ -1,0 +1,33 @@
+---
+title: The Holocron GUI
+description: The premium macOS-native command surface for Sanctum.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The Holocron is the native command surface for Sanctum on macOS. It is an Electron app, heavily stylized to feel premium, featuring micro-animations, glassmorphism, and a strict Apple-like UX.
+
+## Architecture
+
+The Holocron renderer is a React SPA built with Vite. It communicates with the host operating system via IPC bridges. The most complex and vital architectural piece is its ability to render external Sanctum control planes (such as the Haus panel or Coach digital twin) entirely natively without triggering Chromium's strict cross-origin security restrictions.
+
+### The Base64 Origin Proxy (ServiceIframe)
+
+When embedding external web applications in an Electron `<iframe src="...">`, Chromium enforces `Content-Security-Policy: frame-ancestors` and `X-Frame-Options` headers sent by backend services (e.g. FastAPI/uvicorn). If a backend denies framing, the iframe silently drops the connection and renders a white/black screen with `ERR_BLOCKED_BY_RESPONSE`.
+
+Instead of trying to forcefully strip headers at the global Electron level (which is brittle and insecure), The Holocron runs a dedicated, transparent local HTTP proxy inside its `main.js` process on port 38883.
+
+To use it, the React renderer encodes the target **origin** (e.g., `http://10.0.0.5:8770`) into base64, and constructs a proxy URL, appending the exact requested path:
+`http://127.0.0.1:38883/{base64Origin}/panel/`
+
+This brilliant routing schema ensures two things:
+1. **Absolute paths resolve safely**: If the iframe's HTML fetches `/global.js`, the browser resolves it against the proxy root (`http://127.0.0.1:38883/global.js`). The proxy detects this missing base64 prefix, intercepts the `Referer` header (`.../{base64Origin}/panel/`), decodes the origin, and transparently fetches `http://10.0.0.5:8770/global.js`.
+2. **Relative paths resolve perfectly**: If the iframe fetches `app.js`, the browser resolves it against the iframe's exact URL directory (`http://127.0.0.1:38883/{base64Origin}/panel/app.js`). The proxy simply splits the base64 origin from the appended path, decoding it to `http://10.0.0.5:8770` and fetching `http://10.0.0.5:8770/panel/app.js`.
+
+The proxy automatically intercepts the response, stripping out `CSP`, `X-Frame-Options`, and `Cross-Origin-Embedder-Policy` headers before streaming it back to the renderer. 
+
+This guarantees flawlessly native-feeling integration of ANY external dashboard into The Holocron without breaking subresource fetching or routing, all while honoring strict OS and Chromium sandboxing constraints.
+
+<Aside type="tip">
+When changing the proxy logic in `main.js`, Vite's HMR (Hot Module Reload) does **not** restart the main process. You must fully quit The Holocron (Cmd+Q) and restart it to apply proxy routing changes.
+</Aside>
