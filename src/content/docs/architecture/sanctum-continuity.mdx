@@ -1,0 +1,70 @@
+---
+title: Sanctum Continuity
+description: "Cross-session coordination reframed as presence and continuity, Apple-style: the Haus knows who's home, hands work off instead of shouting, and is made structurally unable to hurt itself — plus why the hardest layer is better on Linux."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO: hero image — pencil sketch per CONTRIBUTING, generate with tools/gen_hero_image.py when RAM is free (Flux swap-thrashes under load). Prompt: a grand manor at night seen in cutaway, several lamplit rooms each with a figure at a desk; a doorman in the hall reads a small brass occupancy board instead of knocking on every door; a sealed pneumatic tube carries a folded work-order between rooms; a heavy iron pressure-relief valve on the basement boiler glows one notch below its limit; Tommy the Abyssinian cat watches from the stair landing; one teal halo on the occupancy board. Out: ./images/hero-sanctum-continuity.png */}
+
+Sanctum runs many Claude Code sessions at once — one on the always-on Mini, one or two on a MacBook that roams. Every few days the same question returns: how does one session *tell another* to do something? And every few days it hits the same wall — nothing can type into a running session's terminal from outside.
+
+This is where we noticed the question was wrong. It isn't *how do I reach session B* — it's *who's home, and what are they holding?* That is not a messaging problem. Apple solved it twice — with Continuity and with the notification system — and the shape of those answers, minus the Apple plumbing, is what sanctum needs.
+
+<Aside type="note" title="This is a design, not yet a build">
+It began as a provocation — *what would Apple do?* — run as an adversarial panel. Every proposal's failure mode was identical: aping Apple's **surface** instead of shipping the **mechanism** underneath. What follows is the *enforceable subset* of each Apple idea, never its costume.
+</Aside>
+
+## The wall, stated honestly
+
+A `claude` session is an independent process reading its own terminal; nothing native lets one session inject a turn into another. The only injection primitive is **hooks** — a command that runs at the *start* of a turn — so it is **poll-on-turn, not push**: it surfaces a mailbox when a session next takes a turn, but cannot *wake* an idle one. The obvious escape — a session looping so it can answer — is the exact thing the Haus forbids: an unattended loop once ballooned to 60 GiB and panicked the host. The doctrine: **no unattended swarms until a hard governor exists**.
+
+## The reframe: presence and continuity, not messaging
+
+1. **Presence is infrastructure, below the app** — not a `who` you remember to run.
+2. **Work hands off; it doesn't shout** — publish a resumable task, never push a command.
+3. **The receiver always disposes** — triage happens where a message lands.
+4. **The only thing an alarm may interrupt is a person** — you cannot wake an idle session, and the design won't pretend otherwise.
+
+## Five layers
+
+Each layer is the enforceable subset of an Apple mechanism, on primitives sanctum already runs.
+
+| Layer | Apple mechanism (the real one) | What it does in sanctum | Built on |
+|---|---|---|---|
+| **1 · Presence — the Roster** | Handoff's BLE beacon: a cheap, always-on advertisement of *who + activity-type + capability*, split from the expensive on-demand AWDL pipe. No beacon is read as out-of-range — so there is no registry to reconcile. | Every session writes a TTL-stamped beacon (`sid`, host, last-turn timestamp + seq, declared working set) and reads peers' back as a **relevance-gated** roster each turn. Freshness *is* the signal: `actively-turning` / `idle-alive` / `gone`. Written **outbound**, which is why it survives the SSH-closed chalet — the MacBook reaches out, the Mini never reaches in. Retires `vault.sh who`. | `UserPromptSubmit` + `Stop` hooks writing JSON on the Tailscale-mounted FS; PID files + process table + `lsof` as the always-on liveness radio; `flock` for real mutual exclusion when advisory isn't enough. **No daemon** — that was the cargo-cult tell. |
+| **2 · Handoff — the job board** | `NSUserActivity`: pull-not-push, capability-registered, one device wins the claim, no timer and no wake by design. | "Arm it" becomes an **inert, fully-hydrated, capability-routed activity record** — the exact diff, target host, assembled call — dropped in a shared `activities/` dir, addressed to *no one*, executed only when a capable node claims it on a live, attended turn. Degrades to a one-tap command for a human. Publishing executes *nothing*, so it can never trip the governor. | `activities/` on the shared FS; per-session `capabilities.yaml`; atomic-rename claim on the single mounted FS. |
+| **3 · Focus — receiver-disposed classes** | `UNNotificationInterruptionLevel` + Focus + the Scheduled Summary, all filtered **on the receiver's device** so a stamp can't go stale; Focus itself is declarative rules, not a model. | The sender stamps an *advisory* level; the receiver's hook does 100% of triage at render time into **digest** (batched onto the next turn) and **surface-first** (a shared-state collision, shown inline). "Why did this fire?" answers with a rule id. | The existing turn-start hook renders a ranked batch; `rules.yaml` stays node-local. **No LLM in the delivery path** — a model would live on the Mini, the very node whose OOM is the flagship urgent case. |
+| **4 · The Wake — human-in-the-loop** | Time-Sensitive notifications piercing Focus for a bounded window; an unreachable device gets the banner only on reconnect; a HomePod says "not available" rather than faking a capability. | An urgent verdict a live self-poll can't serve wakes **the human** out-of-band — never an idle machine — carrying the firing rule id and the honest state ("Mini flags OOM risk, MacBook idle — take a turn"). A stale beacon *automatically* means unreachable and routes to the person. | The messaging toolkit's push (iMessage today) as primary; the flood-prone `:1984` bridge only secondary. The push **exits the Claude substrate entirely** — no session-to-session wake is attempted, because none exists. |
+| **5 · The Governor — guardianship as physics** | Ask-to-Buy's delegated *envelope* + proportional destructive-action friction + the Apple-Silicon jetsam/thermal governor that sheds load regardless of intent + Downtime's auto-expiry. | Makes the no-swarm doctrine **structural**: `HOLD` is the un-opt-out-able default; a session can only ever *request* an arm. You set an envelope once; inside it, sessions self-arm under a silently-granted lease. The real ceiling is a **RAM-capped VM + TTL auto-disarm**; exceeding it is the single push to you, and it **fails closed to HOLD** when you're unreachable. | Root LaunchDaemon lease-coordinator (`SIGKILL` + a `KeepAlive` the swarm can't clear); `docker --memory` / UTM RAM cap as the actual kernel-enforced physics; a TTL timer; the swap-sentinel elevated from *alert* to *sever*. |
+
+## What "wake" is allowed to mean
+
+Presence is the primary dial, not urgency, and *queue* is the default. Only two things escalate, both judged **at the receiver**, never trusted from the sender — a shared-state collision and a safety/OOM event. "Wake" then has one honest meaning per node: a live loop shortens its own self-poll; an idle session can't be woken at all, so an urgent verdict wakes the *human* instead. Liveness is advertised honestly, and a person is the only thing an alarm may interrupt.
+
+## Guardianship as physics
+
+The honesty that makes it work: the lease-coordinator can be wrong — it is userspace software, not the silicon. The *only* physics is a **RAM-capped VM** whose kernel OOM-kill and TTL auto-disarm sit below the swarm, regardless of intent. So the 60 GiB panic is **structurally impossible**: cross the cap and the kernel kills the job, severs the lease, and a `KeepAlive` restores the host; at TTL the Haus reverts to `HOLD`. "Unattended" is bounded by physics, never a promise.
+
+## The primitive we don't have yet
+
+The gap is *not* "push into an idle session" — Apple accepts that exact gap and routes around it by waking the human. What Apple would **demand** before wiring any alarm to an actuator is **authenticated sender identity with per-class mint entitlements** — the *"you cannot self-grant `.critical`"* gate (the Apple-issued Critical-Alert entitlement no app can self-grant). The vault can't prove who wrote a message, so today the top tier and any cross-host actuator are an open prompt-injection surface. Until the gate exists, the cross-host critical actuator ships **dark**. Smallest build: sign messages with a per-session key, and gate the interrupt/actuator/arm classes behind a mint-allowlist only the governor holds.
+
+## Does it run on Linux?
+
+Yes — and the *hardest* layer gets **better**. Not hypothetical: the OpenClaw side of the Haus already runs on Linux. The architecture is drawn on POSIX primitives with the Apple mechanisms only as inspiration, so most of it ports unchanged.
+
+- **Layers 1–3 and the entitlement primitive don't change.** Hooks are a harness feature, not an OS one. Shared FS, PID / `lsof` liveness, `flock`, atomic renames, a deterministic `rules.yaml`, per-message signing — all pure POSIX and crypto. On Linux the liveness radio is *richer* — `/proc` beats macOS's process table.
+- **Layer 5 — Guardianship — is stronger on Linux.** On macOS the physics is awkward: no per-process memory cgroup, so the cap needs a whole **VM**, the killer is **jetsam**, the coordinator a **LaunchDaemon**. On Linux the three collapse into native kernel features — a **cgroups v2 `memory.max`** on a systemd slice is the one-line, kernel-enforced ceiling with no VM, and crossing it OOM-kills only that cgroup, sparing the host. `systemd-oomd` replaces jetsam; a single **systemd unit** folds TTL (`RuntimeMaxSec=`), restart (`Restart=always`) and cap (`MemoryMax=`) into one file. The layer macOS must *emulate with a VM* is the one Linux was *built to enforce* — so if anything, Sanctum Continuity is more at home on Linux than on the Mac.
+
+<Aside type="tip" title="The one adapter to swap">
+**Layer 4 (waking the human) is the only Apple-coupled piece** — an adapter that exits the substrate entirely. iMessage needs macOS; on Linux, swap it for a channel the Haus already documents — [`signal-cli`](/reference/signal-cli-api/) — or `ntfy`/Telegram/Pushover. One transport line, not a redesign: the wake channel never leaked into the coordination logic.
+</Aside>
+
+## Where to start
+
+Ship zero-config presence first — one turn of work, and every later layer reads its output. Extend the `UserPromptSubmit` hook to write this session's TTL beacon, add a `Stop` hook to stamp last-activity, and have the hook read peers' beacons and inject a relevance-gated roster only when working sets intersect. Retire `vault.sh who`. Zero new infra, works today over the Tailscale FS, and degrades correctly at the chalet because it is outbound-only. Build the radio first — the job board, rules, and governor all compose on it.
+
+<Aside type="caution" title="What Apple would not do">
+Buy responsiveness with an unbounded, self-polling loop kept awake just so it can answer — the exact swarm that panicked the host. Apple ships the thermal envelope *first* and sheds load regardless of intent; it never makes a written doctrine the enforcement layer. **Never ship a governor that's a norm wearing a uniform — make the ceiling physics, then let almost nothing interrupt the human.**
+</Aside>
