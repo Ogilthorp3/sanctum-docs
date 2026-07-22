@@ -1,0 +1,56 @@
+---
+title: "2026-07-21: The Proxy Was Never the Problem"
+description: "A 502 that read like a broken router was four upstream failures stacked at the same instant — and across a long day of hardening, benchmarking, and an adversarial audit, every time proxyd looked guilty the culprit was somewhere else; the router was telling the truth, and the work was learning to believe it."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![The proxy was never the problem — a hand-drawn graphite sketch in the Sanctum docs house style, wide 16:9 on a dark background. A calm switchboard console (the router) sits intact at center in a stone cellar, cables fanning back to a row of heavy doorways; three distant doorways glow with small fires while the console stays quiet. An Abyssinian cat rests on the console facing the fires, a single amber halo on the router's main dial.](./images/hero-the-proxy-was-never-the-problem.png)
+
+It began as a page, the way most of these do: **502 ALL SEATS FAILED**, claude-opus-4-8, flashing in other sessions. The reflex is almost physical — *the proxy is broken.* proxyd is the mTLS router on `:4040`, the seam every model request passes through, and when everything goes dark at once the thing in the middle is the obvious suspect. It touches everything. Of course it did it.
+
+It didn't. Not once, across a long day of looking. Every time proxyd looked guilty, it was innocent — and the real work was learning to believe the thing that was telling us the truth.
+
+## The cascade that looked like a crash
+
+The 502 wasn't one failure. It was four, stacked, each for a different reason and all in the same instant. The local Claude-Max bridge was wedged. Grok's credits were spent. glm-52 — the one metered cloud rung in the fallback chain — was walled off by a daily USD cap that had silently stuck. And the local cathedral 413'd on the enormous contexts being thrown at it. Every seat was genuinely down. The proxy walked the whole ladder, found no rung that would hold, and reported exactly that. It wasn't describing a broken router. It was describing a broken world upstream, faithfully.
+
+## Two bugs the panic was hiding
+
+Under the cascade sat two real defects, and they were worth the outage to find.
+
+The first was money. Claude on the Max subscription is a flat fee — you pay once, the tokens are free. But the code metered it anyway, charging $15/$75 per million once daily Anthropic tokens crossed a 500k gate. "Free" traffic was quietly billed and jammed the shared USD cap. We made Claude unconditionally $0 in `budget_policy.rs` and dropped the gate; only genuinely-metered glm-52 counts against the ceiling now.
+
+The second was that the ceiling, once tripped, never came back down. The daily USD counter didn't reset when the agent went idle — it stayed stuck for days, a closed valve nobody was turning. A timer-driven rollover fixed it.
+
+<Aside type="caution" title="A stuck counter is a silent outage">
+A budget cap that never resets is indistinguishable from a broken service, except it leaves no crash and no log line — it just quietly refuses. The 502 was loud; the stuck cap under it was silent for days. When a limiter can enter a state it cannot leave on its own, that state *is* the bug, no matter how correct the limiting logic looks.
+</Aside>
+
+## The audit that had to be disproved
+
+Then a deliberate hardening pass — the brief was "military-grade and apple-like" — across nine dimensions, with one rule: every finding had to survive a skeptic who tried to knock it down before it counted. The first pass produced 43 real findings, two of them high. We fixed the lot: a quadratic CPU-DoS in tool-payload squashing, PII scrubbing that shipped defaulting *off*, a body limit with no concurrency gate behind it, a published default auth key. The re-audit came back clean — zero critical, zero high. The test suite went from 78 to 138.
+
+## Falsify before you fortify, twice
+
+The haus already had a name for the day's deeper lesson, earned weeks ago: *falsify before you fortify.* It billed us twice more.
+
+The re-audit's own recommended auth fix — change a heartbeat's `target: "last"` — was wrong the moment we read the source. `target` is the delivery *destination*, not the session; a plausible fix, backed by the audit, that the code itself disproved in a single read. And earlier, `ps` had insisted the cathedral held "no model loaded," a mere 42MB, while `top` showed 34GB resident. Twice the theory had a fan club. Twice the fan club was wrong until we checked the twin.
+
+## The router that was blamed for being slow
+
+"The proxy seems slow." We stopped guessing and measured: proxyd's own overhead is about 2 milliseconds. The latency was never the router. It was the model generating tokens, and a tail of requests spilling onto a swap-thrashed local 35B. A committed benchmark now guards that floor, so "fast" is a measured claim instead of a feeling.
+
+## The heartbeat that ate the cathedral
+
+The slow tail led to the last root cause, and it was the ugliest. Agent heartbeats were resuming their full ~30,000-token sessions and firing them at the local 35B every 15 to 30 minutes. Each one needed about 168 seconds just to prefill — longer than the 120-second timeout. So every heartbeat aborted, then kept generating into a dead socket for nine more minutes, blocking the cathedral the whole time. And because it always aborted before finishing, the session never trimmed. It grew forever.
+
+We fixed it at the source: openclaw's `isolatedSession` now runs each heartbeat in a fresh, empty session — 30,000 tokens became 79 — and we added a durable proxy-side input cap that VM config drift can't quietly undo.
+
+<Aside type="note" title="Two locks, because one drifts">
+The source fix is correct, and the source fix is fragile: it lives in VM config, and VM config drifts. The proxy-side cap is the durable one — it holds even if the upstream setting is reverted, forgotten, or overwritten. Fix it where it's right; also fence it where it can't be undone.
+</Aside>
+
+## What a router is for
+
+Six times the proxy looked guilty — the 502, the money, the slowness, the dark cathedral — and six times it was the messenger, reporting honestly on a world that really was, in that moment, on fire upstream. A router's whole job is to tell the truth about the country it routes into. This one did. Believe the router; go find the fire it is pointing at.

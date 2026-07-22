@@ -267,6 +267,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-21 — The Proxy Was Never the Problem', slug: 'operations/2026-07-21-the-proxy-was-never-the-problem' },
 								{ label: '2026-07-17 — The Pretender in the Pit', slug: 'operations/2026-07-17-the-pretender-in-the-pit' },
 								{ label: '2026-07-14 — The Ladder With One Paid Rung', slug: 'operations/2026-07-14-the-ladder-with-one-paid-rung' },
 								{ label: '2026-07-14 — The Device That Announces Itself', slug: 'operations/2026-07-14-the-device-that-announces-itself' },
