@@ -5,6 +5,10 @@ House style (see HERO_ROADMAP.md): black-and-white pencil sketch, hand-drawn,
 wide format, white/off-white background, Tommy the Abyssinian cat observing,
 one subtle localized color halo (teal or amber). Pass the full prompt in.
 
+Tommy: pass --tommy to prepend the canonical breed descriptor (TOMMY below) so
+his Abyssinian shape reaches CLIP's 77-token window instead of being truncated
+out of it — the reason past heroes rendered a generic cat. See TOMMY's comment.
+
 Two backends, ONE entry point:
   --backend local  (default)  Flux.1-dev on-device via flux_backend.py — offline,
                               $0, no API key. Needs the torch/diffusers venv
@@ -39,6 +43,24 @@ ASPECT_DIMS = {
     "9:16": (768, 1344),
 }
 DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux"
+
+# ── Tommy, the haus's recurring Abyssinian guardian-spirit ───────────────────
+# Two hard-won lessons are baked into this one string:
+#
+#   1. CLIP TRUNCATES AT 77 TOKENS. FLUX runs two text encoders — CLIP (hard
+#      77-token cap) and T5 (512). CLIP is the one that pins recognizable
+#      SUBJECT IDENTITY. In a long scene prompt, "Abyssinian" lands past token
+#      77, CLIP never sees it, and you get a generic ghost cat (exactly the bug
+#      reported 2026-07-14). So this descriptor is meant to be FRONT-LOADED via
+#      --tommy, which prepends it — putting the breed inside CLIP's window.
+#
+#   2. THE HOUSE STYLE IS BLACK-AND-WHITE, which removes an Abyssinian's single
+#      most recognizable trait: its warm ruddy TICKED COAT COLOR. So identity
+#      here has to ride on SHAPE, not color — large pointed ears, a wedge face,
+#      almond eyes, long slender legs, a lithe body, and the fine ticked coat
+#      rendered as texture. Bare "Abyssinian cat" gives the model none of that.
+TOMMY = ("Tommy, a lithe Abyssinian cat with large pointed ears, a wedge-shaped "
+         "face, almond-shaped eyes, long slender legs and a fine ticked coat")
 
 
 def load_key() -> str:
@@ -114,6 +136,11 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
+    ap.add_argument("--tommy", action="store_true",
+                    help="prepend the canonical Tommy (Abyssinian) descriptor so his "
+                         "breed shape lands inside CLIP's 77-token window. Write --prompt "
+                         "with the medium/style first, then the scene; keep Tommy small "
+                         "('in the corner, observing') so front-loading doesn't over-weight him.")
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
     ap.add_argument("--backend", default="local", choices=["local", "imagen"],
                     help="local=Flux on-device (free, default); imagen=Google (paid)")
@@ -124,6 +151,12 @@ def main() -> None:
     # imagen knob
     ap.add_argument("--model", default="imagen-4.0-generate-001", help="Imagen model (imagen)")
     a = ap.parse_args()
+
+    # Front-load Tommy so his breed reaches CLIP (see TOMMY's comment). Prepend
+    # rather than append: CLIP reads the first ~77 tokens, so the descriptor must
+    # lead the prompt, not trail a long scene it never gets to.
+    if a.tommy:
+        a.prompt = f"{TOMMY}. {a.prompt}"
 
     if a.backend == "local":
         gen_local(a)
