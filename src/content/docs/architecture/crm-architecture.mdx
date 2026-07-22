@@ -1,47 +1,104 @@
 ---
-title: JCRM Pipelines & Routing
-description: How we sync, enrich, and route intelligence into the read-only DuckDB backend without burning down the house.
+title: Sanctum CRM
+description: One relationship memory — every channel in, two surfaces out. You see the full archive. Partners never see the family.
 ---
 
-import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-![Jocasta pipeline visualizing deal states flowing gracefully into the memory vault](../../../assets/illustrations/jocasta_pipeline.png)
+![Jocasta pipeline — deal and relationship state flowing into one memory vault](../../../assets/illustrations/jocasta_pipeline.png)
 
-The JCRM (Jocasta CRM) is fundamentally stateless. It is a read-only GUI sitting on top of `workspace.duckdb`. Data only flows in through autonomous sync agents, which means if the UI burns down, we lose exactly zero bytes of intelligence. It is also, let's be honest, an over-engineered sqlite viewer that happens to run our entire pipeline.
+Sanctum CRM is the haus relationship memory. Every conversation that lands on the Mac — mail, iMessage, SMS, Signal, WhatsApp, Telegram, LinkedIn — is ingested into one local DuckDB store. Affinity deal flow and a personal angel ledger sit beside it. The Archives UI is a thin, read-only window on that store: if the UI burns down, zero bytes of intelligence burn with it.
 
-## How It Works
+What matters for a human operator is not the pipeline diagram. It is **who can see what**.
 
-The architecture relies on a Single Source of Truth (`workspace.duckdb`). Background agents hydrate this truth.
+## Two surfaces
 
-- **`linkedin-sync.py`**: Pulls LinkedIn profiles and maps the `contact` object to our `person` schema. This keeps the Full Name fields intact so the UI doesn't look like an anonymous witness protection database.
-- **`osint-sync.py`**: Scrapes domains from unarchived entries in `v_deal` and feeds them to SpiderFoot for raw OSINT extraction. 
+| Surface | Who | What they see |
+|---------|-----|----------------|
+| **Personal** | You | Full timeline, family threads, Angel & LP |
+| **Work** | Partners / fund session | Work-graph only — Affinity people, deal domains, firm addresses |
 
-<Aside type="note">
-The `v_deal` view strictly filters on `archived_at IS NULL`. If a deal disappears, someone achieved it. If 3,700 deals disappear, you ran a bad migration.
-</Aside>
+There is no LLM reading your texts to decide “sounds professional.” Classification is **who the counterparty is**, not what they said.
 
-## The Enrichment Workflow
+- **Work** = already on the work graph (Affinity contact, deal website domain, `@triptyq.vc`).
+- **Personal** = household roster (instance family + Firewalla/screen-time devices) plus phones and emails that show up in family threads.
+- **Unknown** = treated as personal for partners. Fail-closed.
 
-Raw SpiderFoot JSON is dense and unreadable. `bin/osint-enrich.sh` runs in the background, feeding the raw data to the cathedral, and writing a "Jocasta Executive Brief" straight into the `interactions` table. The CRM timeline displays this instantly.
+Personal always wins when both match (spouse at a portfolio company stays personal).
 
-```bash
-# How the OSINT enrichment hits the proxy
-curl -sf -m 180 \
-    --cacert ~/.sanctum/certs/ca.crt \
-    --cert ~/.sanctum/certs/clients/sanctum-server.crt \
-    --key  ~/.sanctum/certs/clients/sanctum-server.key \
-    -X POST https://127.0.0.1:4040/v1/chat/completions \
-    -H "Authorization: Bearer no-key" \
-    -H "Content-Type: application/json" \
-    -d '{ "model": "jocasta", ... }'
+```
+ingest (hourly) ──▶ workspace.duckdb ──▶ v_timeline          (you)
+                         │
+                         ├── contact_silo + work_allowed_handles
+                         │
+                         └──▶ v_timeline_work                 (partners)
+                              workspace-work.duckdb          (export)
 ```
 
-<Aside type="caution">
-Never hit the raw MLX port `:1337` directly unless you are writing a liveness canary. The workflow agents must hit the `proxyd` gateway on `:4040` using the `Authorization: Bearer no-key` header. If you hardcode the port, you break the routing logic when we upgrade the champion model.
+## Where you open it
+
+| Role | UI | Data |
+|------|----|------|
+| You | Archives **`:3346`** | `~/.openclaw/workspace/workspace.duckdb` |
+| Partners | Archives **`:3347`** (`CRM_SESSION=work`) | Prefer **`workspace-work.duckdb`** — personal rows never copied |
+
+The partner export is physical isolation, not a filter you hope nobody bypasses. Raw channel tables, the full timeline, and Angel & LP are simply not in that file.
+
+## CLI that matters
+
+```bash
+# Health of the dual surface
+sanctum-crm status
+sanctum-crm silo-status
+sanctum-crm doctor              # must be all-critical green before a partner session
+
+# Your full archive
+sanctum-crm who "François Rioux"
+sanctum-crm timeline "demute"
+sanctum-crm needs-reply
+
+# Partner-safe (same commands, work graph only)
+sanctum-crm timeline "demute" --work
+CRM_SESSION=work sanctum-crm needs-reply
+
+# After Affinity sync or family roster changes
+sanctum-crm silo-seed
+sanctum-crm work-export         # → workspace-work.duckdb
+```
+
+Affinity sync re-seeds the work graph automatically on success. Family identity is reloaded from `instance.yaml` and Firewalla-backed `devices.yaml` on every seed — you do not hand-maintain household members in a side file unless someone is missing.
+
+## What lands in the store
+
+| Channel | How | Table |
+|---------|-----|--------|
+| Email | Mail.app / Graph | `email_history` |
+| iMessage / SMS | Signed FDA reader → dump | `imessage_history` |
+| Signal | Desktop SQLCipher + Keychain | `signal_history` |
+| WhatsApp | `ChatStorage.sqlite` (busy-timeout hardened) | `whatsapp_history` |
+| Telegram | MTProto session | `telegram_history` |
+| LinkedIn | Voyager / harvest | `linkedin_history` |
+| Deals | Affinity v2 → `v_deal` | dealflow |
+| Angel & LP | Curated ledger | `angel_investments` (you only) |
+
+Unified view: **`v_timeline`**. Partner view: **`v_timeline_work`**. Cross-channel “ball in your court”: **`v_needs_reply`** / **`v_needs_reply_work`**.
+
+<Aside type="caution" title="Single-writer DuckDB">
+`workspace.duckdb` allows one writer at a time. Ingest holds the lock for **seconds**, not minutes — fetch first, then one short transaction. A failure pages Force Flow; empty results are never a silent success.
 </Aside>
 
-## Model Routing Parity
+## Partner session checklist
 
-Every active workflow agent—including `aemon.py` in the Dragonpit, `sanctum-dreams-backfill.py`, `confirm_franglais.py`, and the `talk_to_bert.py` persona—now correctly hits `proxyd`. 
+1. `sanctum-crm doctor` — all critical checks green  
+2. `sanctum-crm work-export` — fresh partner DB  
+3. Open **`:3347`** or hand partners **only** `workspace-work.duckdb`  
+4. Never share `workspace.duckdb` or the personal Archives on `:3346`
 
-They request logical aliases (like `jocasta`) instead of hardcoding `mlx-community/Qwen3.6-35B-A3B-4bit`. The proxy decides which weights actually serve the request. It is a highly robust system that will inevitably fail the one time you actually need it during a demo.
+Work access is audited at `~/.openclaw/logs/crm-work-access.log`.
+
+## Related
+
+- [Jocasta — CRM Agent](/agents/jocasta/) — who runs the archive  
+- [Dealflow Intelligence](/architecture/dealflow-intelligence/) — Affinity → Mundi briefs  
+- [Screen Time](/architecture/screen-time/) — Firewalla family roster that seeds personal silo  
+- Repo: `~/Projects/sanctum-crm/`
