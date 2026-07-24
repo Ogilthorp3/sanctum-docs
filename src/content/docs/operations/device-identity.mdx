@@ -129,6 +129,52 @@ MAC address" setting: rung 4 and 5 exist because any teenager can type a
 MAC. iOS/Android private addresses and SteamOS randomization are rung 2.
 </Aside>
 
+## Display-name renames cannot drop curfew
+
+Renaming a device in the Firewalla app, on AirPlay, or via DHCP hostname
+changes **labels**, not identity. Enforcement keys on the **MAC** (static
+config ∪ columbo pins). A kid who renames `Living Room Apple TV` to
+`Den Room` — or anything else — keeps the same enforce set.
+
+What the engine does on every discovery tick when a known MAC presents a
+new name:
+
+1. **Remember aliases** — old and new labels land in `device_aliases`
+   (SQLite) so rotation matching still finds the device under either name.
+2. **Soft-update the in-memory display name** — Holocron / status stay
+   truthful without rewriting `devices.yaml` mid-flight.
+3. **Never remove the MAC** from known or enforce sets.
+
+Config can also list durable former names under `also_known_as` on a
+screen or personal device. Hostname matching (columbo-style rotation,
+owner re-pin after Private Wi-Fi Address shuffle) uses, in order:
+
+- `hostname_patterns` globs
+- the screen/device `name`
+- `also_known_as`
+- remembered `device_aliases` for that MAC
+
+```yaml
+# devices.yaml (illustrative — real registry is gitignored haus config)
+screens:
+  den_room_appletv:
+    name: Den Room Apple TV
+    also_known_as:
+      - Living Room Apple TV
+      - First Floor Apple TV
+    macs:
+      - "AA:BB:CC:DD:EE:01"   # identity — rename-proof
+    schedule:
+      holiday: { curfew: "23:00", wake: "10:00" }
+```
+
+<Aside type="caution" title="Rename is not a loophole; ghost MAC still is">
+If the *hardware address* changes and no pin/alias path follows it, that
+is a rotation problem (rungs 2–5 above), not a rename problem. Renaming
+alone never clears a curfew. Treating the Firewalla display name as the
+enrollment key was the bug class this closes.
+</Aside>
+
 ## Verifying it works
 
 ```bash
@@ -141,8 +187,17 @@ curl -s -H "Authorization: Bearer $(cat ~/.sanctum/secrets/screen-control-token)
 
 # Ledger should be empty when nothing is intentionally blocked
 sqlite3 ~/.sanctum/screen-time/usage.db 'SELECT * FROM paused_macs'
+
+# Rename aliases remembered for a MAC (after a live rename tick)
+sqlite3 ~/.sanctum/screen-time/usage.db \
+  "SELECT alias FROM device_aliases WHERE mac='AA:BB:CC:DD:EE:01'"
 ```
 
 Live E2E on ship day: block → box shows the pinned MAC paused → ledger row →
 expiry → verified release → ledger clear, in under 15 seconds — run on the
 Xbox and the TCL Google TV, on the deployed binary.
+
+Rename-resilience E2E (2026-07-23): enrolled Apple TV renamed on the Gold Pro
+while curfew was active — Force Flow still reported blocked, the box kept
+streaming DNS blocks on the same MAC, and hostname match still resolved both
+the old and new labels to the same screen key.
