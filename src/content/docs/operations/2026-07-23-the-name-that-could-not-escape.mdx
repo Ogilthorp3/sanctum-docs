@@ -1,0 +1,62 @@
+---
+title: The Name That Could Not Escape
+description: Renaming an Apple TV mid-curfew does not open a loophole — curfew identity is the MAC, and aliases keep rotation matching honest after the label changes.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+{/* TODO: hero — pencil sketch per CONTRIBUTING. Prompt: a theater marquee whose title cards keep flipping (Living Room, Den Room, First Floor) while a heavy padlock on the stage door stays locked to a copper MAC-address plate; Tommy the Abyssinian watches from the box office; one teal halo on the padlock. Out: ./images/hero-2026-07-23-the-name-that-could-not-escape.png */}
+
+A parent renames a screen. A kid renames a screen. The Firewalla app, AirPlay,
+and DHCP all happily show the new label. If curfew keyed on that label, bedtime
+would be a settings menu away. On 2026-07-23 we proved the opposite on the live
+haus, and closed the last soft edge where a rename could still *feel* like it
+had broken enforcement.
+
+## What happened
+
+The living-room Apple TV (HomeKit hub, `mode: services`) was renamed to **Den
+Room** on the Gold Pro. Force Flow still held the curfew: same MAC, holiday
+schedule `23:00`, streaming DNS blocks still active (Netflix, YouTube, Disney+,
+Apple TV+, …). The only thing that lagged was the *label* on surfaces that
+cached the old Firewalla name until the box redis rediscovered it.
+
+## What we changed
+
+In `sanctum-screen-time` the engine now:
+
+1. Treats **MAC as identity** for every enforce path (already true) and makes
+   that explicit on rename.
+2. Records **aliases** (`device_aliases` table + optional `also_known_as` in
+   config) so columbo-style hostname matching still finds the device after a
+   rename.
+3. Soft-updates the in-memory display name so Holocron stays truthful without
+   rewriting the gitignored haus `devices.yaml` mid-tick.
+
+Unit coverage lives in `tests/test_rename_identity.py`. The doctrine page is
+[Device Identity](/operations/device-identity/) — section *Display-name renames
+cannot drop curfew*.
+
+## E2E that shipped
+
+| Check | Result |
+|-------|--------|
+| Force Flow `/screen/status` for the enrolled screen | curfew `23:00`, `blocked: true` |
+| Gold Pro host by MAC | new display name, still blocked |
+| Streaming DNS policies scoped to that MAC | present (Netflix/YouTube/…) |
+| Hostname match old label → same screen key | yes |
+| Hostname match new label → same screen key | yes |
+| Simulated further rename | MAC stays known; enforce set unchanged |
+
+<Aside type="tip" title="Where the live registry lives">
+`devices.yaml` is haus config (gitignored in the public tree). Renames that
+should stick across reloads get an `also_known_as` entry on the Mini; the
+engine also learns aliases at runtime into `usage.db`.
+</Aside>
+
+## What rename still does not fix
+
+A **new MAC** with no pin, no OUI path, and no unknown-during-curfew hit is a
+different problem — the evasion ladder on the Device Identity page. Renaming
+alone never was enough. The work tonight was making sure the system *never
+behaves* as if the label were the key.
