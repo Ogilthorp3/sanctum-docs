@@ -144,7 +144,9 @@ After generating, verify each image against existing illustrations:
 
 ---
 
-## 2026-07-25-the-knobs-that-outlived-their-reason.mdx → `operations/images/hero-the-knobs-that-outlived-their-reason.png`
+## ✅ 2026-07-25-the-knobs-that-outlived-their-reason.mdx → `operations/images/hero-the-knobs-that-outlived-their-reason.png`
+
+*Generated 2026-07-25 with `gemini-3-pro-image-preview` (1584×672). Prompt kept for provenance and as a style reference — the four-doorways-lit-by-tier composition reads well at hero width.*
 
 **Prompt:**
 > Black and white pencil sketch illustration, wide format. A stone cellar
