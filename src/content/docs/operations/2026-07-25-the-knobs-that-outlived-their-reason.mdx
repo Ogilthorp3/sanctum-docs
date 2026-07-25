@@ -1,0 +1,76 @@
+---
+title: "2026-07-25: The Knobs That Outlived Their Reason"
+description: "Opus 5 shipped and the router 502'd — but the seat was the smallest problem. Under it sat a credential that could never have worked, a refresher nobody had wired up, four config knobs still solving a risk that had inverted, and a monitoring probe quietly degrading the thing it watched."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Four knobs unscrewed and set aside on a cellar workbench, replaced by a single engraved brass plate reading ASK — THEN BEST; behind it four cables run to doorways labelled HAIKU, SONNET, OPUS and FABLE, each lit to a different brightness, while Tommy the Abyssinian rests one paw on the discarded knobs and looks thoroughly satisfied with the subtraction.](./images/hero-the-knobs-that-outlived-their-reason.png)
+
+Opus 5 shipped, and within the hour the router answered a request with **502 ALL SEATS FAILED**. The banner named the model — `claude-opus-5` — and listed exactly two rungs it had tried before giving up.
+
+Two. On a ladder with seven.
+
+That number was the whole story, and it took a while to admit it. The obvious repair was to add the missing seat. The actual work was discovering that most of what we found that night had been broken for weeks, silently, waiting for something to lean on it.
+
+## The seat that didn't exist
+
+proxyd resolves a model name to a *seat* — a configured upstream. `claude-opus-5` had none, so it fell to an auto-passthrough that mints a synthetic Anthropic seat for any unrecognised `claude-*` name. Fine in principle. Except a seat with no name in the config also has no entry in the `fallbacks:` table, and a seat with no fallback chain gets the bare offline net: one local model, whose prompt cap rejects any real session.
+
+So: passthrough fails, single local rung 413s, ladder exhausted, 502. Every part behaving exactly as designed.
+
+The fix has two halves, and the second matters more. A glob alias — `claude-opus-*` — points any Opus at the subscription bridge, so a future Opus 6 needs no config edit. Then `fallback_chain` learned to *inherit the alias target's chain*, which is the part that was actually missing. Without it the alias resolves correctly and still dies on the same one-rung ladder.
+
+## The lane that could never have worked
+
+The seat pointed at `api.anthropic.com` using the credential in `~/.sanctum/secrets/anthropic-api-key`, and that credential returned `401 OAuth access token has been revoked`.
+
+Easy — refresh it. So we refreshed it, and got `429 rate_limit_error {"message": "Error"}`. A bare "Error", no explanation. With the OAuth beta header, and without it. On a token minted minutes earlier.
+
+That is the finding worth the night: **a Max subscription token cannot drive the metered API at all.** Subscription inference flows through the Claude CLI — which is what the `:3456` bridge wraps — and nowhere else. Every `provider: anthropic` seat in the config was a dead rung: it authenticated, got refused, and burned a timeout before failing over.
+
+<Aside type="caution" title="Two credentials that look identical and aren't">
+`sk-ant-oat01…` (subscription OAuth) and `sk-ant-api…` (metered API key) are both "the Anthropic key", both live in the same secrets slot, and both authenticate. Only one can do inference on `/v1/messages`. The failure mode is a `429` with no message — not a `401`, which is what you'd grep for. Don't debug it as a rate limit; check the credential *type* first.
+</Aside>
+
+## The refresher nobody had wired up
+
+The revoked snapshot was dated the 11th. Meanwhile `com.sanctum.token-refresh` had been running every ten minutes for weeks, doing the OAuth refresh grant properly, writing a live token to `~/.sanctum/credentials/anthropic-token`.
+
+Two files. Different paths. Nothing connecting them. The launcher had always read the snapshot.
+
+This is the failure the bridge doesn't have, and the reason is instructive: the bridge rides the CLI's own self-refreshing credential, so it cannot go stale. proxyd rode a photograph of one. Pointing the launcher at the live file is a one-line change; noticing that the two had never been connected took the outage.
+
+## The knob that outlived its reason
+
+The bridge force-mapped every request to Opus. That was written when the risk was *quality* — a caller asking for a weak model on a subscription where the best one is free. Reasonable. It was governed by four environment variables and a fifty-line patcher, and you had to read source to predict what any request would do.
+
+But once the dead seats were revived, the risk inverted. Claude Code asks for haiku when it wants to generate a title. Forcing that to Opus isn't generosity — it's spending finite subscription quota on trivia, on every chore, forever.
+
+The instinct was to add a fifth knob to allow haiku through. The better answer was to delete four:
+
+> **Honour the tier the caller asked for. If they didn't ask, give them the best.**
+
+`fable → fable`, `sonnet → sonnet`, `haiku → haiku`, anything else → `opus`. Zero environment variables. The rule fits in a sentence, which means it needs no documentation, which means it cannot drift from its documentation.
+
+<Aside type="note" title="A knob is a decision you refused to make">
+Every configuration flag is a decision deferred to whoever reads the source at 2am. Four flags is sixteen behaviours, fifteen of which nobody has tested. The rule that replaced them is strictly *more* capable — it routes four tiers instead of one — and has no settings at all.
+</Aside>
+
+## The combination that was supposed to be impossible
+
+The other half of the ask was per-seat reasoning effort: Yoda on Fable at `max`, the rest on Opus at `medium`.
+
+Effort is an API parameter, so it only worked on metered seats — the lane that can't authenticate. Subscription and effort were mutually exclusive by construction. Except the CLI has taken `--effort` all along; the bridge simply never passed it. Four hops later — inject, survive translation, survive the handler that rebuilt the options object and dropped it, reach `buildArgs` — a subscription seat carries its own effort.
+
+## The monitor that degraded the thing it watched
+
+One last defect, and it only became dangerous because everything else got fixed. The e2e harness posts a deliberately malformed body every cadence tick to assert the `400` contract. proxyd counted those 400s as *provider* failures. With every Anthropic seat now on one provider, a single monitoring run drove it to 56% error rate, flipped it unhealthy, and diverted live council traffic to Gemini.
+
+A malformed request is the caller's fault. It no longer counts against provider health — and it no longer walks the entire ladder looking for a backend lenient enough to accept it, which had been turning a client error into a misleading `200`.
+
+## What actually changed
+
+The council runs entirely on the subscription now, with real effort control and no metered key anywhere. But the durable output isn't the routing table. It's that four knobs, one dead lane, one orphaned snapshot, and one self-harming probe are gone — and the six tripwires that would have caught any of them are in the harness, running on a cadence, failing loudly.
+
+The 502 was the only part of the night that announced itself.

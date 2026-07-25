@@ -141,3 +141,23 @@ After generating, verify each image against existing illustrations:
 > the gauge zones.
 
 **Alt text:** `Tommy bolts the flickering gauge steady while two others hold firm in the green`
+
+---
+
+## ✅ 2026-07-25-the-knobs-that-outlived-their-reason.mdx → `operations/images/hero-the-knobs-that-outlived-their-reason.png`
+
+*Generated 2026-07-25 with `gemini-3-pro-image-preview` (1584×672). Prompt kept for provenance and as a style reference — the four-doorways-lit-by-tier composition reads well at hero width.*
+
+**Prompt:**
+> Black and white pencil sketch illustration, wide format. A stone cellar
+> workbench holding a single brass control panel. Four large labelled knobs have
+> been unscrewed and set aside in a neat row on the bench, small and dull; where
+> they used to be there is now one clean engraved brass plate reading
+> "ASK — THEN BEST". Behind the panel, four cables run to four differently-sized
+> doorways labelled FABLE, OPUS, SONNET, HAIKU, each doorway lit to a different
+> brightness. An Abyssinian cat (lean, elegant, slightly smug) sits on the bench
+> beside the discarded knobs, one paw resting on them, looking at the single
+> plate with evident approval. Hand-drawn pencil style on white background. No
+> colour except black lines and shading.
+
+**Alt text:** `Four knobs unscrewed and set aside, replaced by one engraved rule — Tommy approves of the subtraction`
