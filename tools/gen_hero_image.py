@@ -23,6 +23,26 @@ Usage:
 The default is local so nobody accidentally spends on the API. If the local
 env is missing we FAIL LOUDLY rather than silently falling back to the paid
 path — that no-surprise-charge rule is the whole point of going local.
+
+KNOWN LIMIT OF THE LOCAL BACKEND — prompt length (measured 2026-07-25):
+Flux's CLIP text encoder hard-truncates at 77 tokens. Anything past that is
+DROPPED, and it warns on stderr rather than failing:
+
+    "The following part of your input was truncated because CLIP can only
+     handle sequences up to 77 tokens: [...]"
+
+A hero prompt in full house style (scene + labelled elements + Tommy + accent
+halo) runs ~160 tokens, so roughly half the composition silently disappears.
+Observed on the 2026-07-25 knobs hero: the labelled doorways, the cat and the
+halo were all cut, and the render inverted the point of the illustration —
+knobs still attached and labelled with invented words ("WIOUS", "WARLU"),
+plate text garbled to "AOIK-THEN". 12 minutes of on-device compute for an
+unusable frame.
+
+Practical rule: keep local prompts under ~60 words and put the LOAD-BEARING
+subject FIRST (the truncation always eats the tail). For a complex multi-element
+hero with legible signage, use --backend imagen and accept the metered cost —
+it honours the whole prompt.
 """
 import argparse
 import os
