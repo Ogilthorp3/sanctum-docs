@@ -331,7 +331,8 @@ Keep these facts current across all docs. If any page contradicts these, it's st
 
 **Model Routing** (updated 2026-04-23 after Olympics rework):
 - **Local default — `council-secure`** (Qwen3.6-35B-A3B on `:1337` mTLS): Yoda, Mothma, Windu, Cilghal, Mundi, Jocasta. The 35B-A3B is Olympics rank #2 (0.957) and wins on uniformity; house default.
-- **Coder tier — `coder`** (Qwen2.5-Coder-14B via LM Studio `:1234`): Qui-Gon, Ahsoka. Ahsoka runs on a 16 GB M1 at the chalet and can't fit the 35B; Qui-Gon wants tight code gen at 22 tok/s.
+- **Coder tier — `coder`** (Qwen2.5-Coder-14B via LM Studio `:1234`): Qui-Gon, who wants tight code gen at 22 tok/s.
+- **Satellite — Ahsoka** (updated 2026-07-24): her own local `Qwen2.5-7B-Instruct-4bit` on `mlx_lm.server :1338` at the chalet — offline, bake-off-verified, not routed through the hub tiers. See [Ahsoka](./src/content/docs/agents/ahsoka.mdx).
 - **Cloud escalation — `cloud`** (Claude Opus, Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus — via `claude-max-api-proxy` on `:3456`, OpenRouter fallback): Yoda and Mundi only, for novel reasoning and complex finance edge cases. Uses the Max subscription OAuth — zero API credits consumed for routine calls.
 - **Spatial escalation — `spatial`** (Gemini 3.1 Pro via Google AI Studio Ultra): Windu only, for network topology / zone map / physical layout reasoning.
 

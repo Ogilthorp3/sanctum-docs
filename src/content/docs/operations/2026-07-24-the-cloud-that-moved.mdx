@@ -1,0 +1,64 @@
+---
+title: "The Cloud That Moved Out"
+description: "NuHeat retired its API mid-July. Both hauses' floor heating went dark in Home Assistant. Nobody noticed for eighteen days, because it was July."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketched thermostat hanging mid-air, its cloud unplugged behind it, one amber filament still glowing](./images/hero-cloud-that-moved.png)
+
+Floor heating is the one system in a Québec haus you do not want to discover is broken in December. We discovered ours was broken in July, by accident, while setting up a different haus. This is the good version of that story.
+
+## What Happened
+
+NuHeat's parent company migrated every Signature thermostat to a new "Conductor" cloud during the week of July 6. The old API domain — the one Home Assistant's built-in `nuheat` integration has hardcoded — was deleted from DNS entirely. Not deprecated. Gone.
+
+The hub's three floor zones went `unavailable` on the Green box that day and stayed that way for eighteen days. No alert fired, because an `unavailable` entity is a state, not an error, and it was 24 degrees outside. The chalet was never set up at all: its config flow asked for a serial number from a website that no longer existed.
+
+Upstream, the core integration is broken with no fix ETA — the rewrite is stuck waiting on an OAuth handshake between vendors. A community integration (`nuheat_conductor`) already speaks the new cloud.
+
+## The Fix, Twice
+
+**The chalet was the easy one.** Home Assistant runs in a container there, so the custom integration was installed by copying it into `custom_components/` directly — no HACS, no GitHub device-login wall, no store. Restart, add the integration, and the config flow walks through the vendor's OAuth: login, consent, and the `my.home-assistant.io` relay pointed at the local instance. Four floor zones appeared with live temperatures. One of them got set to eleven degrees by an AI speaking Québec French about ninety seconds later, but that is [her page's story](/agents/ahsoka/).
+
+**The Green required a door that did not exist.** The hub's Home Assistant is a sealed appliance: no SSH, no Samba, and a Supervisor REST API that rejects long-lived tokens. The toolkit's WebSocket lane is the exception — it proxies Supervisor calls over the authenticated socket. Through it, the Terminal & SSH add-on that was installed-but-ingress-only got a real configuration: the hub's automation key in `authorized_keys`, port 22 mapped, restart. The appliance grew a key-only SSH lane in about forty seconds, which promptly carried the integration files over.
+
+```bash
+# Supervisor over the authenticated WebSocket — the only lane the Green respects
+hag-ws.py sup post /addons/core_ssh/options \
+  '{"options": {"authorized_keys": ["ssh-ed25519 AAAA..."]}, "network": {"22/tcp": 22}}'
+hag-ws.py sup post /addons/core_ssh/restart '{}'
+scp -r custom_components/nuheat_conductor root@manoir.local:/config/custom_components/
+```
+
+<Aside type="tip">
+  That SSH lane outlives the incident. The Green went from "sealed appliance we drive through a browser" to "sealed appliance with one audited, key-only door." Every future file-level fix just got forty seconds cheaper.
+</Aside>
+
+## The Rename Surgery
+
+One OAuth later, the Green had live thermostats — under the wrong names. The dead integration still squatted the original entity IDs, so the new ones arrived as `climate.kitchenette_floor_2`, and every automation in the haus references the originals.
+
+Deleting the dead config entry was not enough: its entities lingered in the registry as orphans, still holding the names. The order that works:
+
+```text
+1. DELETE the dead config entry            # frees nothing yet
+2. config/entity_registry/remove           # evict the orphan squatters
+3. config/entity_registry/update           # rename *_2 onto the original IDs
+```
+
+After the surgery: original IDs, live data, automations untouched. The `_2` suffix survived nowhere, which is the only acceptable amount of `_2` in a production entity registry.
+
+<Aside type="caution">
+  Deleting a config entry does not free its entity IDs. The registry keeps orphaned entries, and your shiny replacement integration will politely take numbered seats behind them forever. Evict first, then rename. Ask us how we know.
+</Aside>
+
+## Why One Account Fixed Two Hauses
+
+The vendor account holds every thermostat the owner registered, regardless of which building they are screwed into. Both instances authenticate against the same cloud and each shows all zones — the chalet's four and the hub's three. Each haus's automations simply use its own local entities and ignore the other's.
+
+## What This Cost and What It Bought
+
+Eighteen days of silent unavailability, zero degrees of actual cold (July did the incident response for us), and one evening of work. In exchange: both hauses back on supported infrastructure, a durable SSH lane into the appliance, a documented rename procedure for the next time a vendor moves its cloud, and floor heating that answers to an agent who says "c'est fait."
+
+The pipes never noticed. That was the whole point.
