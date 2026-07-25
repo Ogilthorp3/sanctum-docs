@@ -5,7 +5,7 @@ House style (see HERO_ROADMAP.md): black-and-white pencil sketch, hand-drawn,
 wide format, white/off-white background, Tommy the Abyssinian cat observing,
 one subtle localized color halo (teal or amber). Pass the full prompt in.
 
-Three backends, ONE entry point:
+Two backends, ONE entry point:
   --backend local  (default)  Flux.1-dev on-device via flux_backend.py — offline,
                               $0, no API key. Needs the torch/diffusers venv
                               (SANCTUM_FLUX_VENV, default ~/Projects/comfy-lab/.venv-flux)
@@ -13,13 +13,6 @@ Three backends, ONE entry point:
   --backend imagen            Google Imagen 4 via google-genai — METERED (costs
                               money). Run with the cli-venv python that has
                               google-genai. Use only when you deliberately want it.
-  --backend gemini-browser    The Gemini web app driven by agent-browser on the
-                              AI Ultra SUBSCRIPTION — no metered spend. Needs one
-                              interactive Google login into a dedicated profile;
-                              see gemini_browser_backend.py. Same ToS-grey class
-                              as the :6543 code-assist OAuth proxy (owner-accepted
-                              2026-06-13). Use when you want Imagen-grade output
-                              without the Cloud bill.
 
 Usage:
   ~/Projects/comfy-lab/.venv-flux/bin/python tools/gen_hero_image.py \
@@ -30,6 +23,27 @@ Usage:
 The default is local so nobody accidentally spends on the API. If the local
 env is missing we FAIL LOUDLY rather than silently falling back to the paid
 path — that no-surprise-charge rule is the whole point of going local.
+
+NO, THE AI ULTRA SUBSCRIPTION CANNOT PAY FOR THIS (probed 2026-07-25 — do not
+re-litigate this every time a Cloud bill lands). Google runs two unrelated
+ledgers: Ultra ($249/mo, Google Play) covers the Gemini *app*; the developer API
+bills a Cloud project. Measured, not assumed:
+  * Code Assist OAuth — the path :6543 uses, which DOES run on the Ultra
+    allowance — serves text (HTTP 200) but returns HTTP 404 "Requested entity was
+    not found" for every image model on the identical envelope. Controlled A/B,
+    one field changed.
+  * That same subscription token against generativelanguage: HTTP 403 "Request
+    had insufficient authentication scopes". The ledgers reject each other in
+    both directions.
+  * `agy models`: 11 models, all text. No image plugin exists.
+  * gemini-cli bundles generateImages, but only via ...FromVertex / ...FromMldev
+    — both metered surfaces.
+The only surface where Ultra pays for images is the web app, which means browser
+automation. That was built and then deliberately deleted: at ~40 heroes/month it
+saves about $1.60 against an already-capped $10/mo budget, and it cost a stored
+Google session, a stale-cookie failure mode, a keep-warm daemon, and ToS exposure
+on the account the haus depends on. Not worth it. If image volume ever grows by
+two orders of magnitude, reopen it — the probe above is cheap to re-run.
 
 KNOWN LIMIT OF THE LOCAL BACKEND — legible text and dense composition
 (measured 2026-07-25). Flux renders the house style well but is weak at
@@ -141,32 +155,13 @@ def gen_imagen(a) -> None:
     print(f"OK {out} ({out.stat().st_size} bytes)")
 
 
-def gen_gemini_browser(a) -> None:
-    """Drive the Gemini web app on the AI Ultra subscription (no metered spend).
-
-    Delegates to gemini_browser_backend.py, which owns the agent-browser session
-    and fails loudly (with the accessibility snapshot) if the UI moved or the
-    profile is signed out.
-    """
-    backend = pathlib.Path(__file__).with_name("gemini_browser_backend.py")
-    if not backend.exists():
-        sys.exit(f"--backend gemini-browser: {backend.name} missing next to {__file__}")
-    cmd = [sys.executable, str(backend), "--prompt", a.prompt, "--out", a.out]
-    r = subprocess.run(cmd)
-    if r.returncode != 0:
-        sys.exit(r.returncode)
-
-
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
-    ap.add_argument("--backend", default="local",
-                    choices=["local", "imagen", "gemini-browser"],
-                    help="local=Flux on-device (free, default); "
-                         "gemini-browser=Gemini web app on the AI Ultra sub (free, needs login); "
-                         "imagen=Google API (PAID)")
+    ap.add_argument("--backend", default="local", choices=["local", "imagen"],
+                    help="local=Flux on-device (free, default); imagen=Google (paid)")
     # local (Flux) knobs
     ap.add_argument("--steps", type=int, default=40, help="Flux inference steps (local)")
     ap.add_argument("--seed", type=int, default=42, help="Flux seed (local)")
@@ -177,8 +172,6 @@ def main() -> None:
 
     if a.backend == "local":
         gen_local(a)
-    elif a.backend == "gemini-browser":
-        gen_gemini_browser(a)
     else:
         gen_imagen(a)
 
