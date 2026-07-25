@@ -1,0 +1,63 @@
+---
+title: "The Fleet Watches Itself"
+description: "A toolchain upgrader with an honesty problem, a bridge that died silently for two days, and the sentinels that make both impossible now."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketched watchtower scanning three small islands connected by thin bridges, one teal beacon sweeping](./images/hero-fleet-watches-itself.png)
+
+Sanctum runs on three Macs and a VM, and the tooling underneath it — brew formulae, npm globals, pip venvs, an agent runtime — rots at the usual rate, which is to say constantly and invisibly. This week we stopped trusting ourselves to notice and gave the job to machines. It took three tries to make the machines honest.
+
+## sanctum upgrade
+
+The command inventories a curated registry of everything Sanctum rides on, per node: `tailscale`, `node`, `colima`, `restic`, `sops`, the OpenClaw runtime, the MLX serving venvs. Check mode is read-only and exits nonzero on drift, which makes it cron-food. Apply mode upgrades one tool at a time and then **re-reads the installed version from the machine** — the number in the "now" column is never assumed. It respects `brew pin` as a deliberate HOLD, because four of the hub's pins exist to protect the council's stability, and an upgrader that fights the operator's pins is malware with a changelog.
+
+```text
+tool         via       installed   latest      state
+tailscale    brew      1.98.8      1.98.9      upgrade
+node         brew      26.0.0      26.5.0      HOLD
+mlx-lm       pip-venv  0.31.3      0.31.3      current
+```
+
+## The Honesty Problem
+
+For four days, the daily drift check reported ALL NODES OPTIMAL while a dozen real upgrades sat waiting. The check was not lying, exactly. It was asking `brew outdated`, which reads a **local index that nothing refreshes**. Stale index, clean report. The fleet looked optimal against a snapshot of the world from Tuesday.
+
+The fix is one line — refresh the index before the check — and a rule worth keeping: an audit that never pays the cost of looking at the real world is a mood, not an audit.
+
+<Aside type="caution">
+  `brew outdated` never updates the index. Any scheduled drift check built on it reports against the last time a human happened to run `brew update`. If your fleet has been "optimal" for a suspiciously long time, it is probably just old.
+</Aside>
+
+## The Fleet Pane
+
+Every node runs a daily sentinel: refresh index, run the check, alert the shared vault on drift (rate-limited, naming the exact tools), and push a status line to the hub's fleet ledger. The satellite cannot push — its ACL denies satellite-to-hub SSH by design — so its status rides the hub's existing pull mirror instead. The topology dictated the data flow, not the other way around.
+
+```text
+NODE       SANCTUM   DRIFT  STATUS
+chalet     0.15.3    0      optimal   (pulled)
+manoir     0.15.3    0      optimal
+mbp        0.15.3    0      optimal
+FLEET: ALL NODES OPTIMAL
+```
+
+The sentinel alerts; it does not auto-apply. A surprise major bump on a dev box at 9 AM is how you lose a morning. Awareness is automated, applying stays a decision.
+
+## The Bridge That Died Quietly
+
+Separately: the VM's MCP bridge to the hub — the one that gives the records agent its hands — failed for two days straight. Seventy-one failures in the gateway log, zero alerts. Cause: the hub's SSH host key had changed during a migration, and the VM's `known_hosts` still pinned the old one. Nothing detected it. Nothing fixed it. Everything politely retried forever.
+
+The heal that now runs every fifteen minutes is deliberately *not* the lazy fix. On failure, the hub pushes **its own** host key from `/etc/ssh/` into the VM's `known_hosts` — the machine asserting its own identity over an already-authenticated channel. No trust-on-first-use, no accepting whatever key happens to answer, no window for an impostor.
+
+It was proven by live fire: corrupt the pinned key, watch the bridge fail with the exact production error, watch the heal re-pin, restart the gateway, and come back with zero failures — in under thirty seconds, against the incident's forty-eight hours.
+
+<Aside type="tip">
+  Test your self-healing by breaking the thing on purpose. A heal that has only ever seen healthy systems is a hypothesis. Ours has a confirmed kill.
+</Aside>
+
+## The Engine Room Rule
+
+Same week, same lesson twice: upgrading the VM's agent runtime crash-looped its gateway for six minutes because the new version wanted Node one patch newer than the VM had. And upgrading Tailscale over a Tailscale SSH session kills your own transport mid-apply, because brew restarts services on upgrade. Both are now doctrine: preflight the engine requirements before upgrading what rides on them, and detach anything that upgrades the pipe it arrived through.
+
+The fleet is current, the watchers are honest, and the next silent failure has to get past three sentinels that were all born from a specific, documented embarrassment. That is the only pedigree a watchdog needs.
