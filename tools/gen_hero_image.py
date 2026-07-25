@@ -24,25 +24,29 @@ The default is local so nobody accidentally spends on the API. If the local
 env is missing we FAIL LOUDLY rather than silently falling back to the paid
 path — that no-surprise-charge rule is the whole point of going local.
 
-KNOWN LIMIT OF THE LOCAL BACKEND — prompt length (measured 2026-07-25):
-Flux's CLIP text encoder hard-truncates at 77 tokens. Anything past that is
-DROPPED, and it warns on stderr rather than failing:
+KNOWN LIMIT OF THE LOCAL BACKEND — legible text and dense composition
+(measured 2026-07-25). Flux renders the house style well but is weak at
+multi-word signage and at compositions with many labelled elements or a
+negation ("knobs REMOVED and set aside"). On the 2026-07-25 knobs hero it
+produced invented words ("WIOUS", "WARLU"), garbled the plate to "AOIK-THEN",
+drew three doorways instead of four, and left the knobs attached — inverting
+the point of the illustration. 12 minutes of on-device compute, unusable frame.
+
+IGNORE the CLIP warning you will see on every run:
 
     "The following part of your input was truncated because CLIP can only
      handle sequences up to 77 tokens: [...]"
 
-A hero prompt in full house style (scene + labelled elements + Tommy + accent
-halo) runs ~160 tokens, so roughly half the composition silently disappears.
-Observed on the 2026-07-25 knobs hero: the labelled doorways, the cat and the
-halo were all cut, and the render inverted the point of the illustration —
-knobs still attached and labelled with invented words ("WIOUS", "WARLU"),
-plate text garbled to "AOIK-THEN". 12 minutes of on-device compute for an
-unusable frame.
+It is benign and NOT the cause of a bad render. Flux has two text encoders:
+CLIP supplies a pooled style embedding (77 tokens, always truncates on a long
+prompt) while T5 carries the semantics — and flux_backend.py passes
+max_sequence_length=512, so the full prompt does reach the model. Chasing that
+warning as a truncation bug is a dead end; it was misdiagnosed as one here
+before the T5 path was checked.
 
-Practical rule: keep local prompts under ~60 words and put the LOAD-BEARING
-subject FIRST (the truncation always eats the tail). For a complex multi-element
-hero with legible signage, use --backend imagen and accept the metered cost —
-it honours the whole prompt.
+Practical rule: local is right for atmosphere and single-subject scenes. If the
+hero needs LEGIBLE lettering or several precisely-labelled elements, use
+--backend imagen and accept the metered cost.
 """
 import argparse
 import os
