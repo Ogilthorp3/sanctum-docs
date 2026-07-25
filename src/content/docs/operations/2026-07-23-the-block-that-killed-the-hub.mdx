@@ -1,0 +1,73 @@
+---
+title: "2026-07-23: The Block That Killed the Hub"
+description: "A parent Block Now on the Den Apple TV took the full-MAC pause path and killed the HomeKit hub until wake — services-mode had been taught to curfew and the reconciler for months, but never to the manual endpoint."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![The block that killed the hub — a hand-drawn graphite sketch, wide 16:9, dark background. A small set-top box sits dark on a shelf while the lamps, door locks and thermostat around it fade into blank paper. One amber halo glows at the box's edge. An Abyssinian cat watches from the sofa arm.](./images/hero-the-block-that-killed-the-hub.png)
+
+On 2026-07-23 at 23:32 a parent tapped **Block Now** on the Den Room Apple TV. Streaming stopped. So did the lights, the locks, and the thermostat. That Apple TV is the HomeKit hub for the first floor. The manual block path had taken the full-MAC pause route — the same primitive that is correct for a basement console and catastrophic for a hub. Curfew and the reconciler had honoured `mode: services` for months. The manual endpoint had never been told.
+
+## Why that screen has a mode at all
+
+Pause and services-block are not interchangeable on a hub. A MAC pause tells the Firewalla to drop everything for that host. HomeKit traffic lives on that host. Kill the host, kill the automation fabric for the rooms it serves.
+
+`mode: services` exists so the Den Room box can lose Netflix, YouTube, Disney+, and friends via DNS rules while the rest of the LAN still reaches the hub. It is the only screen in `devices.yaml` with that mode. The rest of the fleet is pause-mode by default, and that is correct for them.
+
+## Two doors to the same primitive
+
+Enforcement has more than one entrance. Curfew ticks, reconciler re-enforcement, and `POST /screen/block` on Force Flow (`:4077`) all eventually decide whether to call `_block_services` or `_apply_block_macs`. The dangerous primitive is the second one.
+
+For months, the schedule path already branched on services-mode. The observer path already refused to treat the Firewalla ACL as ground truth for those screens, because an ACL that stays "allowed" under a correct DNS block would manufacture false drift and drive a pause that kills the hub. The knowledge lived about eight hundred lines away from `handle_screen_block`. The manual door simply never walked past it.
+
+## The guard
+
+The fix is a short gate in `handle_screen_block` (merged as `9e66b65` on `sanctum-screen-time` main, PR #3):
+
+```python
+services_mode = bool(
+    screen and screen.get("mode") == "services"
+    and screen.get("blocked_services")
+)
+```
+
+When true, the path calls `_block_services` with a bounded `expire_at`. Everything else still hits `_apply_block_macs`. Member targets, shared devices, and ordinary screens keep full pause behaviour.
+
+The empty-`blocked_services` half of the condition is load-bearing. A screen marked `mode: services` with an empty service list would otherwise enter the services branch and apply nothing — a silent no-op that looks like success. Requiring a non-empty list means misconfiguration falls through to the pause path (loud, wrong for a hub, but visible) rather than a polite lie. The only correct services-mode screen is one that names the services it is willing to kill.
+
+## Bounded DNS rules
+
+Un-expiring DNS rules were the 2026-04-18 stale-rule bug: devices woke into residual NXDOMAIN confs that nobody owned. The manual services path therefore always sets `expire_at` — explicit `minutes` becomes `now + minutes`, and a bare Block Now binds to the screen's next wake via `_next_wake_unix`, matching the hold the API records.
+
+## What stayed deliberately dangerous
+
+The reconciler's fail-closed escalation after `FAIL_CLOSED_GRACE_SECONDS` of non-convergence still calls `_apply_block_macs` on a services-mode screen. That is the **one** sanctioned path to a hub-killing pause. It pages critical, it announces that HomeKit is offline, and it exists because an under-enforced curfew that never converges is worse than a temporary hub outage the parents are told about. The incident was not that trade. The incident was a path that had never heard the trade existed.
+
+<Aside type="caution" title="A safety mode is a coverage problem">
+A safety mode is worth exactly the number of code paths that have heard of it. Teaching curfew and the observer does not protect the parent button. Audit every caller of the dangerous primitive, not the one path you wrote the check for.
+</Aside>
+
+## Tests
+
+| Test | Pins |
+|---|---|
+| `test_manual_block_services_mode_stays_dns_only` | services-mode Block Now never calls `_apply_block_macs`; fixtures use netflix + crunchyroll |
+| `test_manual_block_services_mode_default_expiry_is_next_wake` | bare Block Now still sets a non-null `expire_at` on the DNS rules |
+
+Both live in `tests/test_enforcement_gap_fixes.py` under `sanctum-screen-time`. Hermetic; no live Firewalla required.
+
+## Live verify (2026-07-25)
+
+With the fixed code loaded on manoir (Force Flow restarted after the merge; live import path is the symlink chain `~/.sanctum/force-flow/screen_time.py` → `~/.sanctum/screen-time` → `~/Projects/sanctum-screen-time`):
+
+1. Safety gate: `grep -c services_mode` on the live file returned non-zero before any Block Now.
+2. Unit tests: both services_mode cases **PASSED**.
+3. E2E Block Now for three minutes on `first_floor_appletv`: response `status=blocked` with non-null `expires_at`; force-flow log line **SERVICES BLOCKED** (not a MAC pause); Firewalla showed dozens of DNS block policies with non-null expire and **zero** MAC-pause policies for the screen; host stayed online with ACL still allowing; HA API remained reachable.
+4. Unblock: hold cleared, DNS residual cleaned to zero.
+
+Do not trust `deployed/screen_time.py.deployed` as live state — it is a stale snapshot. The running engine is the git checkout behind the symlinks; pick up Python changes with a Force Flow restart.
+
+## Lesson
+
+The mode was not missing. The mode was incomplete. One door remembered the hub; another still treated every screen as a console. After the fix, manual Block Now on the Den box is a streaming cut, not a haus-wide automation blackout — unless the reconciler deliberately escalates and says so out loud.
