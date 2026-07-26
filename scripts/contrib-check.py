@@ -329,6 +329,42 @@ ASCII_ART_KNOWN_BROKEN = set()
 FENCE_RE = re.compile(r'^\s*```')
 
 
+ORPHAN_CLOSE_RE = re.compile(r"</([A-Za-z][A-Za-z0-9._-]*)\s*>")
+ORPHAN_OPEN_RE = re.compile(r"<([A-Za-z][A-Za-z0-9._-]*)[\s/>]")
+
+
+def check_orphan_closing_tags(path, rel, body, body_line_offset, report):
+    """Catch a closing JSX/HTML tag that has no opener anywhere on the page.
+
+    MDX aborts the WHOLE build on this, not just the offending page — a single
+    stray tag takes the entire site from 288 pages to 0. The failure surfaces
+    only as a Vite trace at deploy time, which is an expensive way to learn.
+
+    Pinned 2026-07-26 after a bare `</content>` reached main: a write path
+    wrapped page text in a `content` element and the closer leaked into the
+    body. contrib-check passed the page clean before AND after, so nothing but
+    a full build caught it.
+
+    Conservative on purpose: only flags a closing tag whose name NEVER appears
+    as an opener in the body. Balanced components (`<Aside>…</Aside>`) and
+    self-closing ones (`<Steps />`) are untouched, so this cannot nag.
+    """
+    stripped = CODE_BLOCK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), body)
+    stripped = INLINE_CODE_RE.sub("", stripped)
+
+    opened = {m.group(1) for m in ORPHAN_OPEN_RE.finditer(stripped)}
+    for i, line in enumerate(stripped.splitlines(), start=body_line_offset):
+        for m in ORPHAN_CLOSE_RE.finditer(line):
+            name = m.group(1)
+            if name not in opened:
+                report.err(
+                    rel, i, "orphan-tag",
+                    f"closing tag </{name}> has no opener on this page — MDX will "
+                    f"fail the ENTIRE site build, not just this page. Likely a "
+                    f"write artifact; delete the line.",
+                )
+
+
 def _iter_code_blocks(body, body_line_offset):
     """Yield (first-content-line-num, [body lines]) for each ``` fenced block.
 
@@ -658,6 +694,7 @@ def check_page(path, report):
     check_placeholders(path, rel, body, body_line_offset, report)
     check_no_leak(path, rel, body, body_line_offset, report)
     check_mdx_tag_chars(path, rel, body, body_line_offset, report)
+    check_orphan_closing_tags(path, rel, body, body_line_offset, report)
     check_ascii_art_alignment(path, rel, body, body_line_offset, report)
     check_length(path, rel, body, body_line_offset, report)
 
