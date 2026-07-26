@@ -99,6 +99,12 @@ DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux
 # when the MBP is actually idle enough to take it. If it isn't, we pay Google
 # rather than gamble the Mini. Rendering Flux ON the Mini requires an explicit
 # --force-local and prints what it is risking.
+#
+# Third option, for when the internet is dark AND the MBP is gone: a
+# dereferenced copy of the model lives on the T9 Digital Ark
+# (/Volumes/T9/models/flux). flux_backend.py falls through to it automatically
+# when the HF cache has none, and says so on stderr. Still needs ~48 GB free
+# RAM wherever you run it — the ark solves availability, not arithmetic.
 RENDER_HOST = os.environ.get("SANCTUM_RENDER_HOST", "mbp")
 # 36 GiB observed peak + headroom for the OS and whatever else is resident.
 RENDER_MIN_FREE_GIB = float(os.environ.get("SANCTUM_RENDER_MIN_FREE_GIB", "48"))
