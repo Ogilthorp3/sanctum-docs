@@ -1,0 +1,96 @@
+---
+title: "2026-07-26: The Airgap That Forgot Itself"
+description: A hypervisor migration silently restored the VM's internet. Nothing noticed for eight days, because nothing was watching.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The OpenClaw VM has no internet. That was the design, it was written down, and a NAT window had been explicitly considered and rejected. On 26 July we discovered it had been reachable on the open internet for roughly eight days.
+
+Nobody opened a hole. The VM was migrated from UTM to Lima, and Lima's default user-mode networking helpfully attached an `eth0` with a NAT gateway. The airgap was not defeated; it was *forgotten* — a property that existed because of how the box happened to be built, not because anything enforced it.
+
+That distinction is the entire lesson.
+
+## The tell
+
+Every probe the doctrine cited as proof of the airgap came back inverted:
+
+| Doctrine said | Reality |
+|---|---|
+| `ping 1.1.1.1` fails | reachable |
+| DNS for `registry.npmjs.org` fails | resolves |
+| no internet by design | `curl registry.npmjs.org` → 200 |
+
+The default route told the rest of the story: `via 192.168.5.2 dev eth0`, the signature of Lima's slirp gateway. `limactl list` confirmed a `vz` VM named `sanctum-vm`, and there were no UTM bundles left on the machine at all.
+
+This is the regression doctrine doing its job. When something that worked stops working — or in this case, when something that was *true* stops being true — the answer is in what changed, not in the physics. The break was in the diff: a hypervisor swap.
+
+## Cutting it back, without cutting the agents
+
+The obvious fix is to down `eth0`. The obvious fix is wrong.
+
+The VM's LAN path runs *through* that NAT: `ip route get 10.0.0.1` returns `via 192.168.5.2 dev eth0`. Downing the interface would have severed the Firewalla bridge, the mDNS listener, and the health ingester along with the internet — a fix that trades one outage for three.
+
+So the guard filters on **destination**, not interface. Everything in private space stays reachable; everything else is dropped.
+
+```bash
+table inet airgap {
+  chain output {
+    type filter hook output priority filter; policy accept;
+    ct state established,related accept
+    oif "lo" accept
+    ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+               127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4, 100.64.0.0/10 } accept
+    meta nfproto ipv4 counter name egress_blocked_v4 drop
+    meta nfproto ipv6 counter name egress_blocked_v6 drop
+  }
+}
+```
+
+Two details worth stealing. It lives in its **own table** — Docker installs its own nftables rules, and a stray `flush ruleset` would take container networking down with it. And the persisted `/etc/nftables.conf` deliberately omits the `flush ruleset` line that ships in Ubuntu's default template, for exactly that reason.
+
+<Aside type="caution" title="Nothing broke, and that was checked first">
+Before cutting anything, every agent seat was audited. All six route to the Mini's proxyd at `10.10.10.1:4040`; text-to-speech is a local shim on `127.0.0.1:18091`. The one genuine internet dependency was image generation. Cutting first and discovering breakage afterwards is how you turn a security fix into an incident.
+</Aside>
+
+## The part that matters: it announces itself now
+
+Windu's ruling was blunt. The image model was not the finding. The finding was that a platform change re-granted egress and **nothing noticed for eight days**.
+
+> Airgaps must be tested, not assumed. Config that survives a hypervisor swap by luck is not a control.
+
+So the boundary now reports on itself, two ways.
+
+The drop rules **count and log**, rate-limited so a retry loop can't flood the journal. `sudo nft list counters table inet airgap` is now a number you can watch, and `journalctl -k | grep airgap-drop` shows what tried to leave.
+
+And a systemd unit asserts the airgap at boot and hourly. It is an inverted health check: it **fails when the public internet is reachable**. A failed unit is the alarm — it sits in `systemctl --user --failed` until a human looks at it, and it writes a status file the Mini can scrape.
+
+The assertion was tested in both directions, because a guard nobody has watched fail is not a guard:
+
+<Steps>
+1. **Airgap intact** → exit 0, `leaks: []`.
+2. **Guard deliberately removed** → exit 1, catching all five leak vectors plus the missing table, and surfacing as a failed unit.
+3. **Guard restored** → exit 0, unit result `success`.
+</Steps>
+
+## The fabrication
+
+While brokering the one real internet dependency, proxyd was asked for an image model. No seat matched, so the fallback ladder walked down to the local text model — which answered confidently and invented an image URL that does not exist.
+
+That is worse than an outage. An outage reports itself; a plausible, well-formed, false artifact does not. The seat was reverted rather than shipped.
+
+The ruling that followed: seats should declare a capability, fallback should only traverse the same capability class, and a cross-class request should fail closed with an error that cannot be mistaken for a result. That work belongs in proxyd's fallback path, which was under active surgery by another session at the time — so it was handed over rather than duplicated. Two sessions editing one fallback loop is its own kind of incident.
+
+## Credentials, while we were in there
+
+The dead provider held a plaintext API key. Windu's instruction was to revoke rather than rotate — *"inert behind the airgap is not dead; it is one hypervisor migration away from live."* The key and the reopened airgap were the same incident.
+
+The sweep that followed found **ten more** plaintext credentials: five Google keys sitting in per-agent `models.json`, and five Anthropic keys in stale `.bak` files left behind by a database import. All eleven are now purged or quarantined, and the live config surface greps clean.
+
+One found by accident implies others nobody has looked for. That turned out to be exactly right.
+
+## What this cost
+
+Nothing, in the end. The VM lost no capability it was actually using, the agents never noticed, and the boundary went from an assumption to a control that files a complaint when it's violated.
+
+The uncomfortable part is the eight days. Not that the airgap broke — platforms change, that's their job — but that a security property everyone believed in had no one checking it. The fix isn't the firewall rule. The fix is the thing that fails loudly on a Tuesday when Lima ships a new default.
