@@ -85,6 +85,18 @@ Two defects were genuine judgment calls rather than clear bugs, so they went to 
 
 The guard is byte-exact and lowercase on purpose. Claude Code's own tools are capitalised — `Bash`, `Read`, `Edit` — and are untouched. A regression test pins that.
 
+## Refusing when the seat cannot serve the request at all
+
+A third ruling arrived from a parallel session mid-sweep. Someone asked proxyd for `google/gemini-3-pro-image-preview`. No seat matched, so the ladder walked down to the local MLX text model, which answered confidently and invented an image URL that does not exist.
+
+That is not degradation. A text model answering an image request is fabrication, and a wrong answer that looks right is worse than an outage — the outage self-reports, the fabrication does not.
+
+Seats now declare a capability: `text`, `image`, `embedding` or `vision`. An untyped seat is text, which all 43 live seats are, so the guard shipped with no config change. The class required by a turn comes from the requested name: a configured seat declares it, an unconfigured name is inferred from markers like `image-preview`, `dall-e`, `imagen` or `embedding`. The ladder may only traverse seats of that class, and if none remain the answer is a hard 501 `capability_unavailable` whose body carries no assistant content that could be mistaken for a result.
+
+Text requests skip the check entirely, so the ordinary path is untouched.
+
+This composes with continuity rather than competing with it. Continuity makes a switch carry the request faithfully; capability typing makes the proxy refuse when the destination cannot serve it. Every response now also carries `x-sanctum-route-chain` listing the seats traversed, because degrading to a fallback is an event, not an implementation detail.
+
 ## Verification
 
 Every fix was written test-first and watched fail against the old code. The suite went from 152 to 171. `clippy -D warnings` is clean.
@@ -102,6 +114,8 @@ Three targeted probes against the running proxy:
 | Native server-tool on an OpenAI-shape chain | All seats skipped, honest ledger, zero inference burned |
 | 38k-token request to a capped seat | Diverted to the 200k bridge, answered correctly from turn one |
 | 38k-token request to an all-capped chain | Truncated 38414 to 2040, DEGRADED banner shown, **still answered correctly** |
+| Image model with no image seat | Hard 501 `capability_unavailable`, zero content keys in the body |
+| Ordinary text request | 200, correct answer, `x-sanctum-route-chain` present |
 
 That last row is the one to read twice. `hard_tail_keep` fired — the most destructive pass there is, keeping only the final handful of messages — and the model still recovered a passphrase planted in the very first user turn. That is head-pinning working on live traffic. Before this change, the first turn was the first thing deleted.
 
