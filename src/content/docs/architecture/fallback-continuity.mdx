@@ -1,0 +1,110 @@
+---
+title: Fallback Continuity
+description: The proxy's fallback chain was dropping the conversation it existed to carry. Twelve defects, a Council ruling, and the two-line fix that mattered most.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Fallback Continuity — two relay runners at full stride completing a clean baton exchange, Tommy the Abyssinian cat watching from the edge of the track](./images/hero-fallback-continuity.png)
+
+# Fallback Continuity
+
+**Date:** 2026-07-26
+**Status:** Production (sanctum-proxy, origin/main `6aec9a6`, PR #35)
+
+The fallback chain exists for one reason: when the primary seat is unavailable, the turn should survive. A deep audit of the live proxy found that a switch was quietly destroying the very thing it was supposed to carry.
+
+Measured on the real handler, through real HTTP: **a fallback seat received 6 of 80 messages.**
+
+## The one that mattered
+
+`data` is parsed once in `handle_messages` and loop-carried through every attempt in the chain. `fit_context_to_budget` truncates it **in place**, and nothing ever put it back.
+
+So a 16384-token cathedral seat would amputate a session down to its last few turns, fail for its own unrelated reason — a saturated GPU, a cold model — and the chain would hand that stump to the next seat. Including `claude-cli-offline`, the 200k-context bridge that `needs_cathedral_context_fit()` explicitly exempts from truncation. The exemption was real. The guarantee was void, because the damage had already happened upstream of it.
+
+The fix is two lines: snapshot the body after routing, restore it at the top of every attempt. It costs one clone per **failed** attempt and nothing at all on the happy path.
+
+```rust
+let pristine = data.clone();
+
+for model_key in &models_to_try {
+    data = pristine.clone();
+```
+
+Every other context defect below was chain-wide before this landed and is seat-local after it. That is the whole reason it went in first.
+
+## Choosing a seat that can hold the prompt
+
+Seat capacity was never consulted when *choosing* a seat — `max_prompt_tokens` was read at forward time, after the seat was already committed. A 190k session could be deliberately shredded on a 16k seat while a seat that fits it sat one rung down.
+
+The chain is now stable-partitioned by whether a seat can hold the estimated prompt. Seats that fit keep their configured priority; the ones that would truncate stay in the chain as a genuine fallback, because a degraded answer still beats no answer. Live, on a 38k-token request:
+
+```
+continuity: preferring seats that can hold the prompt
+  prompt_tokens=38414
+  promoted=["claude-cli-offline"]
+  deferred=["council-mlx", "council-code"]
+```
+
+## Context defects
+
+| Defect | What was actually happening |
+|---|---|
+| Shared body | Truncation by one seat inherited by every later seat |
+| Seat choice | Capacity never consulted before committing to a seat |
+| Tool pairing | On an agentic transcript every user turn carries a `tool_result`, so the drop-alignment loop walked itself to the end and kept **one** message |
+| Lost task | The first user turn — the instruction and its constraints — was always deleted first |
+| Token estimate | 40 MCP tool definitions counted as zero tokens; one screenshot charged 200035 |
+| Silence | The DEGRADED warning was suppressed on exactly the mid-loop turns where it fired |
+| Tool images | Images nested in a `tool_result` dropped; an image-only result became a single space |
+| Usage | Streaming responses reported zero tokens, blinding the client's own accounting |
+
+Pairing is now an invariant rather than a per-path promise: `repair_tool_pairing()` runs after every message-dropping path and removes any `tool_use` or `tool_result` whose counterpart did not survive. An orphan is a hard 400 upstream, and on a backend that tolerates it the model renders output for a call it never made.
+
+The original task now survives too. `head_marker()` folds the caller's first turn into the truncation marker instead of deleting it, so the model can still see what it was asked to do.
+
+## Permission defects
+
+`tool_choice` was never translated. Not mishandled — absent. A search of the entire tree found zero occurrences. A caller sending `{"type":"none"}` to forbid tool use had that decision silently replaced by the OpenAI default of `auto` the moment the request landed on a fallback seat, and a forced tool degraded to prose.
+
+Streaming parallel tool calls were demultiplexed by "whichever block opened last" rather than by the `index` field. Two concurrent calls could have their argument fragments spliced into each other, so the permission prompt showed one invocation's name with another's arguments. The user approves one thing; a different one runs.
+
+The PII scrubber walked tool schemas key-blind, so JSON Schema structural keywords went to the NER sidecar and came back rewritten. A `$ref` looks like a URL; `format: email` looks like an email. The result was a schema the model could not satisfy. Scrubbing is now key-aware inside schema subtrees only — `enum`, `const`, `default` and `description` are still scrubbed, and tool-call arguments still get the full treatment. No privacy posture changed.
+
+## What the Council ruled
+
+Two defects were genuine judgment calls rather than clear bugs, so they went to the Jedi Council. Both rulings were unanimous.
+
+**Stream termination.** An upstream can end with neither a `finish_reason` chunk nor a `[DONE]` sentinel, leaving the Anthropic message unterminated. The tempting fix is to close it cleanly. The Council rejected that: a clean `end_turn` makes a truncated answer look complete, which is precisely the silent-truncation mode the mid-stream error branch was written to prevent. The stream now closes **loudly** — an `error` event, then `stop_reason: "error"`.
+
+**Native tools.** An OpenAI-shape seat cannot express Anthropic server-tools (`bash_*`, `text_editor_*`, `computer_*`). The old behaviour deleted them and served the request anyway, reducing the caller's permission surface without saying so while the matching `tool_use` blocks stayed in history. The Council chose explicit failure: skip the seat, log why, let the chain reach one that can honour them.
+
+<Aside type="note" title="Council verdict, 2026-07-26">
+"Option B is adopted, prioritizing explicit failure and honest logging over silent capability loss." Windu's line is the one worth keeping: it prevents the dangerous hallucination of capabilities that do not exist.
+</Aside>
+
+The guard is byte-exact and lowercase on purpose. Claude Code's own tools are capitalised — `Bash`, `Read`, `Edit` — and are untouched. A regression test pins that.
+
+## Verification
+
+Every fix was written test-first and watched fail against the old code. The suite went from 152 to 171. `clippy -D warnings` is clean.
+
+Live, through the deployed binary on port 4040:
+
+```
+proxy-e2e --full   46 checks   fail=0   (identical to the pre-deploy baseline)
+```
+
+Three targeted probes against the running proxy:
+
+| Probe | Result |
+|---|---|
+| Native server-tool on an OpenAI-shape chain | All seats skipped, honest ledger, zero inference burned |
+| 38k-token request to a capped seat | Diverted to the 200k bridge, answered correctly from turn one |
+| 38k-token request to an all-capped chain | Truncated 38414 to 2040, DEGRADED banner shown, **still answered correctly** |
+
+That last row is the one to read twice. `hard_tail_keep` fired — the most destructive pass there is, keeping only the final handful of messages — and the model still recovered a passphrase planted in the very first user turn. That is head-pinning working on live traffic. Before this change, the first turn was the first thing deleted.
+
+<Aside type="caution" title="Truncation is not free">
+The DEGRADED banner now appears on every truncated turn, including inside a tool loop. It was previously gated to fresh human prompts, which silenced it exactly when an agent was executing against constraints the fit had just deleted. If you see it, the answer is built on a shortened history — verify before you act on it.
+</Aside>
