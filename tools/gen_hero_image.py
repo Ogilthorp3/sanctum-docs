@@ -85,6 +85,145 @@ ASPECT_DIMS = {
 }
 DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux"
 
+# ── where Flux may run ───────────────────────────────────────────────────────
+# Measured 2026-07-26 on manoir (Mac Mini M4, 64 GB): one 1344x768 / 40-step
+# render peaked at 36 GiB resident. The Mini was already carrying the council,
+# the VM, OrbStack and the curfew engine, so it went straight into swap —
+# swap-sentinel logged `level=critical pressure=4 culprit=[python3.12 (36.0GiB)]`
+# every two minutes, the render wedged in VAE decode for 15+ minutes without
+# producing a file, and it had to be killed. This box has already taken one
+# memory-exhaustion kernel panic (2026-07-10); it is not a render farm, and it
+# runs the family's curfew enforcement.
+#
+# So: Flux renders on the MBP (M4 Max, 128 GB) over the TB5 bridge, and only
+# when the MBP is actually idle enough to take it. If it isn't, we pay Google
+# rather than gamble the Mini. Rendering Flux ON the Mini requires an explicit
+# --force-local and prints what it is risking.
+RENDER_HOST = os.environ.get("SANCTUM_RENDER_HOST", "mbp")
+# 36 GiB observed peak + headroom for the OS and whatever else is resident.
+RENDER_MIN_FREE_GIB = float(os.environ.get("SANCTUM_RENDER_MIN_FREE_GIB", "48"))
+# Substrings that mean "this host is busy doing something expensive" — a render
+# dropped on top of a training run would evict its weights and thrash both.
+BUSY_MARKERS = ("mlx_lm.lora", "train.py", "accelerate launch", "torchrun",
+                "flux_backend.py", "mlx_lm.fuse", "finetune")
+
+
+def _ssh(host, script, timeout=30):
+    """Run a shell snippet on `host`; return CompletedProcess (never raises)."""
+    return subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=8", host, script],
+        capture_output=True, text=True, timeout=timeout,
+    )
+
+
+def remote_capacity(host=RENDER_HOST):
+    """(ok, detail) — may `host` take a Flux render right now?
+
+    Checks three things, all of which have to hold: it answers over TB5, it has
+    the model cached, and it has both the free RAM and the idleness to spare.
+    Free RAM is computed from vm_stat (free + inactive + speculative), which is
+    what macOS will actually hand a new process without swapping."""
+    probe = r"""
+free=$(vm_stat | awk '
+  /page size of/ {ps=$8}
+  /Pages free/ {f=$3} /Pages inactive/ {i=$3} /Pages speculative/ {s=$3}
+  END {gsub(/\./,"",f); gsub(/\./,"",i); gsub(/\./,"",s);
+       printf "%.1f", (f+i+s)*ps/1073741824}')
+model=no
+[ -n "$(ls -d ~/.cache/huggingface/hub/models--black-forest-labs--FLUX.1-dev/snapshots/*/ 2>/dev/null | head -1)" ] && model=yes
+busy=$(ps -eo args | grep -iE 'mlx_lm.lora|train\.py|accelerate launch|torchrun|flux_backend\.py|mlx_lm\.fuse|finetune' | grep -v grep | head -3 | cut -c1-60 | tr '\n' ';')
+echo "FREE=$free MODEL=$model BUSY=$busy"
+"""
+    try:
+        r = _ssh(host, probe)
+    except Exception as e:
+        return False, f"{host} unreachable ({type(e).__name__})"
+    if r.returncode != 0:
+        return False, f"{host} unreachable (ssh rc={r.returncode})"
+    out = dict(kv.split("=", 1) for kv in
+               (r.stdout.strip().split(" ", 2) if r.stdout.strip() else []) if "=" in kv)
+    try:
+        free = float(out.get("FREE", "0"))
+    except ValueError:
+        free = 0.0
+    if out.get("MODEL") != "yes":
+        return False, f"{host} has no FLUX.1-dev snapshot cached"
+    busy = (out.get("BUSY") or "").strip("; ")
+    if busy:
+        return False, f"{host} is busy: {busy}"
+    if free < RENDER_MIN_FREE_GIB:
+        return False, f"{host} has {free:.1f} GiB free, need {RENDER_MIN_FREE_GIB:.0f}"
+    return True, f"{host} ready ({free:.1f} GiB free)"
+
+
+def gen_remote(a, host=RENDER_HOST) -> None:
+    """Render on `host` over ssh, then copy the PNG back. Raises on failure so
+    the caller can fall back to the metered path."""
+    w, h = ASPECT_DIMS.get(a.aspect, ASPECT_DIMS["16:9"])
+    remote_out = f"/tmp/hero-{os.getpid()}.png"
+    venv = os.environ.get("SANCTUM_REMOTE_FLUX_VENV",
+                          "~/Projects/comfy-lab/.venv-flux/bin/python")
+    backend = os.environ.get("SANCTUM_REMOTE_FLUX_BACKEND",
+                             "~/Projects/Claude_Code/sanctum-docs/tools/flux_backend.py")
+    import shlex
+    cmd = (f"{venv} {backend} --prompt {shlex.quote(a.prompt)} "
+           f"--out {remote_out} --width {w} --height {h} "
+           f"--steps {a.steps} --seed {a.seed}")
+    if a.dry_run:
+        cmd += " --dry-run"
+    # Detach the render from the ssh session. A Flux render is ~10 minutes; if
+    # the caller's shell exits (or a background job gets reaped, or the TB5 link
+    # blips) a foreground `ssh host cmd` takes the render down with it — that
+    # happened on the first remote run here, which died at step 4/40. nohup +
+    # setsid on the far side means the render owns its own lifetime and we just
+    # watch for its sentinel file.
+    log = f"{remote_out}.log"
+    done = f"{remote_out}.done"
+    # Ship the command base64-encoded. `cmd` already contains shlex-quoted
+    # single quotes around the prompt, so wrapping it in `sh -c '...'` nests
+    # single quotes and the launch silently becomes a no-op — the first version
+    # of this did exactly that and polled a sentinel that was never going to
+    # appear. base64 has no quoting surface at all.
+    import base64
+    script = f"{cmd} > {log} 2>&1\necho $? > {done}\n"
+    b64 = base64.b64encode(script.encode()).decode()
+    runner = f"{remote_out}.sh"
+    launch = (f"echo {b64} | base64 -d > {runner} && "
+              f"nohup sh {runner} </dev/null >/dev/null 2>&1 & echo started")
+    print(f"[render] delegating to {host} over TB5 (detached) …", flush=True)
+    r = _ssh(host, launch, timeout=30)
+    if r.returncode != 0:
+        raise RuntimeError(f"could not launch render on {host} (rc={r.returncode})")
+
+    import time
+    deadline = time.time() + float(os.environ.get("SANCTUM_RENDER_TIMEOUT_S", "1800"))
+    rc = None
+    while time.time() < deadline:
+        time.sleep(15)
+        probe = _ssh(host, f"cat {done} 2>/dev/null || echo PENDING", timeout=20)
+        val = (probe.stdout or "").strip()
+        if val and val != "PENDING":
+            rc = int(val) if val.isdigit() else 1
+            break
+    _ssh(host, f"rm -f {done} {runner}", timeout=15)
+    if rc is None:
+        _ssh(host, f"pkill -f {remote_out} 2>/dev/null; rm -f {log} {runner}", timeout=15)
+        raise RuntimeError(f"remote render on {host} exceeded its timeout")
+    if rc != 0:
+        tail = _ssh(host, f"tail -5 {log} 2>/dev/null", timeout=20).stdout
+        _ssh(host, f"rm -f {log}", timeout=15)
+        raise RuntimeError(f"remote render failed on {host} (rc={rc})\n{tail}")
+    _ssh(host, f"rm -f {log}", timeout=15)
+    if a.dry_run:
+        return
+    out = pathlib.Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    c = subprocess.run(["scp", "-q", f"{host}:{remote_out}", str(out)], text=True)
+    _ssh(host, f"rm -f {remote_out}", timeout=15)
+    if c.returncode != 0 or not out.exists():
+        raise RuntimeError(f"could not copy the render back from {host}")
+    print(f"OK {out} ({out.stat().st_size} bytes) — rendered on {host}")
+
 
 def load_key() -> str:
     k = os.environ.get("GEMINI_API_KEY")
@@ -160,8 +299,15 @@ def main() -> None:
     ap.add_argument("--prompt", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
-    ap.add_argument("--backend", default="local", choices=["local", "imagen"],
-                    help="local=Flux on-device (free, default); imagen=Google (paid)")
+    ap.add_argument("--backend", default="auto",
+                    choices=["auto", "remote", "local", "imagen"],
+                    help="auto=Flux on the render host, else Imagen (default); "
+                         "remote=force Flux on the render host; "
+                         "local=Flux HERE (needs --force-local off the MBP); "
+                         "imagen=Google (paid)")
+    ap.add_argument("--force-local", action="store_true",
+                    help="permit --backend local on a host that is not the render "
+                         "host — see the RENDER_HOST note before using this")
     # local (Flux) knobs
     ap.add_argument("--steps", type=int, default=40, help="Flux inference steps (local)")
     ap.add_argument("--seed", type=int, default=42, help="Flux seed (local)")
@@ -170,10 +316,46 @@ def main() -> None:
     ap.add_argument("--model", default="imagen-4.0-generate-001", help="Imagen model (imagen)")
     a = ap.parse_args()
 
-    if a.backend == "local":
-        gen_local(a)
-    else:
+    if a.backend == "imagen":
         gen_imagen(a)
+        return
+
+    if a.backend == "local":
+        # Flux here, on whatever box "here" is. Allowed without ceremony only on
+        # the designated render host; anywhere else it needs --force-local,
+        # because "here" is usually the Mini and the Mini cannot afford it.
+        import socket
+        here = socket.gethostname().split(".")[0]
+        if here != RENDER_HOST and not a.force_local:
+            sys.exit(
+                f"refusing --backend local on '{here}': one render peaks at ~36 GiB.\n"
+                f"  Measured on manoir 2026-07-26 — it swapped the box to a critical\n"
+                f"  swap-sentinel alert, wedged in VAE decode, and had to be killed.\n"
+                f"  Use --backend auto (delegates to {RENDER_HOST}, falls back to\n"
+                f"  Imagen), or pass --force-local if you truly mean it."
+            )
+        gen_local(a)
+        return
+
+    # auto / remote: try the render host first.
+    ok, detail = remote_capacity()
+    if ok:
+        try:
+            gen_remote(a)
+            return
+        except Exception as e:
+            print(f"[render] {e}", file=sys.stderr)
+            if a.backend == "remote":
+                sys.exit(1)
+    else:
+        print(f"[render] not delegating: {detail}", file=sys.stderr)
+        if a.backend == "remote":
+            sys.exit(1)
+
+    if a.dry_run:
+        sys.exit(f"dry-run: would have fallen back to Imagen ({detail})")
+    print(f"[render] falling back to Imagen (METERED) — {detail}", file=sys.stderr)
+    gen_imagen(a)
 
 
 if __name__ == "__main__":
