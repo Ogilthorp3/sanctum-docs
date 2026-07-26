@@ -5,6 +5,8 @@ description: How Sanctum keeps enforcing the right devices when MACs rotate, nam
 
 import { Aside } from '@astrojs/starlight/components';
 
+![Luggage tags on a wire, one drifting loose from its suitcase](./images/hero-device-identity.png)
+
 A curfew rule is a promise attached to a MAC address. Both halves of that
 sentence rot: iOS and SteamOS rotate MACs by design, mesh extenders re-translate
 them on every reconnect, and the labels every dashboard shows were copied from
@@ -58,6 +60,14 @@ Hardening that survived a 30-agent adversarial panel (25 confirmed findings,
   to one per (screen, MAC) per 6 h.
 - **DHCPv6 IAID lines are skipped** — field 2 must parse as a MAC.
 
+## One device, two network cards
+
+Pinning follows a *name*, and half the hardware a haus shares has none to
+follow — a console's idle second NIC advertises nothing at all. That case, the
+single-target rule it broke, and how nameless TVs, receivers, speakers and
+printers stopped being treated as strangers are covered in
+**[Shared Hardware Identity](/operations/device-identity-shared-hardware/)**.
+
 ## The paused-MAC ledger
 
 Firewalla pauses have **no expiry**. Before the ledger, a MAC that rotated away
@@ -106,7 +116,10 @@ from most to least cooperative:
 2. **Rotated MAC, recognizable hostname** — columbo pin follows it;
    first-join gets the nudge (~60–90 s), mid-curfew rotation ≤4 min.
 3. **Any MAC, recognizable vendor OUI** — auto-assigned to shared devices,
-   reconciler blocks within ~2 min.
+   reconciler blocks within ~2 min. If the MAC is a **NIC sibling** of an
+   already-enrolled screen it joins that screen instead, inheriting its
+   schedule; appearing mid-curfew, it is blocked on the spot rather than at the
+   next onset — that window is exactly when a kid switches cable.
 4. **Spoofed MAC and renamed hostname, joining during curfew** — the
    unknown-device backstop pauses it at the iptables level in ~30 s.
 5. **Spoofed, renamed, and parked online *before* curfew** — the
@@ -163,7 +176,7 @@ screens:
       - Living Room Apple TV
       - First Floor Apple TV
     macs:
-      - "AA:BB:CC:DD:EE:01"   # identity — rename-proof
+      - "FA:CE:DE:CA:CA:01"   # identity — rename-proof
     schedule:
       holiday: { curfew: "23:00", wake: "10:00" }
 ```
@@ -199,7 +212,7 @@ sqlite3 ~/.sanctum/screen-time/usage.db 'SELECT * FROM paused_macs'
 
 # Rename aliases remembered for a MAC (after a live rename tick)
 sqlite3 ~/.sanctum/screen-time/usage.db \
-  "SELECT alias FROM device_aliases WHERE mac='AA:BB:CC:DD:EE:01'"
+  "SELECT alias FROM device_aliases WHERE mac='FA:CE:DE:CA:CA:01'"
 ```
 
 Live E2E on ship day: block → box shows the pinned MAC paused → ledger row →
