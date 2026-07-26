@@ -270,6 +270,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-26 — DRI Governance: The Council Picks Owners', slug: 'operations/2026-07-26-dri-governance-the-council-picks-owners' },
 								{ label: '2026-07-24 — The Cloud That Moved Out', slug: 'operations/2026-07-24-the-cloud-that-moved' },
 								{ label: '2026-07-24 — The Fleet Watches Itself', slug: 'operations/2026-07-24-the-fleet-watches-itself' },
 								{ label: '2026-07-23 — The Block That Killed the Hub', slug: 'operations/2026-07-23-the-block-that-killed-the-hub' },
