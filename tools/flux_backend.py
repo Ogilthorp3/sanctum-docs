@@ -58,14 +58,33 @@ def main() -> None:
     import glob
     src = a.model
     if not os.path.isdir(src):
+        # Search order: the HF cache first (the normal path on a workstation
+        # that has the model), then the T9 Digital Ark. The ark copy exists so
+        # heroes can still be generated with the internet dark AND the MBP
+        # unavailable — it is the offline-of-last-resort, not the daily path.
+        #
+        # The ark is exFAT, which has no symlinks, so its copy is DEREFERENCED:
+        # a flat snapshot directory of real files rather than the HF cache's
+        # blobs+symlinks layout. from_pretrained() on a directory handles that
+        # identically, which is why this resolves to a dir either way.
+        cands = []
         cache = os.path.expanduser("~/.cache/huggingface/hub")
-        snaps = sorted(glob.glob(f"{cache}/models--{src.replace('/', '--')}/snapshots/*"))
-        snaps = [s for s in snaps if os.path.exists(os.path.join(s, "model_index.json"))]
-        if snaps:
-            src = snaps[-1]
+        cands += sorted(glob.glob(f"{cache}/models--{src.replace('/', '--')}/snapshots/*"))
+        ark = os.environ.get("SANCTUM_FLUX_ARK", "/Volumes/T9/models/flux")
+        leaf = src.split("/")[-1]                      # black-forest-labs/FLUX.1-dev -> FLUX.1-dev
+        cands += [os.path.join(ark, leaf)]
+        cands += sorted(glob.glob(os.path.join(ark, leaf, "snapshots", "*")))
+        found = [c for c in cands if os.path.exists(os.path.join(c, "model_index.json"))]
+        if found:
+            # Prefer the cache when both exist: internal SSD beats external USB.
+            cache_hits = [c for c in found if c.startswith(cache)]
+            src = cache_hits[-1] if cache_hits else found[0]
+            if not src.startswith(cache):
+                print(f"flux_backend: using the offline ark copy at {src}", file=sys.stderr)
         else:
             sys.exit(f"flux_backend: no local snapshot with model_index.json for {a.model}; "
-                     f"complete the download (needs a token) before offline use.")
+                     f"looked in {cache} and {ark}. Complete the download (needs a "
+                     f"token), or mount the T9 ark, before offline use.")
     pipe = FluxPipeline.from_pretrained(
         src, torch_dtype=torch.bfloat16, local_files_only=True
     )
