@@ -116,6 +116,42 @@ RENDER_HOST_ALIASES = {
     RENDER_HOST,
     os.environ.get("SANCTUM_RENDER_HOSTNAME", "berts"),
 }
+
+
+def _local_names():
+    """Every name this machine answers to.
+
+    socket.gethostname() is NOT stable: it returned "berts" one hour and
+    "Berts-MacBook-Pro-M4-Max-128GB" the next, on the same machine, because
+    mDNS/DNS state changes what it reports. Ask several sources and match on a
+    normalised prefix instead of trusting any single string.
+    """
+    import socket, subprocess
+    names = {socket.gethostname()}
+    for key in ("LocalHostName", "ComputerName"):
+        try:
+            r = subprocess.run(["scutil", "--get", key], capture_output=True,
+                               text=True, timeout=5)
+            if r.returncode == 0:
+                names.add(r.stdout.strip())
+        except Exception:
+            pass
+    out = set()
+    for n in names:
+        n = n.split(".")[0].strip().lower()
+        if n:
+            out.add(n)
+    return out
+
+
+def _is_render_host():
+    """True when this box is the designated render host, by any of its names."""
+    aliases = {a.strip().lower() for a in RENDER_HOST_ALIASES if a}
+    for name in _local_names():
+        for a in aliases:
+            if name == a or name.startswith(a) or a.startswith(name):
+                return True
+    return False
 # 36 GiB observed peak + headroom for the OS and whatever else is resident.
 RENDER_MIN_FREE_GIB = float(os.environ.get("SANCTUM_RENDER_MIN_FREE_GIB", "48"))
 # Substrings that mean "this host is busy doing something expensive" — a render
@@ -351,7 +387,7 @@ def main() -> None:
         # because "here" is usually the Mini and the Mini cannot afford it.
         import socket
         here = socket.gethostname().split(".")[0]
-        if here not in RENDER_HOST_ALIASES and not a.force_local:
+        if not _is_render_host() and not a.force_local:
             sys.exit(
                 f"refusing --backend local on '{here}': one render peaks at ~36 GiB.\n"
                 f"  Measured on manoir 2026-07-26 — it swapped the box to a critical\n"
