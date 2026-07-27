@@ -15,6 +15,8 @@ jobs:
       deployments: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: pnpm/action-setup@v4
         with:
@@ -26,6 +28,33 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      # ── Compliance gate ──────────────────────────────────────────────────
+      # contrib-check.yml runs on PRs, but it and this workflow both trigger
+      # independently on push to main with no dependency between them — so a
+      # direct push could (and did, 2026-07-26) deploy a page whose compliance
+      # check was red. This closes that hole at the gate that matters.
+      #
+      # CHANGED FILES ONLY, deliberately. A full-corpus check currently fails on
+      # 12 pages, 10 of them predating this change; gating on that would block
+      # every deploy until unrelated backlog was cleared. The rule here is "do
+      # not make it worse", not "fix everything first".
+      - name: Determine changed MDX files
+        id: changed_mdx
+        run: |
+          BASE="${{ github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+            FILES=""
+          else
+            FILES=$(git diff --name-only --diff-filter=ACMR "$BASE" "${{ github.sha }}" -- 'src/content/docs/**/*.mdx' | tr '\n' ' ')
+          fi
+          echo "files=$FILES" >> "$GITHUB_OUTPUT"
+          echo "changed: ${FILES:-<none>}"
+
+      - name: CONTRIBUTING compliance (changed files)
+        if: steps.changed_mdx.outputs.files != ''
+        run: python3 scripts/contrib-check.py ${{ steps.changed_mdx.outputs.files }}
+
       - run: pnpm build
 
       - uses: cloudflare/wrangler-action@v3
