@@ -270,7 +270,12 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-26 — The Probe That Could Not Tell On Itself', slug: 'operations/2026-07-26-the-probe-that-could-not-tell-on-itself' },
+								{ label: '2026-07-26 — The Ruler Was Broken, Not the Model', slug: 'operations/2026-07-26-the-ruler-was-broken' },
+								{ label: '2026-07-26 — The Secret That Was Never Missing', slug: 'operations/2026-07-26-the-secret-that-was-never-missing' },
+								{ label: '2026-07-26 — The Airgap That Forgot Itself', slug: 'operations/2026-07-26-the-airgap-that-forgot-itself' },
 								{ label: '2026-07-26 — DRI Governance: The Council Picks Owners', slug: 'operations/2026-07-26-dri-governance-the-council-picks-owners' },
+								{ label: '2026-07-25 — The Knobs That Outlived Their Reason', slug: 'operations/2026-07-25-the-knobs-that-outlived-their-reason' },
 								{ label: '2026-07-24 — The Cloud That Moved Out', slug: 'operations/2026-07-24-the-cloud-that-moved' },
 								{ label: '2026-07-24 — The Fleet Watches Itself', slug: 'operations/2026-07-24-the-fleet-watches-itself' },
 								{ label: '2026-07-23 — The Block That Killed the Hub', slug: 'operations/2026-07-23-the-block-that-killed-the-hub' },

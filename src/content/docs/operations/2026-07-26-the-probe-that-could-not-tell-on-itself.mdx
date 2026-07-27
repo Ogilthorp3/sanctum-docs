@@ -1,0 +1,100 @@
+---
+title: "2026-07-26: The Probe That Could Not Tell On Itself"
+description: The reboot was clean. The watchdogs were not — and every one of them failed the same way, by mistaking its own breakage for the breakage of the thing it watched.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The Mini was rebooted on 26 July and the question was the usual one: did everything come back pristine? A 43-agent audit answered it with 36 adversarially-verified findings and **zero reboot regressions**. Every service that was supposed to come back came back.
+
+The findings were all pre-existing, and they clustered in one place. Not in the services. In the layer that watches the services.
+
+## One failure wearing four costumes
+
+Four separate watchdogs were broken on 26 July, in four different languages, written weeks apart by different sessions. They had exactly one defect between them: **a probe that could not distinguish its own failure from the failure of the thing it was watching.**
+
+That is the whole note. Everything below is the same bug, four times.
+
+| Watchdog | Reported | Reality | Fix |
+|---|---|---|---|
+| `quigon-doctor` proxyd probe | DOWN for 12 days | healthy the whole time | `73b7156` |
+| `agy-proxy` `/health` | `auth_required` | credential never expired | `e16a10e` |
+| `post-reboot-verify.sh` | fabricated failures | box was pristine | `c3a51a5` |
+| Holocron sidecar | OPERATIONAL | could not see the curfew at all | `4b72908` |
+
+## The doctor that could not speak TLS 1.3
+
+Qui-Gon's infrastructure doctor reported proxyd DOWN on **every launchd run from 2026-07-14 to 2026-07-26** — 341 escalations, each one paging the operator twice, over signal-cli and a Force Flow POST to `:4077`. proxyd was healthy for all 341 of them.
+
+The bug was not in the router. It was in the interpreter. The LaunchAgent ran the doctor under `/usr/bin/python3` — Apple's build, linked against LibreSSL 2.8.3, which tops out at TLS 1.2. proxyd's rustls listener on `:4040` is **TLS 1.3 only**. The handshake died with `TLSV1_ALERT_PROTOCOL_VERSION`, and the probe's error handling did the rest:
+
+```python
+    except Exception:  # noqa: BLE001
+        return 0
+```
+
+A bare `except` collapsed "I cannot speak your protocol" into the same `0` as "connection refused". The probe's own incapacity was indistinguishable from the service being dead.
+
+It never once passed under launchd. It always passed by hand, because an interactive shell resolves `python3` to `/opt/homebrew/bin/python3` (OpenSSL 3.6.3). The bug was invisible at authoring time and permanent at runtime.
+
+Fixed in two layers, because the interpreter should not be load-bearing: the plist now names the homebrew interpreter, **and** `http_code()` retries through `curl` on any transport exception before declaring anything down.
+
+## A timeout that read as a logout
+
+`agy-proxy.js` classified credentials like this:
+
+```js
+if (/sign in|authentication|not logged|Please sign/i.test(combined) || r.code !== 0)
+```
+
+The regex is fine. The `|| r.code !== 0` is the defect. **Any** non-zero exit from `agy models` — including a timeout under boot-storm load — set `auth = false`, and `/health` on `:6543` answered `{"status":"auth_required"}`. That is a machine sending a human to re-authenticate a token that never expired. It fired twice on 26 July.
+
+There are now three states, and silence is not one of them:
+
+- `auth === true` → `ok`, or `degraded` when the last probe failed but a good model list is still held. HTTP 200; it keeps routing.
+- `auth === false` → `auth_required`, and **only** when agy explicitly says it is signed out.
+- `auth === null` → `enumeration_failed`. Never enumerated, cause unknown. Which is the honest answer.
+
+A failed enumeration now holds last-known-good models and never invents `auth = false` out of a timeout. `AGY_MODEL_CACHE_MS` overrides the five-minute cache so the degraded path is testable without waiting it out.
+
+## Three lies in one reboot check
+
+`post-reboot-verify.sh` is the script that answers "did it come back pristine?". It was wrong three separate ways.
+
+<Steps>
+1. **A baseline nothing produced.** It diffs live state against a snapshot file that no job on the box ever wrote — hand-made once on 2026-07-05 and left to rot. By 26 July it was 21 days stale, so four services deliberately retired in the interim read as reboot failures. There is now a `--snapshot` mode, a staleness warning past seven days, and a `com.sanctum.reboot-snapshot` LaunchAgent at 06:00 daily. Deliberately **not** `RunAtLoad`: a snapshot taken mid-boot-storm would bless a half-started box as the baseline.
+2. **An inverted OrbStack check.** It tested `pgrep` and called a live process "GUI visible". That process *is* the engine — quit it and every container dies. So the check warned whenever OrbStack was healthy and PASSed only once the engine was dead.
+3. **A probe pointed at a retired port.** It hit `:8011`, the internal TTS worker, hours after TTS moved behind the `sanctum-tts` front door on `:8008`. The chain was provably fine: `POST /speak` through `:8008` returns 200 and 102 KB of RIFF WAVE PCM16. Probe front doors, not internals.
+</Steps>
+
+<Aside type="caution" title="plutil -lint is not XML validation">
+`plutil -lint` **accepts** an XML comment containing a double-hyphen. `xmllint` and Python's `plistlib` both reject the same file. That is not a style difference — a plist that passes `plutil` and fails the real parser is a LaunchAgent that quietly never loads. `com.sanctum.mlx.plist` blinded `com.sanctum.council-guardian` for **11 days** through exactly this gap, and the new snapshot plist tripped the same trap on its first write. Validate every plist with all three before landing it.
+</Aside>
+
+## The board that could not see the product
+
+The Holocron sidecar on `:3344` is the board the operator actually looks at. It reported OPERATIONAL while being structurally incapable of knowing whether a twelve-year-old's curfew was enforced. It watched three workspace repos and disk. The seat doctors that own enforcement reported to Force Flow, signal-cli and the memory vault — nowhere near the dashboard. "OPERATIONAL" meant "disk is fine".
+
+Curfew is now its own top-level tile in `/status`, not a line item averaged into a Windu score, plus a `dri` section for the other seats and a `GET /dri` route that returns **503** whenever enforcement is not provably healthy. Either tile can veto a green board alone. The ladder is fail-closed, per Windu's posture:
+
+| Evidence | Verdict |
+|---|---|
+| no log | FAILED |
+| silent over 25 hours | FAILED |
+| verdict UNVERIFIED | DEGRADED |
+| verdict OK and fresh | OPERATIONAL |
+| anything else | FAILED |
+
+Silence is a FAIL, not a pass. That is Mothma's DRI Standard applied to the one feature the haus exists for.
+
+The tile reads the doctors' JSONL, tailing the last 64 KB because those logs grow unbounded — and manual testing caught the tail reader dropping line 1 as a partial record. Correct after a seek; **wrong** when the file is smaller than the window, because no seek happened. The Windu log is about 5 KB, so it was silently discarding the first check of every cycle. A bug in the thing built to stop silent discarding, found because it was tested rather than assumed.
+
+## What transfers
+
+<Steps>
+1. **A probe that returns "down" is making a claim about the probe.** It stays a claim until a second, independent client reproduces it. `curl` disagreeing with your health check does not mean curl is wrong.
+2. **Never collapse transport failure into service failure.** `except: return 0` is how a healthy service gets paged on for twelve days. If you cannot reach it, say you could not reach it.
+3. **Absence of evidence must never render as green.** No log is a FAIL. A stale log is a FAIL. Only a fresh, positive verdict is a pass.
+</Steps>
+
+The reboot was never the story. The story is that four independent watchdogs had all quietly stopped being able to tell the difference between "the thing I watch is broken" and "I am broken" — and every one of them resolved that ambiguity in the direction that let the board stay comfortable.
