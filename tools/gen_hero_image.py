@@ -106,6 +106,16 @@ DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux
 # when the HF cache has none, and says so on stderr. Still needs ~48 GB free
 # RAM wherever you run it — the ark solves availability, not arithmetic.
 RENDER_HOST = os.environ.get("SANCTUM_RENDER_HOST", "mbp")
+# The render host answers to more than one name. RENDER_HOST is the SSH target;
+# the same machine's `hostname -s` is "berts". Comparing the two as plain
+# strings meant the designated render host refused to render on itself, while
+# --backend auto ssh'd a name that does not resolve — so both paths fell through
+# to Imagen, which is dead. Four pages shipped without heroes before anyone
+# noticed the check was asking the wrong question.
+RENDER_HOST_ALIASES = {
+    RENDER_HOST,
+    os.environ.get("SANCTUM_RENDER_HOSTNAME", "berts"),
+}
 # 36 GiB observed peak + headroom for the OS and whatever else is resident.
 RENDER_MIN_FREE_GIB = float(os.environ.get("SANCTUM_RENDER_MIN_FREE_GIB", "48"))
 # Substrings that mean "this host is busy doing something expensive" — a render
@@ -268,7 +278,16 @@ def gen_local(a) -> None:
 
 def gen_imagen(a) -> None:
     """Render with Google Imagen 4 — METERED. Deliberate opt-in only."""
-    from google import genai
+    try:
+        from google import genai
+    except ImportError:
+        sys.exit(
+            "Imagen fallback unavailable: the `google-genai` package is not installed,\n"
+            "  and the Gemini API key was revoked 2026-07-26. This path cannot work.\n"
+            "  Render locally instead — on the render host that is simply:\n"
+            "    gen_hero_image.py --backend local ...\n"
+            "  Do NOT reach for --force-local elsewhere; the 36 GiB guard is real."
+        )
     from google.genai import types
 
     client = genai.Client(api_key=load_key())
@@ -332,7 +351,7 @@ def main() -> None:
         # because "here" is usually the Mini and the Mini cannot afford it.
         import socket
         here = socket.gethostname().split(".")[0]
-        if here != RENDER_HOST and not a.force_local:
+        if here not in RENDER_HOST_ALIASES and not a.force_local:
             sys.exit(
                 f"refusing --backend local on '{here}': one render peaks at ~36 GiB.\n"
                 f"  Measured on manoir 2026-07-26 — it swapped the box to a critical\n"
