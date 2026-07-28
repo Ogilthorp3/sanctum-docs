@@ -154,6 +154,7 @@ export default defineConfig({
 						{ label: 'R2D2 — Auto-Fix Supervisor', slug: 'architecture/r2d2' },
 						{ label: 'The Resilience Doctrine', slug: 'architecture/resilience-doctrine' },
 						{ label: 'Sanctum Continuity', slug: 'architecture/sanctum-continuity' },
+						{ label: 'gitsync', slug: 'architecture/gitsync' },
 					],
 				},
 				{

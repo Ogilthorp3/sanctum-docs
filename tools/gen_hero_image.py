@@ -318,11 +318,18 @@ def gen_imagen(a) -> None:
         from google import genai
     except ImportError:
         sys.exit(
-            "Imagen fallback unavailable: the `google-genai` package is not installed,\n"
-            "  and the Gemini API key was revoked 2026-07-26. This path cannot work.\n"
-            "  Render locally instead — on the render host that is simply:\n"
-            "    gen_hero_image.py --backend local ...\n"
-            "  Do NOT reach for --force-local elsewhere; the 36 GiB guard is real."
+            "Imagen unavailable here: the `google-genai` package is not installed\n"
+            "  in THIS interpreter. The package lives in the Sanctum CLI venv, so run:\n"
+            "    ~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen ...\n"
+            "\n"
+            "  (The key itself is fine: it is auto-rotated by the secret rotator and\n"
+            "   read from ~/.sanctum/secrets/gemini-api-key. An older version of this\n"
+            "   message claimed the key was permanently revoked — that stopped being\n"
+            "   true on 2026-07-28 when headless minting was wired up.)\n"
+            "\n"
+            "  Local rendering still works and costs nothing, but takes ~13 min/image\n"
+            "  versus ~10 s on Imagen. Do NOT reach for --force-local off the render\n"
+            "  host; the 36 GiB guard is real."
         )
     from google.genai import types
 
