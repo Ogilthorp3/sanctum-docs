@@ -252,6 +252,30 @@ The local backend renders from the locally-cached Flux.1-dev on Apple MPS and wr
 
 > Example: "A technical pencil sketch of a secure communication device projecting a holographic signal wave. Detailed circuitry and antenna patterns visible. Dark background, soft amber glow, clean lines, no text."
 
+### What the Local Model Cannot Draw
+
+The local Flux backend fails in two specific, repeatable ways. Both were
+learned the expensive way — each bad render costs ~13 minutes, and three of
+ten heroes had to be redone on 2026-07-26 for exactly these reasons.
+
+**1. It cannot render text.** Any word you put in the prompt comes out as
+plausible-looking gibberish. A prompt naming three gates `MAX`, `GEMINI`,
+`GROK` produced a gate labelled `GEMMN`. A label the reader can almost but
+not quite read is worse than no label — it looks like a typo we shipped.
+Say `no text` in the prompt and carry the meaning in the *scene*.
+
+**2. It cannot pick "the special one" out of near-identical things.** Prompts
+of the form "three doors, the third one open" or "five arms, one unfinished"
+get the count right and the *selection* wrong — it lit the wrong gate. If
+the point of the image is that one item differs, either make that item
+visually dominant (one focal subject, the others absent or clearly
+background) or choose a different metaphor.
+
+**The working shape:** one concrete focal subject, one action, no text, the
+teal accent naming exactly one thing. "A craftsman filing the last rough
+edge of a governor that is already spinning" works. "Several gates, one of
+which is open" does not.
+
 ### Alt Text
 
 Alt text must describe the scene **and** have personality. It's both accessibility and brand voice:
@@ -272,6 +296,11 @@ Before committing a new illustration, verify:
 - [ ] Technical concept is embedded in the visual (not just decorative).
 - [ ] File is real PNG (not JPEG with .png extension).
 - [ ] **Image is unique** — not used on any other page.
+- [ ] **No rendered text in the image** — the model cannot spell (see above).
+- [ ] **The page actually references the image** with a real markdown image
+      (`![alt](./images/hero-x.png)`). A `{/* TODO: hero image ... */}` comment
+      that merely *names* the file is not a reference — `contrib-check.py`
+      reports the PNG as `[hero-orphan]` and the page ships blank.
 
 ### Do Not
 
