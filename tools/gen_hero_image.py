@@ -284,7 +284,33 @@ def load_key() -> str:
     p = pathlib.Path.home() / ".sanctum" / "secrets" / "gemini-api-key"
     if p.exists():
         return p.read_text().strip()
-    sys.exit("no GEMINI_API_KEY (env or ~/.sanctum/secrets/gemini-api-key)")
+    # macOS login keychain — the derived cache the haus already keeps in sync
+    # (SOPS is the source of truth; the keychain is downstream of it). Added
+    # 2026-07-29: the MBP has the key in its keychain but no bare file, so the
+    # Imagen backend was dead on the render host. Reading the keychain instead
+    # of writing a bare file matters: this particular key already leaked once by
+    # being copied into six places, and a seventh copy is not a fix. GUI session
+    # only — a cold SSH cannot unlock the login keychain.
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-a", "sanctum",
+             "-s", "gemini-api-key", "-w"],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    sys.exit(
+        "no GEMINI_API_KEY here.\n"
+        "  Looked in: $GEMINI_API_KEY, ~/.sanctum/secrets/gemini-api-key, and the\n"
+        "  login keychain (service 'gemini-api-key', account 'sanctum').\n\n"
+        "  On the MBP — which is the render host but does NOT hold this secret —\n"
+        "  the key lives on the Mini. Pass it for one command only, so the render\n"
+        "  host never gains a persistent copy:\n\n"
+        "    GEMINI_API_KEY=$(ssh <MINI> 'cat ~/.sanctum/secrets/gemini-api-key') \\\n"
+        "      ~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen ...\n\n"
+        "  Do NOT write it to a file here. This key already leaked once by being\n"
+        "  copied into six places; the fix was fewer copies, not more.")
 
 
 def gen_local(a) -> None:
@@ -312,8 +338,35 @@ def gen_local(a) -> None:
     raise SystemExit(subprocess.call(cmd))
 
 
+def _budget_gate() -> None:
+    """Refuse to start a metered render when the month is already over budget.
+
+    Ported from the Veo node (comfy-lab/common/nodes/comfyui_veo/veo.py) on
+    2026-07-29, when Ultra became the house standard for hero art. Raising the
+    quality bar is exactly the moment to add the guard: the tool used to render
+    first and ledger afterwards, so the budget could only ever be discovered
+    already spent. Fails OPEN — meter trouble must never block deliberate work.
+    Set GCP_SPEND_OVERRIDE=1 to spend past the cap on purpose.
+    """
+    meter = pathlib.Path.home() / "Projects/Claude_Code/tools/gcp_spend.py"
+    if os.environ.get("GCP_SPEND_OVERRIDE") == "1" or not meter.exists():
+        return
+    try:
+        r = subprocess.run([sys.executable, str(meter), "check"],
+                           capture_output=True, text=True, timeout=10)
+        if r.returncode == 1:
+            sys.exit(
+                f"GCP monthly budget reached — {r.stdout.strip()}.\n"
+                "  Set GCP_SPEND_OVERRIDE=1 to spend past it deliberately, or render\n"
+                "  locally with --backend local (free, ~13 min, lower fidelity)."
+            )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass  # fail open
+
+
 def gen_imagen(a) -> None:
     """Render with Google Imagen 4 — METERED. Deliberate opt-in only."""
+    _budget_gate()
     try:
         from google import genai
     except ImportError:
@@ -381,7 +434,13 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42, help="Flux seed (local)")
     ap.add_argument("--dry-run", action="store_true", help="local: verify env, don't render")
     # imagen knob
-    ap.add_argument("--model", default="imagen-4.0-generate-001", help="Imagen model (imagen)")
+    # Ultra is the house standard (Bert, 2026-07-29: "Apple standard, so Imagen 4
+    # Ultra, so that everything is gorgeous"). $0.06/image vs $0.04 standard and
+    # $0.02 fast — the difference is a rounding error against a $10 month, and we
+    # only ever re-render a targeted list, never the whole archive.
+    ap.add_argument("--model", default="imagen-4.0-ultra-generate-001",
+                    help="Imagen model (imagen backend). Default: Ultra, the house "
+                         "quality bar. Cheaper tiers exist but are not the standard.")
     a = ap.parse_args()
 
     if a.backend == "imagen":
