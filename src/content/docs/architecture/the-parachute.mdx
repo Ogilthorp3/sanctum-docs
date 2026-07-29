@@ -1,0 +1,53 @@
+---
+title: The Parachute
+description: How a child-safety curfew keeps enforcing when the firewall's own cloud goes dark — a sovereign block that lives entirely in the kernel.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch of a heavy stone gatehouse at night, its portcullis lowered and holding, while far overhead the control tower it once answered to sits dark and abandoned. One amber lamp still burns on the gate itself, powered by nothing but itself. Tommy the cat watches from the wall, unbothered.](./images/hero-the-parachute.png)
+
+On a Tuesday afternoon the firewall's vendor cloud stopped answering. Not the internet — the internet was fine. The cloud that the firewall itself phones home to, the one it needs to log in before it will apply a single new rule. It accepted our connection and then said nothing, for hours.
+
+That is a strange kind of outage, and a dangerous one, because everything looks up. The lights work. The router forwards. The family streams. And quietly, underneath, the one control a parent actually relies on — the curfew that says the tablet sleeps at nine-thirty — can no longer be changed, because changing it requires a login to a machine three provinces away that has chosen this evening to be unreachable.
+
+The Parachute is what opens when that happens. It is a way to hold a curfew with the cloud dark, the management bridge wedged, and the server that normally drives all of this asleep in another room.
+
+## Why the normal path needs the cloud at all
+
+Sanctum enforces screen time through the vendor's own engine: a local bridge takes an instruction — *pause this device* — and hands it to the firewall over an encrypted channel. That channel is authenticated, and the authentication is minted in the cloud. No login, no channel; no channel, no new rule. Existing rules keep running, but nothing new lands and nothing lifts.
+
+For a light switch that would be an annoyance. For a child-safety control it is a hole, because the failure is invisible: the dashboard stays green, the schedule still *says* nine-thirty, and only the enforcement quietly stopped. A curfew you cannot prove is a curfew you do not have.
+
+<Aside type="caution">
+The most dangerous outages are the ones that leave every indicator healthy. This one did: name resolution worked, the box had internet, the schedule was intact. The single thing that failed was the one nobody was watching — the ability to *apply* a decision, as opposed to merely hold the old one.
+</Aside>
+
+## A block that answers to no one
+
+The Parachute refuses the whole dependency. It writes its rule straight into the kernel's packet filter, keyed on the one thing a device cannot fake for free — its hardware address — and it puts the schedule and the expiry *inside the kernel too*, so the block enforces itself with nothing running above it.
+
+That last part is the trick. A curfew that begins at nine-thirty and lifts at seven is expressed as a kernel time-match, in UTC, computed once. From then on the drop happens whether or not the server is awake, whether or not the reconciler is alive, whether or not the cloud ever comes back. The machinery that decided the curfew can vanish entirely and the gate still closes on time and opens on time.
+
+A blocked packet meets our own drop, not the vendor's — a small distinction that matters, because the vendor's drop has an escape hatch near the top and ours has none. When our counter says a packet died, it died.
+
+Tommy, were he still filing reports, would approve of the arrangement: a gate that does its job whether or not anyone is watching it is the only kind he ever respected.
+
+## The four things that keep it from becoming this morning
+
+A tool that can cut a device off the internet is a tool that can cut the *wrong* device off, and this haus had already lived that: a repair earlier the same day wrongly quarantined a printer, a dishwasher, and the battery that powers the failover. So the Parachute is built less like a weapon and more like a fuse box.
+
+- **One key, everywhere.** It gates, drops, and verifies on the same hardware address. There is no path where the safety check reads one identifier and the block acts on another — the gap a recycled network lease slips through.
+- **A never-block wall.** The router, the home-automation hub, the failover battery, the printer and their kin are written in as *pass* rules above every block. A rule against one of them is not refused; it is unreachable.
+- **Nothing unbounded.** Every block carries an expiry, capped at twelve hours, and there is no verb that blocks more than one device at a time. Seven-at-once cannot be typed.
+- **A dead man's hand.** The first rule the kernel checks is an amnesty dated a day out and pushed forward on every pass. If everything that could push it forward dies, the whole apparatus goes inert within twenty-four hours — on its own, with no process left alive to notice.
+
+<Aside type="tip">
+The test that mattered was not "does a rule appear" but "does a real packet die." A throwaway client wearing the canary address, its traffic forced through the same path a child's tablet takes, was dropped exactly as many times as it tried and not once more — then, unblocked, passed freely. A rule that exists is not a rule that works; only the counter settles it.
+</Aside>
+
+## What it is not
+
+The Parachute is a fallback, and it is honest about the edge it cannot hold. A network block stops what the network carries; it does nothing for a laptop that steps onto a phone's hotspot, which is precisely how one did that same afternoon. That is not a flaw to be patched at the firewall — it is the reason the real wall for a determined teenager is on the device itself, and the Parachute is the layer beneath it, not a substitute for it. It also stands down the instant the vendor cloud returns and the ordinary engine, with its richer per-device policy, takes the controls back.
+
+It exists for one narrow, real situation: the hours when the thing that normally enforces the rules cannot, and a family still expects the rules to hold. Most days it never opens. That is the point of a parachute. The [Resilience Doctrine](./resilience-doctrine.mdx) is the wider argument this belongs to — a haus that keeps its promises when the cloud, the power, or the operator is gone — and the [Firewalla bridge](./sanctum-firewalla.mdx) is the ordinary path it stands in for. A curfew should not depend on a login to someone else's server, and now it does not.
