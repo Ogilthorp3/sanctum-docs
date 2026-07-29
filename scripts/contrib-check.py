@@ -659,19 +659,23 @@ def check_image_files_on_disk(report):
 
 
 def check_length(path, rel, body, body_line_offset, report):
-    clean = CODE_BLOCK_RE.sub("", body)
-    clean = IMAGE_REF_RE.sub("", clean)
-    clean = INLINE_CODE_RE.sub("", clean)
-    # Drop table rows (they read faster than prose; CONTRIBUTING exempts them).
-    clean_lines = [ln for ln in clean.splitlines() if not ln.lstrip().startswith("|")]
-    words = len(" ".join(clean_lines).split())
-    if words > 1200:
-        report.warn(
-            rel,
-            body_line_offset,
-            "length",
-            f"~{words} prose words — Five-Minute Rule cap is 1200 (tables/code stripped)",
-        )
+    """RETIRED 2026-07-29 — superseded by story-check.py's budget/chapter.
+
+    This counter was wrong in two directions at once. It counted heading text,
+    JSX tags and markdown link URLs as prose, which inflated every page; and at
+    the same time it dropped every line starting with "|", which let an author
+    launder unlimited prose through table cells. Between them it reported the
+    gold standard, agents/tommy.mdx, at ~1253 words against a 1200 cap — so the
+    one page the whole style guide points at carried a permanent violation, and
+    anyone who promoted `length` to an error would have failed it on the first
+    CI run. A gate that fails the gold standard is a gate that gets deleted.
+
+    story-check.py uses a typed block parser instead of a line filter, measures
+    tommy.mdx at 1155, and enforces the Chapter Rule (1600 standard / 2000
+    ceiling, annex excluded). Budget lives there now. Deliberately a no-op
+    rather than a deletion, so the reason survives in the file that had the bug.
+    """
+    return
 
 
 def check_page(path, report):
