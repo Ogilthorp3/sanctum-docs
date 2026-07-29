@@ -271,6 +271,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-07-28 — The Cache That Overwrote the Source', slug: 'operations/2026-07-28-the-cache-that-overwrote-the-source' },
 								{ label: '2026-07-26 — The Probe That Could Not Tell On Itself', slug: 'operations/2026-07-26-the-probe-that-could-not-tell-on-itself' },
 								{ label: '2026-07-26 — The Ruler Was Broken, Not the Model', slug: 'operations/2026-07-26-the-ruler-was-broken' },
 								{ label: '2026-07-26 — The Secret That Was Never Missing', slug: 'operations/2026-07-26-the-secret-that-was-never-missing' },
