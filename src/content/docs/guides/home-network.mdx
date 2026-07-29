@@ -1,0 +1,106 @@
+---
+title: Home Network
+description: One glance at whether the haus is online and protected — and one safe improve that never flips your WAN mode.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+The everyday home-network surface. Not a cutover wizard. Not a speed-test sermon. One pane that answers: **is the house online and protected right now?** — and one action that only applies fixes that cannot strand you.
+
+```bash
+sanctum net home
+```
+
+## What you see
+
+| Row | Meaning |
+|-----|---------|
+| **Internet** | TLS samples — Fastly/PyPI (CDN path) and Google (control). If CDN fails while Google works, the path MTU/MSS guard is the usual suspect |
+| **WAN path** | How the Firewalla reaches the internet (`pppoe`, public Ethernet / ADMZ-class, or private double-NAT) |
+| **CDN guard** | Firewalla TCP MSS **1400** + `tcp_mtu_probing` — keeps Fastly/PyPI (and similar CDNs) healthy on Bell PPPoE |
+| **Armor** | Single-NAT armor rollup (`HEALTHY`, poison routes, etc.) |
+| **Hub (optional)** | Whether the ISP hub (`192.168.2.1` by default) is reachable. Unreachable under PPPoE bridge is **normal**, not a failure |
+
+Overall:
+
+- **GREEN** — online and protected  
+- **ATTENTION** — works now; optional improvements  
+- **DEGRADED** — something is broken *right now* (e.g. CDN TLS down)
+
+```bash
+sanctum net home status
+sanctum net home status --json
+```
+
+## Safe improve
+
+```bash
+sanctum net home improve
+sanctum net home improve --force    # re-assert even when green
+sanctum net home improve --dry-run  # print intent only
+```
+
+**Does:** re-assert Firewalla MSS 1400 + `tcp_mtu_probing` (and the persist script when present).
+
+**Does not:** Advanced DMZ, PPPoE ↔ DHCP, hub reboot, or any WAN mode change.
+
+That split is deliberate — the beta/dogfood surface never drops the house for a speed experiment.
+
+```bash
+sanctum net home doctor
+sanctum net home doctor --apply   # status + safe improve if needed
+```
+
+## How this fits the other `net` commands
+
+| Command | Role |
+|---------|------|
+| **`sanctum net home`** | Daily “is the haus OK?” + safe CDN guard |
+| **`sanctum net status`** | Deeper node roll-up (posture, heal daemon, identity, guardian) |
+| **`sanctum net check` / `optimize`** | NAT topology and guided single-NAT playbooks |
+| **`sanctum net speedtest`** | Honest multi-stream ceiling |
+| **`sanctum net single-nat`** | Attended Advanced DMZ cutover (separate, gated) |
+
+Start with **home**. Reach for the others when the pane says so.
+
+## Why CDN TLS used to hang on Bell
+
+Bell PPPoE leaves a **1492** path MTU. A TCP MSS of **1452** is the textbook clamp and is often enough — but some CDNs (Fastly hosts PyPI, Reddit, and friends) still failed TLS until MSS was tightened to **1400**. The fix is applied on the Firewalla and re-asserted by `home improve`; it is not a PyPI outage and not a Firewalla blocklist.
+
+For the `/1` netmask story (Advanced DMZ + `10.x` LAN), see [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/). For speed-test honesty, see [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/).
+
+## Advanced DMZ (not in `home improve`)
+
+Optional speed / topology upgrade stays a **separate attended flow**:
+
+```bash
+sanctum net single-nat --check
+# only when preflight is green and net.single_nat_live is armed
+sanctum net single-nat --apply
+```
+
+Hub management is often unreachable from the house LAN while the hub is bridged and Firewalla owns PPPoE. That requires a dual-homed operator machine (Ethernet to hub + Wi‑Fi to the house) — not something `home improve` will ever start for you.
+
+## Instance knobs
+
+In `~/.sanctum/instance.yaml`:
+
+```yaml
+devices:
+  hub:
+    brand: sagemcom
+    host: 192.168.2.1          # pin hub for SAH when dual-homed
+  firewalla:
+    host: 10.0.0.1
+    ssh_user: pi
+    ts_addr: 100.68.36.16      # Tailscale OOB recovery
+paths:
+  armor_kit_dir: ~/Projects/Claude_Code/sanctum-singlenat-armor
+net:
+  isp: bell
+  single_nat_live: false         # keep false until an attended ADMZ night
+```
+
+<Aside type="tip">
+Dogfood loop: `sanctum net home` → expect GREEN → if CDN ever fails, `sanctum net home improve` → recheck. No cable-moving required for the daily path.
+</Aside>
