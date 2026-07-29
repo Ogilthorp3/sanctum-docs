@@ -18,11 +18,15 @@ The last sentence of a section often lands a quiet punchline. Don't force it. If
 
 **Warmth matters.** There is genuine love for this project under every quip. The humor punches at the absurdity of the situation, never at the reader.
 
-## The Five-Minute Rule
+## The Chapter Rule
 
-A doc page should be readable in five minutes. Not skimmed — read. That's the budget.
+*(Supersedes the Five-Minute Rule, 2026-07-29. The old cap was 1,000–1,200 words.)*
 
-Five minutes is roughly 1,000 words, or about 150 lines of prose once you account for headings, code blocks, and the asides that make the page worth reading in the first place. If your page runs longer, it isn't a page anymore — it's a filing cabinet pretending to be one.
+A page is a chapter. It should be readable in one sitting — not skimmed, read — and it should be long enough to have a middle. **1,600 prose words, about seven minutes. 2,000 is the hard ceiling.** Tables, code blocks and the annex don't count.
+
+We raised it for a measured reason, not a generous one. The best pages on this site already sit at 1,155 (`agents/tommy.mdx`) and 1,067 (`the-dragon-earns-its-crown`) — so the old 1,200 cap left the gold standard forty-five words of headroom. Then the Narrative Standard made a cold open and a landing mandatory, which is another 150–250 words of story scaffolding that did not exist before. Holding the old number would have taken the story budget straight out of the technical content, which is precisely backwards.
+
+So: room to add a scene and land properly, instead of amputating a beat to fit. What the raise is *not* is permission to accrete. The ceiling is hard, `bloat/net-zero` blocks growth on any page already over the line, and a page that wants to be 2,400 words is two chapters wearing one hero image. If your page runs past the ceiling, it isn't a page anymore — it's a filing cabinet pretending to be one.
 
 **What this means in practice.** Architecture pages explain the idea and stop. Operational material — dated incidents, forensic walkthroughs, the thing that took four hours on a Tuesday — goes in its own annex under `operations/` and gets linked from the parent page. The doctrine page keeps the doctrine. The annex keeps the receipts.
 

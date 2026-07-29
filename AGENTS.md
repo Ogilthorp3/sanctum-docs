@@ -26,9 +26,11 @@ in CI. None of them are suggestions.
    markers go in as words: `RUN / SCHED / FAIL / OFF`. No `✅ ❌ 🔴` in
    content pages.
 
-3. **Five-Minute Rule.** ≤ 1200 prose words per page. Tables and code blocks
-   don't count against it. If the page is longer, split the long material
-   into an annex under `operations/` and link to it.
+3. **Chapter Rule.** ≤ 1600 prose words per page, 2000 hard ceiling. Tables,
+   code blocks and the annex don't count against it. If the page is longer,
+   split the long material into an annex under `operations/` and link to it.
+   (Raised from 1200 on 2026-07-29 — the Narrative Standard made a cold open
+   and a landing mandatory, and that budget must not come out of the content.)
 
 4. **Haus, not house.** See the "Haus Rule" section of CONTRIBUTING for the
    full mapping. Exceptions: product names (Home Assistant, HomeKit), file
