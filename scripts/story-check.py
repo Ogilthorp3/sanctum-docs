@@ -404,7 +404,9 @@ def check_page(path: pathlib.Path, rep: Report, sidebar_slugs: set, inbound: Cou
     if genre != "index" and nwords > 500 and len(h2) < 2:
         err("scene/no-spine", f"{nwords} prose words with {len(h2)} section heading(s) — no spine")
 
-    if genre != "reference":
+    # Splash and index pages have no scenes to be too long — they are doors,
+    # not chapters, and their whole body is one continuous pitch.
+    if genre not in ("reference", "index"):
         scene, scene_name = 0, "(opening)"
         for b in cb:
             if b.kind == "heading" and b.level == 2:
