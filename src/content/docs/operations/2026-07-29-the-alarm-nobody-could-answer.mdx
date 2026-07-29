@@ -1,0 +1,70 @@
+---
+title: "2026-07-29: The Alarm Nobody Could Answer"
+description: The haus lost the internet for twelve hours. It noticed in four minutes, said so out loud, and then stood there — because detecting a fire and putting one out are different jobs, and we had only ever built the first.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketched fortress gatehouse at night, its archway swallowed in black. A drift of folded paper planes has piled up against the threshold, going nowhere. Two lamps burn steadily above the arch, entirely untroubled by the situation beneath them. An Abyssinian cat watches from a ledge, unimpressed.](./images/hero-2026-07-29-the-alarm-nobody-could-answer.png)
+
+At 08:56 on a Wednesday morning the haus worked out that it had no internet, and told somebody.
+
+It told somebody again at 10:01. In between it wrote the verdict into a JSON file, three anchors down, gateway up, and went back to sleep for sixty seconds. It had been doing this, faithfully, three thousand nine hundred and fifty times. The alarm was perfect. Nobody was coming.
+
+This is a field note about the difference between a smoke detector and a fire brigade, and about the twelve hours we spent learning that we had only ever built one of them.
+
+## The evening it changed its name
+
+It started the night before, and it started politely. An episode finished on the headset, the operator picked up an iPad to read the tech news, and the videos would not load. Mail arrived. Text arrived. Video sat there. A VPN was tried, on the reasonable theory that something upstream was being unpleasant, and the VPN did not help either. Downstairs, an agent was asked to look at the network and reported that the network was fine.
+
+The network was fine. That was the honest answer to the question asked.
+
+What had actually happened was that at 22:31:29, after `Connect time 8396.3 minutes` — five days and twenty hours of unbroken service — the uplink session dropped, and thirteen seconds later came back up under a different public address. The haus changed its name in the middle of the evening. Every connection that had been established under the old name died with it. Everything opened fresh afterwards worked, which is precisely why mail looked healthy and a video stream did not.
+
+<Aside type="note">
+Nothing in the haus was watching for a change of identity, only for a loss of service — and by every check that existed, service was never lost. The link went down and came back inside one round of anybody's polling interval. An uplink that flaps and recovers is invisible to a monitor that only asks "is it up".
+</Aside>
+
+Whether that alone accounts for ninety minutes of dead video, the logs do not say, and this note is not going to pretend otherwise. What matters is what happened next, because what happened next was our own fault.
+
+## The cure
+
+Faced with a network that was misbehaving in a way nothing could explain, the operator did the correct and universally recommended thing. He rebooted the modem, the firewall and the mesh access point.
+
+That reboot is what took the haus down for twelve hours.
+
+On the way back up, the firewall's Redis lost a single background save to a boot-ordering race — the temp snapshot went to rename itself into a data directory that was not ready yet. One failed save, immediately recovered. But Redis ships with `stop-writes-on-bgsave-error` set to `yes`, so that one failure froze every write behind a `MISCONF` error, and it froze them during the exact ninety seconds in which FireMain was trying to initialise.
+
+FireMain has a retry loop for this. It ran six times, five seconds apart, and it would have won — except that Redis restarted underneath it, the in-flight command aborted, the rejection escaped a recursion that was never awaited, and the loop simply stopped existing. No crash. No exit. `systemctl` reported `active (running)` for the next twelve hours, which was true and completely useless.
+
+What FireMain had not finished doing was building the firewall. The `FORWARD` chain defaults to `DROP` by design; the rules that let your traffic through live in the layer that never got built. So the router came up healthy, confident, and silently ate every packet the haus tried to send.
+
+## Why it looked like the internet's fault
+
+Because DNS kept working. `dnsmasq` answers on the `INPUT` path, and `INPUT` was fine — so every device could still look up an address perfectly, and then reach nothing at it. The box itself could fetch from the internet, because its own traffic is `OUTPUT`, not `FORWARD`. Public status pages for the video service said all clear, correctly.
+
+Every signal available from inside the haus pointed at the internet. The call was coming from inside the haus.
+
+What broke it open was a controlled A/B that took thirty seconds: a laptop on a phone hotspot reached the CDN with a TLS handshake in under a third of a second, while the server on the haus network timed out against the same hostnames. Same targets, one variable. After that it was one command — `FORWARD` sitting at policy `DROP` with 1.9 million packets and 219 MB counted against it, and none of the jumps that should have been there.
+
+<Aside type="caution">
+Do not trust the box's own timestamps across subsystems. Services that start before the timezone is applied log in UTC; anything restarted later logs local — in the same file, on the same boot. `/var/log/syslog` records the kernel booting at 12:17 and userspace finishing at 08:53, four hours earlier and one minute later. Anchor your timeline on an epoch or a `Connect time` delta, never on two log lines agreeing.
+</Aside>
+
+The repair was the vendor's own idempotent setup script, `install_iptables_setup.sh`, which rebuilt in seconds what six minutes of restarts had not: 17 filter chains to 98, 15 ipsets to 504, packet loss 100 percent to zero.
+
+## The part that stings
+
+We had the alarm. `sanctum-wan-sentinel` classified the outage correctly — anchors unreachable, gateway reachable, therefore the uplink and not the LAN — and paged four minutes after the failure. It was right, it was fast, and it was ignorable, because the only action it was ever armed to take was to re-point the council's models at local hardware. That is a sensible thing to do when the cloud is gone. It does nothing whatsoever for a haus with no internet.
+
+The first fix drafted for this incident was a second detector on a two-minute tick. It would have watched the same path, reached the same verdict, and been equally unable to act. It was deleted before it saw a second morning.
+
+Detection was never the gap. Agency was.
+
+<Aside type="tip">
+When an incident ends with "nothing was watching", check again. Ours had been watching for weeks and had already written down the right answer four minutes in. The question worth asking is not what your monitoring can see. It is what your monitoring is allowed to do about it.
+</Aside>
+
+The sentinel now carries a hand: a bounded repair ladder it can run itself, armed separately from its other powers because they answer different questions. It still refuses to touch anything when the fault is local to the machine doing the asking, and it still never reboots the box — that judgment stays with a human. Its hourly sibling gained the one check nobody had thought to write, which is whether the sentinel is still ticking at all. A dead watcher and a quiet one look exactly the same from the outside, and we would rather not find out which one we have at 22:31 on a Tuesday.
+
+The bug itself went upstream to the vendor the same day. It is a good bug, and it deserves a fix better than ours.
