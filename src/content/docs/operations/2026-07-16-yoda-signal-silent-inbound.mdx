@@ -1,6 +1,6 @@
 ---
 title: "2026-07-16 — The reply that never left the bridge"
-description: "Outbound Signal probes were green while Bert→Yoda was mute. Two faults stacked: channels.signal.enabled=false, and yoda-chat SSE nested envelopes where OpenClaw expected top-level data.envelope. Fixed, R2D2-healed, goldens tracked."
+description: "Every outbound Signal probe was green while Bert texting Yoda got silence. Two faults stacked — the channel was disabled on the gateway that mattered, and the SSE envelope was nested one level too deep for OpenClaw to see. Here is how the silence was found and sealed."
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
@@ -10,11 +10,15 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 The most important interface in Sanctum is a Signal thread with Yoda. When it
 goes quiet, every other green dashboard is a lie.
 
-On 2026-07-16 the operator saw our outbound probes arrive on his phone and
-still got **no answers** to his own messages. Health said OK. The bridge was
-"up." The silence was inbound-only.
+On 2026-07-16 the operator watched our outbound probes land on his phone and
+still got **no answers** to the messages he sent back. Health said OK. The
+bridge was "up." Yoda's texts arrived. Bert's never did. The silence was
+inbound-only — the worst kind, because nothing was on fire and nothing was
+logged loud enough to notice.
 
 ## Symptom
+
+Every check that could be green was green. The one that mattered was not.
 
 | Check | Result |
 |-------|--------|
@@ -25,14 +29,19 @@ still got **no answers** to his own messages. Health said OK. The bridge was
 | Proxy `recent_events` | Contained `dataMessage` from Bert (`"hi"`) |
 | openclaw-gateway journal after that `hi` | **No agent run** |
 
-Outbound green + inbound mute is the tell: the transport works; the **inbound
-parser or channel gate** is dropping.
+Outbound green plus inbound mute is the tell: the transport works, and
+something in the **inbound parser or the channel gate** is quietly eating
+messages. The `hi` reached the proxy. It just never became an agent run.
 
 ## Root causes (stacked)
 
+Two independent faults, either one enough to swallow a message on its own. We
+fixed the first, watched the provider start, and still heard nothing — which is
+how we found the second.
+
 ### 1. Channel disabled on the live gateway
 
-VM `~/.openclaw/openclaw.json`:
+On the VM, `~/.openclaw/openclaw.json` had Signal switched off:
 
 ```json
 "channels": {
@@ -44,20 +53,23 @@ VM `~/.openclaw/openclaw.json`:
 }
 ```
 
-The Mac Mini host config still had Signal enabled. The **gateway that matters
-runs on the sanctum-vm** — that copy was off. Enabling it made the provider
-start (`[signal] starting provider`) but still did not process messages.
+The Mac Mini host config still had Signal enabled, which is exactly what made
+this so convincing — someone glancing at the twin config would swear it was on.
+But the **gateway that matters runs on the sanctum-vm**, and that copy was
+off. Enabling it made the provider start (`[signal] starting provider`) and
+still did not process a single message. One fault down, and the room was just
+as quiet.
 
 ### 2. SSE payload shape mismatch (the silent drop)
 
-`yoda-chat` proxy emitted:
+The `yoda-chat` proxy emitted its receive events like this:
 
 ```
 event: receive
 data: {"method":"receive","params":{"envelope":{...},"account":"..."}}
 ```
 
-OpenClaw's Signal monitor does:
+OpenClaw's Signal monitor reads them like this:
 
 ```js
 payload = JSON.parse(event.data);
@@ -65,11 +77,14 @@ const envelope = payload?.envelope;  // undefined when nested under params
 if (!envelope) return;               // silent drop
 ```
 
-So every real inbound envelope arrived at the proxy, was recorded in
-`/api/v1/status`, and was **discarded by OpenClaw** without a log line loud
-enough to page.
+The envelope OpenClaw wanted at the top level was nested one layer down, under
+`params`. So every real inbound envelope arrived at the proxy, was faithfully
+recorded in `/api/v1/status`, and was then **discarded by OpenClaw** without a
+log line loud enough to page anyone. The bridge was not down. It was reading
+the mail and filing it in the wrong drawer.
 
-Fix (proxy SSE write path):
+The fix flattens the SSE write path so the data field is the signal-cli params
+object itself:
 
 ```python
 # data MUST be the signal-cli params object (top-level envelope)
@@ -77,13 +92,16 @@ payload = json.dumps(params if isinstance(params, dict) else {"value": params})
 self.wfile.write(f"event: {method}\ndata: {payload}\n\n".encode("utf-8"))
 ```
 
-Proof after fix: synthetic inject → typing → send →  
-`[signal] delivered reply to +15555550100`. Operator confirmed live reply.
+Proof after the fix: a synthetic inject produced typing, then a send, then
+`[signal] delivered reply to +15555550100`. The operator confirmed a live reply
+on his phone. The round trip closed for the first time in the incident.
 
 ## Self-heal (R2D2 / signal-link-sentinel)
 
-The Mac-side **signal-link-sentinel** (wrapped by R2D2 recipe
-`heal-yoda-signal-link`) now treats inbound readiness as first-class.
+A fix that only a human can reapply is a fix with a half-life. The Mac-side
+**signal-link-sentinel** — wrapped by R2D2 recipe `heal-yoda-signal-link` —
+now treats inbound readiness as first-class, so both of the day's faults have a
+named state and a named heal.
 
 | State | Heal |
 |-------|------|
@@ -92,13 +110,15 @@ The Mac-side **signal-link-sentinel** (wrapped by R2D2 recipe
 | `GATEWAY-DOWN` | Restart `openclaw-gateway` + `yoda-chat-proxy` |
 | (existing) `SIGNAL-CLI-DOWN` / `BRIDGE-DOWN` / `VM-CONSUMER-DOWN` | kickstart / doctor |
 
-Probe script on the VM (called over SSH):
+The sentinel gathers its facts from a probe script that lives on the VM and is
+called over SSH:
 
 ```
 ~/.openclaw/yoda-chat/scripts/inbound-readiness.py
 ```
 
-Tracked golden copies live under:
+The tracked golden copies live under sanctum-config, ready to re-apply after a
+rebuild wipes the VM's working copy:
 
 ```
 ~/.sanctum/yoda-chat/   # sanctum-config
@@ -109,6 +129,9 @@ Tracked golden copies live under:
 ```
 
 ## Operator commands
+
+Four commands cover the whole surface — check readiness, force the heal R2D2
+runs, redeploy goldens after a rebuild, and ask the VM for the raw facts:
 
 ```bash
 # Readiness (Mac)
@@ -124,7 +147,8 @@ bash ~/.sanctum/scripts/r2d2/heal-yoda-signal-link.sh yoda-signal-link
 ssh yoda 'python3 ~/.openclaw/yoda-chat/scripts/inbound-readiness.py'
 ```
 
-Healthy inbound facts look like:
+Healthy inbound facts come back looking like this — five booleans, all true,
+or the channel is not really up:
 
 ```json
 {
@@ -141,11 +165,18 @@ Healthy inbound facts look like:
 1. **Outbound success is not inbound health.** Always require a
    `dataMessage` → agent run → reply chain for the primary channel.
 2. **The gateway config on the VM is the source of truth for Signal**, not
-   the Mac Mini's twin `openclaw.json`.
-3. **Silent drops are worse than crashes.** If a monitor early-returns on
-   missing fields, log at warn with the raw payload shape once.
-4. **Liveness ≠ readiness.** Process up + port open is necessary; channel
-   enabled + SSE contract + subscriber connected is sufficient.
+   the Mac Mini's twin `openclaw.json`. The twin is the decoy.
+3. **Silent drops are worse than crashes.** If a monitor early-returns on a
+   missing field, log at warn with the raw payload shape once. A crash pages
+   you; a silent return lets you sleep through it.
+4. **Liveness is not readiness.** Process up plus port open is necessary;
+   channel enabled plus SSE contract plus subscriber connected is sufficient.
+   The lineage is the rest of the bridge — [The Holocron Bridge](/architecture/yoda-chat/)
+   for how yoda-chat is wired, and [Signal troubleshooting](/operations/signal-troubleshooting/)
+   for the layers below this one.
 
-See also: [The Holocron Bridge](/architecture/yoda-chat/),
-[Signal Troubleshooting](/operations/signal-troubleshooting/).
+For an incident that never threw an error, the receipt is small: a text goes
+in, an agent runs, a reply comes back. The sentinel now refuses to call the
+channel healthy until that whole round trip completes — because a bridge that
+only carries traffic one way is not a bridge, it is a very convincing green
+light.

@@ -1,25 +1,29 @@
 ---
 title: "2026-06-24: Closing the LAN — the loopback surface sweep"
-description: "After the passkey + mTLS hardening, an audit of every listening service found several still bound to 0.0.0.0. This is how each sensitive port came off the LAN — loopback, or loopback plus exactly the one interface it needs."
+description: "The front door was locked. Then someone counted the windows: an audit of every listening service found several still bound to 0.0.0.0. This is how each sensitive port came off the LAN — loopback, or loopback plus exactly the one interface it needs."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 ![A gatehaus at night where a keeper walks a row of doors, sealing each with a teal bolt; one door keeps a narrow slot open to a single lit path while the wide courtyard side is bricked shut.](./images/hero-2026-06-24-loopback-surface-sweep.png)
 
-The passkey lock and the mTLS machine certs secured the front door and the crown jewels. But "hack-proof every sensitive port" means *every* port — so the next step was to enumerate every listening service on the haus and ask one question of each: who actually needs to reach you? Several were still bound to `0.0.0.0` — every interface, reachable by any device on the home LAN. This is the sweep that closed them.
+The passkey and the machine certs locked the front door. The crown jewels sat behind mTLS. Windu, the security seat, was not satisfied — a locked door means nothing when the windows are open. So we counted the windows: every service on the haus that was listening for a connection. The question for each was small and merciless. Who actually needs to reach you? Several answered `0.0.0.0` — every interface, any device on the home LAN. This is the sweep that shut them.
+
+The lock came from the [passkey and mTLS hardening](/operations/2026-06-22-passkey-mtls-hardening/) two days earlier. This is the follow-through.
 
 ## The doctrine: bind to need, never to 0.0.0.0
 
-A service that binds `0.0.0.0` is saying "anyone on any network I touch may connect." Almost nothing needs that. The rule applied to each service:
+A service bound to `0.0.0.0` is making an offer: anyone on any network I touch may connect. Almost nothing needs to make that offer. One rule, three cases:
 
-- **On-box only** (a backend behind a terminator, a bus only local scripts post to) binds **loopback** (`127.0.0.1`). The LAN and the tailnet simply cannot see it.
-- **A deliberate off-box need** (a read-only API the travelling-laptop dashboard renders from; a coordination registry the VM uses) binds **loopback plus exactly that one interface** — the tailnet IP, or the vmnet bridge — and nothing else. The LAN is excluded.
-- **Mutation surfaces always stay loopback.** Read-only exposure is a different risk class than write.
+- **On-box only** — a backend behind a terminator, a bus that only local scripts post to — binds **loopback** (`127.0.0.1`). The LAN cannot see it. Neither can the tailnet.
+- **A deliberate off-box need** — a read-only API the travelling laptop renders from, a coordination registry the VM uses — binds **loopback plus exactly the one interface it needs**: the tailnet IP, or the vmnet bridge. Nothing more. The LAN is excluded.
+- **Mutation surfaces stay loopback, always.** Reading is one risk class. Writing is another.
 
-The second pattern is the interesting one: there is no single bind address that means "loopback and tailnet but not the LAN," so those services now bind a small explicit list and skip `0.0.0.0` entirely.
+The second case is the subtle one. There is no bind address that means "loopback and tailnet but not the LAN." So those services now bind a short explicit list and skip `0.0.0.0` entirely.
 
 ## What moved
+
+Seven listeners came off the wire. The change reads more cleanly as a ledger than as a paragraph — each of these ports lives in the full [port summary](/architecture/port-summary/).
 
 | Service | Port | Before | After |
 |---|---|---|---|
@@ -32,20 +36,26 @@ The second pattern is the interesting one: there is no single bind address that 
 | presence (lock registry) | `:1949` | 0.0.0.0 | loopback + bridge + tailnet |
 
 <Aside type="note">
-proxyd is the gateway to every council model. A panel asked whether it needed mTLS like the `:1337`/`:3301` backends it fronts; the ruling was that with zero off-box callers a loopback bind removes the entire external surface more cleanly than a client-cert rebuild, so loopback it is. The deeper note: proxyd does not validate its own api-key, so a local process can still use it — loopback closes the network, an api-key check (a later item) closes the rest.
+proxyd is the gateway to every council model. Windu asked the obvious question: shouldn't it carry mTLS, like the `:1337` and `:3301` backends it fronts? The ruling went the other way. With zero off-box callers, a loopback bind removes the whole external surface more cleanly than a client-cert rebuild ever would. So: loopback. One caveat stays on the books — proxyd does not validate its own api-key, so a local process can still use it. Loopback closes the network. An api-key check, a later item, closes the rest.
 </Aside>
 
 ## sanctumd, Holocron, presence: loopback plus one
 
-These three carry read-only or coordination endpoints that a council ruling deliberately exposes off-box — sanctumd and Holocron render the dashboard honestly when the laptop is travelling (over the tailnet); presence lets the VM acquire and release cross-session locks (over the vmnet bridge). Their mutation surfaces already live elsewhere on loopback. So instead of `0.0.0.0`, each now binds loopback plus the resolved tailnet IP (and, for presence, the bridge), best-effort: if Tailscale is down the service simply falls back to loopback rather than failing. sanctumd's default is baked into the binary, so no relaunch — by a heal, a boot script, or anything else — can put it back on the LAN.
+Three services could not simply hide. Each carries an endpoint a council ruling deliberately exposes off-box. sanctumd and Holocron render the dashboard honestly when the laptop is on the road, over the tailnet. presence lets the VM acquire and release cross-session locks, over the vmnet bridge. Their mutation surfaces already live elsewhere, on loopback.
+
+So each binds loopback plus the resolved tailnet IP — and, for presence, the bridge too. The bind is best-effort. If Tailscale is down, the service falls back to loopback rather than failing outright. sanctumd goes one step further: its default is baked into the binary. No relaunch can undo it — not a heal, not a boot script, not anything. The LAN is off the table for good.
 
 ## Left exposed on purpose
 
-A few listeners stay reachable beyond loopback because that is correct:
+A few listeners stay reachable past loopback, because that is the correct answer for them:
 
-- The **PQ-TLS terminators** on `:1111`, `:2222`, `:2223`, `:4078` are bound to the tailnet by design — they are the encrypted front for loopback backends, the same pattern the passkey dashboard uses.
-- `:7337` is already tailnet-bound; `:1138` (the voice agent) is reached by the LiveKit cloud and SIP, gated by Tailscale and the framework's TLS.
+- The **PQ-TLS terminators** on `:1111`, `:2222`, `:2223`, and `:4078` bind the tailnet by design. They are the encrypted front for the loopback backends — the same pattern the passkey dashboard uses.
+- `:7337` is already tailnet-bound. `:1138`, the voice agent, is reached by the LiveKit cloud and by SIP, gated by Tailscale and the framework's own TLS.
 
 ## So a regression is caught, not discovered
 
-The honest part: the macOS application firewall does **not** actually gate these services (they are "permitted"), so the binding is the real control, not a firewall rule. The `:6669` ablation listener is the clearest case — it serves an uncensored model with no auth, protected only by being loopback-bound, so its posture check was rewritten to assert exactly that: loopback-only, or page. The `security-posture-sentinel` now verifies the whole set every 15 minutes — gate enforcing, machine ports refusing plaintext, and nothing sensitive drifting back onto `0.0.0.0`. Point-in-time hardening is a snapshot; continuous attestation is the lock.
+Here is the honest part. The macOS application firewall does not actually gate these services — it marks them "permitted." The binding is the real control. Not a firewall rule.
+
+The `:6669` ablation listener makes the stakes plain. It serves an uncensored model with no auth. The only thing between it and the LAN is a loopback bind. So its posture check was rewritten to assert exactly that: loopback-only, or page.
+
+The `security-posture-sentinel` now sweeps the whole set every 15 minutes. It checks that the gate is enforcing, that the machine ports refuse plaintext, and that nothing sensitive has drifted back onto `0.0.0.0`. When it fails, it opens the [break-glass runbook](/operations/2026-06-23-command-center-recovery-runbook/). Point-in-time hardening is a snapshot. Continuous attestation is the lock — the windows get counted every fifteen minutes now, whether or not anyone is watching.
