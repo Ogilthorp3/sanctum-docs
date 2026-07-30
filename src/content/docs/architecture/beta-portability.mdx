@@ -1,31 +1,39 @@
 ---
 title: Beta Portability & the No-Hardcoded-Endpoints Rule
-description: "How Sanctum keeps per-setup values out of code, so the same build runs on a second haus without breaking or leaking the first operator's identity."
+description: "How the same Sanctum build runs on a second haus without breaking on the first operator's paths or leaking the first operator's name to a stranger's agents."
 ---
 
-![A pencil sketch of two identical haus keys cut from one master template, teal accent halo](./images/beta-portability.png)
+![A pencil sketch of two identical haus keys cut from one master template, one teal accent halo where they part ways](./images/beta-portability.png)
 
-Sanctum has two kinds of constant. **Stable** ones are identical on every
-install — the proxy always listens on `:4040`, the Firewalla bridge on `:1984`.
-**Per-setup** ones differ from one haus to the next: LAN addresses, device MAC
-addresses, the operator's name and phone number, home directory paths, Home
-Assistant entity IDs, the GitHub org. Bake a per-setup value into code and the
-second install either breaks (a service starts on a path that does not exist) or
-leaks (the first operator's identity ships to a stranger's agents).
+Sanctum grew up in one haus, in Quebec, for one family. The second install is
+where that fact becomes a liability. Ship the same build to a stranger's box and
+one of two things goes wrong. It breaks — a service starts on a home directory
+that does not exist. Or, worse, it leaks — the first operator's name, alert
+number, and children's device MAC addresses arrive, uninvited, on somebody
+else's agents. Neither is acceptable in a product whose entire pitch is privacy.
 
-The rule: **per-setup values live in one source of truth, and code resolves them
-at run time — never as a literal.**
+So we drew a line down the middle of every constant in the system.
+
+## Two kinds of constant
+
+**Stable** ones are identical on every install. The proxy always listens on
+`:4040`; the Firewalla bridge always on `:1984`. **Per-setup** ones differ from
+one haus to the next: LAN addresses, device MAC addresses, the operator's name
+and phone number, home directory paths, Home Assistant entity IDs, the GitHub
+org. The rule that keeps the two apart is short. **Per-setup values live in one
+source of truth, and code resolves them at run time — never as a literal.**
 
 ## The source of truth
 
-Every install has exactly one `instance.yaml`. It holds the per-setup values and
-nothing else needs them duplicated. A fresh box gets a minimal scaffold on first
-run; onboarding fills the rest.
+Every install has exactly one `instance.yaml`. It holds the per-setup values,
+and nothing else needs them duplicated. A fresh box gets a minimal scaffold on
+first run; [onboarding](/architecture/config-system/) fills the rest. One file
+knows who lives here. Everything else asks it.
 
 ## The resolve pattern
 
-Three consumers, one idea — read the source of truth, fall back to a dev default
-only so a not-yet-onboarded box still runs:
+Three consumers, one idea — read the source of truth, and fall back to a dev
+default only so a not-yet-onboarded box still boots:
 
 - **Shell** uses `sanctum_get <dotted.key> <fallback>`, e.g.
   `ORBI_HOST="$(sanctum_get network.orbi_lan 100.0.0.5)"`. A launchd plist, which
@@ -35,8 +43,11 @@ only so a not-yet-onboarded box still runs:
 - **Prompts and other templates** ship with `{{placeholders}}` and `AUTO:` blocks
   that a render step fills from the source of truth at deploy.
 
-Because the fallback is the original literal, an existing box behaves identically
-while the value becomes per-setup everywhere else.
+Because the fallback is the original literal, an existing box behaves
+identically while the same value becomes per-setup everywhere else. Nothing
+breaks the day the rule lands. That is the whole trick — see
+[endpoint resolution](/architecture/endpoint-resolution/) for how the shell side
+grew up.
 
 ## What counts as per-setup
 
@@ -52,32 +63,40 @@ Stable service ports are **not** per-setup and stay as named constants.
 
 ## Agents ship empty, render full
 
-The council prompt template carries no operator data. The owner's name, haus
-names, and each child's device MAC addresses are `{{placeholders}}`; the device
-roster is an `AUTO:family` block. The render step substitutes real values into
-the deployed copy from `instance.yaml`. The shipped template reads
-`MAC FA:CE:DE:CA:CA:XX` and `serving {{owner_full_name}}`; only the rendered,
-per-install copy ever holds a real address.
+The council prompt template carries no operator data at all. The owner's name,
+the haus names, and each child's device MAC addresses are `{{placeholders}}`;
+the device roster is an `AUTO:family` block. The render step substitutes real
+values into the deployed copy from `instance.yaml`. The template you can read in
+the repo says `MAC FA:CE:DE:CA:CA:XX` and `serving {{owner_full_name}}`. Only
+the rendered, per-install copy ever holds a real address. Read the shipped
+source and you learn nothing about the family it serves. That is by design.
 
 ## Onboarding collects it
 
 `sanctum onboard` asks for the values that cannot be discovered: the operator's
-name and alert number, and each child's device MAC addresses (offered as a live
-pick-list from the paired firewall, or typed by hand). Without the MAC addresses
-the haus-control curfews have nothing to enforce, so collecting them is part of
-first run, not an afterthought.
+name and alert number, and each child's device MAC addresses — offered as a live
+pick-list from the paired firewall, or typed by hand. This is not busywork.
+Without the MAC addresses the [haus-control curfews](/architecture/screen-time/)
+have nothing to enforce, so collecting them is part of first run, not an
+afterthought.
 
 ## Proving it with a second haus
 
-Structural assertions — "the key exists" — do not prove portability. The contract
-test builds a **hostile second config**: a different operator (`alice@haus.local`,
-`+15555550142`, org `alice-beta`, child MAC `FA:CE:DE:CA:CA:01`) and feeds it
-through every real consumer — the shell resolver, the prompt render, the CLI
-defaults, the haus-control digest. A pass means two things at once: the second
-operator's values resolve, **and** none of the first operator's identity appears
-anywhere in the output. Run it before any release that touches a per-setup path.
+Here is where Alice comes in. Alice does not exist — she is the hostile second
+config the contract test builds, and she is the whole reason this page is more
+than a good intention. Structural assertions ("the key exists") prove nothing
+about portability. So the test invents a different operator entirely —
+`alice@haus.local`, `+15555550142`, org `alice-beta`, child MAC
+`FA:CE:DE:CA:CA:01` — and feeds her through every real consumer: the shell
+resolver, the prompt render, the CLI defaults, the haus-control digest.
+
+A pass means two things at once. Alice's values resolve. And none of the first
+operator's identity appears anywhere in the output — not a name, not a number,
+not a MAC. Run it before any release that touches a per-setup path.
 
 ## The rule in one line
 
-If a value would change from one haus to the next, it comes from discovery,
-the source of truth, or an env override — never a literal in code.
+If a value would change from one haus to the next, it comes from discovery, the
+source of truth, or an env override — never a literal in code. Alice gets a home
+that works. The first operator keeps a home that stays his. Two hauses, one
+build, and neither one ever has to meet the other.
