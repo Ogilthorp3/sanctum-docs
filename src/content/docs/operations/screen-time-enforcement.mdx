@@ -8,12 +8,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Screen Time enforcement — a grand parental clock with two faces: the polished public one telling a comfortable lie, the hidden second one telling the truth; a craftsman with a stethoscope listens to the difference.](./images/hero-screen-time-enforcement.png)
 
-# Screen Time Enforcement — Closed-Loop Edition
+The log reported five blocked devices. Netflix said otherwise. Both were telling the truth about different things — which is the worst class of bug there is: the kind that files a clean report while the thing it reports on quietly does nothing.
 
-**Date:** 2026-04-18
-**Status:** Live on manoir, E2E-tested, regression-gated
-
-A screen-time system that says "blocked" but streams Netflix is worse than one that admits it's broken. This page documents what went wrong on April 16–18, 2026 and the closed-loop contract that now governs every enforcement action.
+A screen-time system that says "blocked" but streams Netflix is worse than one that admits it's broken. For two nights in April, ours did exactly that — the [Force Flow](/architecture/force-flow/) daemon on manoir logged `BLOCKED` against seven MACs while five of them stayed happily online, and the only people who noticed were the parents, who were supposed to be the ones the curfew let sleep. This page is the autopsy of April 16–18, 2026, and the closed-loop contract that now governs every enforcement action. The fix went live on manoir on 2026-04-18, E2E-tested and regression-gated.
 
 ## What broke
 
@@ -83,7 +80,7 @@ Same shape for `_unblock_mac` — asserts `acl == True` after the call, retries 
 
 The bridge's `success` field is a partial signal. The Firewalla SDK can accept the command, return `success: true`, and still not propagate the change to the enforcement tier (happened to us with the metallib-stalled SDK state). The only authoritative signal is re-reading the target's policy on the Firewalla itself. **If the observed state doesn't match the intended state, the action didn't happen, regardless of what any intermediary said.**
 
-This is Living Force principle 12: *commands can't lie either*.
+This is [Living Force](/architecture/living-force/) principle 12: *commands can't lie either*.
 
 ## The log grammar
 
@@ -124,14 +121,15 @@ Parents can override both consoles (VRVANA PC + Nintendo Switch) from the Holocr
 | **+120 MIN** | Same, 120 minutes (the backend max from `override_max_minutes`) |
 | **STOP** | Clear both overrides immediately (`minutes: 0`) |
 
-Album's phone curfew is unaffected — the phone keeps its 23:00 weekend bedtime so he can read or play chess while falling asleep. Only the consoles get bumped.
+Albert's phone curfew is unaffected — the phone keeps its 23:00 weekend bedtime so he can read or play chess while falling asleep. Only the consoles get bumped.
 
 ## STUDY MODE — per-child curfew override
 
 When a kid hits an end-of-school study crunch and needs an earlier
 cutoff than the regular weekday schedule, the cleanest path is the
 `study_mode` block at the top of that child's `schedule` in
-`devices.yaml`:
+`devices.yaml` — one more layer on the [screen-time
+architecture](/architecture/screen-time/)'s stack of who-is-curfewed-when:
 
 ```yaml
 family:
@@ -211,3 +209,5 @@ shasum -a 256 -c ~/Backups/sanctum-mini/sanctum-mini-20260418-*.tgz.sha256
 <Aside type="note">
 The Nintendo was moved from `shared_devices` to `screens` in the same session so it could carry its own 22:30 weekend/holiday schedule. That's a yaml change, not a code change — reverting `devices.yaml` from the backup puts it back under "shared inherits from Albert."
 </Aside>
+
+The whole affair cost two nights of quiet Netflix and one confident, wrong "RED tout est bloqué." What it bought is a rule the haus now applies to everything that writes to hardware: the acknowledgement is a claim, the re-read is the truth, and a curfew you cannot verify is one the kids have already beaten. The daemon no longer gets to tell the parents it did its job. It has to show them.
