@@ -1,29 +1,34 @@
 ---
 title: "2026-06-20: The Three-Seat Cathedral"
 description: >-
-  One Rust binary, one resident MoE crown jewel, three seats. Devstral became
-  the all-Rust Qui-Gon code seat — a new mistral3 loader whose long-context NaN
-  fell to chunked-prefill and an attn-scale dtype cast, parity-green against
-  Python. Cilghal got a refusal-ablated twin on :6669 — one model, two ports,
-  ~zero extra memory — after a "moot→works" reversal traced to a mis-aimed r̂.
-  And everything consolidated onto one main behind post-quantum mTLS, the
-  redundant second 35B retired, ~20 GB handed back.
+  One Rust binary, one resident crown jewel, three seats. Devstral became the
+  all-Rust Qui-Gon code seat — a mistral3 loader whose long-context NaN fell to
+  chunked prefill and an attn-scale dtype cast, parity-green against Python.
+  Cilghal got a refusal-ablated twin on :6669 — one model, two ports, ~zero
+  extra memory — after a "moot→works" reversal traced to a mis-aimed r̂. And it
+  all consolidated onto one main behind post-quantum mTLS, the redundant second
+  35B retired, ~20 GB handed back.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Three thrones, three doors, one resident crown jewel feeding them all — a code seat, a healer's seat, and the council. Tommy presides.](./images/hero-the-three-seat-cathedral.png)
+![Three thrones, three doors, one resident crown jewel feeding them all — a code seat, a healer's seat, and the council, sketched under a single amber halo.](./images/hero-the-three-seat-cathedral.png)
 
-The Temple has run one resident crown jewel for a while now: Qwen3.6-35B-A3B,
-the 4-bit MoE that serves the council on `:1337` behind mTLS. Today's overhaul
-did not add a second crown. It added two *seats* — a code seat and a healer's
-seat — and arranged for both to draw from infrastructure the haus already pays
-for. One Rust binary. One resident model where it could be. Three doors.
+The obvious way to give the council new powers is to add more models. We did
+the opposite.
+
+For a while now the Temple has run exactly one resident crown jewel:
+Qwen3.6-35B-A3B, the 4-bit MoE that serves the council on `:1337` behind mTLS.
+Today's overhaul added no second crown. It added two *seats* — a code seat and
+a healer's seat — and arranged for both to draw from infrastructure the haus
+already pays for. One Rust binary. One resident model where it could be. Three
+doors. The [cathedral](/architecture/sanctum-mlx/) got bigger by getting
+simpler.
 
 ## Seat one — Devstral, the all-Rust Qui-Gon
 
-Qui-Gon's code seat used to lean on a heterogeneous patchwork; today it became a
-first-class native citizen. **Devstral-Small-2-24B**, 4-bit, now serves on
+Qui-Gon's code seat used to lean on a heterogeneous patchwork; today it became
+a first-class native citizen. **Devstral-Small-2-24B**, 4-bit, now serves on
 `:3301` through a brand-new all-Rust **mistral3 loader** in `sanctum-mlx`. The
 loader is not a from-scratch model — it reuses the dense `mistral::Model` path
 and its YaRN long-context scaling, which is exactly the kind of reuse that keeps
@@ -32,7 +37,9 @@ a cathedral maintainable instead of a museum of one-offs.
 The reuse came with a tax, and the tax was a NaN. At long context the loader
 produced clean output up to a point and then poisoned itself — the signature of
 an overflow that only shows up once the sequence is long enough to exercise the
-arithmetic that's fine in miniature. Two fixes, both surgical:
+arithmetic that's fine in miniature. It is the same class of ghost that once
+made [the cathedral unable to read long](/operations/2026-05-22-the-cathedral-could-not-read-long/).
+Two fixes, both surgical:
 
 - **Chunked prefill** at `PREFILL_CHUNK=2048` — prefill the prompt in bounded
   windows instead of one giant pass, so the intermediate magnitudes never reach
@@ -45,7 +52,8 @@ Neither fix is interesting on its own. Together they let Devstral run
 **parity-green against Python `mlx_lm`** across 8k–36k tokens — not "looks
 right," but matched against the reference loader at the lengths where the bug
 actually lived. The seat answers `is_prime` with the standard sqrt
-trial-division, finishes clean, and the NaN is gone where it used to start.
+trial-division, finishes clean, and the NaN is gone from the country it used to
+haunt.
 
 <Aside type="caution" title="Verified at the lengths that mattered">
 Parity was checked against Python `mlx_lm` across 8k–36k — the regime where the
@@ -55,21 +63,22 @@ fix proven only on short prompts isn't proven; it's hopeful.
 
 ## Seat two — the Cilghal-Heretic on :6669
 
-Cilghal's role is wellness and genome work, the kind of emergency assistance
-where a reflexive refusal is the failure mode, not the safety. That seat needs
-a model with its **refusal direction ablated** — the single direction in
-activation space that, when a model decides to decline, it moves along. Suppress
-that direction and the model stops reflexively refusing while keeping everything
-else it knows.
+Cilghal's role is wellness and genome work — the kind of emergency assistance
+where a reflexive refusal *is* the failure mode, not the safety. A model that
+declines to discuss a CRISPR protocol is not being careful; it is being useless
+to a healer. That seat needs a model with its **refusal direction ablated**:
+the single direction in activation space that a model moves along when it
+decides to decline. Suppress that direction and the model stops reflexively
+refusing while keeping everything else it knows.
 
-The first attempt was filed as **moot**: ablation seemed to do nothing
+The first attempt was filed as **moot** — ablation seemed to do nothing
 measurable. That verdict turned out to be the bug, not the result. The v1
-refusal direction (`r̂`) had been **extracted through the wrong prompt path** —
-a mis-aimed `r̂` points at a direction the *served* model never actually travels,
-so projecting it out changes nothing. The reversal came from re-extracting on
-the **served 4-bit checkpoint through the production prompt path** — measuring
-the direction the deployed model really uses, not the one a different code path
-implied.
+refusal direction (`r̂`) had been **extracted through the wrong prompt path**;
+a mis-aimed `r̂` points at a direction the *served* model never actually
+travels, so projecting it out changes nothing. The reversal came from
+re-extracting on the **served 4-bit checkpoint through the production prompt
+path** — measuring the direction the deployed model really uses, not the one a
+different code path implied.
 
 With the v2 direction aimed correctly, the gate moved:
 
@@ -91,18 +100,19 @@ The seat ships with its safety rails welded on:
   nothing else; it is never exposed on the LAN or Tailscale.
 
 The elegant part is the memory. `:6669` is **the same `:1337` model with
-ablation forced on** — one resident 4-bit checkpoint, two ports, served from one
-process. Both `/health` endpoints return byte-identical bodies because they are
-literally the same model; the ablated seat costs essentially zero additional
-resident memory. One model, two doors, two postures.
+ablation forced on** — one resident 4-bit checkpoint, two ports, served from
+one process. Both `/health` endpoints return byte-identical bodies because they
+are literally the same model; the ablated seat costs essentially zero
+additional resident memory. One model, two doors, two postures.
 
 ## The consolidation — one main, post-quantum everywhere
 
 The third piece was housekeeping with consequences. Everything merged to **one
 `main` at `dffbe81`**: the mistral3 loader, ML-DSA post-quantum mTLS, vision,
-proxyd's post-quantum hop, the ablation, the `:6669` seat. No concurrent feature
-branches, no "deployed but uncommitted" limbo — the thing running is the thing
-in `main`.
+proxyd's post-quantum hop, the ablation, the `:6669` seat. No concurrent
+feature branches, no "deployed but uncommitted" limbo — the thing running is
+the thing in `main`. Windu's hardening from [the post-quantum vault](/operations/2026-06-20-the-post-quantum-vault/)
+now reaches every hop that leaves a process.
 
 - **`:1337` council** runs `--no-plain` behind **ML-DSA post-quantum mTLS**.
   The handshake's signature algorithms and key exchange are post-quantum via
@@ -143,7 +153,7 @@ macOS `memory_pressure` cheerfully reports "79% free," but that figure counts
 compressible and inactive pages as free; the swap-in-use and load numbers are
 the honest read, and they say *not comfortable*. The design claim holds; the
 "host is relaxed" claim does not. A follow-up should account for who is holding
-that swap.
+that swap — see the [capacity doctrine](/architecture/capacity-doctrine/).
 </Aside>
 
 ## What's verified vs. what's handed off
@@ -164,4 +174,6 @@ as done here:
 Three seats, one binary, one resident crown jewel, one `main`, post-quantum on
 every hop that leaves a process. The code seat is native Rust at last, the
 healer's seat is a refusal-ablated twin that costs almost nothing to keep, and
-the redundant 35B is gone. The cathedral got bigger by getting simpler.
+the redundant 35B is gone. Somewhere on the terrace, Tommy would note that the
+best guardian is the one you never have to feed twice — and go back to watching
+the sun. The cathedral got bigger by getting simpler.

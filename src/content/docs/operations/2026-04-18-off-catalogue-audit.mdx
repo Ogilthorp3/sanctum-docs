@@ -1,24 +1,22 @@
 ---
 title: "2026-04-18: The Off-Catalogue Audit"
-description: Five services found running that no manifest knew about, five registered, a guardrail script born — and a long docs-and-code alignment pass to close the day.
+description: Five healthy services were running that the watchdog had never heard of. Finding them, registering them, and building the guardrail that keeps the roll call honest.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 
-![Off-catalogue audit — a vast library of indexed scrolls; five luminous interlopers tucked between shelves they were never assigned to, and an inspector with a small lamp finally noticing.](./images/hero-2026-04-18-off-catalogue.png)
+![Off-catalogue audit — a wall of softly-glowing server portraits held up against a clipboard catalogue; five of the portraits have no name-tag, and a small hand is finally writing them in.](./images/hero-2026-04-18-off-catalogue.png)
 
-{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A clipboard catalogue being held up to a wall of softly-glowing server portraits; five of the portraits have no name-tags, and a small hand is writing them in. Technical pencil sketch, dark background, amber localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
+Three sittings, one uncomfortable question carried through all of them: what is running that the watchdog has never heard of? Nothing was broken. No crashes, no 4 AM pages, no fires. Just an audit — the kind you run precisely because everything looks fine and you have learned not to trust that.
 
-Three sittings, one question across all of them: what services are running that the watchdog doesn't know about? No broken services. No crashes. No 4 AM underwear. Just an uncomfortable audit.
-
-The answer, it turned out, was five.
+The answer came back five.
 
 ## Third Entry — Off-Catalogue Audit: Five Found, Five Registered
 
 **Watchdog before:** 33/33 healthy. **Watchdog after:** 38/38 healthy.
 
-A cross-reference of `lsof -iTCP -sTCP:LISTEN` against the watchdog catalogue revealed five sanctum-ecosystem services running without service YAMLs. All five were genuinely healthy. None appeared in the watchdog's service list. The watchdog was blind to roughly fifteen percent of the running surface.
+A cross-reference of `lsof -iTCP -sTCP:LISTEN` against the watchdog catalogue turned up five sanctum-ecosystem services listening without a service YAML. All five were genuinely healthy. None appeared in the watchdog's list. It was blind to roughly fifteen percent of the running surface.
 
 ### The Five
 
@@ -32,15 +30,13 @@ A cross-reference of `lsof -iTCP -sTCP:LISTEN` against the watchdog catalogue re
 
 ### Root Cause Pattern
 
-Every off-catalogue service shared the same failure mode: **LaunchAgent registration happened; watchdog YAML registration did not.** The two-step was only completed halfway.
+Every one shared a single failure mode: **the LaunchAgent got registered; the watchdog YAML did not.** The two-step was completed halfway, in three flavors:
 
-The pattern appears in three flavors:
+1. **Service predates the YAML schema.** Force Flow and SanctumBridge got LaunchAgents before the manifest format existed. Nobody backfilled.
+2. **Service fixed but not registered.** OBLITERATUS got its venv repaired last session; the fix closed the ticket and left the watchdog blind, because the focus was the Python interpreter, not the catalogue.
+3. **Companion forgotten.** Memory-vault has a YAML; its paired reranker doesn't. Think of the two as one unit and you write one manifest.
 
-1. **Service predates YAML schema.** Force Flow and SanctumBridge got LaunchAgents before the manifest format was standardized. Nobody backfilled.
-2. **Service was fixed but not registered.** OBLITERATUS got its venv repaired last session. The fix closed the ticket but left the watchdog blind, because the session's focus was the Python interpreter, not the catalogue.
-3. **Companion service forgotten.** Memory-vault has a YAML. Its paired reranker doesn't. When you think of them as one unit, you write one manifest.
-
-The common thread: **the LaunchAgent is the developer artifact; the watchdog YAML is the operations artifact.** They live in different directories, get created by different people (sometimes different agents), and there is no gate between them. You can have a perfectly healthy, fully supervised, LaunchAgent-managed service that the watchdog has never heard of.
+The common thread: **the LaunchAgent is the developer artifact; the watchdog YAML is the operations artifact.** They live in different directories, get created by different people — sometimes different agents — with no gate between them. You can run a perfectly healthy, fully supervised service the watchdog has never heard of.
 
 ### Deadpool Protocol Port Audit
 
@@ -56,23 +52,21 @@ All five ports were clean — no reassignment needed.
 
 ### The `catalogue-sync-check.sh` Guardrail
 
-Created `/Users/neo/Documents/Claude_Code/tools/catalogue-sync-check.sh` to keep this class of drift from returning quietly.
+So a guardrail was born: `/Users/neo/Documents/Claude_Code/tools/catalogue-sync-check.sh`, to keep this class of drift from returning quietly. It does three things:
 
-The script does three things:
+1. Queries the watchdog API (`/health`) for every port it tracks.
+2. Runs `lsof -iTCP -sTCP:LISTEN` for every listening TCP port.
+3. Cross-references the two, printing any port listening but not catalogued — filtered against a maintained ignore list of system ports (22, 80, 443, 631), macOS services (Raycast and ControlCenter on 5000, 7000, 7265), Cloudflare's internal listener (20241), and documented companion or internal ports.
 
-1. Queries the watchdog API (`/health`) and extracts all ports it tracks.
-2. Runs `lsof -iTCP -sTCP:LISTEN` and collects all listening TCP ports.
-3. Cross-references the two lists. Prints any port listening but not in the watchdog catalogue, filtered against a maintained ignore list of system ports (22, 80, 443, 631), macOS services (Raycast and ControlCenter on 5000, 7000, 7265), Cloudflare's internal listener (20241), and documented companion or internal ports.
-
-After this session, the script outputs: `(none — catalogue is fully in sync)`.
+After this session it outputs: `(none — catalogue is fully in sync)`.
 
 **When to run it:**
 
-- After any manual `nohup ... &` or `launchctl load` that isn't accompanied by a service YAML commit.
-- Before writing a living-force entry — it's the audit step that tells you what to write about.
+- After any manual `nohup ... &` or `launchctl load` not accompanied by a service YAML commit.
+- Before writing a [living-force](/architecture/living-force/) entry — it's the audit step that tells you what to write about.
 - After a boot or LaunchAgent batch-load, to catch anything that came up without a manifest.
 
-The `INTERNAL_PORTS` array is self-documenting: every excluded port has an inline comment explaining the exclusion. If a port ever moves off that list, it will immediately start appearing in output.
+The `INTERNAL_PORTS` array is self-documenting: every excluded port carries an inline comment. Move a port off that list and it starts appearing in output immediately.
 
 <Aside type="tip" title="The two-step registration will always try to drift">
 LaunchAgents are a developer instinct. Watchdog manifests are an operational discipline. The guardrail script exists because the gap between the two is the exact shape most often missed at 11 PM.
@@ -186,3 +180,5 @@ Apr 18 sanctum session complete.
 - **HTTP-monitored services don't appear in the port sync check.** The watchdog health message says "HTTP 200" rather than "port X open" for services checked via HTTP (obliteratus, tommy, navigator-bridge). The sync-check extracts ports from the message text, so these don't show up as covered. They're tracked in the `INTERNAL_PORTS` ignore list with inline comments.
 - **Companion ports need companion YAMLs.** If a service has a paired secondary port (reranker + memory-vault, livekit-server + token-minter), check whether the companion also needs a YAML. The fact that one half exists doesn't mean the other half was filed.
 - **Bootstrap health-tunnel process.** On each boot, `sanctum-bootstrap.sh` may start its own health-tunnel with different port-forwarding args than the current on-disk plist. After running `sync_runtime_calibration.py`, always `launchctl unload` then `load` to replace the running tunnel with the new config. The bootstrap process will keep running with stale args until explicitly killed.
+
+None of the five was ever broken. That is the unsettling part: the haus had been running fine on services it could not see, the way a haus runs fine right up until the one unlisted thing fails at 4 AM and nobody remembers where it lives. Now `catalogue-sync-check.sh` calls the roll, and for the first time all day the answer is that nobody is missing. The [services catalogue](/architecture/services/) and the runtime finally describe the same haus.

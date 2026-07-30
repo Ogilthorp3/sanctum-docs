@@ -7,11 +7,11 @@ import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/compone
 
 ![TurboQuant Slice 4 — three machinists under one lamp working the same crystalline component: a hand-file, then a precision lathe, then a particle-beam etcher, escalating from MLX ops to a custom Metal kernel.](./images/hero-turboquant-slice-4.png)
 
+The flag works. Slices 1 through 1f dragged TurboQuant from "doesn't compile" to "ships 21× better quality at 4× compression," and every one of those numbers is earned. What the flag cannot yet be is a **default** — and the thing standing in the way is embarrassingly boring. Dequant runs on the CPU. Fine for correctness validation, unshippable for production. This page is where we scoped the kill: Slice 4.
+
 <Aside type="tip" title="4a landed — 2026-04-19, then got rebuilt from the ground up 2026-04-24">
 The original 4a (Lloyd-Max key dequant ported to MLX ops, `21f230f` + `b469c52`) measured 9.4× per-fetch versus the CPU reference — but end-to-end on the production Qwen3.6-35B-A3B MoE the win didn't translate, eaten by per-step kernel-launch overhead and concat-grow cost. So we threw it away. The **2026-04-24 rebuild** flipped the premise: stop compressing keys entirely (~4 MB/layer of bf16 K at T=2048 is nothing on a 64 GB Mini) and hand-write a fused Metal kernel that dequantizes V inline during attention, so V never materializes. It ships as `sdpa_dequant_v` in `services/sanctum-mlx/src/turboquant/attention_kernel.rs`, and on the MBP M4 Max bench (vanilla MoE) lifts the dev-grade Slice-1 path from 62.38 to 75.64 tok/s (+21.2%), ~5% under the 79.42 no-TurboQuant baseline. The flag stayed **off** until a confirmed winner earned the flip — `--turboquant` now ships **on** in the production plist, per the [shipped-architecture page](/architecture/turboquant-kv-compression/). This page is the planning-time record; the architecture that shipped lives there.
 </Aside>
-
-Slices 1 through 1f got us from "TurboQuant doesn't compile" to "ships 21× better quality at 4× compression as an opt-in flag." The one thing between that flag and a **default** is performance: dequant lives on the CPU — fine for correctness validation, unshippable for production. This page scopes Slice 4 — the fix.
 
 ## The current bottleneck
 
@@ -33,6 +33,8 @@ Three problems, in priority order:
 At realistic context lengths (1k–4k), CPU dequant dominates — which is why `--turboquant` ships a "dev-grade CPU dequant, expect throughput regression" warning at startup.
 
 ## The three tiers
+
+Three ways to move dequant onto the GPU, in ascending order of effort and nerve — the hero image up top renders them as a hand-file, a lathe, and a particle-beam etcher, three machinists working the same crystalline part. Qui-Gon, who never met an idle cycle he could forgive, would insist we climb the ladder one rung at a time and measure between each. We meant to.
 
 <Tabs>
 <TabItem label="4a — MLX ops (no Metal)">
@@ -116,6 +118,10 @@ We pencilled in **~2 days** to GPU-port the existing math. What shipped was a fr
 - `services/sanctum-mlx/src/turboquant/quantizer.rs` — migrate `quantize_value_group` to an Array-based signature *(planning-time this also listed a key-side `quantize_key_affine`; the rebuild deleted the legacy key path in `37853d8`, so only the value side survived)*
 - `vendor/mlx-rs/mlx-rs/src/ops/` — expose mlx_quantize / mlx_dequantize in the Rust wrapper. The planning-time `grep 'pub fn quantize'` came up empty, and still does: what landed is `quantize_device`, not a bare `quantize`, so a thin safe wrapper is still the first step.
 - Validation lives in `tests/turboquant_ppl.rs` plus the `turboquant_truncate_test` / `drift_probe` bins — no `bench/` dir was ever created.
+
+## The map and the territory
+
+Qui-Gon's ladder was the right ladder. The world just refused to climb it: 4a-as-ported missed the bar, 4b never happened, and the winner turned out to be a 4c-shaped kernel built on a premise the plan never entertained — stop compressing the keys at all. So why keep a planning doc the shipping code now contradicts on nearly every line? Because a plan that survives contact with reality teaches you nothing, and this one did not survive. The escalation still held even when we skipped straight to the particle beam — [The Carmack Optimization](/architecture/carmack-optimization/) is the same instinct pointed at training, and [Sanctum-MLX](/architecture/sanctum-mlx/) is the Rust server all of this fuses into. The [shipped architecture](/architecture/turboquant-kv-compression/) is the destination; this page is the map we drew before we knew the roads had moved.
 
 ## References
 
