@@ -272,6 +272,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+							{ label: '2026-07-29 — The Firewall That Quarantined the Dishwasher', slug: 'operations/2026-07-29-the-firewall-that-quarantined-the-dishwasher' },
 								{ label: '2026-07-29 — The Key Baked Into the Wall', slug: 'operations/2026-07-29-the-key-baked-into-the-wall' },
 								{ label: '2026-07-29 — The Alarm Nobody Could Answer', slug: 'operations/2026-07-29-the-alarm-nobody-could-answer' },
 								{ label: '2026-07-28 — The Cache That Overwrote the Source', slug: 'operations/2026-07-28-the-cache-that-overwrote-the-source' },
