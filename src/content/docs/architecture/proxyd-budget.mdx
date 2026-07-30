@@ -1,16 +1,20 @@
 ---
 title: "Proxyd budget.yaml + CLI route banners"
-description: Hot-reloaded USD budget for Claude CLI ($50/day shared pool), sanctum subs+local only, green/red iTerm2 banners, and degraded local context fit.
+description: A hot-reloaded USD budget for the Claude CLI — a $50/day shared pool, sanctum subs and local only, green/red iTerm2 banners, and a graceful degrade to local context when a session runs long.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-![A pencil-sketched pressure gauge mounted on a pipe, its needle well below the marked limit, with a small handwritten card of rates clipped alongside — swappable without touching the pipework. A cat watches the needle.](./images/hero-proxyd-budget.png)
+![A pencil-sketched pressure gauge mounted on a pipe, its needle well below the marked limit, a small handwritten card of rates clipped alongside — swappable without touching the pipework.](./images/hero-proxyd-budget.png)
 
 
-The live `proxyd` on manoir (`:4040`) is a **Rust** binary. Operator knobs live in YAML so you never recompile to change the daily cap or model rates.
+Leave an agent running overnight and it will spend your money with the patience of a machine that never sleeps. No coffee break, no second thoughts, no glance at the meter. Mundi, who tracks the haus finances, would like a word — and this file is that word, written down so nobody has to have the conversation at 3am.
+
+The live `proxyd` on manoir (`:4040`) is a **Rust** binary. Operator knobs live in YAML so you never recompile to change the daily cap or a model rate — you edit a line, and the gauge reads differently within a second.
 
 ## Files
+
+The policy is spread across two YAML files you edit by hand and three Rust files you don't.
 
 | Path | Role |
 |------|------|
@@ -23,6 +27,8 @@ The live `proxyd` on manoir (`:4040`) is a **Rust** binary. Operator knobs live 
 Override path: `SANCTUM_PROXY_BUDGET=/path/to/budget.yaml`.
 
 ## Claude CLI pool (USD/day)
+
+The [Claude CLI](/architecture/proxy/) is the one agent that can spend real metered money, so it gets its own leash:
 
 - Agent id: `claude-code` (from `User-Agent: claude-code…`)
 - **One shared USD/day** across every seat that CLI can land on (Fable, Opus, glm-52, …)
@@ -40,25 +46,27 @@ claude_cli:
     enabled: false
 ```
 
-proxyd logs `budget policy hot-reloaded … claude_cli_cap_usd=…` within ~1s. No restart.
+proxyd logs `budget policy hot-reloaded … claude_cli_cap_usd=…` within ~1s. No restart. The needle moves; nothing gets rebuilt.
 
 ## Free-sub-first fallbacks (config.yaml)
 
-CLI-facing Opus/Fable chains prefer **subscription bridges before metered glm-52**:
+Hitting the cap should not mean the night ends. It means the night gets cheaper. CLI-facing Opus/Fable chains prefer **subscription bridges before metered glm-52**:
 
 `claude-cli-offline (Max :3456) → gemini-3-pro → grok-oauth → glm-52 → council-local-think`
 
-So a capped agentic night lands on free subs first, not the cathedral 27B. Cathedral is blackout tail only.
+So a capped agentic night lands on free subs first, not the cathedral 27B. The [Temple of the Kyber](/architecture/temple-of-the-kyber/) is the blackout tail only — the last thing standing when every paid seat is dark. How the turn survives that handoff is its own story, told in [fallback continuity](/architecture/fallback-continuity/).
 
-## Sanctum house agents
+## Sanctum haus agents
 
-Everyone **not** in `claude_cli.agents` is sanctum by default:
+Everyone **not** in `claude_cli.agents` is sanctum by default — the family agents, who never get a metered wallet at all:
 
 - Metered OpenRouter **stripped**
 - Subscription bridges + local only (`only_subscription_and_local: true`)
 - OpenRouter `*:free` still allowed if `allow_openrouter_free: true`
 
 ## iTerm2 banners (one line)
+
+proxyd narrates its own decisions in a single coloured line, so you learn what happened without reading a log:
 
 | Color | Meaning |
 |-------|---------|
@@ -72,9 +80,11 @@ Examples:
 [sanctum-proxy] ⚠ DEGRADED CONTEXT · 136000→27500 tok (cap 28000) · actions=[drop-middle-history+…] · double-check facts
 ```
 
+Green is the proxy telling you it rerouted and everything is fine. Red is the proxy telling you it had to cut something, and you should not fully trust what comes back.
+
 ## Local context fit (the oversized-session hack)
 
-Cathedral operational cap is ~32k. When a **local / mTLS** seat would 413, proxyd:
+Cathedral operational cap is ~32k. When a **local / mTLS** seat would 413, proxyd trims the session in five escalating steps rather than refusing the turn outright:
 
 1. Drops middle history  
 2. Squashes huge `tool_result` payloads  
@@ -92,9 +102,11 @@ local_context:
 
 ## Pricing table
 
-`pricing.models` / `pricing.providers` — USD per **1M tokens**. Lookup: seat name → api_model → provider default.
+`pricing.models` / `pricing.providers` — USD per **1M tokens**. Lookup: seat name → api_model → provider default. This is the rate card clipped to the gauge; change a number here and every future turn is billed against it.
 
 ## Ops checks
+
+To confirm the leash is set where you think it is:
 
 ```bash
 curl -sk --cacert ~/.sanctum/certs/ca.crt https://127.0.0.1:4040/stats | jq .agents
@@ -106,3 +118,5 @@ bash ~/Projects/sanctum-rs/services/sanctum-proxy/test_e2e_budget_route.sh
 <Aside type="caution">
 Red DEGRADED means history was cut. The answer can still complete, but facts from dropped turns may be missing — treat as best-effort local, not full-session Claude.
 </Aside>
+
+That is the whole bargain this file strikes: spend freely up to $50, then spend nothing, and never let a long night quietly become an expensive one. The gauge sits below the red for the same reason Tommy always sat where he could see the door — not because anything is wrong, but because someone should be watching when it goes.

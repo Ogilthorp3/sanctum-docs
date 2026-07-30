@@ -7,7 +7,7 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 ![Hybrid Sidecar — a Mac Mini and a virtual server rack connected by a glowing data umbilical cord.](./images/hero-hybrid-sidecar.png)
 
-The Mac Mini is an Apple Silicon machine with opinions about who gets to touch its Neural Engine. The OpenClaw core is a Linux-first application that would prefer you forgot macOS exists. The Hybrid Sidecar Architecture is the peace treaty between them — a dual-plane system where the host keeps hardware control and a guest VM handles application logic, talking over loopback TCP like two neighbors who share a wall and very specific rules about noise.
+Somewhere in a Quebec basement, one Mac Mini runs two operating systems that would rather not be introduced. The macOS host guards its Neural Engine. The OpenClaw core is Linux-first and would prefer you forgot macOS exists. The Hybrid Sidecar Architecture is the peace treaty between them — a dual-plane system where the host keeps hardware control and a guest VM handles application logic, talking over loopback TCP like two neighbors who share a wall and very specific rules about noise.
 
 This architecture was formalized in Council Decree 0x7F-MACSYNTH. What follows is the operational reality of that decree.
 
@@ -60,15 +60,15 @@ The VM is a clean blast boundary. A compromised OpenClaw core is trapped in a Li
 
 The host doesn't wait for you to press buttons — the stack is dependency-locked under `launchd`. For the full plist reference, see [LaunchAgents & LaunchDaemons](/reference/launchagents/).
 
-### Phase 1: VM and Engine Boot
+### Phase one — VM and engine boot
 
 `com.sanctum.vmnet` brings up the vmnet bridge that `sanctum-vm` rides on; `com.sanctum.vm-autostart` starts the Lima VM at login. The guest's OpenClaw gateway comes up on `:1977` and is forwarded to host loopback.
 
-### Phase 2: Container Orchestration
+### Phase two — container orchestration
 
 `com.sanctum.openclaw.docker-startup` (a LaunchAgent) runs `~/.openclaw/launch-after-docker.sh`. The script polls the OrbStack Docker socket (`~/.orbstack/run/docker.sock`) every 2s for up to 120s, reaps orphans from any previous compose config (`docker compose down --remove-orphans`, so a stale container can't squat on a port the new one wants), then brings the ancillary stack up. OpenClaw itself is already live in the VM — the script does not start it.
 
-### Phase 3: Privileged Daemons
+### Phase three — privileged daemons
 
 The host's privileged set lives in `/Library/LaunchDaemons/`: `com.sanctum.pfctl` (the `pf` driver), `com.sanctum.vmnet` (the VM bridge), `com.sanctum.castellan` plus `com.sanctum.castellan-deadman` (the supervisor and its dead-man's switch), `com.sanctum.watchdog-rust`, `com.sanctum.force-flow`, `com.sanctum.proxyd`, and the HA / Firewalla gateways. There is no `net-filter` or `hw-sync` daemon; those were never built.
 
