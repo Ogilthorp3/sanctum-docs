@@ -8,20 +8,21 @@ import { Aside } from '@astrojs/starlight/components';
 ![Luggage tags on a wire, one drifting loose from its suitcase](./images/hero-device-identity.png)
 
 A curfew rule is a promise attached to a MAC address. Both halves of that
-sentence rot: iOS and SteamOS rotate MACs by design, mesh extenders re-translate
-them on every reconnect, and the labels every dashboard shows were copied from
-whichever system guessed first. On 2026-07-18 we discovered how far the rot had
+sentence rot. iOS and SteamOS rotate MACs by design. Mesh extenders re-translate
+them on every reconnect. And the labels every dashboard shows were copied from
+whichever system guessed first. On 2026-07-18 we found out how far the rot had
 gone — and rebuilt identity handling so it cannot recur silently.
 
 ## The discovery: enforcement theater
 
-The consoles' enrolled MACs (PS5, Switch) were absent from the Firewalla's
-**entire post-April host history** — 184 devices, zero matches. Every console
+The consoles' enrolled MACs — PS5, Switch — were absent from the Firewalla's
+**entire post-April host history**. 184 devices. Zero matches. Every console
 "block" since the network migration had been a valid policy applied to an
 address nothing wears: the closed loop verified the *rule*, never the *device*.
 Meanwhile a live Xbox One sat ungoverned at `10.0.0.147`, mislabeled as a
-parent's iPhone, and two TCL smart-TV panels streamed nightly past the 23:00
-curfew because the "TV" screens enforced an ESP32 sensor and a lawn sprinkler.
+parent's iPhone. Two TCL smart-TV panels streamed nightly past the 23:00
+curfew — because the "TV" screens enforced an ESP32 sensor and a lawn sprinkler.
+The rule fired. Nobody was home at the address.
 
 <Aside type="caution" title="The lesson">
 Closed-loop verification must close the loop on the **device**, not the rule.
@@ -32,20 +33,20 @@ what a dashboard once guessed.
 
 ## Columbo screen pinning
 
-Consoles don't advertise mDNS device-info, but their DHCP lease hostnames are
-stable identities (`XboxOne`, `PS5-*`, `steamdeck`). Columbo
+Consoles don't advertise mDNS device-info. But their DHCP lease hostnames are
+stable identities: `XboxOne`, `PS5-*`, `steamdeck`. Columbo
 (`~/.sanctum/bin/columbo/phonebook.py`, launchd every 120 s) already pinned
-family phones via Bonjour; it now also reads the box's dnsmasq leases and pins
-each screen's hostname → current MAC into `phonebook.json` under `_screens`,
-keeping a 14-day history of previous MACs.
+family phones via Bonjour. Now it also reads the box's dnsmasq leases. Each
+screen's hostname → current MAC gets pinned into `phonebook.json` under
+`_screens`, with a rolling 14-day history of previous MACs.
 
 The engine enforces **static config ∪ live pins** at every site — curfew loop,
 holds, wake, reconciler ground truth, drift repair, daily reaper, and the
 parent-facing Block Now / override / homework handlers. Worst-case latency from
 a mid-curfew rotation to re-block: ~4 minutes (columbo pass ≤120 s + 60 s
 phonebook TTL + one reconciler tick). A **never-seen console joining
-mid-curfew** is faster: discovery fires an immediate columbo pass (the
-"nudge") and busts the phonebook TTL, so the pin lands and the normal curfew
+mid-curfew** is faster. Discovery fires an immediate columbo pass — the
+"nudge" — and busts the phonebook TTL. The pin lands, and the normal curfew
 path blocks it in **~60–90 seconds**.
 
 Hardening that survived a 30-agent adversarial panel (25 confirmed findings,
@@ -62,7 +63,7 @@ Hardening that survived a 30-agent adversarial panel (25 confirmed findings,
 
 ## One device, two network cards
 
-Pinning follows a *name*, and half the hardware a haus shares has none to
+Pinning follows a *name*. And half the hardware a haus shares has none to
 follow — a console's idle second NIC advertises nothing at all. That case, the
 single-target rule it broke, and how nameless TVs, receivers, speakers and
 printers stopped being treated as strangers are covered in
@@ -71,19 +72,19 @@ printers stopped being treated as strangers are covered in
 ## The paused-MAC ledger
 
 Firewalla pauses have **no expiry**. Before the ledger, a MAC that rotated away
-while blocked could stay paused forever with no code path left to release it.
+while blocked could stay paused forever, with no code path left to release it.
 Now every pause the engine applies is recorded in `paused_macs` and cleared
-only on verified unpause; a per-tick sweep releases any ledger MAC that no
+only on verified unpause. A per-tick sweep releases any ledger MAC that no
 active enforcement state still claims. The ledger only ever contains Sanctum's
-own pauses, so the sweep can never release a block a parent set in the
+own pauses. So the sweep can never release a block a parent set in the
 Firewalla app.
 
 ## The naming audit
 
 A 6-judge + adversarial-verify panel audited all 181 devices across every
-naming surface. Thirteen Firewalla renames landed, three `devices.yaml`
-structural defects were fixed (Apple TV slot collision, an Amazon Echo
-masquerading as an Apple TV, a phantom Orbi-alias device), and the classifier
+naming surface. Thirteen Firewalla renames landed. Three `devices.yaml`
+structural defects were fixed: an Apple TV slot collision, an Amazon Echo
+masquerading as an Apple TV, a phantom Orbi-alias device. The classifier
 gained a family-device catalog — console/streamer/TV OUIs plus hostname hints,
 with a new `tv` category so smart-TV panels auto-enroll like consoles instead
 of streaming silently.
@@ -101,16 +102,17 @@ of streaming silently.
    the Xbox as "Lise's iPhone", the Lutron bridge as "Albert's iPhone", a
    Nuheat floor thermostat as "Bert's Mac Mini M4 Pro".
 
-The Orbi holds no independent names (it mirrors DHCP); its toolkit registry
+The Orbi holds no independent names — it mirrors DHCP. Its toolkit registry
 (`orbi-registry.sh`) is now seeded with the canonical identities. Access the
-Orbi **only** through the Network Control API (`localhost:4007` on the Mini) —
-the admin refuses SOAP in AP mode and direct scraping is what created stale
+Orbi **only** through the Network Control API (`localhost:4007` on the Mini).
+The admin refuses SOAP in AP mode, and direct scraping is what created stale
 copies in the first place.
 
 ## The evasion ladder
 
-Every way a device can present itself lands on a blocking path, ordered here
-from most to least cooperative:
+Windu, who holds the security seat, models this as an adversary who wants one
+more hour of *Fortnite*. Every way a device can present itself lands on a
+blocking path, ordered here from most to least cooperative:
 
 1. **Enrolled MAC** — blocked directly by static config at curfew.
 2. **Rotated MAC, recognizable hostname** — columbo pin follows it;
@@ -129,10 +131,10 @@ from most to least cooperative:
    closed the last hole: Xbox's manual "Alternate MAC address" setting plus
    a console rename plus patience used to survive the night.
 
-The sweep is edge-triggered: a parent's manual mid-curfew unpause is
+The sweep is edge-triggered. A parent's manual mid-curfew unpause is
 respected until the next curfew start. Devices that join during the *day*
 still sit un-paused in the review queue until curfew — a deliberate
-operator decision (2026-05-24: review-before-bed, not phone-buzzing) — but
+operator decision (2026-05-24: review-before-bed, not phone-buzzing). But
 curfew now catches them even when nobody reviewed.
 
 <Aside type="note" title="Xbox and MAC randomization">
@@ -223,3 +225,6 @@ Rename-resilience E2E (2026-07-23): enrolled Apple TV renamed on the Gold Pro
 while curfew was active — Force Flow still reported blocked, the box kept
 streaming DNS blocks on the same MAC, and hostname match still resolved both
 the old and new labels to the same screen key.
+
+The promise still lives at a MAC address. The difference now is that the MAC
+can't quietly walk away from it.

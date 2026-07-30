@@ -15,7 +15,7 @@ Service-level failures that don't have a one-line fix. Each section earned its p
 
 That means the bridge100 path (Mac `10.10.10.1` ↔ VM `10.10.10.10`) is up, but the model-serving side of the Mac has drifted. Usually one of two things is true:
 
-1. The `sanctum-mlx` Council server (mTLS `:1337`, Qwen3.6-35B-A3B-4bit) is down or bound incorrectly.
+1. The [`sanctum-mlx` Council server](/architecture/sanctum-mlx/) (mTLS `:1337`, Qwen3.6-35B-A3B-4bit) is down or bound incorrectly.
 2. The `sanctum-mlx-codestral` coder server on `:3301` (Codestral-22B-v0.1-4bit) is down. (Historically the coder role was `sanctum-mlx-coder` / coder-14b fronted by a `socat` bridge on `:1234`; both that GGUF coder and the LM Studio server on `:1234` were retired 2026-06-07 in favor of native MLX seats.)
 
 **Check from the VM:**
@@ -129,7 +129,7 @@ launchctl kickstart -k gui/$(id -u)/com.sanctum.proxy
 
 **Symptom:** Heartbeat or briefing requests fail with 502 even though remote providers are healthy.
 
-**Root cause:** The model's fallback chain only contains other local models on the same server. If that server is down, every fallback also fails.
+**Root cause:** The model's [fallback chain](/architecture/fallback-continuity/) only contains other local models on the same server. If that server is down, every fallback also fails.
 
 **Example:** `council-heartbeat` originally had only `council-mlx` as a fallback — both pointing at `http://10.10.10.1:1337`. When the MLX server was down, there was no escape route to a remote provider.
 
@@ -181,3 +181,9 @@ npm run update:app
 <Aside type="caution">
 If you use `pkill -f` with a vague substring around Electron, you are delegating process selection to chaos. Chaos is enthusiastic but not detail-oriented.
 </Aside>
+
+## The Thread Through All Five
+
+Every failure on this page passed its own health check on the way down. The bridge answered. The port listened. The proxy ran. The fallback resolved. The window opened. Each green light was telling the truth about the wrong thing — a service reporting its own vitals while the handshake to the next service quietly rotted. That is the failure mode of a haus assembled from parts that each work flawlessly alone and were never introduced to one another; the fallback-chain section is the purest example, where Tommy's `council-heartbeat` kept resolving right up until the one server it could reach fell over.
+
+So when the next one lands and the dashboard swears everything is nominal, come back here — one click past green — and start with the gap between two services rather than the services themselves. The fault is almost never in the room you are standing in. It is in the doorway.
