@@ -5,36 +5,36 @@ description: A rotated API key kept reverting to a dead one. Four silent defects
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-![A pencil-sketched stone basin on a pedestal, brimming with teal water that spills downward into a ring of small plain clay bowls below. The flow only ever goes one way, from the one basin into the many. An Abyssinian cat sits watching.](./images/hero-2026-07-28-the-cache-that-overwrote-the-source.png)
+![A pencil-sketched stone basin on a pedestal, brimming with teal water that spills downward into a ring of small plain clay bowls below. The flow only ever goes one way, from the one basin into the many. Tommy sits watching.](./images/hero-2026-07-28-the-cache-that-overwrote-the-source.png)
 
-The Gemini API key was minted, verified against a live endpoint, and written to SOPS. Seconds later it was gone, replaced by a key that had already been deleted at Google. The rotation reported success every time. So did the sync that destroyed it.
+We minted a fresh Gemini API key, verified it against a live endpoint, and wrote it to SOPS. Seconds later it was gone — overwritten by a key Google had already deleted. The rotation reported success every time. So did the sync that destroyed our work.
 
-Four defects, none of which announced themselves. Each one alone would have been survivable; together they made it impossible for an auto-rotated secret to ever reach the login keychain.
+Four defects, none of which announced itself. Each one alone would have been survivable; together they made it impossible for an auto-rotated secret to ever reach the login keychain. We had built a machine that could only lose the thing it was meant to carry.
 
 ## The direction rule
 
-**SOPS is the source of truth. The login keychain is a derived cache.** Values flow one way:
+**SOPS is the source of truth. The login keychain is a derived cache.** Values flow one way — the same one-way arrow the [Secrets Trifecta](/architecture/secrets-trifecta/) is built on:
 
 ```
 rotate.py  →  SOPS store  →  login keychain
                           →  bare file consumer
 ```
 
-Every defect below is a violation of that arrow.
+Every defect below is a violation of that arrow. The basin fills the bowls; the bowls never fill the basin. Read one back into the other and you have poisoned the well you drink from.
 
 ## 1. The cache was rebuilt from itself
 
-`sync-from-sops.sh` ended by calling `regen-keychain-sops-store.py`, which rebuilds the SOPS store **from the login keychain** against a hardcoded service list. Anything not on that list is dropped.
+`sync-from-sops.sh` ended by calling `regen-keychain-sops-store.py`, which rebuilds the SOPS store **from the login keychain** against a hardcoded service list. That is the arrow run backwards: the cache dictating the source. Anything not on that list is dropped.
 
-A freshly minted key, written to SOPS by the rotator, was therefore erased within seconds of the next sync — because it had never been in the keychain, and it wasn't on the list. The run reported `ok ... sops-store=refreshed`.
+Our freshly minted key, written to SOPS by the rotator, was therefore erased within seconds of the next sync — because it had never been in the keychain, and it wasn't on the list. The run reported `ok ... sops-store=refreshed`.
 
 That script is a one-time migration tool that had been wired into the recurring path. It now carries a header saying so, and the sync no longer calls it.
 
 ## 2. A deleted secret on the airgapped VM won every time
 
-The sentinel does not read the local vault. It opens an SSH connection to the VM and decrypts the VM's **own** copy.
+We went looking for where the dead key kept coming from, and found it hiding one machine over. The sentinel does not read the local vault. It opens an SSH connection to the VM and decrypts the VM's **own** copy.
 
-That copy still contained a `gemini_api_key` from before the provider block was removed on 2026-07-26 — the *config* had been deleted, the *secret* had not. Because the lookup found a value there, it never consulted the Mini store, and every sync faithfully rewrote the keychain with a key that had been deleted at Google weeks earlier.
+That copy still contained a `gemini_api_key` from before the provider block was removed on 2026-07-26 — the *config* had been deleted, the *secret* had not. The gun was still loaded. Because the lookup found a value there, it never consulted the Mini store, and every sync faithfully, obediently, and with a perfect green status rewrote the keychain with a key that Google had deleted weeks earlier and would only ever answer with a rejection.
 
 <Aside type="caution">
 Removing a provider block does not remove the secret. Grep the vault, not the config, and confirm with the decrypted contents rather than the file you assume is being read. The first check here looked at the Mini's local vault and found nothing — the sentinel reads the VM's, over SSH. Same filename, different machine, opposite conclusion.
@@ -51,13 +51,13 @@ One counter covered two very different outcomes:
 | Keychain already matches SOPS | Nothing to do — healthy | `skipped` |
 | Value not found in any store | **Unsynced. Broken.** | `skipped` |
 
-Both exited `ok`. A custody sentinel whose entire job is propagating secrets was reporting green while propagating nothing.
+Both exited `ok`. A custody sentinel whose entire job is propagating secrets was reporting green to us while propagating nothing.
 
-`missing` is now counted separately and forces a `partial` verdict. It found defect 4 on its first run.
+`missing` is now counted separately and forces a `partial` verdict. It found defect 4 on its first run — one honest counter, and the next defect walked straight into the light.
 
 ## 4. It worked over SSH and failed under launchd
 
-With `missing` finally visible, the Mini store lookup was returning nothing — but only inside the LaunchAgent. The same script, same file, same user, worked fine over SSH.
+With `missing` finally visible, the Mini store lookup was returning nothing — but only inside the LaunchAgent. The same script, same file, same user, worked fine when we ran it over SSH.
 
 launchd loads no shell profile, so `SOPS_AGE_KEY_FILE` was unset and `sops` could not decrypt. The key file is now passed explicitly rather than relying on the default search path.
 
@@ -67,7 +67,7 @@ launchd loads no shell profile, so `SOPS_AGE_KEY_FILE` was unset and `sops` coul
 
 ## Verify the value, not the status word
 
-The sync reported `written=0 skipped=6 failed=0` — all healthy. The keychain held a dead key at the time.
+The sync reported `written=0 skipped=6 failed=0` — all healthy. The keychain held a dead key at the time. This is the lesson the haus keeps relearning; we wrote it down once already in [Verify Before You Fortify](/operations/2026-07-03-verify-before-you-fortify/).
 
 Status words are derived from the same broken logic you are debugging. The only check that settled anything was hashing the actual value in each store and comparing:
 
@@ -83,3 +83,5 @@ Same twelve characters in SOPS, the keychain, and the file consumer, or it isn't
 `rotate.py` runs headlessly over SSH, where writing the login keychain **always** fails with exit 36, `errSecInteractionNotAllowed`. Listing the keychain as a rotation consumer only manufactured a permanent partial failure for work the GUI-session sentinel already does correctly.
 
 The rotator writes SOPS and the file. The sentinel copies SOPS into the keychain, from a session that has the interaction rights. Rotation is now clean: two consumers, two ok.
+
+The arrow points one way now, the way the basin only ever pours downhill into the bowls. Tommy watched water run that direction for fifteen years and never once saw it climb back up the mountain to argue with the spring. Of course the source feeds the copy; the copy does not get a vote. It took us four silent defects and a twelve-character hash to finally agree with the cat.

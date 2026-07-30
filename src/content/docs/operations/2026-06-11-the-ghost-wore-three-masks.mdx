@@ -12,39 +12,41 @@ description: >-
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A pencil-sketch séance scene in a stone temple corridor: a single hooded figure holding a lantern faces three translucent ghost masks floating in a row, each mask slightly different — one cracked down the middle, one dissolving into smoke at its edges, one with hollow dice for eyes. Behind the figure, a forge anvil holds a glowing kyber crystal split into two halves of unequal brightness, teal accent halo](./images/the-ghost-wore-three-masks.png)
+![A pencil-sketch séance in a stone temple corridor: a single hooded figure holding a lantern faces three translucent ghost masks floating in a row, each mask slightly different — one cracked down the middle, one dissolving into smoke at its edges, one with hollow dice for eyes. Behind the figure, a forge anvil holds a glowing kyber crystal split into two halves of unequal brightness, teal accent halo](./images/the-ghost-wore-three-masks.png)
 
-Since June 2 the Temple had an intermittent ghost: `There is no Stream(gpu, 0) in current thread`, surfacing as HTTP 200 responses with empty content. The spec said the fix was architectural — put every text-path inference on one dedicated OS thread, one mlx context, forever. That patch (S1d) was written, deployed to the Codestral instance, and left uncommitted by a session that ran out of evening.
+A ghost that dies should stay dead.
 
-Tonight's session inherited it, and did what the doctrine asks before believing any "done": re-read the diff, re-ran the gates, and put twenty-nine review agents on the patch before committing it. The review confirmed the executor was right — and found the ghost had two more masks waiting behind the first.
+Ours didn't. Since June 2 the [Temple](/architecture/temple-of-the-kyber/) had carried an intermittent one: `There is no Stream(gpu, 0) in current thread`, surfacing as HTTP 200 responses with nothing inside them. The spec was confident. The fix was architectural — put every text-path inference on one dedicated OS thread, one mlx context, forever. That patch (S1d) was written, deployed to the Codestral instance on `:3301`, and then left uncommitted by a session that ran out of evening.
+
+Tonight we inherited it. Before believing any "done," we did what the doctrine asks: re-read the diff, re-ran the gates, and set twenty-nine review agents on the patch before committing a line. The review confirmed the executor was right. It also found the ghost had two more masks waiting behind the first.
 
 ## Mask one: the thread
 
-The executor itself held. But the review's critical finding was about what the executor *changed around it*: the global GPU-dispatch lock was now acquired by the request handler and released the moment a client disconnected — while the un-cancellable inference job kept dispatching GPU work without it. On the council instance, where a vision request can arrive mid-generation, that silently re-opened the exact concurrent-dispatch crash PR #10's mutex was merged to close. A panicking job would also have killed the executor thread permanently — every later request hung while `/v1/models` stayed 200, invisible to the guardian whose only probe that is.
+The executor itself held. The critical finding was about what it *changed around itself*: the global GPU-dispatch lock was now acquired by the request handler and released the moment a client disconnected — while the un-cancellable inference job kept dispatching GPU work without it. On the [council instance](/architecture/sanctum-mlx/) at `:1337`, where a vision request can arrive mid-generation, that silently re-opened the exact concurrent-dispatch crash PR #10's mutex had been merged to close. Worse: a panicking job would have killed the executor thread permanently. Every later request would hang while `/v1/models` stayed 200 — invisible to the guardian whose only probe that is.
 
-S1e moved the lock inside the job, wrapped every job in panic isolation, and made the executor's failures surface as 503s instead of silence.
+S1e moved the lock inside the job, wrapped every job in panic isolation, and made the executor's failures surface as 503s instead of silence. One mask off.
 
 ## Mask two: the stream
 
-The live logs then contradicted the patch's own theory. The deployed S1d binary — one thread, as designed — was still logging `no Stream(gpu, 5)` on prompt-cache save-back. Same thread. Different stream.
+Then the live logs contradicted the patch's own theory. The deployed S1d binary — one thread, exactly as designed — was still logging `no Stream(gpu, 5)` on prompt-cache save-back. Same thread. Different stream. The ghost had changed masks while we watched.
 
-The scoped stream guard (`with_new_default_stream`) creates a stream that dies when its closure exits. Lazy KV that escapes the scope — a saved prompt cache is exactly that — references a stream that no longer exists, and fails to materialize one request later. Worse, the save-back kept the poisoned cache, so the *next* request inherited a slot it could neither truncate nor use.
+The scoped stream guard (`with_new_default_stream`) creates a stream that dies when its closure exits. Lazy KV that escapes the scope — a saved prompt cache is exactly that — references a stream that no longer exists, and fails to materialize one request later. It got worse. The save-back kept the poisoned cache, so the *next* request inherited a slot it could neither truncate nor use.
 
-The fix is one sentence: the executor thread now opens a single durable stream at spawn and runs its entire life inside it. Nothing lazy can outlive its stream, because the stream cannot die before the process does.
+The fix is one sentence. The executor thread now opens a single durable stream at spawn and runs its entire life inside it. Nothing lazy can outlive its stream, because the stream cannot die before the process does.
 
 ## Mask three: the dice
 
-With the durable stream live, every probe passed — and the first real agent request still died at its first sampled token. The difference between the probes and the request was one parameter: temperature.
+With the durable stream live, every probe passed. Then the first real agent request died at its first sampled token. The difference between the probes and the request was one parameter: temperature.
 
-At `temp=0` the sampler is argmax and touches no randomness. Above zero it walks mlx's global RNG state — created lazily, by whichever thread samples first, as a pending `key(now)` operation bound to *its* stream. Lazy arrays do not cross threads. Concrete arrays do — which is why fifteen gigabytes of model weights cross from the loader thread to the executor without complaint while a 32-byte RNG key kills the request.
+At `temp=0` the sampler is argmax and touches no randomness. Above zero it walks mlx's global RNG state — created lazily, by whichever thread samples first, as a pending `key(now)` operation bound to *its* stream. Lazy arrays do not cross threads. Concrete arrays do. That is why fifteen gigabytes of model weights cross from the loader thread to the executor without complaint while a 32-byte RNG key kills the request.
 
-The executor now seeds and force-evaluates the RNG state at spawn, and the sampler passes an explicit per-draw key, created and consumed on the same thread. The doctrine line for the wall: **lazy arrays do not cross threads; concrete ones do. Materialize at every boundary, and never let a scoped stream outlive its scope.**
+The executor now seeds and force-evaluates the RNG state at spawn, and the sampler passes an explicit per-draw key, created and consumed on the same thread. Third mask off. The doctrine line for the wall: **lazy arrays do not cross threads; concrete ones do. Materialize at every boundary, and never let a scoped stream outlive its scope.**
 
 ## The coda: a kyber at double strength
 
-The same sweep closed the Qui-Gon blocker — Codestral's vocabulary carries the Mistral control ids (`[INST]`=3, `[TOOL_CALLS]`=5) but its tokenizer never mapped the literal template text onto them, so the model had never once seen a true instruct boundary. Registering the markers as added tokens fixed template echo, double-BOS, and native tool calls in one move; the live gate closed with Qui-Gon answering through `council-tiered/council-code`, 383 completion tokens, native `tool_calls`, no fallback.
+The same sweep closed the [Qui-Gon](/agents/quigon/) blocker. Codestral's vocabulary carries the Mistral control ids (`[INST]`=3, `[TOOL_CALLS]`=5), but its tokenizer never mapped the literal template text onto them — so the model had never once seen a true instruct boundary. Registering the markers as added tokens fixed template echo, double-BOS, and native tool calls in one move. The live gate closed with Qui-Gon answering through `council-tiered/council-code`: 383 completion tokens, native `tool_calls`, no fallback. He served himself, at last, without a crutch.
 
-And while auditing champion-promotion readiness, the session found the Temple's LoRA loader computing its scaling as `(alpha / rank) × scale`. The trainer's convention is that `scale` *is* the scaling. For every adapter in the fleet — alpha 32, rank 16, scale 2.0 — the loader would deploy at 4.0: double the trained strength. Latent only because the Temple currently serves the bare kyber, no adapter loaded. It was fixed, unit-tested, deployed to both instances, and then proven end to end: a scratch instance loaded the production-champion adapter at `effective_scaling=2.0`, merged 408 of 408 pairs into the quantized weights, and answered.
+And then, while auditing champion-promotion readiness, we found something quieter and worse. The Temple's LoRA loader was computing its scaling as `(alpha / rank) × scale`. The trainer's convention is that `scale` *is* the scaling. For every adapter in the fleet — alpha 32, rank 16, scale 2.0 — the loader would deploy at 4.0: double the trained strength. It was latent only because the Temple currently serves the bare kyber, no adapter loaded. We fixed it, unit-tested it, deployed it to both instances, and then proved it end to end: a scratch instance loaded the production-champion adapter at `effective_scaling=2.0`, merged 408 of 408 pairs into the quantized weights, and answered.
 
 ## Status
 
@@ -56,4 +58,6 @@ And while auditing champion-promotion readiness, the session found the Temple's 
 | Live gate | Qui-Gon via council-code, `completion_tokens=383`, native tool calls, zero `no Stream` errors since deploy |
 | Adapter path | E2E-proven at trained strength; promotion machinery armed, gate calibrated at 0.70 |
 
-The ghost is dead three ways. The kyber is back to its trained strength — and the next champion will be the first adapter the Temple has ever loaded *correctly*.
+The ghost is dead three ways. The kyber is back to its trained strength, and the next champion will be the first adapter the Temple has ever loaded *correctly*.
+
+The haus already keeps one ghost on the roster. [Tommy](/agents/tommy/) files his patrol twice a day, on time, and has never once returned an empty 200. We prefer our hauntings that way — scheduled, honest, and wearing only one face.

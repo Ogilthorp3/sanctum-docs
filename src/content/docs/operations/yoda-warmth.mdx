@@ -1,31 +1,40 @@
 ---
 title: "Yoda warmth — three-layer fix history"
-description: "How Yoda gives real replies on Signal — from the v1 dist-patch dead-end to the consumer-side wrapper to the proxy-stringification root cause."
+description: "The morning Yoda told Bert his own message was gibberish — and the three-layer defense that came out of chasing the [object Object] bug across six hops."
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-![Yoda warmth — a four-handed lighthouse keeper passing a wax-sealed letter between openclaw, gateway, proxyd, and the Claude CLI; the third hand drops it into a shadow labelled object-Object until a teal halo gear catches it back.](./images/hero-yoda-warmth.png)
+![Yoda warmth — a four-handed lighthouse keeper passing a wax-sealed letter between openclaw, gateway, proxyd, and the Claude CLI; the third hand drops it into a shadow labelled object-Object until a teal halo gear catches it back and delivers it whole.](./images/hero-yoda-warmth.png)
+
+Bert texted Yoda good morning. Yoda replied that the message was
+corrupted. It arrived, the model explained gently, as `[object Object]`
+— what had Bert meant to send? The message was fine. Somewhere across
+six hops between Signal and a Claude subprocess, a stray template
+literal had rendered an operator's words into JavaScript's default noise,
+and the model — ever helpful — described the noise back to him.
 
 Yoda is the Haus assistant Bert texts on Signal at his fictional-block
 demo number (real number redacted; pretend it is `+15555550100`). The
-chain from operator to LLM and back is openclaw, then a yoda-chat
-consumer, then the openclaw gateway, then the council-tiered proxyd,
+[chain from operator to LLM and back](/architecture/yoda-chat/) is
+openclaw, then a yoda-chat consumer, then the openclaw gateway, then
+the council-tiered proxyd,
 then claude-max-api-proxy, then the Claude CLI subprocess, then back
 out through signal-cli. Six hops, three independent silent-failure
-classes, one bug that masked another for ten hours. This page is the
-incident record + the three-layer defense that came out of it.
+classes, one bug that masked another for ten hours. The fix needed
+three layers, and we kept all three — because each one fails
+differently.
 
 <Aside type="note" title="Apple-like + military-grade">
-Every layer here was shipped because a previous attempt failed at the
+Every layer here shipped because a previous attempt failed at the
 boundary it owned. Read top-to-bottom for the chronology, or skip to
 "Layer 3" for the actual root-cause fix.
 </Aside>
 
 ## The symptom
 
-Every text Bert sent to Yoda came back as one of three patterns,
-depending on which layer you blamed at the time:
+Every text Bert sent came back as one of three patterns, depending on
+which layer you were blaming that hour:
 
 1. **Silence.** The default openclaw harness emits `NO_REPLY` for any
    message that doesn't need a tool call. Signal showed nothing back.
@@ -37,9 +46,8 @@ depending on which layer you blamed at the time:
    Even though `finalPromptText` in the JSON dump showed the operator
    text intact.
 
-The fix turned out to need three independent layers. Each layer is
-worth keeping, even now, because each layer's failure mode is
-different.
+Three symptoms, three culprits, and for ten hours the loud one hid the
+real one. Here is the order we peeled them.
 
 ## Layer 1 (retired) — patch openclaw's silent-reply rewrite array
 
@@ -50,15 +58,16 @@ right now.`). The first attempt patched that dist file with warm
 franglais entries.
 
 This approach died when openclaw was pinned to 2026.5.20 — that
-version doesn't have the rewrite feature at all. Lesson: patching a
-vendor's `node_modules/<pkg>/dist/` works until the next pin or update
-rewrites the path it lives at. **Retired 2026-05-24** — the
-`heal-yoda-warmth` recipe is gone from `r2d2/recipes.yaml`; the patch
-script lives at `~/.sanctum/scripts/yoda-warmth-patch.sh.retired-*`
-for reference.
+version doesn't have the rewrite feature at all. The patch was
+writing to a file that no longer existed. Lesson: editing a vendor's
+`node_modules/<pkg>/dist/` works until the next pin or update rewrites
+the path it lives at. **Retired 2026-05-24** — the `heal-yoda-warmth`
+recipe is gone from `r2d2/recipes.yaml`; the patch script lives at
+`~/.sanctum/scripts/yoda-warmth-patch.sh.retired-*` for reference.
 
-## Layer 2 — consumer-side wrapper in our repo
+## Layer 2 — a wrapper in our own repo
 
+If a vendor path can vanish under a pin, own the boundary yourself.
 `yoda_chat/agent.py` (in our repo at
 `sanctum/yoda-chat/yoda_chat/agent.py`) now owns delivery. It calls
 openclaw with `--json` and no `--deliver`, parses the agent's reply,
@@ -72,41 +81,39 @@ pin, bump, or downgrade leaves it intact. The R2D2 recipe
 `heal-yoda-warmth-wrapper` redeploys `warmth.py` + `agent.py` from
 the repo if the VM copy ever goes missing.
 
-Three relevant files:
-
 | Path | Purpose |
 |---|---|
 | `sanctum/yoda-chat/yoda_chat/warmth.py` | `WARM_TEXTS` array + `pick_warm(seed)` deterministic picker + `is_silent_reply(text)` |
 | `sanctum/yoda-chat/yoda_chat/agent.py` | `dispatch_signal_reply()` — owns the openclaw call, the parse, the substitution, the signal-cli send |
 | `sanctum/yoda-chat/tests/test_warmth.py` | 7 unit tests — determinism, distribution, silent-reply detection |
 
-This layer was good — but operator feedback was that he wanted real
-LLM-generated answers, not canned acknowledgements. The canned path
-should be the Zeroth Rule floor, not the everyday case. Which led to
-Layer 3.
+This layer worked. But the reply still felt scripted, because it was —
+Bert wanted real LLM-generated answers, not a warm shrug. The canned
+path should be the Zeroth Rule floor, not the everyday case. Which is
+how we finally admitted the `NO_REPLY` itself was the symptom, not the
+disease. That led to Layer 3.
 
 ## Layer 3 — the actual root cause
 
 Even with Layer 2 in place, every Yoda turn returned `NO_REPLY` from
 openclaw, so the canned text fired every time. Direct openclaw calls
-bypassing Layer 2 also returned text like `Your message came through
-as [object Object]`. The bug had to be upstream of openclaw.
+that bypassed Layer 2 still returned `Your message came through as
+[object Object]`. The bug had to be upstream of openclaw.
 
-A sub-agent traced the request path one hop at a time and found it in
+A sub-agent walked the request path one hop at a time and found it in
 `~/Library/pnpm/global/5/node_modules/claude-max-api-proxy/dist/adapter/openai-to-cli.js`,
 function `messagesToPrompt()`. The function used template literals on
 `msg.content` directly. openclaw sends content in OpenAI multimodal
-form, an array of `{type:"text", text:"..."}` blocks. JavaScript
-stringifies arrays of objects via the default `toString()` to
-`[object Object]`. The Claude CLI subprocess then received that
-literal string. The LLM dutifully described the corruption it saw.
+form — an array of `{type:"text", text:"..."}` blocks. JavaScript
+stringifies an array of objects via the default `toString()` to the
+literal `[object Object]`. The Claude CLI subprocess received that
+string, and the LLM dutifully described the corruption it was handed.
+The model was never confused. It was reading exactly what we sent it.
 
 **Fix**: add a `flattenContent()` helper that returns the joined text
-of array blocks, then use it in all three role branches (system,
+of the array blocks, then use it in all three role branches (system,
 user, assistant). Marker `// content-flatten patch v1` for
 idempotence and R2D2 detection.
-
-Three defenses (defense-in-depth, all in repo):
 
 | Layer | Path | Trigger |
 |---|---|---|
@@ -116,7 +123,9 @@ Three defenses (defense-in-depth, all in repo):
 
 ## Verifying
 
-Three independent probes, easiest first:
+Three independent probes, easiest first. The first two never touch
+Signal; the third sends a real text to the operator, so run it when
+Bert is expecting one.
 
 ```bash
 # 1. Marker present in the proxy adapter?
@@ -138,18 +147,23 @@ curl -s -X POST http://127.0.0.1:3456/v1/chat/completions \
 
 ## What the wrapper is for, now
 
-With Layer 3 in place, most operator texts get real LLM replies and
-the wrapper's `pick_warm()` rarely fires. The wrapper is the floor:
-when the LLM genuinely has nothing to say (no tool grounded, no
-opinion) the Zeroth Rule (`never silent to Bert`) still needs to
-emit something. `LAST_RESORT_TEXTS` is a 3-entry array, sized to be
-the absolute minimum.
+With Layer 3 in place, most operator texts get real LLM replies and the
+wrapper's `pick_warm()` rarely fires. That is the point: the wrapper is
+the floor, not the room. When the LLM genuinely has nothing to say — no
+tool grounded, no opinion — the Zeroth Rule (`never silent to Bert`)
+still needs to emit something. `LAST_RESORT_TEXTS` is a 3-entry array,
+sized to be the absolute minimum — three warm sentences that only exist
+so that a good morning is never met with nothing at all. Everything
+operator-facing rides the same doctrine: the
+[msg-bus](/operations/2026-05-24-msg-bus-shipped/) can drop a hop, but
+never a reply.
 
 ## Related
 
-- `architecture/yoda-chat.mdx` — the full Yoda chat plumbing
-- `operations/2026-05-24-msg-bus-shipped.mdx` — the msg-bus that
-  delivers operator-facing alerts via iMessage primary
-- Memory: `claude_max_proxy_object_object_2026_05_24.md` (in
+- [Yoda chat plumbing](/architecture/yoda-chat/) — the full six-hop
+  chain this page debugs, hop by hop.
+- [Msg-bus shipped](/operations/2026-05-24-msg-bus-shipped/) — the
+  message bus that delivers operator-facing alerts via iMessage primary.
+- Memory: `claude_max_proxy_object_object_2026_05_24.md` (in the
   Claude_Code repo) — the post-mortem, including the four dead ends
   burned before the proxy-side fix landed.

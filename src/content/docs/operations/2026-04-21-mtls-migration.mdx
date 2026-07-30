@@ -8,9 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![mTLS migration — six couriers at the fortress gate, five with glowing wax-sealed scrolls clearing the automated reader, the sixth still empty-handed behind a velvet rope; a shadow-fortress flickers in the distance.](./images/hero-2026-04-21-mtls-migration.png)
 
-{/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "Six small sentries lined up at a gatehaus, each holding up a different badge; five badges glow teal, one is still blank. The gatehaus door is mid-handshake with the fifth sentry. Technical pencil sketch, dark background, teal localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
-
-The morning after the A+ roadmap push, the obvious next move was to copy the cert-detection pattern from the two clients that already had it out to the three that didn't. Nothing heroic. Boring is the right shape for security work — boring means the pattern is composing rather than surprising.
+Windu asked for the boring thing: copy the cert-detection recipe from the two probes that had it onto the three that didn't. Nothing heroic. Boring is the right shape for security work — boring means the pattern is composing rather than surprising. The morning after the [A+ roadmap push](/operations/2026-04-20-aplus-roadmap-closes/), that is exactly what we did.
 
 ## What Moved
 
@@ -36,7 +34,7 @@ fi
 
 Each probe logs its chosen `transport` on every call. When Prometheus panels get built for monitor traffic, the bearer curve will decay and the mTLS curve will climb as clients flip — the migration graph is already in the data, just waiting for someone to plot it.
 
-Five of six probe clients are on mTLS now. The holdout is `sanctum-server`'s `HttpProxyBackend` — the Rust router — which is a real refactor (reqwest client with rustls config, per-backend cert paths read from `instance.yaml`), not a bash one-liner. Moved to its own roadmap slot for a dedicated session. No reason to rush it.
+Five of six probe clients are on mTLS now. The holdout is `sanctum-server`'s `HttpProxyBackend` — the [Rust router](/architecture/council-router/) — which is a real refactor (reqwest client with rustls config, per-backend cert paths read from `instance.yaml`), not a bash one-liner. Moved to its own roadmap slot for a dedicated session. No reason to rush it.
 
 ## One Small Sharp Edge Caught Along the Way
 
@@ -68,7 +66,7 @@ One small reqwest landmine along the way: the `use_preconfigured_tls` API takes 
 
 A second landmine: reqwest's `__rustls` feature requires a crypto provider to be globally installed even when the backend is plain HTTP. `Client::new()` panics with `"No provider set"` if you forgot. A `Once` wrapper installs `rustls::crypto::ring::default_provider()` at every `HttpProxyBackend` construction, which is enough.
 
-### Why the config flip didn't happen
+## Late Night — Why the Config Waited
 
 Steps 2–4 needed a live `:1338` mTLS listener on the Mini for the router's primary URL to succeed. The `com.sanctum.mlx` LaunchAgent has that listener in its plist. But the actual `sanctum-mlx` process running at the moment is a different invocation — pointed at `Qwen3.6-35B-A3B-4bit-text` with `--turboquant` and no TLS arguments, presumably launched by a parallel session's work. That process owns `:1337` with bearer auth but has no `:1338` listener at all.
 
@@ -88,7 +86,7 @@ Step 1 shipped, pushed to `feat/proxy-hardening` as commit `c95eaa5`. sanctum-se
 
 ## Overnight — The Router Proven on MBP Shadow
 
-With the Mini running someone else's turboquant work, steps 2–4 of the sanctum-server mTLS rollout didn't have a `:1338` listener to aim at. So we moved the rollout to the MBP — which already has the shadow on `:8902` (plain+bearer) and `:8903` (mTLS) from the earlier P7.4 work — and exercised the full primary/fallback matrix against a disposable sanctum-server instance on `:19900`.
+With the Mini running someone else's turboquant work, steps 2–4 of the sanctum-server mTLS rollout didn't have a `:1338` listener to aim at. So we moved the rollout to the MBP — which already has the shadow on `:8902` (plain+bearer) and `:8903` (mTLS) from the earlier P7.4 work — and exercised the full [primary/fallback matrix](/architecture/fallback-continuity/) against a disposable sanctum-server instance on `:19900`.
 
 ### What the test exercised
 
@@ -138,3 +136,7 @@ Steps 2, 3, and 4 of the sanctum-server mTLS rollout are proven against the MBP 
 - `c95eaa5` — step 1, mTLS-capable backend (earlier today).
 - `3b6bef2` — fix, drop `https_only` to allow mixed-transport fallback lists.
 - This entry in sanctum-docs.
+
+## The Boring Kind of Win
+
+Five of six probes speak mTLS today. The sixth is a one-line config flip waiting on a `:1338` listener to come home to the signed LaunchAgent — the router's code is proven on the shadow and idle on the Mini, which is exactly the shape we wanted. A migration that never had to become a rollout is the best kind of migration. Windu will notice the bearer curve the day it finally touches zero. No one else will notice anything at all, and for a security change, that silence is the highest praise there is.

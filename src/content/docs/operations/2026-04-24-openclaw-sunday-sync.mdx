@@ -1,13 +1,15 @@
 ---
 title: "2026-04-24: Sunday Sync — airgapped tarball push and the Monday morning canary"
-description: The haus gets a weekly heartbeat — openclaw stays in lockstep across the Mini and the airgapped VM, with tripwires, a tarball-push, and a canary that checks the doctor.
+description: The council broke at 2 AM with "Unknown agent id yoda" — the cause was version drift. A weekly tarball heartbeat, three tripwires, and a Monday canary keep three openclaw copies in lockstep across the Mini and the airgapped VM.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-![Sunday Sync — a sealed-vault VM receiving a weekly tarball from the Mini through a narrow airgap pipeline, with a Monday canary waiting with a checklist.](./images/hero-openclaw-sunday-sync.png)
+![Sunday Sync — a sealed-vault VM receiving a weekly tarball from the Mini through a narrow airgap pipeline, with a Monday canary waiting with a checklist to confirm all three copies landed on one version.](./images/hero-openclaw-sunday-sync.png)
 
-The haus has two copies of openclaw: Mac Mini runs the orchestrator and CLI, the OpenClaw VM runs the gateway and council agents. Tonight the two were on different versions, with a third copy — the npm-global CLI shim on the VM — a version behind both. Two minor versions of drift between caller and callee silently eats agent config fields and throws `Unknown agent id "yoda"` at 2 AM.
+The council broke at 2 AM, and the error made no sense: `Unknown agent id "yoda"`. Yoda is the orchestrator — the one agent that is always supposed to be there. Getting told he does not exist is like a courtroom convening to discover it has no judge.
+
+The cause was not Yoda. The haus keeps three copies of openclaw across two machines: the Mac Mini runs the orchestrator and CLI, the OpenClaw VM runs the gateway and council agents, and a third copy — the npm-global CLI shim on the VM — sat a version behind both. Two minor versions of drift between caller and callee silently eats agent config fields; the newer CLI wrote config the older one dropped as stale, including the field that named the agents. So the council forgot its own chairman.
 
 By morning all three report `OpenClaw 2026.4.22`, a Sunday LaunchAgent keeps them that way, and a Monday LaunchAgent checks that the Sunday one worked. The whole thing respects the VM airgap — intentional, briefly mistaken for a NAT bug.
 
@@ -43,10 +45,10 @@ If the VM ever "loses internet," check whether it's supposed to have it. Memory:
 
 Second instinct: convene the council on the delivery architecture — three options, a real A/B/C. Yoda, Quigon, Windu returned `[No response]`. Synthesis failed. Two issues compounded:
 
-1. **LLM backend was down post-reboot.** `sanctum-mlx` on `:1337` listening but not serving; the LM Studio fallback referenced `qwen/qwen3.5-35b-a3b`, retired 2026-04-22. Both paths dead.
+1. **LLM backend was down post-reboot.** `sanctum-mlx` on `:1337` listening but not serving — the same [listening-but-silent failure the reasoner threw on April 19th](/operations/2026-04-19-council-mlx-silence/) — and the LM Studio fallback referenced `qwen/qwen3.5-35b-a3b`, retired 2026-04-22. Both paths dead.
 2. **`council-session.sh` hung on Yoda.** Script invoked `send.sh yoda yoda session high <prompt>` — Yoda processing a message addressed to itself. 27 minutes of thinking before I killed it.
 
-Fixed in [`openclaw-skills a764146`](https://github.com/Ogilthorp3/openclaw-skills/commit/a764146): Yoda is always orchestrator and synthesizer, never a participant — the script now filters `yoda` out with a `NOTE` when callers include it out of habit.
+Fixed in [`openclaw-skills a764146`](https://github.com/Ogilthorp3/openclaw-skills/commit/a764146): Yoda is always orchestrator and synthesizer, never a participant — the script now filters `yoda` out with a `NOTE` when callers include it out of habit. It is the same chairman-not-participant rule the [Council Router](/architecture/council-router/) enforces at the routing layer, arriving one script later at the session layer.
 
 ### 3. The VM can't receive apt either
 
@@ -113,3 +115,5 @@ Silent on success. Loud on any drift between the three surfaces or on any WARN l
 - **The airgap is honored by default now.** No script in the haus tries to reach public package mirrors from the VM. If a future workload needs that, it adds an explicit push channel, it doesn't open NAT.
 - **The council can be convened again.** The self-addressed-hang is fixed, so future sessions on architectural A/B/C questions won't silently die on the first participant when Yoda appears in the participants list out of habit.
 - **One new LaunchAgent pair joins the family.** `com.sanctum.sunday-upgrade` and `com.sanctum.sunday-upgrade-check`. Both bootstrapped persistently via `launchctl bootstrap gui/$(id -u)`, both logging into `~/.sanctum/upgrade-logs/`, both silent on success and loud only on anomaly. Not a new pattern — just another entry in the same book.
+
+None of this is glamorous. It is a tarball, a symlink, and two launchd jobs that mostly do nothing. But drift is the failure that only surfaces at 2 AM, addressed to the one agent who is supposed to always answer — and the entire point of a weekly heartbeat is that nobody has to be awake to read the log where it quietly didn't happen.
