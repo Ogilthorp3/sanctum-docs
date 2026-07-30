@@ -5,17 +5,19 @@ description: "The complete operational registry of Sanctum launchd jobs and list
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A pencil-sketched apothecary cabinet at night, dozens of labelled drawers in neat rows, a keeper holding a lantern reading one label; each drawer glows faintly teal, a few amber; one tiny drawer ajar showing a curled wisp.](./images/hero-service-inventory.png)
+![A pencil-sketched apothecary cabinet at night, dozens of labelled drawers in neat rows, a keeper with a lantern reading one label while a single drawer sits ajar; most drawers glow faintly teal, a few amber, one wisp escaping.](./images/hero-service-inventory.png)
 
-This is the ground-truth registry of what actually runs on the Mini: every `com.sanctum.*` launchd job and every listening TCP port, each with a one-line purpose. It exists because the weekly docs-drift audit kept finding services that were running but undocumented — this page closes that gap and is the canonical place a new daemon or port earns its row.
+Every week the [drift audit](/operations/runtime-drift-audit/) walks the Mini, counts what is actually running, and holds it against what the docs claim. For months it kept surfacing the same quiet embarrassment: daemons alive and answering, ports open and listening, and not one line of documentation admitting they existed. A haus that watches everything, it turned out, could not account for itself.
+
+This page is the answer to that — the ground-truth registry of what runs on the Mini: every `com.sanctum.*` launchd job and every listening TCP port, each with a one-line purpose. It is the canonical place a new daemon or port earns its row, and the audit now reads back from it. Nothing here runs anonymously anymore.
 
 <Aside type="note">
-Two audit blind spots were fixed alongside this page: the drift check now reads port numbers from this inventory (and `port-summary.mdx`), not just the three files it scanned before, and it skips the volatile dynamic-port range (49152+) so transient third-party sockets (Lima, OrbStack, Rapport helpers) no longer read as drift. It still only enumerates user LaunchAgents, so a handful of system LaunchDaemons (proxyd, watchdog, castellan) can show as "phantom" — documented but not in its scan — which is a scan limitation, not a real absence.
+Two audit blind spots were fixed alongside this page: the drift check now reads port numbers from this inventory (and [`port-summary.mdx`](/architecture/port-summary/)), not just the three files it scanned before, and it skips the volatile dynamic-port range (49152+) so transient third-party sockets (Lima, OrbStack, Rapport helpers) no longer read as drift. It still only enumerates user LaunchAgents, so a handful of system LaunchDaemons (proxyd, watchdog, castellan) can show as "phantom" — documented but not in its scan — which is a scan limitation, not a real absence.
 </Aside>
 
 ## Daemons (launchd jobs)
 
-Every entry is loaded on the Mini. "Domain" is user-agent (`~/Library/LaunchAgents`) unless noted; "cadence" is how it is triggered — a long-running daemon, a fixed interval, a calendar schedule, or a one-shot at boot.
+Every entry below is loaded on the Mini right now. This is the fast index; the [LaunchAgent catalog](/reference/launchagents-catalog/) carries the per-job story and the incident that earned each one its keep. "Domain" is user-agent (`~/Library/LaunchAgents`) unless noted; "cadence" is how it is triggered — a long-running daemon, a fixed interval, a calendar schedule, or a one-shot at boot.
 
 | Label | Domain | Cadence | Purpose |
 |---|---|---|---|
@@ -141,3 +143,5 @@ Stable listeners only. Volatile dynamic-range ports (49152+) used by Lima/OrbSta
 | `40631` | third-party-service | limactl (PID 4118) /opt/homebrew/bin/limactl | Lima VM control/forward endpoint |
 | `42069` | sanctum-service | sanctum-memory-vault (PID 1267) ~/.sanctum/bin/san | Sanctum Memory Vault service (cross-session coordination) |
 | `42070` | sanctum-service | Python (PID 1204) Xcode-bundled Python3.9 (/Applications/Xco | Loopback Python service adjacent to sanctum-memory-vault (likely vault helper/sidecar); not a named Sanctum binary |
+
+Two tables, one promise: nothing runs on the Mini without a row here. The next time the drift audit walks the machine, the only surprise it should find is one it introduces itself — a new daemon, a new listener, and a blank line waiting for its one-line purpose. Fill the line before the audit does, and the haus keeps accounting for itself.
