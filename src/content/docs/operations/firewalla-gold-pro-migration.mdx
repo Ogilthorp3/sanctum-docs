@@ -5,22 +5,22 @@ description: "The ten-minute runbook for swapping the Firewalla under Sanctum wi
 
 import { Aside, Card, CardGrid, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-![Firewalla Gold Pro Migration — a technical pencil sketch of a purple router being lifted out of a rack while a gold router slides into its slot, teal indicator lights flickering mid-swap.](./images/firewalla-goldpro-swap.png)
+![Firewalla Gold Pro Migration — a technical pencil sketch of a purple router lifted out of a rack while a gold router slides into its slot, teal indicator lights flickering mid-swap.](./images/firewalla-goldpro-swap.png)
 
-The Purple has been under the desk for a year and a half. It paused kid phones, blocked curfew-hour YouTube, and ran every screen-time rule we asked of it. It's also been dropping `flowsummary` bytes for months and forcing us to build an ARP fallback and a drift sentinel to compensate. The Gold Pro shows up tomorrow with ten times the CPU, four times the RAM, and — if the SDK cooperates — actual per-host flow data. This is the runbook for swapping it in without losing Albert's bedtime.
+The Purple has guarded this haus for a year and a half. It paused kid phones. It blocked curfew-hour YouTube. It ran every screen-time rule we asked of it, without a reboot we didn't schedule ourselves. It also spent those months quietly dropping `flowsummary` bytes — which is why we built an ARP fallback and a [drift sentinel](/operations/drift-sentinel/) to compensate for a router that worked exactly well enough to lie. Tomorrow a Gold Pro arrives with ten times the CPU, four times the RAM, and — if the SDK cooperates — actual per-host flow data. This is the runbook for swapping it in without taking Albert's bedtime offline for longer than a reboot.
 
 ## Before the box arrives
 
-Run the capability probe against the current Purple so we have a baseline to diff against:
+First, photograph what already works. Run the capability probe against the current Purple so we have a baseline to diff against:
 
 ```bash
 ~/.sanctum/scripts/firewalla-probe/firewalla-sdk-probe.sh neo@100.0.0.25 \
   > ~/.sanctum/scripts/firewalla-probe/capabilities-purple-baseline.json
 ```
 
-The baseline lives in the repo (`capabilities-purple-baseline.json`) and is the answer key. Tomorrow's Gold Pro run writes `capabilities-gold-pro.json`; `diff` tells us which new connectors to build.
+The baseline lives in the repo as `capabilities-purple-baseline.json`. It is the answer key. Tomorrow's Gold Pro run writes `capabilities-gold-pro.json`, and `diff` tells us which new connectors the [Firewalla bridge](/architecture/sanctum-firewalla/) can finally support.
 
-Also export the live policy state so nothing hand-configured in the Firewalla app gets lost:
+Then export the live policy state, so nothing hand-configured in the Firewalla app gets lost:
 
 ```bash
 ~/.sanctum/scripts/firewalla-export.sh
@@ -44,7 +44,9 @@ Also export the live policy state so nothing hand-configured in the Firewalla ap
 
 4. **Transfer the rule set.** The mobile app has a "Transfer from another Firewalla" flow. Use it. Migration preserves host names, device groups, ACLs, DNS policies, and most screen-time rules. Verify by scrolling the device list — 107-ish known MACs should all be there with their existing names.
 
-5. **Pull the Gold Pro's new keys.** The bridge needs the new box's `etp.public.pem`, `etp.private.pem`, and `group.json`. Copy them off the new box via the Firewalla app's "Export to Developer SDK" flow:
+5. **Pull the Gold Pro's new keys.**
+
+   The bridge needs the new box's `etp.public.pem`, `etp.private.pem`, and `group.json`. Copy them off it via the Firewalla app's "Export to Developer SDK" flow:
 
    ```bash
    # On the MacBook, then push to the Mini
@@ -81,11 +83,13 @@ Also export the live policy state so nothing hand-configured in the Firewalla ap
    tests/test-activity-tracking.sh        # 10 PASS
    ```
 
-   If any gate fails, rollback (below) and investigate before proceeding.
+   If any gate fails, roll back (below) and investigate before proceeding.
 
 </Steps>
 
 ## What to hope for
+
+The diff is a wish list with four possible answers. Each one points at a different connector, and the probe decides which:
 
 | Probe finding | What it means | What we do next |
 |---|---|---|
@@ -96,7 +100,7 @@ Also export the live policy state so nothing hand-configured in the Firewalla ap
 
 ## Rollback
 
-The Purple is still in the box and still has keys. Restoring is three commands:
+This is not a one-way door. The Purple is still in the box, and it still has its keys. Restoring is three commands:
 
 ```bash
 # Plug the Purple back in, restore the old keys, restart the bridge
@@ -107,7 +111,7 @@ ssh neo@100.0.0.25 '
 ~/.sanctum/scripts/firewalla-probe/firewalla-sdk-probe.sh neo@100.0.0.25  # should match the baseline
 ```
 
-Screen-time, drift-sentinel, and activity tracking all keep working on the Purple — this isn't a one-way door.
+[Screen-time enforcement](/operations/screen-time-enforcement/), drift-sentinel, and activity tracking all keep working on the Purple. Nothing gets worse by trying.
 
 <Aside type="caution">
 If the Gold Pro migration wipes the Purple's device groups (has happened
@@ -119,4 +123,6 @@ the only known sharp edge in the transfer flow.
 
 ## Why we bothered
 
-The Purple did everything we asked of it for the enforcement side — the silent-success bug, the ARP fallback, the drift sentinel all exist because the Purple works exactly well enough to fail in interesting ways. The Gold Pro upgrade isn't about reliability (we fixed that in software); it's about the data plane. A screen-time system that can tell you a kid has been on the network for four hours is half of a system. The Gold Pro's promise is the other half: knowing, per minute, which of those four hours was Crunchyroll and which was Roblox. Whether it keeps that promise is an empirical question, and the probe is the experiment.
+The Purple did everything we asked on the enforcement side. The silent-success bug, the ARP fallback, the drift sentinel — all of it exists because the Purple works exactly well enough to fail in interesting ways. The Gold Pro upgrade isn't about reliability. We fixed that in software. It's about the data plane. A screen-time system that can tell you a kid has been on the network for four hours is half a system. The other half is knowing, per minute, which of those hours was Crunchyroll and which was Roblox. The Gold Pro promises that half.
+
+Whether it keeps the promise is an empirical question. The probe is the experiment. Until it runs, the Gold Pro is just a better-looking box that does exactly what the last one did.
