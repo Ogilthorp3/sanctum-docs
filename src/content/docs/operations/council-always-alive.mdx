@@ -8,16 +8,13 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Council always-alive — three concentric rings of guardian lanterns around the council chamber, each ring lit by an independent flame; if any one wavers, the next two still hold the room.](./images/hero-council-always-alive.png)
 
-# Council Always-Alive
+The council lied to us for eight straight minutes.
 
-**Date:** 2026-04-17
-**Status:** Active on manoir
-
-The council is the inference substrate for every agent in the haus. When it hangs, Yoda goes mute, Cilghal stops watching your HRV, Mothma loses her eyes on the boot sequence. For most of early April 2026 the phrase "always alive" was marketing. This page is what it took to make it load-bearing.
+It accepted TCP connections. It answered `200 OK` on `/v1/models`. It returned nothing at all on `/v1/chat/completions` — and [the Living Force](./../architecture/living-force) watchdog declared it healthy the whole time. The council is the inference substrate for every agent in the haus: when it hangs, Yoda goes mute, Cilghal stops watching your HRV, Mothma loses her eyes on the boot sequence. For most of early April 2026 "always alive" was marketing. This is what it took, live on manoir since 2026-04-17, to make it load-bearing.
 
 ## The three failure modes we found
 
-One night the council accepted TCP connections, responded `200 OK` on `/v1/models`, and returned nothing at all on `/v1/chat/completions` for eight straight minutes. The watchdog declared it healthy the entire time. Three separate problems, stacked:
+Three separate problems were stacked under that eight-minute lie:
 
 1. **The probe was the wrong shape.** `services/council-mlx.yaml` declared `type: port` as its liveness check — a TCP listen test. `mlx_lm.server` keeps the port open long after inference has deadlocked. Every health check for months had been answering "is the lightbulb in the socket?" when the question was "is the lightbulb on?"
 
@@ -83,7 +80,7 @@ Events are newline-delimited JSON:
 {"ts": 1776475830.1,  "level": "info", "event": "restart_requested", "rc": 0}
 ```
 
-### Auto-fallback to Python — defense against unrecoverable Rust crashes
+## Auto-fallback to Python — defense against unrecoverable Rust crashes
 
 <Aside type="note">
 Battle-tested 2026-04-18: full fallback sequence exercised against the live endpoint. Guardian log recorded `fallback_activated` (BATTLETEST) → `probe_fail agent=com.sanctum.server-mlx` (lockfile routing confirmed) → `probe_ok agent=com.sanctum.mlx` after restore. `launchctl bootout` + `bootstrap` + `kickstart` all work from the guardian's `gui/<uid>` domain. Python backend served a real completion during the window; Rust was back in ~52s after the lockfile was removed.
@@ -174,6 +171,8 @@ grep probe_skip_busy ~/.openclaw/logs/council-guardian.log | tail -1
 ## Known side-finding worth flagging
 
 `~/.sanctum/instance.yaml` has `services.council_mlx.adapter_path: null`. The currently-served model is therefore **bare Qwen3.6-35B-A3B-4bit with no council LoRA adapter applied** (the model retired up from Qwen3.5-27B-4bit on 2026-04-22). If the council adapter is meant to be active in production, set `adapter_path` in `instance.yaml` and kick the cathedral plist (`launchctl kickstart -k gui/501/com.sanctum.mlx`).
+
+That caveat aside, the arithmetic is simple: three layers, three independent rollbacks, and one daemon that runs outside the very committee that would otherwise have voted down its own rescue. The council still hangs now and then — upstream KV-cache bugs keep their own schedule — but it no longer lies about it, and it no longer stays down. "Always alive" finally means what the label says. Yoda has not gone quiet since.
 
 ## Related
 

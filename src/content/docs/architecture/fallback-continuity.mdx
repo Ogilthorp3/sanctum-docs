@@ -5,22 +5,17 @@ description: The proxy's fallback chain was dropping the conversation it existed
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Fallback Continuity — two relay runners at full stride completing a clean baton exchange, Tommy the Abyssinian cat watching from the edge of the track](./images/hero-fallback-continuity.png)
+![Fallback Continuity — two relay runners at full stride completing a clean baton exchange, the baton itself a thread of conversation drawn in a single teal line](./images/hero-fallback-continuity.png)
 
-# Fallback Continuity
+A fallback chain has exactly one job. When the primary seat goes dark — a saturated GPU, a cold model, a seat that simply times out — the turn is supposed to survive the handoff and land somewhere that can finish it. That is the entire promise. A deep audit of the live [proxy](/architecture/proxy/) found the chain doing the opposite: quietly shredding the very conversation it was built to carry, then handing the stump to whoever caught it next.
 
-**Date:** 2026-07-26
-**Status:** Production (sanctum-proxy, origin/main `6aec9a6`, PR #35)
-
-The fallback chain exists for one reason: when the primary seat is unavailable, the turn should survive. A deep audit of the live proxy found that a switch was quietly destroying the very thing it was supposed to carry.
-
-Measured on the real handler, through real HTTP: **a fallback seat received 6 of 80 messages.**
+The number that started the sweep, measured on the real handler through real HTTP: a fallback seat received 6 of 80 messages. It shipped 2026-07-26 to sanctum-proxy (origin/main `6aec9a6`, PR #35), twelve defects deep, and one of them mattered more than the other eleven combined.
 
 ## The one that mattered
 
 `data` is parsed once in `handle_messages` and loop-carried through every attempt in the chain. `fit_context_to_budget` truncates it **in place**, and nothing ever put it back.
 
-So a 16384-token cathedral seat would amputate a session down to its last few turns, fail for its own unrelated reason — a saturated GPU, a cold model — and the chain would hand that stump to the next seat. Including `claude-cli-offline`, the 200k-context bridge that `needs_cathedral_context_fit()` explicitly exempts from truncation. The exemption was real. The guarantee was void, because the damage had already happened upstream of it.
+So a 16384-token cathedral seat would amputate a session down to its last few turns, fail for its own unrelated reason, and the chain would hand that stump to the next seat. Including `claude-cli-offline`, the 200k-context bridge that `needs_cathedral_context_fit()` explicitly exempts from truncation. The exemption was real. The guarantee was void, because the damage had already happened upstream of it.
 
 The fix is two lines: snapshot the body after routing, restore it at the top of every attempt. It costs one clone per **failed** attempt and nothing at all on the happy path.
 
@@ -35,7 +30,7 @@ Every other context defect below was chain-wide before this landed and is seat-l
 
 ## Choosing a seat that can hold the prompt
 
-Seat capacity was never consulted when *choosing* a seat — `max_prompt_tokens` was read at forward time, after the seat was already committed. A 190k session could be deliberately shredded on a 16k seat while a seat that fits it sat one rung down.
+Seat capacity was never consulted when *choosing* a seat — `max_prompt_tokens` was read at forward time, after the seat was already committed. A 190k session could be deliberately shredded on a 16k seat while a seat that fits it sat one rung down. (The reverse failure — accepting a load that then stalls the kernel — is the subject of [the Capacity Doctrine](/architecture/capacity-doctrine/).)
 
 The chain is now stable-partitioned by whether a seat can hold the estimated prompt. Seats that fit keep their configured priority; the ones that would truncate stay in the chain as a genuine fallback, because a degraded answer still beats no answer. Live, on a 38k-token request:
 
@@ -95,7 +90,7 @@ Seats now declare a capability: `text`, `image`, `embedding` or `vision`. An unt
 
 Text requests skip the check entirely, so the ordinary path is untouched.
 
-This composes with continuity rather than competing with it. Continuity makes a switch carry the request faithfully; capability typing makes the proxy refuse when the destination cannot serve it. Every response now also carries `x-sanctum-route-chain` listing the seats traversed, because degrading to a fallback is an event, not an implementation detail.
+This composes with continuity rather than competing with it. Continuity makes a switch carry the request faithfully; capability typing makes the proxy refuse when the destination cannot serve it. Every response now also carries `x-sanctum-route-chain` listing the seats traversed, because degrading to a fallback is an event, not an implementation detail — the same instinct behind the [session continuity cache](/architecture/session-continuity-cache/).
 
 ## Verification
 
@@ -107,7 +102,7 @@ Live, through the deployed binary on port 4040:
 proxy-e2e --full   46 checks   fail=0   (identical to the pre-deploy baseline)
 ```
 
-Three targeted probes against the running proxy:
+Targeted probes against the running proxy:
 
 | Probe | Result |
 |---|---|
@@ -117,8 +112,10 @@ Three targeted probes against the running proxy:
 | Image model with no image seat | Hard 501 `capability_unavailable`, zero content keys in the body |
 | Ordinary text request | 200, correct answer, `x-sanctum-route-chain` present |
 
-That last row is the one to read twice. `hard_tail_keep` fired — the most destructive pass there is, keeping only the final handful of messages — and the model still recovered a passphrase planted in the very first user turn. That is head-pinning working on live traffic. Before this change, the first turn was the first thing deleted.
+That third row is the one to read twice. `hard_tail_keep` fired — the most destructive pass there is, keeping only the final handful of messages — and the model still recovered a passphrase planted in the very first user turn. That is head-pinning working on live traffic. Before this change, the first turn was the first thing deleted.
 
 <Aside type="caution" title="Truncation is not free">
 The DEGRADED banner now appears on every truncated turn, including inside a tool loop. It was previously gated to fresh human prompts, which silenced it exactly when an agent was executing against constraints the fit had just deleted. If you see it, the answer is built on a shortened history — verify before you act on it.
 </Aside>
+
+None of this changes the promise, which was always the small one: hand the turn to the next runner without dropping the baton. Tommy, who spent fifteen years watching this haus and never once lost the thread of a morning, would call that the bare minimum. He would be right. A relay is only ever as good as the exchange, and the exchange is finally clean.
