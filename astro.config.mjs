@@ -229,6 +229,7 @@ export default defineConfig({
 					label: 'Reference',
 					items: [
 						{ label: 'instance.yaml', slug: 'reference/instance-yaml' },
+						{ label: 'sanctum.yaml', slug: 'reference/sanctum-yaml' },
 						{ label: 'Shell API', slug: 'reference/shell-api' },
 						{ label: 'TypeScript API', slug: 'reference/typescript-api' },
 						{ label: 'LaunchAgents', slug: 'reference/launchagents' },
@@ -333,6 +334,7 @@ export default defineConfig({
 								{ label: '2026-06-12 — Four Rungs, One Bet', slug: 'operations/2026-06-12-four-rungs-one-bet' },
 								{ label: '2026-06-11 — The Ghost Wore Three Masks', slug: 'operations/2026-06-11-the-ghost-wore-three-masks' },
 								{ label: '2026-06-08 — The SSH Key the Box No Longer Needs', slug: 'operations/2026-06-08-the-ssh-key-the-box-no-longer-needs' },
+								{ label: '2026-06-06 — The Gate Came Down', slug: 'operations/2026-06-06-the-gate-came-down' },
 								{ label: '2026-06-05 — The Eight-Item Sweep', slug: 'operations/2026-06-05-the-eight-item-sweep' },
 								{ label: '2026-06-04 — The Memory Limit That Lived in the Container', slug: 'operations/2026-06-04-the-memory-limit-that-lived-in-the-container' },
 								{ label: '2026-05-28 — The Screen That Rewarded Forgetting', slug: 'operations/2026-05-28-the-screen-that-rewarded-forgetting' },
