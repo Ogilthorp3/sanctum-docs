@@ -313,6 +313,7 @@ export default defineConfig({
 								{ label: "2026-07-02 — The Lights Go Local (and the Names That Wouldn't Stick)", slug: 'operations/2026-07-02-the-lights-go-local' },
 								{ label: '2026-06-19 — The Speed Test That Cried Slow', slug: 'operations/2026-06-19-the-speed-test-that-cried-slow' },
 								{ label: '2026-06-15 — The Slash-One That Ate the LAN', slug: 'operations/2026-06-15-the-slash-one-that-ate-the-lan' },
+								{ label: '2026-06-08 — The SSH Key the Box No Longer Needs', slug: 'operations/2026-06-08-the-ssh-key-the-box-no-longer-needs' },
 								{ label: '2026-04-28 — The Clean Stage', slug: 'operations/2026-04-28-the-clean-stage' },
 								{ label: '2026-04-27 — The Vajrayogini Cut', slug: 'operations/2026-04-27-the-vajrayogini-cut' },
 								{ label: '2026-04-27 — Two Gates, One Subscription', slug: 'operations/2026-04-27-claude-max-symmetry' },

@@ -1,70 +1,39 @@
 ---
 title: Sanctum-MLX
-description: A pure Rust inference server that talks directly to Apple Silicon Metal — zero Python, fused kernels, mTLS, signed weight manifests, and an irrational level of commitment to eliminating overhead.
+description: A pure Rust inference server that talks straight to Apple Silicon Metal — zero Python, fused kernels, mTLS, signed weight manifests, and an irrational commitment to eliminating overhead.
 ---
 
 import { Card, CardGrid, Aside, Tabs, TabItem } from '@astrojs/starlight/components';
 
-![Tommy in the Sanctum-MLX chamber — one Mac Mini, one fused kernel, zero Python overhead.](./images/sanctum-mlx-metal-chamber.png)
+![The Sanctum-MLX Metal chamber — one Mac Mini, one fused kernel, zero Python overhead, with Tommy keeping watch.](./images/sanctum-mlx-metal-chamber.png)
 
-There was a time when the Council's local inference ran through `mlx_lm.server` — a Python process that loaded a model, accepted HTTP requests, and generated tokens. It worked. It was fine. And then we looked at the profiler and realized 40% of the wall clock was spent in Python overhead, garbage collection, and the seven layers of abstraction between "give me a token" and the actual GPU computation.
+There was a time when the Council's local inference ran through `mlx_lm.server`, a Python process that loaded a model and generated tokens. It worked. It was fine. Then the profiler showed 40% of the wall clock going to Python overhead, garbage collection, and the seven layers between "give me a token" and the actual GPU math.
 
-So we did what any reasonable person would do: we rewrote the entire inference stack in Rust, implemented a GatedDeltaNet state-space model from scratch, wrote custom Metal GPU kernels, and shipped it as a pair of binaries that start in 3 seconds and decode at 36–48 tokens per second.
-
-This is sanctum-mlx, **cathedral fork**, on Apple Silicon Metal. It has no Python dependency. It has no regrets.
-
-<Aside type="note" title="Current as of 2026-06-09">
-This page accumulated through eight months of incremental rewrites. The narrative below is mostly intact but the cathedral fork has changed several load-bearing facts since the v0.2.0 cutover. Read the **Cathedral fork — current state** section first; the rest of the page is the path that got us here, preserved because the bugs and the fixes are still instructive.
-</Aside>
+So we did the unreasonable thing: rewrote the stack in Rust, implemented a GatedDeltaNet state-space model from scratch, wrote custom Metal kernels, and shipped a pair of binaries that start in 3 seconds and decode at 36–48 tokens per second. This is sanctum-mlx, the **cathedral fork**, on Apple Silicon Metal. No Python dependency. No regrets.
 
 ## Cathedral fork — current state
 
-The active inference layer is the **cathedral fork** at `~/Projects/sanctum-rs-cathedral/services/sanctum-mlx/`. The original `sanctum-rs/services/sanctum-mlx/` tree is deprecated and kept only for archival reference. Production drives:
+The active inference layer is the cathedral fork at `~/Projects/sanctum-rs-cathedral/services/sanctum-mlx/`; the original `sanctum-rs/services/sanctum-mlx/` tree is deprecated, archival-only. Production drives two seats out of one binary:
 
 | Binary | Port | Model | Role |
 |--------|------|-------|------|
 | `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) plus a Qwen3.6-27B-4bit secondary via dual-residency | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
 | `sanctum-mlx` (label `com.sanctum.mlx-devstral-rust`) | `:3301` | Devstral-Small-2-24B-Instruct-2512-4bit | Coder seat + Qui-Gon's code path |
 
-A disaster fallback (`com.sanctum.mlx-py-fallback`) sits promote-only on `:8901`, serving the same Qwen3.6-35B-A3B-4bit as `:1337` but via an independent Python mlx-lm stack — so a corrupt or missing Rust binary (which kills both the council and devstral seats, since they share one binary file) leaves a different-stack server able to take over at full parity. It is not always-warm: an always-resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken Rust agent first to free the RAM, then enabling and kickstarting the Python seat. Transient (non-binary) failover is handled separately at the proxyd routing layer (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust MLX seats run under launchd (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`) with KeepAlive and load weights from disk, and neither ever binds `0.0.0.0`. The two seats differ in exactly the ways their threat models differ:
+The two seats differ in exactly the ways their threat models differ:
 
-- **Council `:1337`** gates the listen socket on an **ed25519-signed** manifest (`ed25519` over `shasum -a 256`) and binds three interfaces — loopback, the Mini's Tailscale IP, and bridge100 (`10.10.10.1`) for the Lima VM path. It is mTLS-only: the plist passes `--no-plain`, so there is no plain-HTTP or bearer path left to bypass.
-- **Devstral `:3301`** gates on a **plain SHA-256** manifest (no `.sig` is shipped for it yet) and binds **loopback only** — `127.0.0.1:3301`, nothing on the Tailnet, nothing on the bridge. The coder seat is local-only by design; the VM and MBP reach it through the council router, not directly.
+| Seat | Manifest gate | Binds | Listener |
+|------|---------------|-------|----------|
+| Council `:1337` | ed25519-signed (`ed25519` over `shasum -a 256`) | loopback, the Mini's Tailscale IP, bridge100 `10.10.10.1` (Lima VM path) | mTLS-only (`--no-plain`) — no plain-HTTP or bearer path left to bypass |
+| Devstral `:3301` | plain SHA-256 (no `.sig` shipped for it yet) | loopback only, `127.0.0.1:3301` | local by design; the VM and MBP reach it through the council router, not directly |
 
-The earlier coder seat (`sanctum-mlx-coder` / `com.sanctum.mlx-coder` on `:1338`, plain `:1234` via socat, running Qwen2.5-Coder-14B-Instruct-4bit) was retired 2026-06-07 — its GGUF was archived and weights deleted when the role moved to Codestral. LM Studio itself is decommissioned; native MLX seats serve every model now. The last piece of LM Studio plumbing to stop twitching was `com.sanctum.lmstudio-bridge` — a `socat` shim that kept LISTENing on `10.0.0.1:1234`, forwarding to a `127.0.0.1:1234` that nothing answered anymore. That orphan has since been booted out too: the agent is unloaded and the `:1234` socket is closed.
+A disaster fallback, `com.sanctum.mlx-py-fallback`, sits promote-only on `:8901` — the same Qwen3.6-35B-A3B-4bit as `:1337` but an independent Python mlx-lm stack, so a corrupt or missing Rust binary (which kills both seats, since they share one binary file) still leaves a different-stack server able to take over at full parity. It is not always-warm: a resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken agent to free RAM, then kickstarting the Python seat. Transient failover is handled a layer up, in proxyd routing (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust seats run under launchd (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`) with KeepAlive, load weights from disk, and never bind `0.0.0.0`.
 
-The `sanctum-server` smart router on `:8900` ([Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and routes requests with five tiers of defense — breaker, budget, latency EMA, quality detectors.
+The `sanctum-server` smart router on `:8900` ([Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and five tiers of defense: breaker, budget, latency EMA, quality detectors. Retired plumbing — the old `:1338` coder seat, the socat `:1234` bridges, all of LM Studio — is in the file map below.
 
-### Recent shipped work (Phase 1A/1B and the view-aliasing fix)
+## Inside the server
 
-| Feature | Status | Effect |
-|---------|--------|--------|
-| **Phase 1A — FusedQKVProj** | Shipped 2026-05-13 (commit `8da9d33`, branch `feat/cathedral-fused-qkv`) | 24.1 → 36.3 tok/s freeform on coder, after fixing a `split_sections` view-aliasing bug — split returns non-contiguous views with non-zero offsets, downstream reshape→RoPE silently reads wrong bytes. `+ zero` makes the contiguous copy. |
-| **Phase 1B — FusedGateUpProj** | Merged 2026-05-14 (PR #16, commit `f92d44e`) | Coder essay throughput reached ~48 tok/s. Same `+ zero` discipline carried forward; `mlx_contiguous` / `mlx_copy` are NOT substitutes. |
-| **Phase 2 — Fused RoPE Metal kernel** | Designed, not shipped (branch `feat/cathedral-phase2-fused-rope @ 6378408`) | MSL kernel is correct in isolation but MLX's lazy graph doesn't auto-track custom-kernel outputs; the eval barrier costs more than the two saved launches. Waiting on upstream MLX fix. |
-| **Per-MoE-expert fusion (planned for 35B)** | Pending | Carry-forward of Phase 1A/1B onto `qwen3_5_moe`. Per-expert MLP fusion instead of monolithic gate+up. |
-
-### LCP cache reuse + T_q ≥ 2 invariant
-
-Cross-request prompt-cache reuse via longest-common-prefix matching is on. The cathedral caps the LCP at `len - 2` so the suffix is always `T_q ≥ 2` — MLX's decode-kernel vs prefill-kernel SDPA diverge across requests when the suffix is exactly 1 token, producing byte-different responses to byte-identical prompts. The two-token margin makes the cache byte-identical (commit `0123773`).
-
-### Prompt-Lookup Decoding (PLD) as a self-speculation art piece
-
-The cathedral runs PLD by default on the council `:1337` binary, where the plist wires it explicitly (`SANCTUM_MLX_PLD_MAX_LOOKUP=5`, `SANCTUM_MLX_PLD_NGRAM_SIZE=3`). It self-speculates using the prompt context as a draft model — no second model required, no `flash-attn` wheel-build dance. Devstral's plist doesn't set the PLD env vars, so the coder seat runs on whatever the code default is rather than an explicit, `ps`-visible override. Branch `feat/cathedral-pld` started this; the path is now mainline.
-
-### Architecture coverage
-
-`sanctum-mlx` dispatches its loader on the checkpoint's `model_type`:
-
-| `model_type` | Status | Notes |
-|--------------|--------|-------|
-| `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
-| `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
-| `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not currently the production champion. |
-| `mistral` | Production | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only) on `:3301`. The loader's `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
-| Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Anything else `model_type` is refused outright with a message that names the four it does load. |
-
-### Architecture
+The request path never leaves Rust and Metal:
 
 ```
 [Client] → mTLS handshake → 127.0.0.1:1337  (council, mTLS-only)
@@ -82,9 +51,33 @@ The cathedral runs PLD by default on the council `:1337` binary, where the plist
   └─ /metrics (Prometheus), client-cert auth — mTLS-only, no plain/bearer listener
 ```
 
-The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint. It supports LoRA adapter hot-swap (covers quantized + batched-quantized + 3-D `switch_mlp` layers — needed for the MoE expert grids). Models load directly from safetensors files into mlx-rs arrays. The full model graph runs on the Metal GPU without ever touching Python, NumPy, or the existential dread of `pip install`.
+The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint, hot-swaps LoRA adapters (quantized + batched-quantized + 3-D `switch_mlp` for the MoE expert grids), and loads models straight from safetensors into mlx-rs arrays. The full graph runs on the Metal GPU without ever touching Python, NumPy, or the existential dread of `pip install`. It dispatches on the checkpoint's `model_type`:
 
-## The Model: Qwen3.5-27B-4bit (and others)
+| `model_type` | Status | Notes |
+|--------------|--------|-------|
+| `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
+| `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
+| `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not the current production champion. |
+| `mistral` | Production | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only) on `:3301`. The `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
+| Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Any other `model_type` is refused outright with a message naming the four it does load. |
+
+Two cross-request tricks keep it fast and honest:
+
+| Trick | Detail |
+|-------|--------|
+| LCP prompt-cache reuse | Matched on longest common prefix, capped at `len - 2` so the suffix is always `T_q ≥ 2` — MLX's decode- and prefill-kernel SDPA diverge when the suffix is exactly one token, giving byte-different responses to byte-identical prompts; the two-token margin makes the cache byte-identical (commit `0123773`) |
+| PLD self-speculation | On by default on `:1337` via `SANCTUM_MLX_PLD_MAX_LOOKUP=5` and `SANCTUM_MLX_PLD_NGRAM_SIZE=3`; uses the prompt as its own draft model — no second model, no `flash-attn` wheel-build dance. Devstral sets no PLD env vars, so the coder seat runs the code default |
+
+The fusion work that got the throughput here is tracked as shipped phases:
+
+| Feature | Status | Effect |
+|---------|--------|--------|
+| Phase 1A — FusedQKVProj | Shipped 2026-05-13 (commit `8da9d33`, branch `feat/cathedral-fused-qkv`) | 24.1 → 36.3 tok/s freeform on coder, after fixing a `split_sections` view-aliasing bug — split returns non-contiguous views with non-zero offsets, downstream reshape→RoPE silently reads wrong bytes. `+ zero` makes the contiguous copy. |
+| Phase 1B — FusedGateUpProj | Merged 2026-05-14 (PR #16, commit `f92d44e`) | Coder essay throughput reached ~48 tok/s. Same `+ zero` discipline; `mlx_contiguous` / `mlx_copy` are NOT substitutes. |
+| Phase 2 — Fused RoPE Metal kernel | Designed, not shipped (branch `feat/cathedral-phase2-fused-rope @ 6378408`) | MSL kernel is correct in isolation, but MLX's lazy graph doesn't auto-track custom-kernel outputs; the eval barrier costs more than the two saved launches. Waiting on an upstream MLX fix. |
+| Per-MoE-expert fusion (planned for 35B) | Pending | Carry-forward of Phase 1A/1B onto `qwen3_5_moe`: per-expert MLP fusion instead of monolithic gate+up. |
+
+## The model: Qwen3.5-27B-4bit (and others)
 
 Qwen3.5 is a hybrid architecture — 64 decoder layers split between two attention mechanisms:
 
@@ -94,10 +87,8 @@ Qwen3.5 is a hybrid architecture — 64 decoder layers split between two attenti
 | Full Attention (Qwen3NextAttention) | 16 layers | Standard multi-head attention with a twist: 2x Q projection split into queries + sigmoid gate. |
 
 <Aside type="tip">
-The linear attention layers are what make this model fast at long sequences — they maintain a fixed-size recurrent state instead of a growing KV cache. The full attention layers provide the pattern-matching capability that SSMs alone can't quite deliver. It's a best-of-both-worlds design, assuming your world includes writing custom Metal kernels.
+The linear-attention layers make this model fast at long sequences — a fixed-size recurrent state instead of a growing KV cache — and the full-attention layers provide the pattern-matching SSMs alone can't deliver. Best-of-both-worlds, assuming your world includes writing custom Metal kernels.
 </Aside>
-
-### Key Dimensions
 
 | Parameter | Value |
 |-----------|-------|
@@ -111,125 +102,109 @@ The linear attention layers are what make this model fast at long sequences — 
 | linear_value_head_dim | 128 |
 | Quantization | 4-bit, group_size=64 |
 
-## Performance Optimizations (v0.2.0 → v0.3.0)
+## Six optimizations, ~9 to ~75 tok/s
 
-Six optimizations took decode throughput from ~9 tok/s to ~75 tok/s on the same hardware. The first four are GatedDeltaNet-shaped wins from the v0.2.0 cutover; the last two are the late-April push that closed the TurboQuant tax and bounded MLX's buffer cache. John Carmack would probably find another 21%, but he's busy with other things.
+Six changes took decode throughput from ~9 tok/s to ~75 tok/s on the same hardware — the first four GatedDeltaNet-shaped wins from the v0.2.0 cutover, the last two the late-April push that closed the TurboQuant tax and bounded MLX's buffer cache. John Carmack ([Carmack Optimization](/architecture/carmack-optimization/)) would probably find another 21%, but he's busy.
 
-### 1. Fused Metal Kernel for GatedDeltaNet SSM
+| # | Optimization | Mechanism | Win |
+|---|--------------|-----------|-----|
+| 1 | Fused Metal kernel for the GatedDeltaNet SSM (`metal_kernels.rs`) | One Metal dispatch processes all timesteps in a single GPU launch — was a Rust loop issuing a separate dispatch/sync per timestep; SIMD-group `simd_sum` reductions over the Dk dot products, recurrent state in thread-local registers | decode ~9 → ~13 tok/s |
+| 2 | Zero-copy GQA in the kernel | 16 key heads → 48 value heads mapped internally via `hk_idx = hv_idx / (Hv / Hk)`, reading the original 16-head Q/K — no broadcast, reshape, or allocation | no per-pass V buffer |
+| 3 | Eval-cadence tuning | MLX is lazily evaluated; the graph executes on `eval()`, so the sync interval is a knob (see table) | halves GPU sync overhead |
+| 4 | Pre-computed normalization constants | Q/K RMS-norm `ones_weight` + scale factors (`inv_scale²` for Q, `inv_scale` for K) computed once at model construction and cached, not fresh per call (was 48 layers × 2 arrays × every token) | fewer allocations |
+| 5 | Fused attention with inline V dequant (`sdpa_dequant_v`) | One threadgroup per `(batch, query head, query position)`; 32 threads cooperate on D via `simd_sum`; online (FlashAttention) softmax in fp32; causal mask via additive `-INF` bias, template-specialized so decode compiles the branch away. Routes through a new `KeyValueCache::fused_attention` trait method; when the cache opts in, `FullAttention::forward` skips full-V re-materialization for decode AND prefill | +21.2% |
+| 6 | Metal memory caps + inter-request cache drain | Plist caps Metal; `mlx_clear_cache` (wrapped as `mlx_rs::memory::clear_cache()`) drains the cache at the end of both the sync and SSE chat handlers | bounded RAM |
 
-The GatedDeltaNet recurrent scan was originally implemented as a Rust loop over timesteps, issuing separate MLX operations for each step: decay, matrix multiply, delta update, output projection. Each operation meant a separate Metal kernel dispatch, a separate synchronization point, and a separate opportunity for the GPU to wonder why it was born.
-
-The fused kernel (`metal_kernels.rs`) replaces this with a single Metal dispatch that processes all timesteps in one GPU launch. It uses SIMD group reductions (`simd_sum`) for the Dk-dimension dot products and keeps the recurrent state in thread-local registers.
+The fused SSM kernel tiles the work so each threadgroup handles one `(batch, value_head, dv_slice)`, loops all timesteps internally, and spreads Dk across 32 SIMD lanes:
 
 ```
 Grid: (32, Dv, B*Hv)    Threadgroup: (32, 4, 1)
 ```
 
-Each threadgroup tile handles one (batch, value_head, dv_slice) and loops over all timesteps internally. The Dk dimension is distributed across 32 SIMD lanes with `simd_sum` for horizontal reduction.
-
 <Aside type="caution">
 The fused kernel requires `Dk % 32 == 0` for SIMD alignment. Qwen3.5's `Dk=128` satisfies this. For models with non-aligned dimensions, the server falls back to the Rust per-timestep loop automatically.
 </Aside>
 
-### 2. Zero-Copy GQA in the Kernel
-
-Grouped Query Attention maps 16 key heads to 48 value heads (3x expansion). The naive approach broadcasts and reshapes — allocating a new contiguous buffer every forward pass. The fused Metal kernel handles the mapping internally via `hk_idx = hv_idx / (Hv / Hk)`, reading directly from the original 16-head Q/K tensors. No broadcast, no reshape, no allocation.
-
-### 3. Eval Cadence Tuning
-
-MLX uses lazy evaluation — operations build a computation graph that only executes when you call `eval()`. The cadence matters:
+Eval cadence trades a sliver of latency for throughput:
 
 | Mode | Before | After | Rationale |
 |------|--------|-------|-----------|
 | Streaming | Every 4 tokens | Every 8 tokens | Halves GPU sync overhead. Adds ~80ms latency at 13 tok/s — imperceptible in chat. |
 | Non-streaming | Every 32 tokens | Every 64 tokens | Larger graph batches for throughput. The GPU prefers big meals. |
 
-### 4. Pre-computed Normalization Constants
-
-Q/K RMS normalization uses a `ones_weight` vector and scale factors (`inv_scale²` for Q, `inv_scale` for K). Previously allocated fresh each forward call — 48 layers × 2 arrays × every token = a lot of unnecessary allocation. Now computed once at model construction and cached in the struct.
-
-### 5. Fused Attention with Inline V Dequantization (2026-04-24)
-
-The Slice 1 TurboQuant cache rebuilt the entire dequantized V tensor every decode step on the CPU — `O(T²)` work and a forced GPU sync per layer. The replacement is a custom Metal kernel `sdpa_dequant_v` (in [`turboquant/attention_kernel.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/attention_kernel.rs)) that takes Q + materialized K + the compressed V state (indices, scales, zeros) and runs scaled-dot-product attention with V dequantized inline in registers. No full V tensor ever materializes.
+Optimization 5 hurt to get right. Slice 1 of TurboQuant rebuilt the entire dequantized V tensor every decode step on the CPU — `O(T²)` work and a forced GPU sync per layer. The replacement, `sdpa_dequant_v` (in [`turboquant/attention_kernel.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/attention_kernel.rs)), takes Q + materialized K + the compressed V state (indices, scales, zeros) and runs SDPA with V dequantized inline in registers — no full V tensor ever materializes:
 
 ```
 Grid: (32, 1, B*H_q*L_q)   Threadgroup: (32, 1, 1)
 ```
 
-One threadgroup per (batch, query head, query position); 32 threads cooperate on the D dimension via `simd_sum`. Online (FlashAttention) softmax in fp32. Causal mask via additive `-INF` bias, template-specialized so the decode path compiles the branch away. Routed through a new `KeyValueCache::fused_attention` trait method — when the cache opts in, `FullAttention::forward` skips the full-V re-materialization for both decode AND prefill.
-
-Bench (MBP M4 Max, 3 × 8 × 100 tokens, vanilla MoE):
-
 | Config | Mean tok/s | vs Slice 1 |
-|---|---|---|
+|--------|-----------|-----------|
 | no TurboQuant | 79.42 | — |
 | Slice 1 (CPU K+V) | 62.38 | baseline |
-| **Slice 4a-final (plain K + fused V)** | **75.64** | **+21.2%** |
+| Slice 4a-final (plain K + fused V) | 75.64 | +21.2% |
 
-The keys-plain choice is empirical: at our context lengths, dropping key compression saves us the CPU round-trip without surrendering meaningful memory (~4 MB/layer of bf16 K is nothing on 64 GB). See [TurboQuant KV Compression](/architecture/turboquant-kv-compression/) for the full pivot story.
+Keys-plain is an empirical choice: at our context lengths, dropping key compression saves the CPU round-trip without surrendering meaningful memory (~4 MB/layer of bf16 K is nothing on 64 GB). The full pivot story lives in [TurboQuant KV Compression](/architecture/turboquant-kv-compression/). *(Bench: MBP M4 Max, 3 × 8 × 100 tokens, vanilla MoE.)*
 
-### 6. Metal Memory Caps + Inter-Request Cache Drain (2026-04-24)
-
-The Mini was running at 31.7 GB of 32 GB swap with 85 MB free pages — not because anything leaked, but because MLX's buffer cache had no upper bound and ratcheted up across thousands of requests. Two changes:
-
-- The launchd plist now passes `--metal-cache-limit-mb 1024 --metal-memory-limit-mb 40960 --metal-wired-limit-mb 24576`. Without these, MLX's previous cache limit was effectively 65 GB (the entire machine).
-- `mlx_clear_cache` was wrapped into `mlx_rs::memory::clear_cache()` and called at the end of both chat handler paths (sync and SSE) so the buffer cache is drained between requests instead of growing forever.
-
-Result: post-restart steady state holds at ~13 GB wired (the actual weights + warm experts), with 1.3 GB free pages. macOS dynamically shrunk the swap file from 32 GB to 9.2 GB once the pressure eased — the clearest signal the fix worked.
-
-<Aside type="note" title="35B-era figures differ">
-The caps above (`40960`/`24576`) and the 13 GB-wired / 9.2 GB-swap steady state are the **27B-era** numbers from this 2026-04-24 push. The live 35B champion runs tighter caps in its plist — `--metal-memory-limit-mb 28672 --metal-wired-limit-mb 18432` (cache limit still `1024`) — and a bigger model means more resident weight and a hotter swap: at the time of writing the Mini sits at ~28.7 GB swap, ~27.5 GB of it used. The bounding logic is the same win; the constants moved with the model.
-</Aside>
-
-## The April 2026 Cutover
-
-For a while, sanctum-mlx was a science project. It loaded models, it ran the forward pass, it produced valid tensors — it just wasn't the thing answering your questions. Production still routed through the Python `mlx_lm.server` that sanctum-server babysat. The plan was to flip the switch eventually. April 2026 is when we flipped it.
-
-What landed in a single sustained push:
-
-<CardGrid>
-  <Card title="LoRA Merge at Load" icon="puzzle">
-    `AppState::load` calls `lora::load_and_merge` when `--adapter-path` is supplied. Quantized path dequantizes → adds the delta → requantizes at `group_size=64, bits=4`. Non-quantized path just adds. `AdapterInfo { name, rank, alpha, merged_pairs }` is carried on the app state and surfaced in `system_fingerprint`.
-  </Card>
-  <Card title="Full Sampling Pipeline" icon="rocket">
-    A new `sampling` module replaces the single-temp `qwen3_5::sample()`. Pipeline: repetition penalty → top-p nucleus → temperature → argmax or categorical. `RecentTokens` is a bounded dedup-aware ring buffer. OpenAI-style `stop` is accepted as string-or-array; a `StopSeqBuffer` carries max-stop-length bytes across SSE batches so a stop sequence split across the 8-token flush boundary still trips.
-  </Card>
-  <Card title="Custom Decode Loop" icon="approve-check">
-    `sampling::decode` drives `Model::forward` directly with a `Control::Continue`/`Stop` callback. The callback batches token IDs for the caller to decode + stream + check stops. Replaces `qwen3_5::Generate` so top_p and repetition_penalty actually affect logits without patching vendored mlx-lm.
-  </Card>
-  <Card title="Multimodal Config Support" icon="setting">
-    The production `mlx-community/Qwen3.5-27B-4bit` checkpoint is the VL variant — `text_config` nests the text-model fields. `get_qwen3_5_model_args` now flattens `text_config` into the root before deserializing, so both flat and nested configs load. Root-level keys still win on conflict.
-  </Card>
-</CardGrid>
-
-Along the way we fixed two bugs that would have made production unusable:
-
-- **`Array::deep_clone()` on unevaluated lazy tensors segfaults** inside `mlx_array_data_bfloat16` because the buffer pointer is null until `eval()` runs. The "no-op" branches of `sample`, `apply_top_p`, and `apply_repetition_penalty` were cloning the prefill logits that hadn't been materialized yet. Fix: the pipeline passes `&Array` through every stage and only materializes when a transform actually runs. There is now a fast path for `temp=0` + no rep-penalty that goes straight to argmax with zero intermediate Arrays.
-- **Missing `<think>…</think>` generation-prompt prefix.** Python runs with `--chat-template-args {"enable_thinking": false}`, which causes the Qwen3.5 chat template to emit `<|im_start|>assistant\n<think>\n\n</think>\n\n`. We were sending only `<|im_start|>assistant\n`. Without the empty think block the model slipped into open-ended reasoning and emitted degenerate token loops. `messages_to_prompt` now matches production exactly.
-
-## Autoregressive SSM State — The Hybrid-Attention Cache
-
-This is the piece that took the longest to find and the shortest to fix.
-
-When you load a Qwen3.5-27B base model and send one prompt, sanctum-mlx would produce a few coherent tokens and then collapse:
+Optimization 6 fixed memory pressure. The Mini sat at 31.7 GB of 32 GB swap with 85 MB free pages — not a leak, just MLX's buffer cache ratcheting up across thousands of requests, unbounded:
 
 ```
-Prompt:  "Say hello."
-Output:  "Hello, and the 190/ / 190/ / 190/ / 190/ / …"
+# 27B-era caps (this 2026-04-24 push):
+--metal-cache-limit-mb 1024 --metal-memory-limit-mb 40960 --metal-wired-limit-mb 24576
+# without these, MLX's cache limit was effectively 65 GB (the whole machine)
+
+# live 35B champion caps:
+--metal-memory-limit-mb 28672 --metal-wired-limit-mb 18432   # cache limit still 1024
 ```
 
-The tokenization was right. The special tokens were right. The sampler was right. The model weights were right. And yet.
+| Steady state | 27B-era (2026-04-24) | live 35B champion |
+|--------------|----------------------|-------------------|
+| Wired | ~13 GB (weights + warm experts) | more resident weight |
+| Free pages | 1.3 GB | — |
+| Swap | shrank 32 GB → 9.2 GB once pressure eased | ~28.7 GB, ~27.5 GB used |
 
-The bug was that the **linear-attention layers had no way to carry state across forward calls.** Qwen3.5 is a hybrid — 48 layers of Mamba-style GatedDeltaNet SSM interleaved with 16 full-attention layers. Full attention has a KV cache. Linear attention didn't. Every decode step (`L=1`) entered the forward pass with:
+The bounding logic is the same win; the constants moved with the model. macOS shrinking the swap file on its own was the clearest signal it took.
 
-- A fresh zero SSM recurrent state `h ∈ ℝ^{B × H_v × D_v × D_k}`
-- A depthwise causal `Conv1d` left-padded with zeros
+## The April 2026 cutover
 
-The full-attention KV cache carried the prompt context, which was enough to keep the first few tokens coherent. After that, the linear-attention layers — running with amnesia — produced garbage that cascaded through the residual stream until greedy decode locked onto a self-reinforcing token.
+For a while, sanctum-mlx was a science project: it loaded models, ran the forward pass, produced valid tensors — it just wasn't the thing answering your questions. Production still routed through the Python `mlx_lm.server` that sanctum-server babysat. April 2026 is when we flipped the switch. Four pieces landed in one push:
 
-### The Fix
+| Piece | What it does |
+|-------|--------------|
+| LoRA merge at load | `AppState::load` calls `lora::load_and_merge` when `--adapter-path` is supplied. Quantized path dequantizes → adds the delta → requantizes at `group_size=64, bits=4`; non-quantized just adds. `AdapterInfo { name, rank, alpha, merged_pairs }` rides the app state and surfaces in `system_fingerprint`. |
+| Full sampling pipeline | A `sampling` module replaces the single-temp `qwen3_5::sample()`: repetition penalty → top-p nucleus → temperature → argmax or categorical. `RecentTokens` is a bounded dedup-aware ring buffer; OpenAI `stop` is string-or-array; a `StopSeqBuffer` carries max-stop-length bytes across SSE batches so a stop split across the 8-token flush still trips. |
+| Custom decode loop | `sampling::decode` drives `Model::forward` with a `Control::Continue`/`Stop` callback that batches token IDs. Replaces `qwen3_5::Generate` so `top_p` and `repetition_penalty` actually affect logits without patching vendored mlx-lm. |
+| Multimodal config | The production `mlx-community/Qwen3.5-27B-4bit` checkpoint is the VL variant — `text_config` nests the text-model fields. `get_qwen3_5_model_args` flattens `text_config` into the root before deserializing; root-level keys win on conflict. |
 
-Two pieces of state get threaded through the decode loop now:
+The production cutover itself was a 65-second blue-green swap at 2026-04-17 21:36 local — 63 of those seconds were Metal loading 27 billion 4-bit parameters into the GPU, the other two were `launchctl`.
+
+| Change | Detail |
+|--------|--------|
+| Python wrapper unloaded | `com.sanctum.server-mlx.plist` (wrapper on `mlx_lm.server`) off |
+| Rust binary loaded | `com.sanctum.mlx.plist` on `:1337`, `KeepAlive=true`, `LimitLoadToSessionType=Aqua`, `ThrottleInterval=30` |
+| Guardian rewrite | `council-guardian.sh` now uses `launchctl kickstart -k gui/<uid>/$ACTIVE_AGENT`; rollback = flip `ACTIVE_AGENT` back to `com.sanctum.server-mlx` |
+| Guardian probe latency | ~870 ms → ~485 ms (a ping, not a generation — but a faster ping) |
+
+At cutover we hit 7/10 byte-exact on the smoke battery at `temperature=0`; the remaining three differ only in single-word synonyms — bf16 ULP drift after ~100 characters, argmax identical for the first ~40 tokens on every prompt. Rollback is one line, and `server-mlx.plist` is the escape hatch, not legacy debt — kept until the 24-hour watch is clean and a week of guardian probes match the Python era's 100%:
+
+```bash
+launchctl unload ~/Library/LaunchAgents/com.sanctum.mlx.plist && \
+  launchctl load ~/Library/LaunchAgents/com.sanctum.server-mlx.plist
+```
+
+## The bugs that made it work
+
+These took the longest to find and shortest to fix. Load a Qwen3.5-27B base model, send one prompt, and sanctum-mlx produced a few coherent tokens then collapsed into `"Hello, and the 190/ / 190/ / …"`. The tokenization, the special tokens, the sampler, the weights — all right. And yet. Five bugs stood between the science project and production:
+
+| Symptom | Root cause | Fix |
+|---------|-----------|-----|
+| First tokens coherent, then a `190/ /` loop | The 48 GatedDeltaNet SSM layers carried no state across forward calls — only the 16 full-attention layers had a KV cache, so every `L=1` decode step ran with a fresh zero SSM state `h ∈ ℝ^{B × H_v × D_v × D_k}` and a zero-padded depthwise causal `Conv1d`; the amnesiac layers cascaded garbage until greedy decode locked on a self-reinforcing token | `forward_with_cache(&mut self, x, cache)` threads a `LinearAttentionState`; `None` = prefill, `Some` = decode continuation; `ModelInput` gained `ssm_cache`; the old `Module::forward(&Array)` delegates with `None` |
+| Segfault in `mlx_array_data_bfloat16` | `Array::deep_clone()` on unevaluated lazy tensors — the buffer pointer is null until `eval()`; the no-op branches of `sample`/`apply_top_p`/`apply_repetition_penalty` cloned prefill logits before they materialized | Pass `&Array` through every stage, materialize only when a transform runs; a fast path for `temp=0` + no rep-penalty goes straight to argmax with zero intermediate Arrays |
+| Degenerate token loops | Missing `<think>…</think>` prompt prefix — Python runs `--chat-template-args {"enable_thinking": false}`, emitting `<|im_start|>assistant\n<think>\n\n</think>\n\n`; we sent only `<|im_start|>assistant\n` | `messages_to_prompt` now matches production exactly |
+| Parity stuck 4/10 at `temperature=0` | `FullAttention` saw an empty `cache` Vec, fell through to the no-cache branch, and silently recomputed keys/values every decode step | A `C: Default` trait bound + `(0..self.layers.len()).map(|_| Some(C::default())).collect()` at the top of `forward()` — parity jumped 4/10 → 7/10 |
+| Every decode step corrupted, `exp(0)=1` collapsing the GatedDeltaNet decay | Field named `a_log`; the `ModuleParameters` derive uses `stringify!(field)` for checkpoint lookup and Qwen's safetensors key is `A_log` — lowercase silently mismatched | Rename `a_log` → `A_log` (the software equivalent of losing a year to a missing semicolon) |
+
+The state struct threads two things through the decode loop:
 
 ```rust
 pub struct LinearAttentionState {
@@ -240,61 +215,65 @@ pub struct LinearAttentionState {
 }
 ```
 
-`LinearAttention::forward_with_cache(&mut self, x, cache: &mut Option<LinearAttentionState>)` replaces the old stateless `forward()`:
-
-- `None` on entry → prefill. Conv is left-padded with zeros, SSM starts from `Array::zeros`. On exit the cache gets populated with the final SSM state and the last `conv_kernel_dim - 1` raw QKV projections.
-- `Some(state)` on entry → decode continuation. Conv is left-padded with `state.conv_buffer` (the rolling tail from the previous call), SSM starts from `state.ssm_state`. Works for any `L ≥ 1`, which is to say every single-token decode step.
-
-`ModelInput` gained an `ssm_cache: Option<&mut Vec<Option<LinearAttentionState>>>` field; `Qwen3_5InnerModel::forward` dispatches each layer's cache slot to the right layer type (full-attn layers see their KV slot; linear-attn layers see their SSM slot). The old `Module::forward(&Array)` still exists and delegates with a `None` cache so one-shot prefill-only callers — benchmarks, tests, the hybrid sidecar — work unchanged.
-
-### The Correctness Test
-
-The unit test that says "this is right" is short and brutal:
+The correctness test is short and brutal: a full prefill of `L=6` must equal a prefill of `L=5` plus one decode step through the cache.
 
 ```rust
-// Full prefill of L=6:
 let y_full = la.forward_with_cache(&x6, &mut None)?;
-
-// Prefill L=5, then decode L=1:
 la.forward_with_cache(&x5, &mut cache)?;
 let y_step = la.forward_with_cache(&x1, &mut cache)?;
-
-// The 6th-position output must match both ways.
-assert!(max_abs_diff(&y_full.last(), &y_step) < 1e-3);
+assert!(max_abs_diff(&y_full.last(), &y_step) < 1e-3);   // 6th-position output matches both ways
 ```
 
-If the cache correctly represents the state after `L=5`, then running one more step through it has to produce the same output as scanning all six tokens at once. It does.
+On the real model, `"Say hello."` went from the `190/ /` loop to `"Hello! How can I help you today? …"`. Python `mlx_lm.server` emits EOS at "today?" — a ~50-token drift that is numerical-parity refinement, not a correctness bug.
 
-### End-to-End on the Real Model
+## The firewall ambush
 
+Localhost worked. The guardian worked. Every probe from the MacBook Pro over Tailscale got `curl: (56) Recv failure: Connection reset by peer`. The `socketfilterfw` ruleset had silently added the unsigned Rust binary to the BLOCK list — probably during an earlier shadow test, when the Application Firewall popup went unanswered at the Mini's screen. Localhost bypassed the filter, so every developer probe looked fine.
+
+```bash
+# Diagnose
+/usr/libexec/ApplicationFirewall/socketfilterfw --getappblocked \
+  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
+# → "Incoming connection to ... is blocked."
+
+# Fix (one-shot, requires sudo)
+sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \
+  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
 ```
-Prompt:  "Say hello."
-Before:  "Hello, and the 190/ / 190/ / 190/ / …"
-After:   "Hello! How can I help you today? Whether you need help
-          with a specific task, need clarification, or have a
-          question, I'm here to help!"
+
+This bites once per binary path: a rebuild at the same path keeps the rule, a moved binary starts default-deny again. Python `mlx_lm.server` never hit it — its executable was `Python.app`, allow-listed for decades. Rust binaries from `cargo build --release` are ad-hoc-signed (`codesign -dv` shows `Signature=adhoc`) and enjoy no such privilege.
+
+## The guardian that ate itself
+
+The rewritten guardian passed every test, then the Sanctum Olympics benchmark hit the Mini with 512-token prompts and the guardian decided the server was dead. It wasn't. sanctum-mlx serializes Metal inference — one GPU context, one kernel graph at a time — so a `POST /v1/chat/completions` health probe with `max_tokens=2` queued behind a `max_tokens=512` request in flight, timed out after 20 seconds, and the guardian read that as "hung" and ran `launchctl kickstart -k`. Three restarts in eight minutes; none necessary, all outages.
+
+```bash
+# Before — queues behind in-flight inference under load
+URL="http://127.0.0.1:1337/v1/chat/completions"
+curl -X POST "$URL" -d '{"messages":[{"role":"user","content":"ping"}],"max_tokens":2}'
+
+# After — GET, ~25 ms, bypasses the inference queue
+URL="http://127.0.0.1:1337/v1/models"
+curl "$URL"
 ```
 
-Python `mlx_lm.server` on the same prompt emits EOS at "today?" — earlier than ours. The 50-ish-token drift before we diverge is a numerical-parity refinement, tracked separately. The model is now producing usable, grammatical output against real weights on a 64 GB Mac Mini with zero Python anywhere in the request path, which is the whole point.
-
-## Testing
-
-The server ships with a comprehensive e2e test suite:
-
-| Metric | Value |
-|--------|-------|
-| Unit tests (sampling + server + lora + turboquant) | 74/74 |
-| SSM cache tests (`prefill`, `decode`, `full == prefill+decode`) | 3/3 |
-| E2E tests | 34/34 |
-| Phases | 10 (build, health, deep health, models, non-stream, stream, errors, multi-turn, content arrays, shutdown) |
-
-The test script (`test_e2e_sanctum_mlx.sh`) supports `--skip-build` for rapid iteration and covers the full OpenAI-compatible API surface including error handling and graceful SIGTERM shutdown.
+The fix probes `GET /v1/models` (~25 ms regardless of load, because it never touches the model graph), tightens the timeout from 20s to 10s, and loosens `FAILS_BEFORE_RESTART` from 2 to 3. If the graph goes sideways while HTTP stays alive, this probe won't catch it — a separate, slower monitor covers that.
 
 <Aside type="caution">
-Run unit tests serialized: `just test-mlx` (or `cargo test -p sanctum-mlx -- --test-threads=1`). Parallel tests that touch Metal trigger `AGXG16XFamilyCommandBuffer` encoder collisions and abort the suite with SIGABRT. This is not our bug, but it's our problem.
+The second-order lesson: a monitor that shares a queue with the thing it monitors can become the failure it's meant to detect. For any single-resource server — Metal context, GIL, mutex-guarded state — the health probe must live on a different code path than the work.
 </Aside>
 
-## Performance Baseline (M4 Pro 128GB, 2026-04-02)
+## Latency and testing
+
+Warm-up on the first request after a plist load is ~15 s (Metal context + kernel JIT). After that, latency is flat until the KV cache grows past the working-set window — at which point the linear-attention recurrent state keeps memory bounded instead of the usual quadratic heartburn at the 32K mark.
+
+| Workload | Latency | Throughput |
+|----------|---------|-----------|
+| Guardian ping (`max_tokens=2`) | ~450 ms | — |
+| Short chat (`max_tokens=8`, warm) | ~520 ms | ~15 tok/s |
+| Paragraph (`max_tokens=80`) | ~4.2 s | ~13 tok/s |
+
+The M4 Pro 128GB baseline (2026-04-02): the fused kernel roughly doubled decode while leaving prefill flat, because prefill is dominated by matrix multiplications through 64 quantized layers, not the SSM scan.
 
 | Metric | v0.1.0 (Rust loop) | v0.2.0 (fused kernel) |
 |--------|--------------------|-----------------------|
@@ -303,262 +282,62 @@ Run unit tests serialized: `just test-mlx` (or `cargo test -p sanctum-mlx -- --t
 | Model load | ~3s | ~3s |
 | Binary size | ~4.2 MB | ~4.2 MB |
 
-The prefill speed is unchanged because it's dominated by the initial matrix multiplications through 64 quantized layers — the SSM scan is a small fraction of that cost. Decode is where the fused kernel shines, because the recurrent scan becomes the bottleneck when you're generating one token at a time.
+The e2e suite ships alongside: `test_e2e_sanctum_mlx.sh` supports `--skip-build` and covers the full OpenAI-compatible surface, error handling and graceful SIGTERM shutdown included.
 
-## Production Cutover — 2026-04-17 21:36 local
-
-After eight months of "it works in the shadow, let's ship it in one more sprint," the Rust server replaced Python on the Mac Mini in a 65-second blue-green swap. Sixty-three of those seconds were Metal loading 27 billion 4-bit parameters into the GPU, which is not something one optimises. The other two were `launchctl`.
-
-### What changed
-
-- `com.sanctum.server-mlx.plist` (Python wrapper on `mlx_lm.server`) unloaded.
-- `com.sanctum.mlx.plist` (pure-Rust `sanctum-mlx` binary) loaded on the same port `:1337`, with `KeepAlive=true`, `LimitLoadToSessionType=Aqua`, `ThrottleInterval=30`.
-- `council-guardian.sh` rewritten to use `launchctl kickstart -k gui/<uid>/$ACTIVE_AGENT` instead of the old `pkill mlx_lm.server + nohup wrapper` pattern. Respects `KeepAlive + ThrottleInterval` by design. Rollback is flipping `ACTIVE_AGENT` back to `com.sanctum.server-mlx`.
-- Guardian probe latency fell from ~870 ms to ~485 ms. That's a ping, not a generation — but it is now a faster ping.
-
-### Parity at cutover
-
-- 7/10 byte-exact on the smoke battery at `temperature=0`. The remaining three differ only in single-word synonyms — bf16 ULP drift that accumulates after ~100 characters. Argmax is identical for the first ~40 tokens on every test prompt.
-- The winning fix: a `C: Default` trait bound on the cache generic plus `(0..self.layers.len()).map(|_| Some(C::default())).collect()` at the top of `forward()`. Without it, `FullAttention` saw an empty `cache` `Vec`, fell through to the no-cache branch, and silently recomputed keys/values every decode step. One three-line change, parity jumped 4/10 → 7/10, and nobody was going to catch it with a unit test.
-- The fix before that: renaming a field from `a_log` to `A_log`. The `ModuleParameters` derive macro uses `stringify!(field)` for checkpoint lookup, and Qwen's safetensors key is `A_log`. Lowercase silently mismatched, `exp(0)=1` collapsed the GatedDeltaNet decay, every decode step was corrupted. This is the software equivalent of losing a year to a missing semicolon, and it will happen again somewhere, to someone, probably to us.
-
-### The rollback plan
-
-One line:
-
-```bash
-launchctl unload ~/Library/LaunchAgents/com.sanctum.mlx.plist && \
-  launchctl load ~/Library/LaunchAgents/com.sanctum.server-mlx.plist
-```
-
-Both plists stay on disk. `server-mlx.plist` is the escape hatch, not legacy debt. We keep it until the 24-hour watch is clean and a week of guardian probes have the same 100% success rate the Python era used to have.
-
-### The macOS Application Firewall ambush
-
-Localhost worked. The guardian worked. Every probe from the Mini itself said "yes, the Force is strong with this one." Every probe from the MacBook Pro over Tailscale got `curl: (56) Recv failure: Connection reset by peer`.
-
-The `socketfilterfw` ruleset had silently added the unsigned Rust binary to the BLOCK list — probably during an earlier shadow test, when the Application Firewall popup asked about incoming connections and there was no one at the Mini's screen to click Allow. The block rule persisted. Localhost bypassed the filter, so every developer probe looked fine.
-
-Diagnosis:
-
-```bash
-/usr/libexec/ApplicationFirewall/socketfilterfw --getappblocked \
-  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
-# → "Incoming connection to ... is blocked."
-```
-
-Fix (one-shot, requires sudo):
-
-```bash
-sudo /usr/libexec/ApplicationFirewall/socketfilterfw --unblockapp \
-  /Users/neo/Projects/sanctum-rs/target/release/sanctum-mlx
-```
-
-This only bites once, per binary path. A rebuild at the same path keeps the rule. If the binary is moved, the new path starts in the default-deny state again and has to be explicitly allowed. Python `mlx_lm.server` never hit this because its executable was `Python.app` — already in the allow list for decades' worth of reasons. Rust binaries produced by `cargo build --release` are ad-hoc-signed (`codesign -dv` shows `Signature=adhoc`) and enjoy no such privilege.
-
-### The guardian that ate itself
-
-The council-guardian was rewritten in the same session to use `launchctl kickstart -k` instead of the old `pkill mlx_lm.server + nohup` pattern. It passed every test. Then we pointed the Sanctum Olympics benchmark at the Mini with 512-token prompts, and the guardian decided the server was dead.
-
-It wasn't. sanctum-mlx serializes Metal inference — one GPU context, one kernel graph at a time. A `POST /v1/chat/completions` health probe with `max_tokens=2` still queues behind a `max_tokens=512` request in flight. The probe timed out after 20 seconds waiting for its turn, the guardian read that as "hung", and ran `launchctl kickstart -k`. Thirty seconds of Metal reload later, the next guardian probe hit the same queue again. Three restarts in eight minutes; none of them were necessary, all of them were outages.
-
-Fix: probe `GET /v1/models` instead. It's a static-ish route that returns the model list in ~25 ms regardless of inference load, because it never touches the model graph. Tightened the timeout from 20s to 10s (small enough to notice real hangs fast), loosened `FAILS_BEFORE_RESTART` from 2 to 3 (big enough to absorb a single network blip).
-
-```bash
-# Before
-URL="http://127.0.0.1:1337/v1/chat/completions"
-curl -X POST "$URL" -d '{"messages":[{"role":"user","content":"ping"}],"max_tokens":2}'
-#   ^ queues behind in-flight inference under load
-
-# After
-URL="http://127.0.0.1:1337/v1/models"
-curl "$URL"  # GET, 25 ms, bypasses inference queue
-```
-
-If the model graph itself goes sideways (HTTP alive, inference broken), this probe won't catch it. That's a separate monitor with a slower cadence — noted for the roadmap, not retrofitted into a 60 s loop.
+| Metric | Value |
+|--------|-------|
+| Unit tests (sampling + server + lora + turboquant) | 74/74 |
+| SSM cache tests (`prefill`, `decode`, `full == prefill+decode`) | 3/3 |
+| E2E tests | 34/34 |
+| Phases | 10 (build, health, deep health, models, non-stream, stream, errors, multi-turn, content arrays, shutdown) |
 
 <Aside type="caution">
-This is the second-order lesson: monitors that share a queue with the thing they're monitoring can become the failure they're supposed to detect. For any single-resource server — Metal context, GIL, mutex-guarded state — the health probe must live on a different code path than the work path. Cheap GET routes exist for this reason.
+Run unit tests serialized: `just test-mlx` (or `cargo test -p sanctum-mlx -- --test-threads=1`). Parallel tests that touch Metal trigger `AGXG16XFamilyCommandBuffer` encoder collisions and abort the suite with SIGABRT. Not our bug, but our problem.
 </Aside>
 
-### Observed latency post-cutover (Mac Mini, 64 GB)
+## Hardening: from B+ to A+
 
-| Workload | Latency | Throughput |
-|----------|---------|------------|
-| Guardian ping (`max_tokens=2`) | ~450 ms | — |
-| Short chat (`max_tokens=8`, warm) | ~520 ms | ~15 tok/s |
-| Paragraph (`max_tokens=80`) | ~4.2 s | ~13 tok/s |
+With the binary live, the gap was operational: nobody would notice if the server answered wrong but still returned 200, if a hand-edited plist drifted from the repo, or if a corrupted weights file served a bad token. Successive passes closed those gaps until "military-grade" was earned — observable, survivable, verifiable, identity-gated:
 
-Warm-up on the first request after plist load is ~15 s (Metal context + kernel JIT). Subsequent requests are flat until the KV cache grows past the working-set window, at which point the linear-attention recurrent state keeps memory bounded instead of the usual "quadratic heartburn at the 32K mark."
+| Layer | Mechanism |
+|-------|-----------|
+| Guardian | `council-guardian`, every 60s, `GET /v1/models` — proves HTTP is alive, nothing more |
+| Canary | `council-canary`, every 10 min, POSTs "What is 2+2? Respond with only the number." Response must contain `4`; two consecutive misses alert Force Flow `/notify` (the pipe signal-health uses), 30-min cooldown; it never restarts (guardian owns that) |
+| Drift | `council-drift`, hourly, SHA-256-compares every deployed plist/script/manifest against canonical copies in `services/sanctum-mlx/deploy/` in the Mini's `sanctum-rs` checkout; checks the Application Firewall state and asserts every expected agent is loaded; drift → level=error log + Force Flow alert. `deploy-sanctum-mlx.sh verify` runs it interactively |
+| Deploy | `scripts/deploy-sanctum-mlx.sh` — `install` idempotent (SHA-compare each artifact), `upgrade` (native arm64 + Metal rebuild, MBP-shadow pre-flight, `unload+load` not `kickstart -k`, post-flight chat probe, auto-rollback), `rollback` → `com.sanctum.server-mlx` |
+| Weight manifest | `manifest.rs` reads a coreutils `shasum -a 256` manifest (`services/sanctum-mlx/deploy/qwen35-27b-4bit.manifest.sha256`), rayon-parallel-hashes files under `--model`, refuses to bind on mismatch; 6 unit tests; 10.5 s for 9 files / 16 GB on the Mini's NVMe; startup ~27 s → ~38 s |
+| ed25519 signature | Detached ed25519 signature over the manifest bytes, verified before the hashes. Signing key on the MBP at `~/.ssh/sanctum-manifest-signing.key` (0600, not in repo); 32-byte verify key `services/sanctum-mlx/deploy/manifest-pubkey.ed25519` and 64-byte sig `...manifest.sha256.sig` are committed. `sign_manifest` CLI (`keygen`/`sign`/`verify`); a tamper test reproduces `Verification equation was not satisfied` |
+| Bind restriction | `--host` is repeatable, default single `127.0.0.1`; non-loopback bind failures are non-fatal (Tailscale flaps at boot), loopback is required; `is_unspecified()` also counts as loopback so the MBP shadow's `0.0.0.0:8902` passes the start guard |
+| Bearer auth (retired) | `auth.rs` axum middleware, `127.0.0.1`/`::1` bypass else `Authorization: Bearer <token>`, constant-time compare via `subtle`; token at `/Users/neo/.sanctum/secrets/council-mlx.token` (0600, 64 bytes of `secrets.token_hex(32)`), `--auth-token-file`, fail-closed 401, `SANCTUM_MLX_DISABLE_AUTH=1` to opt out. Rode along during the mTLS transition, retired with the plain listener |
+| Off-box watchers | On the MBP: `com.sanctum.council-canary-offbox` (chat probe via Tailscale, every 10 min) + `com.sanctum.council-drift-offbox` (`deploy-sanctum-mlx.sh verify` hourly against the Mini). Alert is `osascript 'display notification'` with a "Submarine" sound — Force Flow is deliberately not used, since the premise is the Mini might be dead |
+| Hardened runtime | `scripts/codesign-sanctum-mlx.sh` re-signs with `--options runtime` + only `com.apple.security.cs.allow-jit` (Metal's W^X shader pages); `codesign -dv` shows `flags=0x10002(adhoc,runtime)`; no `disable-library-validation` |
+| Developer ID + notarization | Identity `Developer ID Application: Bertrand Nepveu (GJ994MN2YF)`, full three-link Apple chain, `flags=0x10000(runtime)`. ASC API key `.p8` at `~/.keys/holocron-notary/AuthKey_PLACEHLDR0.p8`; `notarytool store-credentials sanctum` stashes it in keychain. Submission IDs: MBP `00000000-0000-0000-0000-000000000004`, Mini `00000000-0000-0000-0000-000000000005`, both `Ready for distribution` |
+| Prometheus `/metrics` | `src/metrics.rs` — RED metrics + inference token counters (see below); reachable only over the mTLS socket now |
+| HA failover | `HttpProxyBackend` holds a `Vec<String>`; `generate` tries primary then each fallback on connect-failure/5xx, bails on 4xx, and stays on a URL once a stream starts; `BackendDef.fallback_urls` in `instance.yaml`; `health_check` is "healthy if ANY url responds" |
+| Parity smoke | `com.sanctum.council-parity-smoke`, 03:00 nightly, 10 fixed prompts at `temperature=0` vs known-good substrings in `parity-smoke.json`; more than 1/10 failures fires Force Flow. Initial prod run 10/10, ~60 s |
+| mTLS | `src/mtls.rs` + `scripts/mtls-gen-certs.sh`; PKI at `~/.sanctum/certs/`; per-client certs give cryptographic identity (the CN lands in audit logs), individually revocable without re-issuing everyone |
 
-## Operational hardening (P4 — 2026-04-17)
-
-With the Rust binary on :1337 and the cutover stable, the remaining gap was operational: nobody would notice if the server started answering wrong but still 200-OK'd, nobody would notice if a hand-edited plist drifted from the repo, and nobody would catch a corrupted weights file before it served a bad token. Four additions closed those gaps in the same session.
-
-### 1. Canary — a slow probe that asks a real question
-
-`council-guardian` runs every 60 s and hits `GET /v1/models`. That proves the HTTP server is alive, nothing more. A model with bit-flipped weights would still happily list itself.
-
-`council-canary` runs every 10 min and POSTs a fixed prompt:
-
-> What is 2+2? Respond with only the number.
-
-The response has to contain `4` or the canary increments a consecutive-failures counter. Two in a row and it alerts Force Flow `/notify`, the same pipe signal-health uses. Cooldown is 30 min to avoid spamming the same outage. Canary does not trigger restarts — guardian owns that — it exists purely to tell a human the model has become smart enough to still respond but stupid enough to answer wrong. That's a surprisingly common failure class.
-
-### 2. Drift detection — nobody edits prod without somebody knowing
-
-`council-drift` runs hourly and SHA-256-compares every deployed plist, script, and manifest against the canonical copies in `services/sanctum-mlx/deploy/` in the Mini's own `sanctum-rs` checkout. It also checks the Application Firewall state for the binary (because we already got bitten by that once) and asserts every expected agent is loaded in `launchctl`.
-
-Any drift → structured log entry at level=error and a Force Flow alert. Running the `deploy-sanctum-mlx.sh verify` command on demand prints the same checks interactively.
-
-### 3. Deploy script — the cutover you don't type twice
-
-`scripts/deploy-sanctum-mlx.sh` wraps the entire install/upgrade/rollback dance as a single tool with subcommands. `install` is idempotent — every artifact gets SHA-compared against the repo copy before being overwritten, and no-ops when they already match. `upgrade` rebuilds the binary on the Mini (native arm64 + Metal linkage), probes the MBP shadow as a pre-flight, `unload+load`s the agent (not `kickstart -k` — see below), runs a post-flight chat probe, and auto-rolls-back if that probe fails. `rollback` flips back to `com.sanctum.server-mlx` for the Python escape hatch.
-
-The plist-reload gotcha earned a dedicated comment block in the source:
+One wrinkle: CLI Mach-O binaries can't be stapled, so Gatekeeper fetches the ticket online on first run; the authoritative proof lives in `~/.openclaw/logs/notarization-<id>.log`. SSH codesigning on the Mini needs a one-time keychain ACL, or `codesign` gets `errSecInternalComponent`:
 
 ```bash
-# `launchctl kickstart -k` restarts the process BUT reads
-# ProgramArguments from the already-loaded plist, not from disk.
-# When the plist content changes (e.g., adding --manifest), we must
-# unload + load or the new args are silently ignored.
+security set-key-partition-list -S apple-tool:,apple:,codesign:,unsigned: \
+  -s -k <login-pw> ~/Library/Keychains/login.keychain-db
 ```
 
-We learned this the direct way when the first rollout of the manifest check silently did nothing because the running plist was a stale in-memory copy.
+The Prometheus series and the router fallback config, for whoever wires the dashboard:
 
-### 4. Weight integrity manifest — don't trust, verify
-
-`manifest.rs` reads a coreutils-format `shasum -a 256` manifest (committed at `services/sanctum-mlx/deploy/qwen35-27b-4bit.manifest.sha256`), parallel-hashes every listed file under `--model` using rayon, and refuses to bind the listener on any mismatch. Six unit tests cover the happy path, tampered file, missing file, missing manifest, bad syntax, and comment-line handling.
-
-Perf: 10.5 s for 9 files / 16 GB on the Mini's NVMe. Six cores saturate SHA-256 throughput; the disk is the bottleneck. Startup went from ~27 s to ~38 s — a cost we pay once per restart to know the 27 billion parameters we're about to run haven't silently corrupted.
-
-The manifest itself isn't cryptographically signed. An attacker with write access to both the model directory and the manifest can roll both together. Closing that gap means Developer-ID signing on a signed manifest-of-manifests, which is listed on the roadmap, not shipped. What this layer does defend against is the much larger and more likely threat surface: bit-rot on the SSD, corrupt downloads, accidental truncation, and the classic "I re-pulled the model and forgot to re-pull the manifest" self-inflicted wound.
-
-### Deferred (named, not done)
-
-| Item | Why not this session |
-|------|----------------------|
-| Developer-ID signing + notarization | Needs a paid Apple Developer cert |
-| Close the 3/10 bf16 ULP parity gap | Reduction-order surgery in the Metal kernel or selective fp32 promotions — not a 30-min fix |
-| Auth on :1337 (mTLS or bearer) | Tailnet ACLs are the current defence; mTLS is a refactor |
-| Prometheus/statsd metrics → Holocron | Requires designing the metric model and wiring the dashboard |
-| Zero-downtime blue-green via front-proxy | Caddy in front of a :1337/:1338 pair, non-trivial plumbing |
-| Parity smoke battery in CI | GitHub Actions runner can't drive Metal; needs a self-hosted arm64 runner |
-
-None of these block day-to-day operation. They're the shape of "what comes after apple-like and military-grade": the layers that keep you boring when boring is what you want.
-
-## P5 — the "actually military-grade" pass (2026-04-17)
-
-After P4 landed, the honest answer to "is this military-grade?" was "apple-like-adjacent, B+". Five remaining gaps, closed in one push.
-
-### 1. Bearer-token auth with a loopback bypass
-
-`auth.rs` is an axum middleware that looks at the request's connect-info peer address. If it's `127.0.0.1` or `::1`, pass through — that's the Mini's own guardian, canary, and `sanctum-server` hitting `:1337` over the kernel loopback path. Anyone else must present `Authorization: Bearer <token>`. Constant-time compare via `subtle` to block timing oracles.
-
-Token lives at `/Users/neo/.sanctum/secrets/council-mlx.token`, 0600, 64 bytes of `secrets.token_hex(32)`. Plist wires `--auth-token-file` to that path. Missing token + non-loopback request = 401 by default — fail-closed. Operators who explicitly want the old open behaviour set `SANCTUM_MLX_DISABLE_AUTH=1` and accept the blame.
-
-10 unit tests cover: loopback IPv4/IPv6 bypass, non-loopback without token rejected, with correct token accepted, with wrong token rejected, missing header, wrong scheme (Basic instead of Bearer), wrong length, case-insensitive prefix.
-
-### 2. Bind to loopback + Tailscale — never `0.0.0.0`
-
-`--host` is now repeatable. Default is a single `127.0.0.1`. Production plist adds the Mini's Tailscale IP (`100.0.0.25`). LAN devices at `192.0.2.x` cannot connect to `:1337` directly — the socket doesn't exist on that interface. Bridge100 (`10.0.0.1`) is owned by `sanctum-triage`, a proxy that normalizes VM traffic and forwards to loopback, so the VM path is intact.
-
-The `--host`/plain-listener detail here is the P5 shape. The council binary has since moved to mTLS-only (`--tls-host` ×3, `--no-plain`); the bind *interfaces* — loopback, Tailscale, bridge100 — are unchanged, only the listener type is.
-
-Non-loopback bind failures are non-fatal. Tailscale can transiently disappear during boot; crashing the server would thrash launchd's KeepAlive. Loopback bind is required — without it, the guardian has nothing to probe and we can't even tell ourselves we're alive.
-
-### 3. ed25519-signed manifest
-
-The SHA-256 manifest from P4 is plain text. An attacker with write access to both the model dir and the manifest can roll both together. P5 closes that: a detached ed25519 signature over the manifest bytes, verified before the hashes are even looked at.
-
-The signing key lives on the MBP at `~/.ssh/sanctum-manifest-signing.key` (mode 0600, NOT in the repo). The verifying key is 32 raw bytes at `services/sanctum-mlx/deploy/manifest-pubkey.ed25519`, committed. The signature is 64 raw bytes at `services/sanctum-mlx/deploy/qwen35-27b-4bit.manifest.sha256.sig`, also committed.
-
-A new `sign_manifest` CLI wraps the workflow: `keygen`, `sign`, `verify`. At runtime, `main` calls `manifest::verify_signature(manifest, sig, pubkey)` before `manifest::verify`. A tamper test — appending one line to the manifest — reproduces the expected `Verification equation was not satisfied` and the process exits non-zero.
-
-This does not stop an attacker with FS-write AND the signing key. What it does stop: anyone editing the manifest without also having the signing key. That's a meaningful delta — the manifest now lives in a two-key trust zone where the hash list is trusted iff the signature is, and the signature requires something the repo does not contain.
-
-### 4. Off-box watchers on the MBP
-
-The on-Mini guardian / canary / drift agents watch each other across process boundaries but share a box. If the Mini is wedged, power-lost, kernel-panicked, or just switched off, every on-Mini alert channel goes silent.
-
-Two new LaunchAgents on the MBP close this:
-
-- `com.sanctum.council-canary-offbox` — chat probe to the Mini via Tailscale with the bearer token, every 10 minutes.
-- `com.sanctum.council-drift-offbox` — runs `deploy-sanctum-mlx.sh verify` hourly from the MBP against the Mini.
-
-The alert channel is `osascript 'display notification'` on the MBP's own screen, with a "Submarine" sound. Force Flow is intentionally not used — the whole premise is the Mini might be dead. Two boxes now have to be compromised to silently lie about the council's health, not one.
-
-### 5. Hardened-runtime codesign
-
-Vanilla `cargo build` produces a Mach-O with `flags=0x20002(adhoc,linker-signed)`. That's the weakest thing macOS accepts. `scripts/codesign-sanctum-mlx.sh` re-signs with `--options runtime` plus a minimal entitlement set — only `com.apple.security.cs.allow-jit` (Metal's shader compiler needs W^X pages). After the re-sign, `codesign -dv` shows `flags=0x10002(adhoc,runtime)`.
-
-We do NOT add `disable-library-validation`. Library validation staying on is the whole point of hardened runtime: any unsigned dylib shoved into the process gets rejected by the loader. DYLD environment overrides are blocked, ptrace is blocked by default, JIT is only allowed because the entitlement explicitly permits it.
-
-Without a paid Apple Developer ID the signature is still adhoc, which means we can't notarize and distribute the binary to other users. Fine — this is an internal service, distribution is `rsync`. What we get with hardened runtime is the runtime-enforcement hardening, orthogonal to notarization.
-
-### Deferred (still, honestly)
-
-After P5 + P6: the binary is hardened + auth-gated + bind-restricted + manifest-signed + doubly-watched + Developer-ID-signed + Apple-notarized. The remaining gaps from A → A+:
-
-| Gap | What it would take |
-|-----|--------------------|
-| Close the 3/10 bf16 ULP parity gap | fp32 accumulator in the fused Metal kernel, or reduction-order surgery |
-| Proper mTLS on `:1337` | rustls, client cert distribution, a rotation policy |
-| Prometheus metrics + dashboard | `metrics` crate, scrape endpoint, Holocron panel |
-| Zero-downtime blue-green | Caddy front-proxy for `:1337/:1338` hot-swap |
-| Parity smoke battery in CI | Self-hosted arm64 runner with Metal |
-| True HA (multi-node council) | Active-passive or load-balanced across Mini + MBP |
-
-## P6 — Developer ID signing + Apple notarization (2026-04-18)
-
-The last B+ → A-minus step was trading the adhoc signature for Apple's Developer ID chain and running the binary through the notary service.
-
-**Signing identity:** `Developer ID Application: Bertrand Nepveu (GJ994MN2YF)`. Both MBP and Mini produce binaries with the full three-link Apple chain — `Developer ID Application → Developer ID Certification Authority → Apple Root CA` — `flags=0x10000(runtime)` (no more adhoc), secure timestamp, `allow-jit` entitlement for Metal.
-
-**Notarization auth:** App Store Connect API Key instead of an Apple ID + app-specific password. The `.p8` was already on the Mini from the Holocron notarization work (`~/.keys/holocron-notary/AuthKey_PLACEHLDR0.p8`) — ASC keys are team-scoped, so the same key works for any binary under the same team. `notarytool store-credentials sanctum` stashes the triple (key/key-id/issuer) in macOS keychain. Future runs just use `--keychain-profile sanctum`, no interactive auth, no 2FA, no browser.
-
-**Submission IDs (audit trail):**
-- MBP: `00000000-0000-0000-0000-000000000004` — `Ready for distribution`.
-- Mini: `00000000-0000-0000-0000-000000000005` — `Ready for distribution`.
-
-**Mini keychain ACL (the reason SSH signing used to fail):** macOS private keys ship with a default access control that prompts for user approval on each use. Over SSH there's no GUI, so `codesign` gets `errSecInternalComponent` and exits. One-time fix is `security set-key-partition-list -S apple-tool:,apple:,codesign:,unsigned: -s -k <login-pw> ~/Library/Keychains/login.keychain-db`. After that, as long as the login keychain is unlocked, SSH codesign works. `security unlock-keychain -p <login-pw>` handles the unlock — no GUI interaction required.
-
-**One-time friction points encountered during rollout:**
-
-1. Apple's `.p8` can only be downloaded once at creation. Miss that window and you must revoke + regenerate. We were lucky — the key from the Holocron project was still on disk at `~/.keys/holocron-notary/`.
-2. An expired Developer Program agreement blocked the ASC key with HTTP 403 — "required agreement is missing or has expired". The account holder clicks through at `appstoreconnect.apple.com/agreements`, and the key immediately works. Nothing about the key itself was wrong.
-3. CLI Mach-O binaries **cannot be stapled** (stapling attaches a ticket to a `.app`/`.pkg`/`.dmg` wrapper; a bare binary has nowhere to put it). Gatekeeper fetches the ticket online on first run from any Mac. The authoritative "it's notarized" check is the log line `"statusSummary": "Ready for distribution"` + `"issues": null`, which is recorded at `~/.openclaw/logs/notarization-<id>.log`.
-
-Grade post-P6: **A-minus.** The "military-grade" label is unambiguously earned. The A+ layer — Prometheus, mTLS, HA, CI parity, kernel-level bit-exact parity — is a horizon-item, not a next-sprint item.
-
-## P7 — observability, failover, and parity CI (2026-04-18)
-
-Four of the six A+ items landed in one push. mTLS deferred — Tailscale already encrypts wire transport and bearer auth handles identity, so the remaining mTLS value is cryptographic per-client identity, worth doing but worth doing carefully.
-
-### 1. Prometheus `/metrics` endpoint
-
-`src/metrics.rs` installs a Prometheus recorder at startup and middleware that times every HTTP request. Series:
-
-- `sanctum_mlx_http_requests_total{route,method,status}` — counter
-- `sanctum_mlx_http_duration_seconds{route,method,status}` — histogram, 5 ms – 180 s buckets
-- `sanctum_mlx_http_inflight_requests` — gauge
-- `sanctum_mlx_inference_requests_total{stop_reason}` — counter
-- `sanctum_mlx_inference_{completion,prompt}_tokens_total` — counters
-- `sanctum_mlx_inference_duration_seconds` — histogram
-- `sanctum_mlx_inference_tokens_per_sec` — histogram (0.5 – 96 tok/s buckets)
-- `sanctum_mlx_inference_completion_tokens` — histogram (1 – 4096 tokens)
-- `sanctum_mlx_startup_seconds{phase="manifest_verify"|"model_load"}` — histogram
-- `sanctum_mlx_model_loaded` — gauge (0/1)
-
-`GET /metrics` renders Prometheus text format and goes through the same auth middleware as the rest. At the time this shipped that meant loopback-bypass plus a bearer token for cross-machine scrapers. Since the mTLS-only consolidation (see the current-state section), `:1337` has no plain listener: `/metrics` is reachable only over the mTLS socket and a scraper has to present a client cert signed by the Sanctum CA. Operational detail doesn't leak onto the open Tailnet.
-
-### 2. HA failover in the sanctum-server router
-
-`HttpProxyBackend` now holds a `Vec<String>` of URLs instead of one. `generate` tries primary, then each fallback on connect failure or 5xx. 4xx responses bail immediately — a fallback won't fix a malformed request.
-
-Once a stream starts, we stay on that URL. Mid-stream checkpointing across endpoints would require KV-cache / SSM-state migration the engines don't expose, and "start over on the fallback" is an honest option for stateless endpoints, not streaming inference.
-
-`BackendDef` in `instance.yaml` gains an optional `fallback_urls` array:
+```
+sanctum_mlx_http_requests_total{route,method,status}          counter
+sanctum_mlx_http_duration_seconds{route,method,status}        histogram (5 ms – 180 s)
+sanctum_mlx_http_inflight_requests                            gauge
+sanctum_mlx_inference_requests_total{stop_reason}             counter
+sanctum_mlx_inference_{completion,prompt}_tokens_total        counters
+sanctum_mlx_inference_duration_seconds                        histogram
+sanctum_mlx_inference_tokens_per_sec                          histogram (0.5 – 96 tok/s)
+sanctum_mlx_inference_completion_tokens                       histogram (1 – 4096 tokens)
+sanctum_mlx_startup_seconds{phase="manifest_verify"|"model_load"}   histogram
+sanctum_mlx_model_loaded                                      gauge (0/1)
+```
 
 ```yaml
 council-secure:
@@ -568,59 +347,35 @@ council-secure:
   api_key_env: COUNCIL_API_KEY
 ```
 
-Deployment is config-only — sanctum-server picks up the fallbacks at next load. `health_check` is now "healthy if ANY url responds," short-circuiting on primary success.
-
-### 3. Nightly parity smoke battery
-
-`com.sanctum.council-parity-smoke` runs at 03:00 every night. Executes 10 fixed prompts at `temperature=0` and checks each response against a known-good substring spec (`parity-smoke.json`). Threshold: more than 1 failure out of 10 fires a Force Flow alert.
-
-This catches what the manifest + signature layer can't: weights that hash fine but answer wrong. A silent mlx-rs rebase that shifts the fused kernel one ULP, an adapter swap, a quiet kernel cache corruption — any of these would show up in the morning's smoke log as a regression.
-
-Initial run in prod: 10/10 pass, ~60 s wall time. The spec file is editable without recompiling — when an intentional kernel change shifts answers, update the expected strings and commit.
-
-### 4. mutual TLS with per-client certs
-
-`src/mtls.rs` + `scripts/mtls-gen-certs.sh`. sanctum-mlx optionally binds a second listener with rustls that only accepts clients presenting a cert signed by our own CA. The whole PKI lives at `~/.sanctum/certs/` on both machines:
-
 ```
 certs/
 ├── ca.crt, ca.key              self-signed EC P-256 CA (5-year validity)
-├── server.crt, server.key       server cert, SAN'd for every address
-│                                sanctum-mlx might bind to (loopback,
-│                                Tailscale IPs, bridge100, hostnames)
+├── server.crt, server.key      server cert, SAN'd for every address sanctum-mlx binds
 └── clients/
     ├── guardian.{crt,key}       per-client cert, CN=<client-name>
-    ├── canary.{crt,key}         audit logs can pin every action to
-    ├── drift.{crt,key}          a specific identity
+    ├── canary.{crt,key}
+    ├── drift.{crt,key}
     ├── parity-smoke.{crt,key}
     ├── sanctum-server.{crt,key}
     └── council-offbox.{crt,key}
 ```
 
-<Aside type="note" title="Superseded — the migration finished">
-What follows is the dual-listener design as it shipped. The gradual rollout it describes is **done**: every client moved to mTLS, the plain `--host` lines came out of the plist, and the second TLS listener folded back onto `:1337`. Live state today is a single mTLS-only listener on `:1337` (`--tls-host` ×3, `--tls-port 1337`, `--no-plain`); there is no plain `:1337` and no `:1338`. Read the rest for the *why*; trust the current-state section for the *what*.
-</Aside>
+Verified cross-machine: a `curl` from the MBP to `https://100.0.0.25:1338/v1/chat/completions` (with `--cacert ca.crt` plus the `sanctum-server` client cert and key) returned `"2 + 2 equals"` in 1.84 s; without a client cert the handshake is rejected at layer-4 with rustls reason 1116. The migration is done: the plain listener is gone, mTLS on `:1337`.
 
-The binary shipped two routers:
+## Still open
 
-- **Plain HTTP (`:1337`)** — bearer-auth enforced with loopback bypass. Everything we shipped in P5 still worked; guardian/canary/drift/sanctum-server/VM-through-triage on loopback kept functioning without config changes.
-- **mTLS (`:1338`)** — no bearer check. The TLS handshake already verified the client's certificate chain against our CA, and doubling up the gate with an HTTP header would just be more surface area to break.
+None of these block day-to-day operation — they're the layers that keep you boring when boring is what you want.
 
-Cross-machine end-to-end verified: `curl --cacert ca.crt --cert clients/sanctum-server.crt --key clients/sanctum-server.key https://100.0.0.25:1338/v1/chat/completions` from MBP returned `"2 + 2 equals"` in 1.84 s. Without a client cert the TLS handshake is rejected at layer-4 with rustls reason 1116.
+| Still open | What it needs |
+|------------|---------------|
+| The 3/10 bf16 ULP parity gap at `temperature=0` | An fp32 accumulator in the fused Metal kernel, or reduction-order surgery / selective fp32 promotions |
+| Parity smoke battery inside GitHub Actions CI | A self-hosted arm64 runner — GitHub's can't drive Metal (the nightly cron covers it off-CI for now) |
+| True HA (multi-node council) | Active-passive or load-balanced across Mini + MBP |
+| Zero-downtime blue-green | A Caddy front-proxy hot-swapping a `:1337`/`:1338` pair |
 
-**Rollout was gradual, no flag day.** Plain listeners stayed up alongside TLS while clients migrated one at a time. Once every client had moved, the plain `--host` lines came out of the plist, only `--tls-host` remained, and the mTLS listener moved onto `:1337` — which is where it lives now. The bearer token rode along as a belt-and-suspenders fallback during the transition and has since been retired with the plain listener.
+## File map
 
-**What mTLS buys you that bearer didn't.** Bearer is a single shared secret — leak the token and every bearer-holder can call the council. mTLS gives per-client cryptographic identity: each client has its own cert, can be revoked individually without re-issuing everyone's credential, and the CN appears in audit logs so "guardian made this call" vs "sanctum-server made this call" is legible without additional middleware. Tailscale already encrypts wire transport, so the confidentiality gain is minor — the identity gain is the point.
-
-**One code-path gotcha fixed along the way.** The P5 guard that refuses to start without a loopback listener was checking `ip().is_loopback()`, which is false for `0.0.0.0`. That crashed the MBP shadow (which binds `0.0.0.0:8902`) in a restart loop. Now `is_unspecified()` also counts — `0.0.0.0` implicitly accepts loopback connections.
-
-### Grade post-P7: A+
-
-All four a-minus → A+ items landed. Observable (Prometheus), survivable (HA), verifiable (parity cron), and identity-gated (mTLS). The remaining work — closing the 3/10 bf16 ULP parity gap, migrating every client onto mTLS, retiring the bearer token — is tuning, not hardening.
-
-## File Map
-
-All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedral/`. The original `~/Projects/sanctum-rs/services/sanctum-mlx/` tree is deprecated and kept for archival only — anything new lands in the cathedral.
+All paths are in the cathedral fork at `~/Projects/sanctum-rs-cathedral/`. The original `~/Projects/sanctum-rs/services/sanctum-mlx/` tree is deprecated and archival-only — anything new lands in the cathedral.
 
 | File | Description |
 |------|-------------|
@@ -639,5 +394,7 @@ All paths below are in the **cathedral fork** at `~/Projects/sanctum-rs-cathedra
 | `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
 | `~/Library/LaunchAgents/com.sanctum.mlx-devstral-rust.plist` | Coder `:3301` runtime config (Devstral-Small-2-24B-Instruct-2512-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
 | `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | RETIRED 2026-06-07 — was the coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs); removed when the coder role moved to Codestral |
-| `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with LM Studio decommission |
-| `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | RETIRED — was the orphan `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend) that outlived the LM Studio decommission; now unloaded, and `:1234` is closed |
+| `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with the LM Studio decommission |
+| `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | RETIRED — the orphan `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend) that outlived the LM Studio decommission; now unloaded, and `:1234` is closed |
+
+The whole point is boring: 27 billion 4-bit parameters answering on a 64 GB Mac Mini, zero Python in the request path, and enough hardening around it that nobody has to think about it. Tommy would approve — the most reliable service in the haus is the one that just shows up, on time, and never asks for a restart.
