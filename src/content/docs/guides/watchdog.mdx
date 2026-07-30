@@ -5,9 +5,9 @@ description: Automated health monitoring with self-healing capabilities and conf
 
 import { Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
 
-The watchdog is the part of Sanctum that doesn't sleep — a long-running Rust daemon (`sanctumd`) that wakes every ten minutes, sweeps every service, fixes what it can, and tells you about whatever it couldn't. It is, literally, a program that watches other programs and judges them. If it ever develops opinions about your uptime, unplug everything.
+Something in the haus has to stay awake while everyone sleeps. That job falls to `sanctumd`, a long-running Rust daemon that wakes every ten minutes, sweeps every service, fixes what it can, and tells you about whatever it couldn't. It is, literally, a program that watches other programs and judges them. If it ever develops opinions about your uptime, unplug everything.
 
-![The watchdog — tireless guardian of three dozen services](./images/watchdog.png)
+![The watchdog on the night shift — tireless guardian of three dozen services](./images/watchdog.png)
 
 ## How It Works
 
@@ -120,12 +120,12 @@ The dashboard banner appends to `~/.sanctum/alerts.json`, which the command cent
 
 ## Remediation
 
-The repair engine is the **service graph**, not a separate doctor process. With `auto_fix` enabled, each *root cause* goes to `service-graph.py remediate <svc>`, running that service's manifest-defined action — a `heal_launchagent.sh` restart, a systemd kick over SSH, a Docker bounce. Blunt, but most failures here respond to "have you tried turning it off and on again."
+The repair engine is the [**service graph**](/guides/service-graph/), not a separate doctor process. With `auto_fix` enabled, each *root cause* goes to `service-graph.py remediate <svc>`, running that service's manifest-defined action — a `heal_launchagent.sh` restart, a systemd kick over SSH, a Docker bounce. Blunt, but most failures here respond to "have you tried turning it off and on again."
 
 Two guards keep a flapping service from turning the watchdog into a respawn machine: a per-service **restart budget** (`max_restarts_per_hour`, default 3) and a **circuit breaker** that halts remediation when too many fail at once.
 
 <Aside type="tip">
-  The `service-doctor.sh` script still exists as a manual tool — run it bare for a report, or `--fix` to remediate every failing service at once. No longer the watchdog's engine, but it's what you reach for when the haus is broken and you don't want to wait ten minutes.
+  The `service-doctor.sh` script still exists as a manual tool — run it bare for a report, or `--fix` to remediate every failing service at once. No longer the watchdog's engine, but it's what you reach for when the haus is broken and you don't want to wait ten minutes. [Service troubleshooting](/operations/service-troubleshooting/) walks through the by-hand path.
 </Aside>
 
 ## Health Test Suite
@@ -147,13 +147,13 @@ Probes return pass/fail, latency, and a diagnostic message; the graph follows `r
 
 ## Memory Sentinel
 
-On April 23, 2026, a runaway session pushed the 64 GB Mac Mini into OOM until WindowServer missed its watchdog checkin and the kernel panicked — twice in one evening. The service graph kept dutifully checking ports while the system asphyxiated, because knowing a service is up doesn't help when there's no RAM left to run it.
+On April 23, 2026, a runaway session pushed the 64 GB Mac Mini into OOM until WindowServer missed its watchdog checkin and the kernel panicked — twice in one evening. The service graph kept checking ports while the system asphyxiated — a service being up means nothing with no RAM to run it.
 
-The memory sentinel exists because of that night. It runs *before* the service graph — which itself spawns Python, threads, and SSH connections, all of which cost memory. Running diagnostics on a starved system is the monitoring equivalent of operating on a burning patient.
+The memory sentinel exists because of that night. It runs *before* the service graph — which itself spawns Python, threads, and SSH connections, all of which cost memory the starved machine may not have.
 
 ### How It Works
 
-The sentinel doesn't reason about whole-system free memory. It reasons about *Sanctum's own services*, one at a time: it enumerates every running `com.sanctum.*` job, reads each PID's RSS via `ps -o rss=`, and compares it to a **per-service limit in megabytes**. Limits are tuned per service — `mlx-builtin` gets 20 GB because it holds a model in RAM; a tunnel gets 64 MB, anything over is a leak. Override any limit under `services.<key>.memory_limit_mb`. The worst grades set the overall status:
+The sentinel doesn't reason about whole-system free memory, but about *Sanctum's own services*, one at a time: it enumerates every running `com.sanctum.*` job, reads each PID's RSS via `ps -o rss=`, and compares it to a **per-service limit in megabytes**. Limits are tuned per service — `mlx-builtin` gets 20 GB because it holds a model in RAM; a tunnel gets 64 MB, anything over is a leak. Override any limit under `services.<key>.memory_limit_mb`. The worst grades set the overall status:
 
 | Level | Trigger | Action |
 |-------|---------|--------|
@@ -162,15 +162,15 @@ The sentinel doesn't reason about whole-system free memory. It reasons about *Sa
 | Critical | At least one service over 100% of its limit | Exit 1, kill the worst offender |
 | Emergency | Three or more services over their limits | Exit 1, kill the worst offender |
 
-The "worst offender" is the service the most megabytes *over its own limit*. On a kill it sends SIGTERM, pauses, then SIGKILLs — and since every victim is a `com.sanctum.*` job, launchd restarts it clean.
+The "worst offender" is the service most megabytes *over its own limit*. On a kill it sends SIGTERM, pauses, then SIGKILLs — and since every victim is a `com.sanctum.*` job, launchd restarts it clean.
 
 <Aside type="caution">
-The flip side: the sentinel only touches `com.sanctum.*` jobs. A rogue process that *isn't* one of yours — a browser tab eating 30 GB — is invisible to it. It guards Sanctum from its own leaks; for everything else, you're still the watchdog.
+The flip side: the sentinel only touches `com.sanctum.*` jobs. A rogue process that *isn't* one of yours — a browser tab eating 30 GB — is invisible to it. It guards Sanctum from its own leaks; everything else is still on you.
 </Aside>
 
 ### Watchdog Integration
 
-The sentinel runs as Step 0.5 — the first thing each sweep does, before any service-graph work:
+The sentinel runs as Step 0.5, before any service-graph work:
 
 ```
 Watchdog check starting
@@ -180,11 +180,11 @@ Watchdog check starting
   → Step 1: validate manifests + service-graph check-all
 ```
 
-On a kill it fires a critical notification and sleeps three seconds for the system to reclaim memory — so the `check-all` that follows sees a machine that has exhaled.
+On a kill it fires a critical notification and sleeps three seconds for the system to reclaim memory, so the `check-all` that follows sees a machine that has exhaled.
 
 ### Configuration
 
-The real knobs are the per-service `memory_limit_mb` overrides under each service's key. The dedicated `instance.yaml` block also carries some forward-looking scaffolding:
+The real knobs are the per-service `memory_limit_mb` overrides under each service's key. The `instance.yaml` block also carries forward-looking scaffolding:
 
 ```yaml
 services:
@@ -208,7 +208,7 @@ Honesty about what's wired: `memory-sentinel.py` grades by **per-service RSS vs.
 </Aside>
 
 <Aside type="tip">
-Run it by hand with `python3 ~/.sanctum/scripts/memory-sentinel.py --status` for a table, or `--json`. `--kill` only acts when a service is over its limit — on a healthy system it reports "no services over their memory limit" and exits without touching anything.
+Run it by hand with `python3 ~/.sanctum/scripts/memory-sentinel.py --status` for a table, or `--json`. `--kill` only acts when a service is over its limit — on a healthy system it reports "no services over their memory limit" and exits.
 </Aside>
 
 ### Agent Integration
@@ -218,4 +218,10 @@ The health agent can invoke the sentinel through the service-doctor skill's `mem
 <Aside type="caution">
 That wrapper still points at a `memory-sentinel.sh` that no longer exists (the live script is `.py`), so the agent path errors until it's repointed — and the Rust daemon hits the same dangling default, silently skipping the pre-flight. Both are flagged as code fixes below.
 </Aside>
+
+## Who Watches the Watchdog
+
+So the haus has two guardians on the night shift now: a memory sentinel that makes sure there's RAM left to think with, and a service graph that checks the ports and restarts what fell over. Neither has judgment. They kill the bloated, revive the fallen, wait ten minutes, and do it again — which is exactly as much as you want a program with root to decide on its own.
+
+The judgment stays yours. That is the one job in this stack that never got a daemon, and after the night of April 23 nobody is in a hurry to write it. [Tommy](/agents/tommy/) files his patrol report twice a day and asks for nothing in return; the watchdog runs every ten minutes and occasionally texts you at midnight. Between the two of them, the haus is watched. You just have to keep watching the watchers.
 

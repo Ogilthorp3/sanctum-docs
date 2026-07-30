@@ -1,46 +1,51 @@
 ---
 title: "Drift Sentinel — Windu's Silent-Failure Early-Warning"
-description: "Military-grade 5-minute integrity check that catches the two classes of silent failure that hid the April 18–19 screen-time incident for two nights in a row."
+description: "The military-grade 5-minute integrity check built after a curfew lied for two straight nights — it catches the two silent failures no log ever mentioned."
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 
-![Drift sentinel — a solitary lighthouse sweeping the horizon at five-minute intervals; a single beam catches a small raft drifting off the chart, a stack of timestamped logbooks at the keeper's feet.](./images/hero-drift-sentinel.png)
+![Drift sentinel — a solitary lighthouse sweeping the horizon at five-minute intervals, one beam catching a small raft that has drifted off the chart, a stack of timestamped logbooks at the keeper's feet.](./images/hero-drift-sentinel.png)
 
-# Drift Sentinel — Windu's Silent-Failure Early-Warning
+For two nights in a row the curfew said the kids were asleep. For two nights
+in a row they were watching Netflix. The logs were clean, the enforcement
+loop ran on schedule, and nothing — not one alert, not one red line — hinted
+that the `block()` path had quietly stopped firing. That is the only kind of
+failure Windu genuinely fears. Enforcement that silently isn't enforcing looks,
+from the attacker's side of the glass, exactly like no enforcement at all.
 
-**Date:** 2026-04-19
-**Status:** Live on manoir, 5-min cadence, regression-gated
-
-After the April 18–19 screen-time incident where the curfew lied for two
-straight nights, the response was: **add a watcher that would have caught
-both bugs before a human noticed.** That watcher is `drift-sentinel.sh`.
-It runs under Windu's sigil because Windu is the security agent and this
-is a security problem — enforcement that silently isn't enforcing is
-indistinguishable, from the attacker's perspective, from no enforcement
-at all.
+So the response to the April 18–19 [screen-time incident](/operations/screen-time-enforcement/)
+was not a bigger dashboard. It was a watcher that would have caught both bugs
+before a human noticed either one. That watcher is `drift-sentinel.sh`. It runs
+under Windu's sigil — because a detector for silent enforcement failure is a
+security problem, not a monitoring nicety — and it has run on manoir at a
+five-minute cadence, regression-gated, since 2026-04-19.
 
 ## The two bugs this catches
 
 ### 1. Firewalla SDK stale-presence
-Firewalla's `/hosts` endpoint returns `online: false` for every host when
-its SDK caches drift out of sync with the control plane. On April 18 this
-meant every kid phone showed as "offline," so Force Flow's curfew loop
-never triggered the block() path — the log said "asleep"; reality said
-Netflix. The bridge looks healthy. Individual `/host/<mac>` calls answer.
-Only the fleet-wide `online` flag has rotted.
+Firewalla's `/hosts` endpoint returns `online: false` for every host when its
+SDK cache drifts out of sync with the control plane. On April 18 that meant
+every kid phone read as "offline," so [Force Flow](/architecture/force-flow/)'s
+curfew loop never reached the `block()` path — the log said asleep; reality said
+Netflix. The bridge itself looks healthy. Individual `/host/<mac>` calls answer
+correctly. Only the fleet-wide `online` flag has rotted, which is precisely why
+nobody caught it by staring at the service.
 
 ### 2. Duplicate-file import shadowing
-When we patched `~/.sanctum/screen-time/screen_time.py`, the running
-Force Flow process kept importing a stale copy that lived in
-`~/.sanctum/force-flow/screen_time.py`. Python's module resolution found
-the local file first. Patches landed in a file nobody was running. The
-file-drift check is exactly this: two basenames, two different SHAs,
-living in two different top-level sanctum subdirectories, where one
-would shadow the other under a plausible import path.
+When we patched `~/.sanctum/screen-time/screen_time.py`, the running Force Flow
+process kept importing a stale copy that lived in
+`~/.sanctum/force-flow/screen_time.py`. Python's module resolution found the
+local file first, so every patch landed in a file nobody was executing. The
+file-drift check is exactly this shape: two basenames, two different SHAs, in
+two different top-level sanctum subdirectories, where one would shadow the other
+under a plausible import path.
 
 ## What it checks, every 5 minutes
+
+The sentinel does three cheap reads and compares them against a working baseline.
+Nothing here is exotic — that is the point.
 
 | Check | Signal | Threshold |
 |---|---|---|
@@ -63,7 +68,8 @@ Known-noise zones (expected to contain divergent-basename files, skipped):
 | Structured log | `/Users/neo/.openclaw/logs/drift-sentinel.log` |
 | Alert pipe | `POST http://127.0.0.1:4077/notify` (Force Flow, 30-min cooldown) |
 
-Exit codes:
+The exit code tells you which world you are in — and the third one is the one to
+respect.
 
 | Code | Meaning |
 |---|---|
@@ -79,7 +85,8 @@ python3 -c "import json; d=json.load(open('/Users/neo/.sanctum/state/drift-senti
             [print(f' - {f}') for f in d['findings']]"
 ```
 
-Every finding line is self-descriptive. Example:
+Every finding line is self-descriptive. It reads like a person telling you what
+they saw:
 
 ```
 presence: Firewalla claims 0 online but ARP sees 56 — SDK likely stale
@@ -89,20 +96,20 @@ file-drift: devices.yaml: divergent copies [/Users/neo/.sanctum/screen-time/devi
 
 ## When drift fires — what to do
 
-**presence drift (Firewalla stale):**
+**presence drift (Firewalla stale).**
 The screen-time stack is already safe — the ARP fallback in `_poll_presence`
-compensates. The bridge itself needs a bounce to clear the SDK state:
+compensates. What needs clearing is the SDK state, and the bridge wants a bounce:
 
 ```bash
 launchctl kickstart -k gui/$(id -u)/com.sanctum.firewalla
 ```
 
-If Firewalla drifts twice in one day, check `/Users/neo/.openclaw/logs/firewalla-bridge.stderr`
+If Firewalla drifts twice in one day, read `/Users/neo/.openclaw/logs/firewalla-bridge.stderr`
 for an upstream SDK upgrade hint.
 
-**stale-import drift:**
-There's only one right fix: replace the shadow copy with a symlink to the
-canonical file.
+**stale-import drift.**
+There is exactly one right fix: replace the shadow copy with a symlink to the
+canonical file, so the divergence can never reopen.
 
 ```bash
 mv /Users/neo/.sanctum/force-flow/screen_time.py \
@@ -112,19 +119,21 @@ ln -s /Users/neo/.sanctum/screen-time/screen_time.py \
 launchctl kickstart -k gui/$(id -u)/com.sanctum.force-flow
 ```
 
-**file drift, generic:**
-Open the two paths side by side, decide which is canonical, symlink or
-delete the other. The sentinel will clear on the next tick.
+**file drift, generic.**
+Open the two paths side by side, decide which is canonical, symlink or delete
+the other. The sentinel clears on the next tick.
 
 ## Regression gate
 
-`tests/test-drift-sentinel.sh` in the Claude_Code workspace exercises the
-full loop under 10 seconds:
+A detector you cannot trust is worse than no detector, so the sentinel earns its
+place the same way everything else on manoir does — a test that runs the whole
+loop. `tests/test-drift-sentinel.sh` in the Claude_Code workspace exercises it
+end to end in under 10 seconds:
 
 - Script and plist deployed, 5-min cadence
-- State JSON well-formed, log emitting run_start events
-- Inject a known file-drift (replace the symlink with a real divergent
-  file), sentinel flags `stale-import`, exit code is 1
+- State JSON well-formed, log emitting `run_start` events
+- Inject a known file-drift (replace the symlink with a real divergent file),
+  sentinel flags `stale-import`, exit code is 1
 - Clean up the injection, next run reports clean
 - Exit code contract (0/1/2) respected
 - Alert cooldown respected: two back-to-back drift runs don't double-page
@@ -133,25 +142,26 @@ Currently **10 pass / 0 fail**.
 
 ## Why Windu
 
-Windu is the security agent and this is the kind of failure mode he's built
-to trust nobody about. The sentinel is tier-0 infrastructure: it runs every
-5 minutes regardless of whether anyone's watching, because the whole point
-of silent failure is that nobody's watching. The morning briefing reads
-`drift-sentinel.json`. A non-empty `findings` array on a morning read is
-Windu's way of making sure the previous night's silence was real, not
-another "say it's blocked; watch Netflix anyway."
+Windu is the security agent, and this is the failure mode he is built to trust
+nobody about. The sentinel is tier-0 infrastructure: it fires every five minutes
+whether or not anyone is watching, because the whole premise of silent failure
+is that nobody is. The morning briefing reads `drift-sentinel.json` at first
+light. A non-empty `findings` array on that read is Windu's way of proving the
+previous night's silence was real — not another "say it's blocked; watch Netflix
+anyway."
 
 <Aside type="caution" title="What this does NOT catch">
-The sentinel is a detector, not an enforcer. It does not auto-bounce
-services, does not auto-symlink, does not auto-delete. It alerts — nothing
-more. The ergonomic temptation to add auto-remediation has been declined
-because silent auto-remediation of a detector creates the exact silent-failure
-class it's supposed to catch.
+The sentinel is a detector, not an enforcer. It does not auto-bounce services,
+does not auto-symlink, does not auto-delete. It alerts — nothing more. The
+ergonomic temptation to add auto-remediation has been declined, because a
+detector that silently fixes things is the exact silent-failure class it exists
+to catch.
 </Aside>
 
 ## Rollback
 
-One command, fully reversible:
+One command, fully reversible — it is purely observational, so removing it can
+break nothing downstream:
 
 ```bash
 launchctl unload -w ~/Library/LaunchAgents/com.sanctum.drift-sentinel.plist
@@ -160,6 +170,10 @@ rm ~/.sanctum/scripts/drift-sentinel.sh
 rm ~/.sanctum/state/drift-sentinel.json ~/.openclaw/logs/drift-sentinel.*
 ```
 
-The sentinel is purely observational. Removing it restores prior behaviour
-exactly; no state it wrote is consumed by any other service except the
-morning briefing (which tolerates missing files).
+No state it wrote is consumed by any service except the morning briefing, which
+tolerates the files being gone. The [runtime drift audit](/operations/runtime-drift-audit/)
+covers the slower, deeper cousin of this check.
+
+The sentinel does not make the haus safer. It makes the haus's silences honest —
+and after two nights of a curfew that lied, an honest silence is the only kind
+Windu will sign off on.
