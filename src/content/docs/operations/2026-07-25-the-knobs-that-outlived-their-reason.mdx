@@ -19,7 +19,7 @@ proxyd resolves a model name to a *seat* — a configured upstream. `claude-opus
 
 So: passthrough fails, single local rung 413s, ladder exhausted, 502. Every part behaving exactly as designed.
 
-The fix has two halves, and the second matters more. A glob alias — `claude-opus-*` — points any Opus at the subscription bridge, so a future Opus 6 needs no config edit. Then `fallback_chain` learned to *inherit the alias target's chain*, which is the part that was actually missing. Without it the alias resolves correctly and still dies on the same one-rung ladder.
+The fix has two halves, and the second matters more. A glob alias — `claude-opus-*` — points any Opus at the subscription bridge, so a future Opus 6 needs no config edit. Then `fallback_chain` learned to *inherit the alias target's chain*, which is the part that was actually missing. Without it the alias resolves correctly and still dies on the same one-rung ladder. We had [walked this ladder before](/operations/2026-07-21-the-proxy-was-never-the-problem/); this time the ladder had a rung missing rather than a rung lying.
 
 ## The lane that could never have worked
 
@@ -27,7 +27,7 @@ The seat pointed at `api.anthropic.com` using the credential in `~/.sanctum/secr
 
 Easy — refresh it. So we refreshed it, and got `429 rate_limit_error {"message": "Error"}`. A bare "Error", no explanation. With the OAuth beta header, and without it. On a token minted minutes earlier.
 
-That is the finding worth the night: **a Max subscription token cannot drive the metered API at all.** Subscription inference flows through the Claude CLI — which is what the `:3456` bridge wraps — and nowhere else. Every `provider: anthropic` seat in the config was a dead rung: it authenticated, got refused, and burned a timeout before failing over.
+That is the finding worth the night: **a Max subscription token cannot drive the metered API at all.** Subscription inference flows through the Claude CLI — which is what the [`:3456` bridge](/architecture/sanctum-bridge/) wraps — and nowhere else. Every `provider: anthropic` seat in the config was a dead rung: it authenticated, got refused, and burned a timeout before failing over.
 
 <Aside type="caution" title="Two credentials that look identical and aren't">
 `sk-ant-oat01…` (subscription OAuth) and `sk-ant-api…` (metered API key) are both "the Anthropic key", both live in the same secrets slot, and both authenticate. Only one can do inference on `/v1/messages`. The failure mode is a `429` with no message — not a `401`, which is what you'd grep for. Don't debug it as a rate limit; check the credential *type* first.
@@ -39,7 +39,7 @@ The revoked snapshot was dated the 11th. Meanwhile `com.sanctum.token-refresh` h
 
 Two files. Different paths. Nothing connecting them. The launcher had always read the snapshot.
 
-This is the failure the bridge doesn't have, and the reason is instructive: the bridge rides the CLI's own self-refreshing credential, so it cannot go stale. proxyd rode a photograph of one. Pointing the launcher at the live file is a one-line change; noticing that the two had never been connected took the outage.
+This is the failure the bridge doesn't have, and the reason is instructive: the bridge rides the CLI's own self-refreshing credential, so it cannot go stale. proxyd rode a photograph of one. Pointing the launcher at the live file is a one-line change; noticing that the two had never been connected took the outage. It is the same shape as [the secret that was never missing](/operations/2026-07-26-the-secret-that-was-never-missing/) — the value was live the whole time; the reader was pointed at the wrong copy.
 
 ## The knob that outlived its reason
 
@@ -72,5 +72,7 @@ A malformed request is the caller's fault. It no longer counts against provider 
 ## What actually changed
 
 The council runs entirely on the subscription now, with real effort control and no metered key anywhere. But the durable output isn't the routing table. It's that four knobs, one dead lane, one orphaned snapshot, and one self-harming probe are gone — and the six tripwires that would have caught any of them are in the harness, running on a cadence, failing loudly.
+
+Tommy the Abyssinian, the haus's force-ghost, has run fifteen years on no dependencies, no configuration, and not one restart. He would recognise the direction of travel: the most reliable thing in any system is the part that was taken out, because it is the only part that can never fail. Four knobs closer to his standard.
 
 The 502 was the only part of the night that announced itself.

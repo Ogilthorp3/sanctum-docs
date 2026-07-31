@@ -5,21 +5,21 @@ description: "Cathedral stopped producing real tokens at 18:54 EDT — silently,
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Pencil sketch on a dark background of an ornate stone cathedral wall under construction with a glowing teal halo around a single misaligned cornerstone being lifted into place. Two unfinished stones rest at the masons feet.](./images/2026-06-01-the-workspace-that-hid-two-stones.png)
+![Pencil sketch on a dark background of an ornate stone cathedral wall under construction, a glowing teal halo around a single misaligned cornerstone being lifted into place, two unfinished stones resting at the mason's feet.](./images/2026-06-01-the-workspace-that-hid-two-stones.png)
 
-It started — as these things do — as one problem and ended as a different one. The Stone 1 panic on cathedral's multimodal pipeline (`no Stream(gpu, 0) in current thread`) had been firing every minute for days, polluting logs, killing tokio workers, surviving each restart. Tonight was supposed to be the night it got fixed before autoresearch fired at 01:00. Five hours later the multimodal panic was gone — but only because we had stopped serving any tokens at all, and the canary had been telling us all day that everything was fine.
+It started as one problem. It ended as a different one. The Stone 1 panic on cathedral's multimodal pipeline — `no Stream(gpu, 0) in current thread` — had been firing every minute for days: polluting logs, killing tokio workers, surviving each restart. Tonight we were going to kill it before autoresearch fired at 01:00. Five hours later the panic was gone. But it was gone the way a fever breaks when the patient does — we had stopped serving any tokens at all, and the canary had spent the whole evening telling us everything was green. It was the same lie [Honest Green](/operations/2026-05-02-honest-green/) was built to end, wearing a new mask.
 
 ## The empty twos
 
-A canary tick on `:1337` returned `multi_code=200` every minute through dinner. By 19:00 it had been green for ninety minutes. The actual inferences were returning `{"choices":[{"message":{"content":""}}],"usage":{"completion_tokens":0,"prompt_tokens":18,"total_tokens":18}}`. The HTTP path was healthy; the model was producing nothing. Cathedral catches inference errors and returns 200 with empty content — clean for clients that fail-open, opaque for monitors that read status codes.
+A canary tick on `:1337` returned `multi_code=200` every minute through dinner. By 19:00 it had been green for ninety minutes. What the model actually handed back, if you asked it anything, was `{"choices":[{"message":{"content":""}}],"usage":{"completion_tokens":0,"prompt_tokens":18,"total_tokens":18}}`. The HTTP path was healthy. The model was producing nothing. Cathedral catches inference errors and returns 200 with empty content — clean for clients that fail-open, opaque for a monitor that reads status codes and calls it a day. We had built a watchman who inspects the envelope and never opens the letter.
 
-The cathedral log told the rest of the story. `transforms.cpp:73 "no Stream(gpu, 0) in current thread"` — same line as the multimodal panic, now on every text request too. 167 process restarts that day, `KeepAlive` cycling cleanly through `libc++abi` terminations from `[METAL] Invalid Resource (code 9)`. Mini swap was 95% saturated; Lima's `openclaw-staging` VM and OrbStack got killed to drain it. The crashes stopped. The empty-200s did not.
+The cathedral log told us the rest. `transforms.cpp:73 "no Stream(gpu, 0) in current thread"` — the same line as the multimodal panic, now firing on every text request too. 167 process restarts that day, `KeepAlive` cycling cleanly through `libc++abi` terminations from `[METAL] Invalid Resource (code 9)`. Mini swap sat at 95% saturated, so we killed Lima's `openclaw-staging` VM and OrbStack to drain it. The crashes stopped. The empty-200s did not. We had treated the symptom and left the disease.
 
 ## The bisect that lied
 
-The 8 commits on `fix/mlx-rs-kvcache-corruption-338` past `main` looked like a clean range. `git bisect run` with an automated cathedral-build-and-probe script (`SANCTUM_MLX_LABEL=bisect` to dodge the production singleton lock) picked **`01ad533` — the Mistral arch loader** — as the first bad commit. That had the right shape: a 2209-line commit that added `vendor/mlx-rs/mlx-lm/src/models/mistral.rs`, modified `loaded_model.rs` and `server.rs`, exactly the kind of vendored-MLX change that could shift mlx-core's per-thread stream state.
+The 8 commits on `fix/mlx-rs-kvcache-corruption-338` past `main` looked like a clean range to walk. `git bisect run`, fed an automated cathedral-build-and-probe script (`SANCTUM_MLX_LABEL=bisect` to dodge the production singleton lock), pointed straight at **`01ad533` — the Mistral arch loader** — as the first bad commit. It had the right shape, too: a 2209-line commit that added `vendor/mlx-rs/mlx-lm/src/models/mistral.rs` and touched `loaded_model.rs` and `server.rs`, exactly the kind of vendored-MLX change that could shift mlx-core's per-thread stream state.
 
-Then the same commit was found alive in `main`. Where `main` was working. With the same 1302-line `mistral.rs` linked into the same binary. The bisect had not lied about which commit was bad — but it had started from a baseline that was already broken, because every checkout on the cathedral worktree built against the same kvcache branch's `Cargo.toml`. The "good" boundary was assumed, never verified, and was in fact bad.
+Then we found that same commit alive in `main`. Where `main` was working. Same 1302-line `mistral.rs`, linked into the same binary, serving tokens without complaint. The bisect had not lied about which commit was bad — but you can only trust its answer as far as you trust its baseline, and ours was rotten. Every checkout on the cathedral worktree built against the same kvcache branch's `Cargo.toml`. The "good" boundary we handed the bisect was assumed, never verified, and in fact bad. Diff the working twin, [we tell ourselves](/operations/2026-05-10-the-vision-probe-lied/) — and then we forget that the twin has to actually be working.
 
 ## The two-line file that produced two binaries
 
@@ -42,7 +42,7 @@ That cascaded somewhere into `mlx-rs` / `mlx-sys` / `mlx-core` and produced a bi
 
 ## Stone 2 finds its way to main
 
-The Stone 2 fix — a one-commit dtype cast in `lora.rs` that stops LoRA adapter merges from silently promoting `bf16` base weights to `fp32` — lived on the broken branch (`a9f1996`). With the cause identified as workspace-level, the fix path was a cherry-pick onto main:
+The Stone 2 fix — a one-commit dtype cast in [`lora.rs`](/architecture/lora-rust/) that stops LoRA adapter merges from silently promoting `bf16` base weights to `fp32` — was stranded on the broken branch (`a9f1996`). Now that we knew the cause was workspace-level, not code-level, we didn't need to fix the branch. We just needed to carry one good commit home. The fix path was a cherry-pick onto main:
 
 ```bash
 git checkout -b stone-2-on-main main
@@ -64,11 +64,11 @@ The validation that mattered was the LoRA path. A shadow cathedral on `:1411` (`
 | Name a French river. | `"The **Loire** is the longest river in France, stretching approximately 1,012"` | 20 |
 | Write a 5-word poem about cats. | `"Soft paws, purring, sleep."` | 9 |
 
-Four of five coherent; one empty. The empty came from the May 16 production champion's known overfitting, not from a merge defect. The merge log read `merged_quantized=408 skipped_missing=0 skipped_shape_mismatch=0`. Stone 2 was working end-to-end on the deployed binary, with the actual adapter the council uses.
+Four of five coherent; one empty. We know that empty answer well — it comes from the May 16 production champion's [known overfitting](/operations/2026-05-22-the-champion-who-memorized-the-exam/), not from a merge defect. The merge log read `merged_quantized=408 skipped_missing=0 skipped_shape_mismatch=0`. Stone 2 was working end-to-end on the deployed binary, with the actual adapter the council reaches for every day.
 
 ## The canary that stops being blind
 
-The Apple-grade fix had to be more than a one-time recovery: the entire incident hid for five hours because the canary read HTTP status and never the body. Gate 6 from tonight's council closed that. `cathedral-vision-canary.sh` now parses the response body, asserts `completion_tokens >= 1` and content non-empty, and emits a new signal when cathedral is alive over TCP but silent on the model:
+A one-time recovery would not have satisfied anyone in the room. The whole incident hid for five hours for one reason: the canary read HTTP status and never the body. Gate 6, which the council set for us tonight, closed that door. `cathedral-vision-canary.sh` now parses the response body, asserts `completion_tokens >= 1` and content non-empty, and emits a new signal for the exact failure that fooled us — cathedral alive over TCP, silent on the model:
 
 ```text
 200       — HTTP 200 + non-empty content + >=1 completion token (true green)

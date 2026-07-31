@@ -5,29 +5,31 @@ description: A three-layer permanent fix for git working-tree drift across every
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Pencil sketch on dark void of a clean stage with one sharp line above three small immaculate boxes labeled committed and gitignored, with the lower half marked no third state — a soft teal halo at the dividing line](./images/hero-2026-04-28-the-clean-stage.jpg)
+![Pencil sketch on a dark void — a bare stage lit by one sharp line, three immaculate boxes below it labeled committed and gitignored, the lower half marked no third state, a soft teal halo at the dividing line](./images/hero-2026-04-28-the-clean-stage.jpg)
 
-The 2026-04-27 colima→OrbStack and pressure-valve phase-4 commits closed two long-running runtime gaps. They surfaced a deeper one: every tracked sanctum repo had been quietly accumulating untracked files for weeks. ~/.sanctum alone had 1,827 untracked items at the start of the cleanup. Most were rolling state (logs, metrics, build artefacts) that should have been gitignored from the start. Some were real new content that needed triage. A few were genuinely sensitive (a `voipms-secrets.sh`, an `api_key.py` from a vendored library) and should never be in git at all.
+Run `git status` in `~/.sanctum`. The terminal scrolls, and keeps scrolling. 1,827 untracked items sat in that one repo at the start of the cleanup — logs, metrics, build artefacts, and, buried in the noise, two files that made us stop cold. One was a `voipms-secrets.sh`. The other was an `api_key.py` that had ridden in from a vendored library. Neither belonged in git. Both had been sitting there for weeks, a single `git add -A` away from a public mirror.
 
-Cleaning each repo by hand is the wrong answer. The right answer is a permanent mechanism that catches drift on day one, not month two.
+That backlog didn't announce itself. The 2026-04-27 colima→OrbStack and pressure-valve phase-4 commits closed two long-running runtime gaps, and in doing so they surfaced a deeper one: every tracked sanctum repo had been quietly accumulating untracked files for weeks. Most were rolling state that should have been gitignored from the start. Some were real new content that needed triage. And a handful were the kind of thing Windu loses sleep over — secrets that should never be in git at all.
+
+You could clean each repo by hand. That is the wrong answer, because a hand-cleaned repo drifts again by month two. The right answer is a mechanism that catches drift on day one and never gets bored of the job.
 
 ## The doctrine
 
 > If it's not in git, it's either gitignored or it doesn't exist. No third state.
 
-Untracked-but-not-ignored is a bug, not a tolerated background condition. The same shape as the pressure-valve trilogy redux: a thing that completes successfully ("untracked file added") but doesn't change the underlying signal ("no one knows about it"), repeated forever.
+Untracked-but-not-ignored is a bug, not a tolerated background condition. It is the same shape as the [pressure-valve trilogy](/operations/pressure-valve/) redux: a thing that completes successfully ("untracked file added") but doesn't change the underlying signal ("no one knows about it"), repeated forever until it buries a secret in plain sight.
 
-Three layers enforce the doctrine.
+Three layers enforce the doctrine. None of them trusts you to remember.
 
 ## Layer 1 — Canonical gitignore template
 
 `~/.sanctum/templates/sanctum-gitignore.template` is the single source of truth for sanctum-wide ignore patterns: OS noise, editor state, Python build/runtime, pnpm/node_modules, Rust target trees, manual snapshots (`*.bak`, `*.pre-*`, `*.stale-*`), rolling runtime state (logs, metrics, audit), local databases, secrets (keys, env, credentials/, secrets/, .ssh, .aws), apple-platform local state. The block lives between two markers (`sanctum-gitignore-managed` begin/end) so per-repo additions remain intact below.
 
-`~/.sanctum/scripts/sanctum-gitignore-sync.py` propagates the canonical block into every tracked sanctum repo's `.gitignore`. Re-running the sync replaces the block in-place — no duplication, no drift between repos. After today's first sync, the block is identical across all seven tracked repos.
+`~/.sanctum/scripts/sanctum-gitignore-sync.py` propagates the canonical block into every tracked sanctum repo's `.gitignore`. Re-running the sync replaces the block in-place — no duplication, no drift between repos. After today's first sync, the block is identical across all seven tracked repos. Jocasta would call it a filing system; we call it the thing that keeps `git status` honest.
 
 ## Layer 2 — Daily git-drift-sentinel
 
-`~/.sanctum/scripts/sanctum-drift-sentinel.py` runs daily at 06:30 ET via `com.sanctum.git-drift-sentinel`. It walks every tracked sanctum repo, lists `git ls-files --others --exclude-standard`, and classifies each untracked path:
+The template stops new drift. It does nothing about what already slipped through, so we gave the haus a night watchman. `~/.sanctum/scripts/sanctum-drift-sentinel.py` runs daily at 06:30 ET via `com.sanctum.git-drift-sentinel`. It walks every tracked sanctum repo, lists `git ls-files --others --exclude-standard`, and classifies each untracked path:
 
 | Class | Triggered by | Outcome |
 |------|-------------|---------|
@@ -35,9 +37,9 @@ Three layers enforce the doctrine.
 | `auto` | matches well-known auto-ignore patterns (`*.bak`, `*.stale-*`, `*.pre-*`, `node_modules/`, `__pycache__/`, `.DS_Store`, `**/target/`, `staging/`) — already covered by template, listed for awareness | logged, no alert |
 | `review` | everything else — real new content the human must triage | yellow alert; exit 1 |
 
-State at `~/.sanctum/state/git-drift.json`. Brevity-gated: a clean run prints one OK line and writes no alert. Drift produces a structured report.
+State at `~/.sanctum/state/git-drift.json`. It is brevity-gated the way Tommy would insist: a clean run prints one OK line and writes no alert, so a quiet morning stays quiet. Drift produces a structured report.
 
-The sensitive classifier is intentionally narrow at the basename level. `fastapi/security/api_key.py` is a vendored library file, not your secret — the `LIBRARY_PATH` exclusion catches it. A top-level `api_key.txt` is your secret — the `SENSITIVE_BASENAME` regex catches it. Both calls are right.
+The sensitive classifier is intentionally narrow at the basename level, and that narrowness is the whole art. `fastapi/security/api_key.py` is a vendored library file, not your secret — the `LIBRARY_PATH` exclusion catches it. A top-level `api_key.txt` is your secret — the `SENSITIVE_BASENAME` regex catches it. Both calls are right, and a classifier that cried wolf on every library path would teach you to ignore the one time it mattered.
 
 ## Layer 3 — Refusal-grade pre-commit hook
 
@@ -51,7 +53,7 @@ Behavior on every commit:
 - Library paths excluded as in the sentinel.
 - Portable bash 3.x (macOS default ships without `mapfile`; the hook uses a read-loop instead).
 
-Tested in a sandbox repo: `.env` refused with rc=1; `newfile.txt` warned with rc=0 and commit proceeded.
+We tested it in a sandbox repo before trusting it anywhere real: `.env` refused with rc=1; `newfile.txt` warned with rc=0 and the commit proceeded. The hook does not moralize. It just stands at the door.
 
 <Aside type="tip" title="Three layers, one doctrine">
 The template prevents drift from accumulating; the sentinel surfaces what slipped through; the hook refuses the worst of it at commit time. The doctrine isn't enforced by any one of the three — it's the *combination* that makes "no third state" structural rather than aspirational.
@@ -70,6 +72,8 @@ Seven repos now share the canonical gitignore block at the top of their `.gitign
 - `~/Projects/yoda-voice-agent`
 
 The `~/Projects/yoda-voice-agent` repo dropped from 10,782 untracked files to 1 after the template covered `.tts-venv/`. The other six show only real triage candidates — content that genuinely needs a human verdict.
+
+That is the clean stage the title promises, and it borrows the same instinct as the [capacity doctrine](/architecture/capacity-doctrine/): each repo now answers for exactly its own air. The noise is swept off, so the one file that still needs your judgment is the only thing left standing in the light.
 
 ## What's next
 

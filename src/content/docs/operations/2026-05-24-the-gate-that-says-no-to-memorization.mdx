@@ -8,11 +8,13 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![The gate that says no to memorization — an old wooden examination gate stamped with a teal seal reading NO MEMORIZATION while a student-spirit holds a flashcard up to it; the gate is unmoved.](./images/hero-2026-05-24-the-gate-that-says-no-to-memorization.png)
 
-A skeleton with a payload. Stage 3 of the autoresearch champion-plateau fix shipped tonight, 19 TDD tasks across two sub-phases of merge-cascade, one whole-branch opus review that caught two critical integration gaps, one targeted post-review fix, and one corrupted plist on disk that almost nobody noticed because launchd had the schedule in memory and didn't need the file.
+Two nights ago we caught [the champion who memorized the exam](/operations/2026-05-22-the-champion-who-memorized-the-exam/). It aced its flashcards and folded on the real test. Tonight we shipped the gate that would have turned it away at the door.
+
+A skeleton with a payload. Stage 3 of the autoresearch champion-plateau fix landed tonight: 19 TDD tasks across two sub-phases of merge-cascade, one whole-branch opus review that caught two critical integration gaps, one targeted post-review fix, and one corrupted plist on disk that almost nobody noticed because launchd had the schedule in memory and didn't need the file.
 
 ## What the gate now requires
 
-The promotion gate gained a fourth condition and a stability sub-condition. Before tonight, an adapter could be promoted by clearing three thresholds: fixable above the production champion plus a margin, held-out tier not regressing too far, reasoning category not regressing too far. As of tonight, an adapter must also clear:
+The [champion gate](/architecture/champion-gate/) gained a fourth condition and a stability sub-condition. Before tonight, an adapter could be promoted by clearing three thresholds: fixable above the production champion plus a margin, held-out tier not regressing too far, reasoning category not regressing too far. As of tonight, an adapter must also clear:
 
 ```
 #4   extended_mean   >=  base.extended − 0.02
@@ -36,7 +38,7 @@ This is the honest measurement, and it is what the operator now has to decide wh
 
 The 3-seed averaging is the second new mechanism. Training a 35B MoE LoRA twice with the same configuration produces adapters that score 0.025 apart on the same eval — bigger than the 0.015 gate margin. Without averaging, a single lucky-seed run can look like a winner that isn't. With averaging, the gate sees the per-tier mean and the standard deviation across three seeds, and rejects a candidate whose extended-tier standard deviation exceeds 0.04 — the "this might just be variance" filter.
 
-Triple-train fires only when a candidate's screen-tier score clears the legacy 0.881 threshold. Most nights have zero candidates and incur zero extra cost. On the rare night a candidate appears, two additional 50-minute trainings produce two additional adapters; the aggregator rolls them up into one `eval_results_aggregated.json` with mean + standard deviation per tier; the gate reads that file in preference to the single-seed `eval_results_full.json`.
+Triple-train fires only when a candidate's screen-tier score clears the legacy 0.881 threshold. Most nights have zero candidates and incur zero extra cost — Mundi never sees a bill for training that didn't need to run. On the rare night a candidate appears, two additional 50-minute trainings produce two additional adapters; the aggregator rolls them up into one `eval_results_aggregated.json` with mean + standard deviation per tier; the gate reads that file in preference to the single-seed `eval_results_full.json`.
 
 ## The four rungs at the front of the queue
 
@@ -76,7 +78,7 @@ Anti-overfit recipes by construction trade gold-tier fit for generalization. The
 
 If they do — if even one of the four anti-overfit rungs produces a candidate that clears all four conditions plus stability — then the loop has found what it was built to find, and the morning's `promote-champion` breadcrumb will say so plainly.
 
-The cathedral runs tonight at 01:00.
+A gate is only honest if it is willing to fail the champion that is already wearing the crown. This one is, and does. The cathedral runs tonight at 01:00; in the morning we find out whether it also knows how to say yes.
 
 ---
 
