@@ -277,6 +277,7 @@ export default defineConfig({
 						{ label: 'Screen Time Enforcement', slug: 'operations/screen-time-enforcement' },
 						{ label: 'MBP Reboot Runbook', slug: 'operations/mbp-reboot-runbook' },
 						{ label: 'Firewalla Gold Pro Migration', slug: 'operations/firewalla-gold-pro-migration' },
+						{ label: 'The Arcs — five reading paths', slug: 'operations/the-arcs' },
 						{
 							label: 'Field Notes',
 							collapsed: true,
