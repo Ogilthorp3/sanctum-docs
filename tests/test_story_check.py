@@ -114,6 +114,36 @@ def test_a_truly_unframed_block_still_errors():
         os.unlink(tmp)
 
 
+def test_mascot_in_artwork_is_not_a_cameo_but_a_guest_is():
+    """cast/alt-text-cameo must ignore the mascot and still catch a guest.
+
+    The house art style puts the Abyssinian in 69 heroes. Firing on him told 54
+    pages to bolt a Tommy sentence onto their last line — the check manufactured
+    the sameness echo-audit measures. It must keep firing for a non-mascot name
+    that appears in the art and nowhere in the prose (2026-07-31)."""
+    import os, tempfile
+    def check(alt, body_line):
+        page = (f"---\ntitle: Fixture\ndescription: A fixture for the cameo rule.\n---\n\n"
+                f"![{alt}](./images/x.png)\n\n"
+                f"{body_line}\n\nSome operator prose so the page is inhabited, with we and you "
+                f"and a reader in the room, and enough words that it is not thin at all.\n")
+        with tempfile.NamedTemporaryFile("w", suffix=".mdx", delete=False,
+                                        dir=str(ROOT / DOCS)) as fh:
+            fh.write(page); tmp = fh.name
+        try:
+            r = subprocess.run([sys.executable, str(STORY), tmp],
+                               capture_output=True, text=True, timeout=60)
+            return r.stdout
+        finally:
+            os.unlink(tmp)
+
+    mascot_only = check("Tommy the Abyssinian watches from the sill", "The haus checks itself.")
+    assert "alt-text-cameo" not in mascot_only, mascot_only
+
+    guest_only = check("Windu inspects the perimeter", "The haus checks itself.")
+    assert "alt-text-cameo" in guest_only, guest_only
+
+
 # ── the Cast Constitution ────────────────────────────────────────────────────
 
 def test_cast_counts_match_their_sources():

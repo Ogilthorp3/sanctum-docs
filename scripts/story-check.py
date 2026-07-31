@@ -239,6 +239,9 @@ ROLES = ["operator", "engineer", "reader", "haushold", "hausehold", "family",
          # "ta", "parent") so English pages are unaffected.
          "tu", "toi", "vous", "tes", "nous", "enfant", "enfants",
          "maman", "papa", "famille"]
+# The mascot: present in most artwork by house style, so his appearance in an
+# image is not a "cameo evicted into alt text". See cast/alt-text-cameo.
+MASCOT_NAMES = {"tommy", "abyssinian"}
 INHABITANTS = CAST_NAMES + ROLES
 INHAB_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in INHABITANTS) + r")\b", re.I)
 CAST_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in CAST_NAMES) + r")\b", re.I)
@@ -269,11 +272,13 @@ EXPLAIN = {
                  "(honest-green); the drifted set runs to 21.4. The distributions overlap "
                  "completely, so density cannot gate a build without failing pages we hold "
                  "up as models.",
-    "cast/alt-text-cameo": "The character evicted into an HTML attribute — the cleanest "
-                           "field-note detector here. Escalates to ERROR only when the page is "
-                           "ALSO thin. The guard is load-bearing: a flat error fails pricing, "
-                           "the-dragonpit and living-force, where the cat is a visual conceit "
-                           "and the prose is richly inhabited by other voices.",
+    "cast/alt-text-cameo": "A GUEST character evicted into an HTML attribute — someone in the "
+                           "art with no lines. Escalates to ERROR only when the page is ALSO "
+                           "thin. The MASCOT is exempt (see MASCOT_NAMES): the house art style "
+                           "puts the Abyssinian in 69 heroes, and firing on him told 54 pages to "
+                           "bolt a Tommy sentence onto their closing line — this check "
+                           "manufactured the corpus-wide sameness that echo-audit later "
+                           "measured. Exempted 2026-07-31.",
     "landing/on-a-warning": "note and tip are legal landings; caution and danger are to-do "
                             "items. Tommy's last words live in a note Aside — which is exactly "
                             "why the distinction exists.",
@@ -482,7 +487,16 @@ def check_page(path: pathlib.Path, rep: Report, sidebar_slugs: set, inbound: Cou
 
         alt_cast = {m.lower() for a in alts for m in CAST_RE.findall(a)}
         prose_cast = {m.lower() for m in CAST_RE.findall(clean_prose(inhab_text))}
-        orphans = alt_cast - prose_cast
+        # The MASCOT is exempt. This check exists to catch a character who was
+        # introduced only in an HTML attribute — a guest with no lines. Tommy is
+        # not a guest: the house art style puts the Abyssinian in 69 heroes, so
+        # firing on him told 54 pages to bolt a Tommy sentence onto their last
+        # line, which is exactly how the corpus ended up with one closing beat
+        # repeated across 23% of the book (echo-audit, 2026-07-31). The check
+        # manufactured the sameness it could not see. It still fires for every
+        # other name — a Windu who appears in the art and nowhere in the prose
+        # is the real defect this was built for.
+        orphans = (alt_cast - prose_cast) - MASCOT_NAMES
         if orphans:
             who = ", ".join(sorted(orphans))
             if thin:

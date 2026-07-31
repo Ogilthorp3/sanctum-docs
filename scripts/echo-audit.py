@@ -43,8 +43,13 @@ BOLTED_BUDGET = 0.05
 # for a 300-page book: a phrase used once on 26 different pages is house voice,
 # not a tic — a reader meets it every tenth page. A tic is felt when it clusters.
 TIC_PER_100 = 5.0
+# Verbal crutches only. NOT "on purpose." — 29 uses were read one by one and
+# every one does semantic work ("the trifecta is small on purpose", "this layer
+# forgets on purpose", "the dangerous knobs live behind gated doors, on
+# purpose"). It asserts deliberateness, which is the book's actual thesis; it is
+# a motif, not a tic, and flattening it would flatten the argument. A tic is a
+# phrase that could be deleted without losing meaning — that is the test.
 TICS = [
-    "on purpose.",
     "the whole point",
     "which is how you know",
     "That was always the point",
@@ -81,8 +86,13 @@ def main():
         rel = os.path.relpath(p, DOCS)
         first = b[:400]
         last, rest = b[-500:].lower(), b[:-500].lower()
+        # A DATED field note is a log entry: opening on the incident's own
+        # timestamp is the genre, not a borrowed device (13 of the 40 clock
+        # opens are these). The sameness that matters is evergreen pages all
+        # opening "It is 2 AM…". Exempted 2026-07-31.
+        is_log = re.match(r"operations/20\d\d-\d\d-\d\d", rel)
         for name, (_, rx) in OPENING_DEVICES.items():
-            if rx.search(first):
+            if rx.search(first) and not is_log:
                 open_hits[name].append(rel)
         for who in LANDING_CAST:
             rx = re.compile(r"\b" + re.escape(who) + r"\b")
