@@ -8,14 +8,27 @@ import { Aside } from '@astrojs/starlight/components'
 
 ![Sanctum Gateway runbook — an operator's workbench laid out like a clockmaker's table: a brass key-rotation rig, a magnifier hovering over a debug receipt, a coil of backup tape, and a tiny cartoon of a door that refuses to close.](./images/hero-sanctum-gateway-runbook.png)
 
-Operational reference for [Sanctum Gateway](/architecture/sanctum-gateway/).
-Architecture, threat model, and resolved decisions live there; this page
-is the runbook a future Bert reaches for at 2 a.m.
+It's 2 a.m. The tunnel is up, DNS resolves, and `bridge.nepveu.name`
+answers every request with the same flat 401. Nothing is on fire —
+something is just quietly wrong, which is worse. Tommy the Abyssinian
+would tell you the door that won't close is a human problem, and he
+stopped having those the morning he became a force-ghost. You don't have
+that luxury tonight.
+
+The [Sanctum Gateway](/architecture/sanctum-gateway/) spec covers
+architecture, threat model, and every resolved decision, and it is the
+right thing to read on a calm afternoon when you want to understand how
+the whole thing fits together and why each piece is shaped the way it is.
+This page is the other half. It is the runbook a future you reaches for
+when the spec has stopped being useful and the fix has to come from hands
+on keys. No theory. Just steps.
 
 ## Bring-up on a fresh Mac
 
-Assumes `brew`, `uv`, `sops`, `age`, `cloudflared`, `gh`, `jq`,
-`shasum` (any CLT install) are present.
+A Mac died, or you bought a new one, and the gateway has to live on it by
+morning. Assumes `brew`, `uv`, `sops`, `age`, `cloudflared`, `gh`, `jq`,
+`shasum` (any CLT install) are present. If they aren't, that's the detour
+you take first.
 
 ```sh
 # 1. Repo + Python env
@@ -60,13 +73,16 @@ sanctum bridge doctor                    # all rows green
 sanctum bridge upload README.md "01_Gestion Triptyq/_smoke" --doc-type meeting-notes
 ```
 
-The Cloudflare side (Tunnel hostname, Access app + service token policy,
-DNS CNAME) is account state, not host state — bring-up of a *new* Mac
-re-uses the existing tunnel and Access app. Re-creating those is a
-separate procedure (and rarely needed; nothing about the tunnel is
-host-bound).
+The Cloudflare side — Tunnel hostname, Access app + service token policy,
+DNS CNAME — is account state, not host state. Bringing up a *new* Mac
+re-uses the existing tunnel and Access app, so you don't touch any of it.
+Re-creating those is a separate procedure, and rarely needed; nothing
+about the tunnel is host-bound.
 
 ## `sanctum bridge doctor` — what each row means
+
+This is the first thing you run and the last thing you trust. Each row is
+a small yes-or-no; read them top to bottom.
 
 ```
 keychain: sanctum-bridge-cf-access-client-id     OK/FAIL
@@ -96,6 +112,11 @@ isn't loaded. `tail ~/.openclaw/logs/sanctum-bridge-rotate.log` for the
 last run's stderr.
 
 ## Secret rotation
+
+Three secrets, three different rotation stories — and only one of them
+rotates itself while you sleep. The [secret rotation](/operations/secret-rotation/)
+playbook covers the wider trifecta; here is what the gateway needs
+specifically.
 
 ### CF Access service token
 
@@ -142,9 +163,14 @@ sudo launchctl kickstart -k system/name.nepveu.sanctum-bridge
 
 Don't. The encrypted `secrets.yaml` is bound to this key — losing it
 forces a from-scratch bootstrap. The 1Password Secure Note named
-`SanctumBridge — age private key (master)` is the recovery copy.
+`SanctumBridge — age private key (master)` is the recovery copy, and it
+is the only thing standing between you and that bootstrap.
 
 ## Recovering a wedged daemon
+
+The daemon wedged. `doctor` is red on `bridge /_health`, and you have
+about ninety seconds of patience before you start inventing theories.
+Don't invent yet — bounce it first.
 
 ```sh
 # 1. Confirm it's down
@@ -161,7 +187,7 @@ sleep 5
 sanctum bridge doctor
 ```
 
-If the daemon's log shows a SOPS decrypt failure: the age key got moved
+If the daemon's log shows a SOPS decrypt failure, the age key got moved
 or its mode changed. `chmod 600 /opt/sanctum/keys/age.key` and bounce.
 
 If the daemon refuses to bootstrap (`launchctl bootstrap` returns EIO),
@@ -169,6 +195,9 @@ fall back to `sudo launchctl load -w /Library/LaunchDaemons/name.nepveu.sanctum-
 — the legacy load path works around a launchd domain transition issue.
 
 ## Tunnel debugging
+
+If the bounce didn't fix it, the trouble is somewhere between you and the
+daemon, not in the daemon itself. Walk the path from the outside in.
 
 ```sh
 # 1. Is cloudflared running?
@@ -186,18 +215,23 @@ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://bridge.nepveu.name/_healt
 curl -sS http://127.0.0.1:8443/_health
 ```
 
-A 502 with valid headers = bridge daemon is down (see above). A 403
-without `cf_access_failed` = CF Access policy issue (probably token
-expired and the rotator hasn't fired). A `cf_access_failed jwt_invalid`
-on the *local* path = `cloudflare.access_aud` in `secrets.yaml` doesn't
-match the real CF Access app's AUD; re-fetch via
-`/accounts/{acc}/access/apps/{id}` and re-encrypt.
+A 502 with valid headers means the bridge daemon is down (see above). A
+403 without `cf_access_failed` is a CF Access policy issue — probably the
+token expired and the rotator hasn't fired. A `cf_access_failed
+jwt_invalid` on the *local* path means `cloudflare.access_aud` in
+`secrets.yaml` doesn't match the real CF Access app's AUD; re-fetch via
+`/accounts/{acc}/access/apps/{id}` and re-encrypt. That last one is the
+2 a.m. 401 from the top of the page.
 
 ## Restoring from backup
 
-The restic snapshot at `/Volumes/T9/sanctum-restic` (or the gdrive
-remote) carries `/opt/sanctum`, `~/Projects/triptyq-skills`, and the
-`launchd/` plist sources. Restore order:
+The Mac is gone entirely — this is the from-nothing path. The
+[backup and restore](/operations/backup-restore/) page is the general
+drill; the gateway's own order matters because the age key must never
+come back the way everything else does. The restic snapshot at
+`/Volumes/T9/sanctum-restic` (or the gdrive remote) carries
+`/opt/sanctum`, `~/Projects/triptyq-skills`, and the `launchd/` plist
+sources.
 
 ```sh
 # 1. Restic restore the bridge tree
@@ -219,11 +253,17 @@ restic -r /Volumes/T9/sanctum-restic restore latest \
 # (same step 4-5 from the bring-up section)
 ```
 
-Verify with `sanctum bridge doctor`.
+Verify with `sanctum bridge doctor`. If every row is green, you're back.
 
 ## When in doubt
 
-The architecture spec at [Sanctum Gateway](/architecture/sanctum-gateway/)
-documents *what* and *why*. This page documents *how*. The audit log at
-`/var/log/sanctum/audit.jsonl` is the source-of-truth for what
-happened.
+When the runbook runs out, the [architecture spec](/architecture/sanctum-gateway/)
+tells you *what* and *why* — this page told you *how*. Between the two
+sits `/var/log/sanctum/audit.jsonl`, the one file that remembers what
+actually happened, in order, without an opinion. Read it before you trust
+your memory of the night.
+
+Then go back to bed. Tommy filed his dawn report the moment the sun
+cleared the ridge, without being asked, the way he has every morning for
+fifteen years and every morning since — and the gateway, wedged or not,
+will still be there when you wake up. It always is.

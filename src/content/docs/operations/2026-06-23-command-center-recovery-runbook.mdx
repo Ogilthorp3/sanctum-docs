@@ -5,17 +5,19 @@ description: "What to do when the dashboard locks you out: lost passkey, cert ex
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A gatehaus keyholder pressing a glowing fingerprint to a teal lock while a small glass-fronted emergency box with a spare key waits on the wall beside the door.](./images/hero-2026-06-23-command-center-recovery-runbook.png)
+![A gatehaus keyholder pressing a glowing fingerprint to a teal lock while a small glass-fronted emergency box holds the spare key that turns a lockout into a two-minute chore.](./images/hero-2026-06-23-command-center-recovery-runbook.png)
 
-The command-center dashboard on `:1111` is Touch-ID-only (a WebAuthn passkey for humans, mTLS for machines). That lock is only military-grade if a lost device, an expired cert, or a flipped toggle is a documented procedure and not a panic. This is that procedure. The one rule that makes every scenario easy: **enroll a backup device before you need it.**
+Your Mac is at the repair shop and your phone just took a swim in the pool. The command-center dashboard on `:1111` — genome vault, lab reports, the whole health surface — will not let you in. It only knows faces, and both of yours are currently unreachable.
+
+This is the day [the dashboard learned your face](/operations/2026-06-22-passkey-mtls-hardening/) turning against you. The lock is genuinely military-grade: a WebAuthn passkey for humans, mTLS for machines, and no keyhole for a thief to pick. But a lock is only military-grade if a lost device, an expired cert, or a flipped toggle is a documented two-minute chore and not a 2 a.m. panic. This is that document. The one habit that makes every scenario below trivial: **enroll a backup device before you need it.**
 
 ## Enroll a backup device (do this now)
 
-Signed in, open `https://manoir.tail7c6d11.ts.net:1111/auth/`, then **Add a backup device** and approve with Touch ID / Face ID on a second authenticator (a phone, a Watch, a second Mac). The store already holds many credentials; a backup means a lost primary is never a lockout. Remove a lost device from the same screen — the dashboard refuses to remove your **last** passkey, so you cannot strand yourself.
+Signed in, open `https://manoir.tail7c6d11.ts.net:1111/auth/`, then **Add a backup device** and approve with Touch ID / Face ID on a second authenticator — a phone, a Watch, a second Mac. The store already holds many credentials; a backup means a lost primary is never a lockout. Remove a lost device from the same screen. The dashboard refuses to remove your **last** passkey, so you cannot strand yourself even if you try.
 
 ## First-time enrollment (or a fresh re-enroll)
 
-Prerequisites: Tailscale **HTTPS Certificates** enabled in the admin console, and a valid Let's Encrypt cert on `:1111` (the renewer keeps it fresh — see the table below). Then:
+Prerequisites: Tailscale **HTTPS Certificates** enabled in the admin console, and a valid Let's Encrypt cert on `:1111` (the renewer keeps it fresh — see the table below). Then read the bootstrap token, which exists only while the store is empty:
 
 ```bash
 # the bootstrap token exists ONLY while no passkey is enrolled
@@ -28,11 +30,11 @@ Open `/auth/`, paste the token, approve with Touch ID. The token is **single-use
 
 ### Lost a device, but you have another
 
-Sign in on the other device, open `/auth/`, and **Remove** the lost one. If you suspect it was compromised, also press **Sign out everywhere** — that raises the session revocation floor and invalidates every outstanding session instantly, no restart.
+This is the easy one — the reason you enrolled a backup. Sign in on the other device, open `/auth/`, and **Remove** the lost one. If you suspect it was compromised, also press **Sign out everywhere** — that raises the session revocation floor and invalidates every outstanding session instantly, no restart.
 
 ### Lost every enrolled device (true lockout)
 
-The enroll page is open, but registration now needs a session you cannot get. Break glass over SSH (the trusted local path) by resetting the passkey store so a fresh bootstrap token is minted:
+Now it bites. The enroll page is open, but registration needs a session you cannot get. Break glass over SSH — the trusted local path — by resetting the passkey store so a fresh bootstrap token is minted:
 
 ```bash
 cd ~/.sanctum/secrets
@@ -41,11 +43,11 @@ launchctl kickstart -k gui/$(id -u)/com.sanctum.dashboard
 cat command-center-bootstrap.token   # freshly minted because the store is now empty
 ```
 
-Open `/auth/` and enroll your replacement device with the new token. Then immediately add a backup. Your old (lost) credentials are in the `.bak` file if you ever need the audit trail.
+Open `/auth/` and enroll your replacement device with the new token. Then immediately add a backup — do not walk away from a store with one passkey in it. Your old credentials survive in the `.bak` file if you ever need the audit trail.
 
 ### "WebAuthn unavailable" or a cert warning in the browser
 
-WebAuthn refuses any origin with a TLS error. Check the terminator and its Let's Encrypt cert:
+WebAuthn refuses any origin with a TLS error — no lock is worth much if it will negotiate over a bad cert. Check the terminator and its Let's Encrypt cert:
 
 ```bash
 launchctl print gui/$(id -u)/com.sanctum.pq-terminator.1111 | grep state
@@ -53,7 +55,7 @@ openssl x509 -in ~/.sanctum/pq-terminator/certs/le-manoir.crt -noout -enddate
 ~/.sanctum/bin/sanctum-cert-renew.sh   # re-issues + reloads only on change
 ```
 
-If `tailscale cert` fails, re-check **HTTPS Certificates** in the Tailscale admin console — disabling it is the usual root cause, and `sanctum-cert-renew.sh` will page Force Flow when expiry is under 14 days with renewal failing.
+If `tailscale cert` fails, re-check **HTTPS Certificates** in the Tailscale admin console — disabling it is the usual root cause, and `sanctum-cert-renew.sh` will page [Force Flow](/architecture/force-flow/) when expiry is under 14 days with renewal failing.
 
 ### A cert-expiry or posture alert fired
 
@@ -73,6 +75,8 @@ The machine-cert renewer re-mints in place and reloads `:1337` + `:3301`, restor
 
 ## The cert lifecycle, at a glance
 
+Most of these scenarios are really one scenario: a cert drifted toward an edge and a renewer was meant to catch it. Here is what renews what, and when.
+
 | Cert | Path (under `~/.sanctum`) | Renews | How |
 |---|---|---|---|
 | Dashboard LE (`:1111`) | `pq-terminator/certs/le-manoir.crt` | ~90 days | `sanctum-cert-renew.sh`, daily 04:30 |
@@ -84,4 +88,6 @@ Every cert above is watched by `cert-expiry-sentinel` (daily): Force Flow warns 
 
 ## What is watching, always
 
-The `security-posture-sentinel` runs every 15 minutes and pages if the posture regresses: the passkey gate must 401, `:1337` and `:3301` must refuse plaintext, `:3301` must still serve over mTLS, and `:6669` must reject unauthenticated calls. Point-in-time hardening is not military-grade; continuous attestation is.
+Windu — the council's security seat — does not trust a lock he checked once. The `security-posture-sentinel` runs every 15 minutes and pages if the posture regresses: the passkey gate must 401, `:1337` and `:3301` must refuse plaintext, `:3301` must still serve over mTLS, and `:6669` must reject unauthenticated calls.
+
+That cadence is the whole thesis of this runbook. Point-in-time hardening is a photograph; military-grade is a heartbeat. Keep a backup passkey enrolled, let the renewers do their 04:30 work, and the worst morning this lock can hand you is the one at the top of this page — the phone in the pool, and a two-minute walk back inside.
