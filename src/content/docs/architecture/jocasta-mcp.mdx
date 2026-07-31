@@ -1,15 +1,17 @@
 ---
 title: Jocasta MCP (The Archivist)
-description: The master Model Context Protocol server exposing the entirety of the user's personal communications, calendar, unstructured thoughts, and iCloud documents purely via offline macOS databases.
+description: The read-mostly MCP server that answers questions about your messages, calendar, notes, photos, and documents by opening the macOS SQLite databases already on disk — 23 tools, zero egress.
 ---
 
 import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
-![Jocasta MCP — a vast library of floating data crystals and holographic scrolls weaving a unified data stream.](./images/hero-jocasta-mcp.png)
+![Jocasta the Archivist — a vast library of floating data crystals and holographic scrolls weaving a unified data stream.](./images/hero-jocasta-mcp.png)
 
-Jocasta is the local-first data gateway for the haus. Rather than scraping cloud APIs or driving a headless browser — both notoriously brittle — `sanctum-jocasta-mcp` reads the `SQLite` databases sitting on disk on the Mac Mini host. It exposes 23 tools, shared across the Jedi Council.
+Every app on the Mac Mini hoards its memory in a SQLite file. Messages, Apple Notes, Photos, Contacts, Mail — each keeps a private ledger under `~/Library` and assumes nobody will ever read it. Jocasta reads all of them.
 
-Because every database it queries (Messages, Apple Notes, Photos) lives offline under `~/Library`, egress cost and network latency are zero. Nothing leaves the box to answer a question about what's already on the box.
+She is the local-first data gateway for the haus, and her method is almost rude in its simplicity. No cloud APIs to scrape, no headless browser to babysit — both notoriously brittle. `sanctum-jocasta-mcp` just opens the `SQLite` databases already sitting on disk on the Mac Mini host, and exposes 23 tools shared across the Jedi Council.
+
+Because every database it queries lives offline under `~/Library`, egress cost and network latency are zero. Nothing leaves the box to answer a question about what's already on the box.
 
 **Source**: [github.com/Ogilthorp3/jocasta-mcp](https://github.com/Ogilthorp3/jocasta-mcp) (private) — `~/Projects/jocasta-mcp/`
 
@@ -48,7 +50,7 @@ The `jocasta_health` tool reports server status and bridge connectivity in one c
     **Slack** and **Discord** data is heavily blocked due to Electron's use of LevelDB packet chunks (`Local Storage/leveldb`). Those tools respond with graceful failures for now.
   </Card>
   <Card title="Apple Core Data" icon="apple">
-    Jocasta pulls **Apple Notes** previews from the `ZSNIPPET` column of `NoteStore.sqlite` (the full bodies live in compressed `ZDATA` packets, untouched for now), reads **Calendar** events through the EventKit Swift helper at `~/.sanctum/bin/jocasta-eventkit` (the on-disk `Calendar Cache` is stale by design on modern macOS, so it's only the fallback), and parses `AddressBook-v22.abcddb` for **CRM correlation** of cell numbers to names. Calendar and Contacts route through SanctumBridge by default; Notes stays on direct SQLite — the bridge doesn't serve it yet.
+    Jocasta pulls **Apple Notes** previews from the `ZSNIPPET` column of `NoteStore.sqlite` (the full bodies live in compressed `ZDATA` packets, untouched for now), reads **Calendar** events through the EventKit Swift helper at `~/.sanctum/bin/jocasta-eventkit` (the on-disk `Calendar Cache` is stale by design on modern macOS, so it's only the fallback), and parses `AddressBook-v22.abcddb` for the [**CRM correlation**](/agents/jocasta/) of cell numbers to names. Calendar and Contacts route through SanctumBridge by default; Notes stays on direct SQLite — the bridge doesn't serve it yet.
   </Card>
   <Card title="Offline Knowledge" icon="open-book">
     `jocasta_search_kiwix` pings a local `kiwix-serve` on `:8080` and confirms the offline `.zim` archive is reachable. Article extraction isn't wired yet — the tool returns "reached, here's how to parse me," not the article. An honest stub beats a pretty lie.
@@ -63,7 +65,7 @@ Reads go through `sqlite3.OPEN_READONLY` (or the bridge, for the four bridged da
 - **`jocasta_write_note`**: creates a note in the default iCloud Apple Notes account.
 - **`jocasta_write_calendar`**: takes ISO datetimes and tells Calendar.app to schedule the event.
 - **`jocasta_send_imessage`**: hands the message to the Messages daemon to send as iMessage/SMS.
-  - *Primary use case*: the pager. When a service drops, the alert gets texted to your own phone — the one channel that lights up the lock screen whether or not you're at the terminal. Handing this tool to Mon Mothma's council seat is the plan; today her tool belt stops at status, doctor, and logs.
+  - *Primary use case*: the pager. When a service drops, the alert gets texted to your own phone — the one channel that lights up the lock screen whether or not you're at the terminal. Handing this tool to [Mon Mothma's council seat](/agents/mothma/) is the plan; today her tool belt stops at status, doctor, and logs.
 
 ## Web Browsing (Agent-Browser)
 
@@ -95,3 +97,5 @@ pnpm build
 ## Testing and E2E
 
 Like the `.mlx` components, Jocasta proves itself with `test_e2e_jocasta.sh`. It builds the TypeScript via pnpm, runs each CLI command and asserts on the `stdout`/`stderr` it gets back, exercises the telemetry tools, and feeds in bad paths to check the error handling. The point worth keeping: connectors that hit a missing or stale database (the on-disk `Calendar Cache` on `manoir.local`, for instance) return a readable error the suite validates as an *expected* failure — a tool that fails loudly is doing its job; one that fails silently is the bug.
+
+That is the whole temperament of the Archivist: read quietly, write through the front door, fail out loud. Tommy — the haus's late Abyssinian, and no easy grader — called Jocasta the most feline sensibility in the entire system. From a cat, that is as close to praise as the record keeps.

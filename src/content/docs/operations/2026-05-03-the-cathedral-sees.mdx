@@ -8,7 +8,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![The cathedral sees — a many-eyed figure floats above the altar, each eye crystallizing into a pixel grid; three machinists at the base have just finished polishing the brass tower that channels the gaze.](./images/hero-2026-05-03-cathedral-sees.png)
 
-The cathedral on Mini has been serving Qwen 3.6 35B-A3B text-only on `:1337` mTLS since 2026-04-22. Multimodal was scaffolded but gated: any `image_url` block returned `HTTP 503 vision_pipeline_not_yet_wired`. Today the gate flipped to 200. First production multimodal probe came back coherent, the text path didn't move, council stayed up.
+For eleven days the cathedral gave the same answer to every picture: `HTTP 503 vision_pipeline_not_yet_wired`. The text path had been live since 2026-04-22 — Qwen 3.6 35B-A3B on `:1337` mTLS, answering prompts, holding the council up — but any `image_url` block hit that wall. Multimodal was scaffolded and gated, waiting on the wiring underneath.
+
+Today the gate flipped to 200. The first production multimodal probe came back coherent, the text path didn't move, and the council stayed up the whole time.
 
 The work split cleanly in three.
 
@@ -61,6 +63,13 @@ Both PRs include unit tests, a runnable benchmark example, and the math showing 
 
 A daily upstream scanner runs at `09:07` local — pulls the fork, checks PR status, scans help-wanted + perf issues, lists ml-explore/mlx releases. Standalone fallback at `services/sanctum-mlx/tools/mlx-rs-upstream-check.sh` for after the cron expires.
 
+## What changed today
+
+- **Mini deploy.** Built the cathedral worktree (`d9ddc93`) on Mini, colocated `mlx.metallib` next to the new binary, edited the plist via `plistlib` (insert `--vision-enabled` after `--no-plain`, swap the binary path to the worktree). `launchctl bootout` + `bootstrap` brought the council back in 24 s. Backup plist at `~/Library/LaunchAgents/com.sanctum.mlx.plist.pre-multimodal-20260503-135006` — rollback is one `cp` away.
+- **First production probe.** A 1×1 PNG through the wired pipeline: 79 prompt tokens (vision_start + image_pad + vision_end + the surrounding chat template) → HTTP 200, 8 generated tokens. Text probe immediately after: HTTP 200, "Hi there!" — council unchanged. Resident memory ~16.5 GB (well under the 51 GB SLO).
+- **Sanctum-rs PR #5** merged to main as `db6c6ea`. The branch carried 16 commits since PR #3 was merged: chat-handler wiring, three Carmack passes (vision dtype anchoring, SDPA padding, vision-tower output contract), three LM-side wins (causal SDPA, sorted-MoE gather, last-logit prefill), MoE router argpartition, the upstream-helper adoption, and the per-layer profilers in both Rust and Python.
+- **Two upstream PRs open** at oxiglade/mlx-rs (#347 + #348). Daily scanner armed.
+
 ## The doctrine
 
 > The gap shrinks fastest when you fix the layer beneath the one you're working on.
@@ -69,12 +78,7 @@ We could have spent the day micro-optimizing inside our cathedral. Per-op parity
 
 The same shape as the [Pressure Valve trilogy](/operations/2026-04-26-valve-trilogy-redux/) and [The Clean Stage](/operations/2026-04-28-the-clean-stage/): the durable fix isn't on the surface, and the cost of going down one layer is small if you have the source.
 
-## What changed today
-
-- **Mini deploy.** Built the cathedral worktree (`d9ddc93`) on Mini, colocated `mlx.metallib` next to the new binary, edited the plist via `plistlib` (insert `--vision-enabled` after `--no-plain`, swap the binary path to the worktree). `launchctl bootout` + `bootstrap` brought the council back in 24 s. Backup plist at `~/Library/LaunchAgents/com.sanctum.mlx.plist.pre-multimodal-20260503-135006` — rollback is one `cp` away.
-- **First production probe.** A 1×1 PNG through the wired pipeline: 79 prompt tokens (vision_start + image_pad + vision_end + the surrounding chat template) → HTTP 200, 8 generated tokens. Text probe immediately after: HTTP 200, "Hi there!" — council unchanged. Resident memory ~16.5 GB (well under the 51 GB SLO).
-- **Sanctum-rs PR #5** merged to main as `db6c6ea`. The branch carried 16 commits since PR #3 was merged: chat-handler wiring, three Carmack passes (vision dtype anchoring, SDPA padding, vision-tower output contract), three LM-side wins (causal SDPA, sorted-MoE gather, last-logit prefill), MoE router argpartition, the upstream-helper adoption, and the per-layer profilers in both Rust and Python.
-- **Two upstream PRs open** at oxiglade/mlx-rs (#347 + #348). Daily scanner armed.
+The cathedral can see now. The first thing it ever looked at was a single pixel — and it answered while the council on the text path never felt the room change around it.
 
 ## What's next
 

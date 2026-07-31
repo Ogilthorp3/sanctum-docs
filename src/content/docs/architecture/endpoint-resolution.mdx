@@ -5,11 +5,11 @@ description: How Sanctum resolves every host and service address dynamically so 
 
 import { Card, CardGrid, Aside, Steps } from '@astrojs/starlight/components';
 
-![A holographic map of the haus where every device address resolves itself live, while a cracked stone tablet of hardcoded literals lies discarded in the dark](./images/hero-endpoint-resolution.png)
+![A holographic map of the haus where every device address resolves itself live, while a cracked stone tablet of hardcoded IP literals lies discarded in the dark](./images/hero-endpoint-resolution.png)
 
 A hardcoded IP address is a time bomb with a long fuse. It works perfectly until the day the LAN shifts subnets, the router is swapped, or a Tailscale node re-authenticates with a new address — and then a dozen scripts fail at once, quietly, at 2 a.m., while everyone in the haus is asleep. We have been burned by this enough times that Qui-Gon, who owns infra, now treats a literal IP in code the way Windu treats a plaintext password: as a breach with a delay on it.
 
-The doctrine is one sentence: **every address a Sanctum service contacts is resolved at runtime from a single source of truth — never written as a literal in code or config.**
+The doctrine is one sentence: **every address a Sanctum service contacts is resolved at runtime from a single source of truth — never written as a literal in code or config.** An address is only half of where a service lives; the [port it answers on](/architecture/port-summary/) is the other half, and it gets the same treatment.
 
 ## Why (the incidents that earned this)
 
@@ -33,7 +33,7 @@ In both cases the failure was invisible because the literal was *plausible* — 
 
 ## The resolver — `sanctum-endpoints`
 
-`~/.sanctum/bin/sanctum-endpoints` reads `instance.yaml` for **names and virtual anchors only**, then resolves them to live addresses. Every source is dynamic:
+`~/.sanctum/bin/sanctum-endpoints` reads `instance.yaml` — the same file the [node topology](/architecture/node-topology/) is built from — for **names and virtual anchors only**, then resolves them to live addresses. It knows there is a `manoir`; it does not presume to know where `manoir` is standing today. Every source is dynamic:
 
 | Address | How it's resolved |
 |---------|-------------------|
@@ -98,6 +98,10 @@ Roughly **920 literal sites across the Sanctum repos** were moved onto the resol
   :::
 - **Two sources of truth.** `tailnet/topology.yaml` is now marked superseded (no live consumers); `instance.yaml` + the resolver are canonical.
 </Aside>
+
+## The quiet part
+
+None of this is glamorous. The resolver has no dashboard, ships no metric anyone brags about, and on a good day produces a file byte-identical to yesterday's. That is the whole point. The measure of this system is a phone that does not ring: the subnet moves while the haus sleeps, the launchd job notices, the map regenerates, and every service wakes up already knowing where everyone lives now. Qui-Gon likes to say the best infra is the kind nobody remembers exists. The two nights we spent debugging plausible-but-wrong literals in the dark are the reason we finally believe him.
 
 ## Related
 
