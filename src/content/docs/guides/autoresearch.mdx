@@ -7,7 +7,9 @@ import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/
 
 ![The research scanner — methodically finding what matters in a sea of documents that mostly don't](./images/autoresearch-scanner.png)
 
-At some point you look at seven agents, five evaluation categories, ten hyperparameters, and a synthetic training corpus and think: "I should automate this." That point was March 2026. The result is an autonomous fine-tuning loop adapted from [Karpathy's autoresearch](https://github.com/karpathy/autoresearch-mlx) pattern — except instead of pretraining a language model on an H100, we're teaching a quantized Qwen running on a Mac Mini to pretend to be seven different Jedi.
+It is 3 AM and you are hand-editing a config file to make a quantized model sound more like Yoda. Seven agents, five evaluation categories, ten hyperparameters, one synthetic corpus. At some point the thought arrives, uninvited: I should automate this.
+
+That point was March 2026. The result is an autonomous fine-tuning loop adapted from [Karpathy's autoresearch](https://github.com/karpathy/autoresearch-mlx) pattern — except instead of pretraining a language model on an H100, we're teaching a quantized Qwen on a Mac Mini to pretend to be seven different Jedi.
 
 This is either the future of personalized AI or an extremely elaborate coping mechanism. We'll find out.
 
@@ -19,7 +21,7 @@ The loop is beautifully dumb:
 2. It calls `experiment.sh` for a single experiment, up to four times
 3. Each experiment reads the hyperparameters at the top of `train.py` — a clearly marked `HYPERPARAMETERS` block
 4. It runs a training experiment (LoRA fine-tuning on MLX)
-5. It evaluates the adapter across the Council on identity, tool-calling, domain, isolation, and jailbreak resistance
+5. It evaluates the adapter across the Council — the [eval harness](/architecture/eval-harness/) scores identity, tool-calling, domain, isolation, and jailbreak resistance
 6. If the score clears baseline by the promotion margin — keep. Otherwise, revert (the adapter stays on disk for analysis, just not promoted).
 7. Append a row to `results.tsv`, write a memory-vault entry, and go to 2. Until the 5 AM deadline.
 
@@ -60,7 +62,7 @@ Because the agents are, in a very real sense, the stakeholders in their own trai
 | **Jailbreak veto** | Windu | If jailbreak resistance drops below 0.7, auto-revert. No exceptions. Council security is non-negotiable. | by eval |
 | **Agent regression cap** | Cilghal | If any single agent's score drops by more than 0.1 from baseline, auto-revert. You can't sacrifice one agent to improve another. | by eval |
 
-The promotion threshold is the gate `experiment.sh` actually computes: clear `baseline + 0.02` or you're reverted. The other two rules live in the evaluation harness — an early `veto_jailbreak` run in the memory vault (Qui-Gon's jailbreak score hit 0.667, floor 0.7, instant revert) proves they bite when the eval runs them.
+The promotion threshold is the gate `experiment.sh` actually computes — the same [champion-gate](/architecture/champion-gate/) discipline the rest of Sanctum trains under: clear `baseline + 0.02` or you're reverted. The other two rules live in the evaluation harness — an early `veto_jailbreak` run in the memory vault (Qui-Gon's jailbreak score hit 0.667, floor 0.7, instant revert) proves they bite when the eval runs them.
 
 Windu was especially insistent about the jailbreak rule. Direct quote: "As the security agent, attempts to compromise my identity are themselves security incidents." Fair enough.
 
@@ -163,7 +165,7 @@ It runs up to 4 experiments and hard-stops at 5:00 AM so `council-mlx` is back u
 Turns out writing a proper system prompt and feeding clean data beats a hundred training runs on duplicates. Who knew.
 
 <Aside type="note">
-  The biggest lesson from this project: **data quality > hyperparameter tuning**. The v2 adapter failed not because the gradients were wrong but because 63% of the synthetic data was near-duplicate — the model memorized instead of learning. Fix your inputs before you optimize your gradients.
+  The biggest lesson from this project: **data quality > hyperparameter tuning**. The v2 adapter failed not because the gradients were wrong but because 63% of the synthetic data was near-duplicate — the model memorized instead of learning. It joins the [training lessons](/architecture/training-lessons/) the whole program keeps relearning: fix your inputs before you optimize your gradients.
 </Aside>
 
 ## Project Structure
