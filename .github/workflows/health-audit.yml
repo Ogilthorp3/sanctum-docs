@@ -146,8 +146,32 @@ jobs:
             echo "Audit clean — no open issue to close."
           fi
 
-      - name: Summary
+      # The echo audit is ADVISORY, so it must be visible on a clean run — the
+      # normal case. Routing it only through the failure-only tracking issue
+      # made it silently useless (verified 2026-07-31: a clean dispatch printed
+      # zero note lines). The job summary always renders.
+      - name: Corpus sameness advisory (always visible)
+        if: always()
+        env:
+          EXIT_CODE: ${{ steps.check.outputs.exit_code }}
+          ERR_COUNT: ${{ steps.check.outputs.err_count }}
+          WARN_COUNT: ${{ steps.check.outputs.warn_count }}
         run: |
-          echo "exit_code=${{ steps.check.outputs.exit_code }}"
-          echo "errors=${{ steps.check.outputs.err_count }}"
-          echo "warnings=${{ steps.check.outputs.warn_count }}"
+          {
+            echo "## Docs health — $(date -u +%Y-%m-%d)"
+            echo ""
+            echo "| gate | result |"
+            echo "|------|--------|"
+            echo "| contrib + story errors | ${ERR_COUNT:-0} |"
+            echo "| warnings | ${WARN_COUNT:-0} |"
+            echo "| combined exit | ${EXIT_CODE:-0} |"
+            echo ""
+            echo "### Echo audit — is the book still varying its music?"
+            echo ""
+            echo '```'
+            python3 scripts/echo-audit.py 2>&1 || true
+            echo '```'
+            echo ""
+            echo "Budgets are taste, written down. Over-budget is a nudge to vary"
+            echo "the device on the next pages you touch — never a build failure."
+          } >> "$GITHUB_STEP_SUMMARY"
