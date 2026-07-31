@@ -84,7 +84,11 @@ def main():
             # min pairwise distance to the cluster anchor
             print(f"      {entries[i][0]}   ({os.path.basename(entries[i][1])})")
         print()
+    # CI gate: a nonzero exit blocks the deploy when two pages share
+    # visually-identical art ("never the same image on two pages" — Bert,
+    # 2026-07-30). Regenerate the duplicate, don't lower the threshold.
+    return 1 if dup_clusters else 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -34,8 +34,18 @@ jobs:
         id: check
         run: |
           set +e
-          out=$(python3 scripts/contrib-check.py 2>&1)
-          ec=$?
+          out_contrib=$(python3 scripts/contrib-check.py 2>&1)
+          ec_contrib=$?
+          # Narrative half of the standard (errors surface in the issue too).
+          # Capture exit BEFORE the tail — $? after a pipeline is tail's exit.
+          out_story_full=$(python3 scripts/story-check.py $(find src/content/docs -name '*.mdx') 2>&1)
+          ec_story=$?
+          out_story=$(printf '%s' "$out_story_full" | tail -60)
+          # Corpus sameness advisory — never gates, only names the echoes
+          out_echo=$(python3 scripts/echo-audit.py 2>&1)
+          out=$(printf '%s\n\n───── narrative standard (story-check) ─────\n%s\n\n───── echo audit (corpus sameness, advisory) ─────\n%s\n' \
+            "$out_contrib" "$out_story" "$out_echo")
+          ec=$(( ec_contrib != 0 || ec_story != 0 ? 1 : 0 ))
           {
             echo 'output<<__EOF__'
             echo "$out"

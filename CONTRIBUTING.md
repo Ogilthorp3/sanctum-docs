@@ -402,3 +402,22 @@ Config lives in `~/.sanctum/instance.yaml` under `router:`. Full per-Jedi ration
 Tommy's pages are written as if by a dead cat who has strong opinions about network segmentation. They are the gold standard. If your page wouldn't survive Tommy's editorial review — if it's generic, or timid, or tries too hard — revise it until it would.
 
 You don't have to be Tommy. But Tommy has to not be embarrassed by you.
+
+## The Gates (how the standard keeps itself)
+
+The standard above is enforced by machines, not memory. Four layers, all in
+this repo:
+
+| Gate | What it proves | When it runs |
+|------|----------------|--------------|
+| `scripts/contrib-check.py` | The page is **correct** — frontmatter, hero present, no leaks, no MDX crash traps (incl. `<|` in table cells) | PR (changed files) + deploy (full corpus) |
+| `scripts/story-check.py` | Someone will **read** it — hook, spine, cast, landing, lineage, chapter budget | PR (changed files) + deploy (full corpus). Errors block; the gold standard keeps exactly one permanent warning |
+| `tools/hero-dupe-check.py` | The art is **unique** — perceptual hash across every hero; two pages must never share visually-identical art even with different bytes | Deploy (full corpus) |
+| `scripts/echo-audit.py` | The book still **varies its music** — corpus-level sameness (opening devices, landing characters, tic phrases) against written budgets | Weekly health audit, advisory only |
+
+`tests/test_story_check.py` pins the calibration contract: `agents/tommy.mdx`
+must pass with exactly one warning (`book/no-lineage`, documented and
+permanent), the portals stay exempt, the joual pages keep their French cast.
+A checker change that fails the gold standard is a broken check, not a strict
+one. The full Astro build remains the final word on MDX validity — run it
+before you push.

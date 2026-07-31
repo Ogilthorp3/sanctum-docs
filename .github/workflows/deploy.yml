@@ -52,6 +52,29 @@ jobs:
       - name: CONTRIBUTING compliance (full corpus)
         run: python3 scripts/contrib-check.py $(find src/content/docs -name '*.mdx')
 
+      # ── Narrative standard gate ──────────────────────────────────────────
+      # story-check is the OTHER half of the standard: contrib-check proves a
+      # page is correct, story-check proves someone will read it (hook, spine,
+      # cast, landing). The 2026-07 sweep drove the corpus to 0 errors; this
+      # gate keeps it there. Errors fail; warnings are advisory (the gold
+      # standard itself carries one permanent warning by design).
+      - name: Narrative standard (full corpus)
+        run: python3 scripts/story-check.py $(find src/content/docs -name '*.mdx')
+
+      # ── Hero uniqueness gate ─────────────────────────────────────────────
+      # Perceptual hash (dHash+aHash): two pages must never share visually-
+      # identical art even when the bytes differ — MD5 is blind to that, and
+      # 11 such clusters shipped before this gate existed (2026-07-30).
+      # Fails on any duplicate cluster: regenerate the duplicate hero, do not
+      # lower the threshold.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Hero uniqueness (perceptual hash)
+        run: |
+          python3 -m pip install --quiet pillow
+          python3 tools/hero-dupe-check.py . 10
+
       - run: pnpm build
 
       - uses: cloudflare/wrangler-action@v3
