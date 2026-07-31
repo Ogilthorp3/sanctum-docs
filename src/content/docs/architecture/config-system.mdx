@@ -7,7 +7,7 @@ import { Aside, Tabs, TabItem, Steps } from '@astrojs/starlight/components';
 import ZoomImage from '../../../components/ZoomImage.astro';
 import configSystem from './images/sanctum-config-system.svg';
 
-Sanctum follows a single-source-of-truth principle: one YAML file defines the entire instance. Every service, script, dashboard, and LaunchAgent reads its configuration from this file -- either directly or through generated artifacts. Secrets are stored separately in macOS Keychain and never appear in configuration files.
+Every port, every IP, every feature flag in the haus traces back to one file. Change it, and the dashboards, the LaunchAgents, the shell scripts, and the voice agent all follow -- some reading it directly, some through artifacts generated from it. Secrets are the one thing it never holds; those live apart, in the macOS Keychain. This is Sanctum's single source of truth, and it fits in a single YAML file.
 
 ![The YAML crown — one file to rule them all](./images/yaml-crown.png)
 
@@ -21,7 +21,7 @@ Everything flows down from that YAML file at the top. If you're looking for the 
 
 ## instance.yaml
 
-The central configuration file lives at `~/.sanctum/instance.yaml`. It contains every instance-specific value: network addresses, service ports, node definitions, feature flags, and integration settings.
+The central configuration file lives at `~/.sanctum/instance.yaml`. It contains every instance-specific value: network addresses, service ports, [node definitions](/architecture/node-topology/), feature flags, and integration settings.
 
 ```yaml
 # ~/.sanctum/instance.yaml
@@ -228,7 +228,7 @@ The `generate-plists.sh` script renders all templates:
 
 ## Secrets Management
 
-Secrets never appear in `instance.yaml` or any configuration file. They live in two stores, split by what they protect: per-service tokens in the Keychain, the gateway config under SOPS.
+Secrets never appear in `instance.yaml` or any configuration file. They live in two stores, split by what they protect: per-service tokens in the Keychain, the gateway config under SOPS. The full arrangement -- and why there are three copies of the truth, not two -- is its own story in the [secrets trifecta](/architecture/secrets-trifecta/).
 
 <Tabs>
   <TabItem label="macOS (Keychain)">
@@ -238,7 +238,7 @@ Secrets never appear in `instance.yaml` or any configuration file. They live in 
     security find-generic-password -a "sanctum" -s "gateway-token" -w
     ```
 
-    Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM. Nothing like waking up to fresh tokens you didn't have to think about.
+    Secrets are rotated monthly by the `com.sanctum.rotate-secrets` LaunchAgent, which runs on the 1st of each month at 3:30 AM -- the full cadence lives in [secret rotation](/operations/secret-rotation/). Nothing like waking up to fresh tokens you didn't have to think about.
   </TabItem>
   <TabItem label="Gateway (SOPS + age)">
     The OpenClaw gateway config is encrypted at rest with SOPS and age. The encrypted file is the source of truth and lives in git; the plaintext is regenerated on every launch and never committed:
