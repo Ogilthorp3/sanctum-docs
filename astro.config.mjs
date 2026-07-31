@@ -164,6 +164,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Dashboard', slug: 'guides/dashboard' },
 						{ label: 'Holocron App', slug: 'guides/holocron-app' },
+						{ label: 'Parent Unlock', slug: 'guides/parent-unlock' },
 						{ label: 'Watchdog', slug: 'guides/watchdog' },
 						{ label: 'Service Graph', slug: 'guides/service-graph' },
 						{ label: 'Home Assistant', slug: 'guides/home-assistant' },

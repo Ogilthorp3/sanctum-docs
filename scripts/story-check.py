@@ -433,7 +433,14 @@ def check_page(path: pathlib.Path, rep: Report, sidebar_slugs: set, inbound: Cou
     for i, b in enumerate(cb):
         if b.kind == "code" and len(b.text.splitlines()) >= 5:
             near = cb[max(0, i - 3): i] + cb[i + 1: i + 4]
-            if not any(x.kind == "prose" and len(words(x.text)) >= 6 for x in near):
+            # A numbered <Steps> item IS framing — "2. **Enable** — Touch ID
+            # only, or either method after a PIN:" explains the block that
+            # follows it. Steps items parse as "bullet", so prose-only
+            # matching flagged every Steps-based guide (the repo's own
+            # documented Page Structure). Same 6-word floor either way: some
+            # human sentence must sit next to the block. Widened 2026-07-31.
+            if not any(x.kind in ("prose", "bullet") and len(words(x.text)) >= 6
+                       for x in near):
                 err("config/unframed-block", f"a {len(b.text.splitlines())}-line code block nobody framed")
                 break
 

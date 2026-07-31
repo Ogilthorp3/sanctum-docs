@@ -84,6 +84,36 @@ def test_table_pipe_token_rule_fires_and_escape_passes():
         assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
 
 
+def test_steps_item_counts_as_framing_for_a_code_block():
+    """A numbered <Steps> item frames the block it introduces. Steps items
+    parse as "bullet"; requiring prose flagged every Steps-based guide, which
+    is the repo's own documented Page Structure (regression 2026-07-31)."""
+    r = run_story("guides/parent-unlock.mdx")
+    assert "config/unframed-block" not in r.stdout, r.stdout
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_truly_unframed_block_still_errors():
+    """The relaxation must not gut the rule: a bare code dump with no sentence
+    anywhere near it still fails."""
+    import tempfile, os
+    body = (
+        "---\ntitle: Fixture\ndescription: A fixture page for the unframed-block rule.\n---\n\n"
+        "![alt](./images/nope.png)\n\n## Config\n\n"
+        "```yaml\na: 1\nb: 2\nc: 3\nd: 4\ne: 5\nf: 6\n```\n\n"
+        "## More\n\n```yaml\ng: 7\nh: 8\ni: 9\nj: 10\nk: 11\n```\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".mdx", delete=False,
+                                    dir=str(ROOT / DOCS)) as fh:
+        fh.write(body); tmp = fh.name
+    try:
+        r = subprocess.run([sys.executable, str(STORY), tmp],
+                           capture_output=True, text=True, timeout=60)
+        assert "config/unframed-block" in r.stdout, r.stdout
+    finally:
+        os.unlink(tmp)
+
+
 # ── hero uniqueness gate ─────────────────────────────────────────────────────
 
 def test_hero_dupe_check_exits_clean_on_current_corpus():
