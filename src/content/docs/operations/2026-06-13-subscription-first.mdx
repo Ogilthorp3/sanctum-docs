@@ -1,37 +1,41 @@
 ---
 title: "2026-06-13: Subscription First"
-description: The council was quietly running on metered per-token APIs while two flat-rate subscriptions sat paid-for and unused. Claude seats moved to the Max proxy, a new Gemini Code Assist proxy put Windu on AI Ultra, Cilghal stayed local for medical privacy, and OpenRouter was demoted to fallback-only.
+description: Two flat-rate subscriptions sat paid-for and idle while the council quietly billed by the token. Claude seats moved to the Max proxy, a new Gemini Code Assist proxy put Windu on AI Ultra, Cilghal stayed local for medical privacy, and OpenRouter was demoted to fallback-only.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
 ![A routing switch throwing its lever away from a coin-fed taxi meter dribbling money into a pile, toward two pristine paid-for turnstile gates standing idle under a teal glow](./images/hero-2026-06-13-subscription-first.png)
 
-The owner's directive was one line: *sanctum runs on subscriptions, not metered per-token APIs; OpenRouter is the only metered provider and only as a fallback.* The audit that followed found the council doing almost the opposite.
+Two flat-rate subscriptions sat paid-for and idle. The council was billing the owner by the token anyway.
+
+The owner's directive was one line: *sanctum runs on subscriptions, not metered per-token APIs; OpenRouter is the only metered provider and only as a fallback.* The audit that followed found the council doing almost the opposite of that. Two things were paid for monthly. Neither was carrying real traffic.
 
 ## The trap
 
-"I use my AI Studio account, so Gemini is on my subscription" is false when the call carries an **API key** to `generativelanguage.googleapis.com`. That path bills per token regardless of any consumer subscription. The same shape held for Claude — `api.anthropic.com` with a key, and `openrouter -> anthropic/*`, are both metered.
+"I use my AI Studio account, so Gemini is on my subscription" is false when the call carries an **API key** to `generativelanguage.googleapis.com`. That path bills per token regardless of any consumer subscription. The same shape held for Claude — `api.anthropic.com` with a key, and `openrouter -> anthropic/*`, are both metered. The subscription and the key look like the same model from the outside. The invoice tells them apart.
 
-A subscription is reached only through its **OAuth-fronted proxy**. Claude Max already had one (`claude-max-proxy`, port 3456). Gemini did not. proxyd is an HTTP key-router, so "use the subscription" means "point the seat at the OAuth proxy," never "use my account's key."
+A subscription is reached only through its **OAuth-fronted proxy**. Claude Max already had one ([`claude-max-proxy`, port 3456](/operations/2026-04-27-claude-max-symmetry/)). Gemini did not. proxyd is an HTTP key-router, so "use the subscription" means "point the seat at the OAuth proxy," never "use my account's key."
 
 ## What the audit found
 
-proxyd's defaults (`config.rs`) routed `anthropic` to the metered API, `gemini` to the metered key (mislabelled "subscription" in the config comments), and `openrouter` to OpenRouter. The result:
+proxyd's defaults (`config.rs`) routed `anthropic` to the metered API, `gemini` to the metered key (mislabelled "subscription" in the config comments), and `openrouter` to OpenRouter. The council had been quietly paying retail while two flat-rate plans gathered dust:
 
 - `council-brain` and Yoda's `council-max-thinking` (his primary) — metered.
 - The Gemini seats, including Windu's `council-spacial` — metered.
 - Only `claude-cli-offline` ever touched the Max proxy.
 
-Two flat-rate subscriptions, paid for, barely used.
+Two flat-rate subscriptions, paid for, barely used. The one seat that reached a subscription was the one nobody had thought to route.
 
 ## The fix
 
+Three provider families, three destinations. Each one moved a seat off the meter and onto something already paid for — the routing rules that decide which live in [dynamic model routing](/architecture/dynamic-model-routing/).
+
 **Claude to Max.** `claude-opus-4-6`, `council-brain`, and `council-max-thinking` now route to `claude-max-proxy` on 3456 (`provider local`, `api_model claude-opus-4`). Verified end-to-end through proxyd.
 
-**Gemini to AI Ultra.** A new `gemini-code-assist-proxy` (`~/.sanctum/bin/gemini-code-assist-proxy.js`, `com.sanctum.gemini-code-assist-proxy`) fronts the Gemini CLI's Code Assist OAuth path, which is the AI Ultra subscription. It is localhost-only, conservatively rate-limited, never logs token material, and refreshes the CLI's own OAuth credentials. Its port is **6543** — the digit-reverse of the Claude proxy's 3456. Every Gemini seat now points there; the metered `GEMINI_API_KEY` is no longer referenced by proxyd.
+**Gemini to AI Ultra.** A new `gemini-code-assist-proxy` (`~/.sanctum/bin/gemini-code-assist-proxy.js`, `com.sanctum.gemini-code-assist-proxy`) fronts the Gemini CLI's Code Assist OAuth path, which is the AI Ultra subscription. It is localhost-only, conservatively rate-limited, never logs token material, and refreshes the CLI's own OAuth credentials. Its port is **6543** — the digit-reverse of the Claude proxy's 3456, because a mnemonic is cheaper than a lookup. Every Gemini seat now points there; the metered `GEMINI_API_KEY` is no longer referenced by proxyd.
 
-**Cilghal stays local.** Cilghal handles medical information, so it runs on the local cathedral (`:1337`) and never leaves the house. That was already the case and was left untouched.
+**Cilghal stays local.** Cilghal handles medical information, so it runs on the [local cathedral (`:1337`)](/architecture/sanctum-mlx/) and never leaves the haus. That was already the case and was left untouched — the one seat where the answer to "which subscription?" is "none, and it stays that way."
 
 **OpenRouter demoted.** No subscription-served model keeps an OpenRouter primary; OpenRouter remains only in fallback chains. `council-code` moved to the live local Codestral (`:3301`), and the obsolete `council-27b` and `lmstudio-qwen` seats were removed.
 
@@ -41,8 +45,10 @@ Google rate-limits `gemini-3.1-pro` on the Ultra subscription to roughly one req
 
 ## What remains
 
+Three threads were left deliberately untied, because pulling them now would cost more than the meter they save:
+
 - `sanctum-cli`'s `GeminiProvider` (the Yoda hybrid transport) still calls the metered Gemini API directly. It should point at the 6543 sub-proxy; it is another session's working tree, so the change is coordinated through the vault rather than taken unilaterally.
 - `council-routine` is still an OpenRouter primary and should move to a local seat.
 - `proxyd-launch` still exports the now-unused `GEMINI_API_KEY`, removable once `sanctum-cli` migrates.
 
-The doctrine of record lives at `~/.sanctum/PROVIDER-BILLING-DOCTRINE.md`.
+The doctrine of record lives at `~/.sanctum/PROVIDER-BILLING-DOCTRINE.md`. The meter is still running on those three, quieter now, and Mundi is watching it. The rule underneath is small enough to hold in one hand: if it is already paid for, use it before you rent it again.
