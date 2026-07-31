@@ -7,13 +7,15 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Pencil sketch on a dark background of two old brass measuring rules clamped together at one end, fanning open at the other end so they reach to different points on a stone wall; a glowing teal halo wraps the gap between their endpoints.](./images/2026-06-02-the-gate-that-was-wrong-for-two-weeks.png)
 
-A nightly autoresearch run scores LoRA adapters against a hundred-and-nine evaluation cases, and a script called `promote_champion.sh` checks the best score against a static gate of `0.881`. Anything above the gate gets rsync'd to the Mini, the cathedral plist gets patched with a fresh `--adapter-path`, a four-case smoke probe fires, and a new champion is live before breakfast. Anything below the gate gets a `NO-OP` breadcrumb and the previous champion keeps its job. This has been the pipeline for weeks.
+Fourteen nights running, the gate said no. Fourteen nights, we believed it.
 
-Tonight, while staring at the 0.69 overall scores coming out of a dropout dose-response sweep that was supposed to give us our first non-overfit champion, the obvious question landed for the first time: **where did `0.881` come from?**
+Each night an autoresearch run scores the evening's LoRA adapters against a hundred-and-nine evaluation cases, and a script called `promote_champion.sh` checks the best score against a static gate of `0.881`. Clear the gate: the winner gets rsync'd to the Mini, the cathedral plist gets patched with a fresh `--adapter-path`, a four-case smoke probe fires, and a new champion is live before breakfast. Miss it: the run drops a `NO-OP` breadcrumb and the previous champion keeps its job. This has been the pipeline for weeks.
+
+Tonight we were staring at the 0.69 overall scores coming out of a dropout dose-response sweep — the run that was supposed to hand us our first non-overfit champion. And for the first time, the obvious question landed: **where did `0.881` come from?**
 
 ## The yardstick we threw out
 
-The `0.881` number was set on 2026-05-16, the night the production champion was promoted, from its score against the *then-current* evaluation set of twenty-six gold-tier cases. On 2026-05-22 we rebuilt the evaluation set to a hundred-and-nine cases across six tiers — the rebuild that explicitly caught that same champion as overfit. We changed the yardstick and never re-measured the wall.
+The `0.881` number was set on 2026-05-16, the night the production champion was promoted, from its score against the *then-current* evaluation set of twenty-six gold-tier cases. On 2026-05-22 we rebuilt the evaluation set to a hundred-and-nine cases across six tiers — [the rebuild that explicitly caught that same champion as overfit](/operations/2026-05-22-the-champion-who-memorized-the-exam/). We changed the yardstick and never re-measured the wall.
 
 Every promotion check since 2026-05-22 has been a candidate's hundred-and-nine-case score compared against an old champion's twenty-six-case score. Two scales. The gate has been a phantom for fourteen nights.
 
@@ -21,7 +23,7 @@ Every other piece of infrastructure produced a breadcrumb for the decision. `pro
 
 ## What "honest gate" means and why it's small
 
-The fix is small. Write a script that runs `carmack_eval.py --tier full --adapter-path <production-champion> --seed 42` against the current evaluation set, take whatever `overall` falls out, subtract a `0.005` promotion margin, floor at `0.70` to prevent a catastrophic eval-framework error from accidentally approving every adapter, and write the result back to `~/.sanctum/state/production-champion.json` as a `calibrated_gate` field. Then patch `promote_champion.sh` to read `calibrated_gate` if present, falling back to the legacy `GATE_SCORE` env var if not.
+The fix is small. Write a script that runs `carmack_eval.py --tier full --adapter-path <production-champion> --seed 42` against the current [evaluation set](/architecture/eval-harness/), take whatever `overall` falls out, subtract a `0.005` promotion margin, floor at `0.70` to prevent a catastrophic eval-framework error from accidentally approving every adapter, and write the result back to `~/.sanctum/state/production-champion.json` as a `calibrated_gate` field. Then patch `promote_champion.sh` to read `calibrated_gate` if present, falling back to the legacy `GATE_SCORE` env var if not — the honest number the whole [champion gate](/architecture/champion-gate/) should have been aiming at all along.
 
 Two files modified, one new script, seven tests. The infrastructure was already there. The only heroic act would have been noticing two weeks ago.
 
@@ -43,11 +45,15 @@ The Phase 4b-1 plan was thirteen tasks across six commits, executed by a chain o
 
 None of these were what the spec said to write. All of them were what the script needed to be. The two-stage review — spec compliance, then quality — caught them in a single pass.
 
+## Three facts the spec never had
+
+The infrastructure was green at six commits. The plan said `Task 5: real-run calibration on May-12 champion`. The natural next step was to run the script. So we reached for the trigger — and three operational facts the spec hadn't accounted for surfaced all at once.
+
+`carmack_eval.py` lives only on the MBP. The production-champion adapter symlink resolves only on the Mini. The MBP GPU was, at that exact moment, fully loaded by tonight's autoresearch nightly, mid-eval on its own adapter. And `~/.sanctum/state/production-champion.json` didn't exist anywhere — the file the calibrator needs to read in order to write doesn't exist yet, which means tonight's run would have had to bootstrap it by hand, which means tonight's run would have been racing whatever the nightly's Phase 3 promotion writes if it found a winner.
+
+Three ways to produce a measurement, and every one of them was contaminated before it started.
+
 ## The council said wait
-
-The infrastructure was green at six commits. The plan said `Task 5: real-run calibration on May-12 champion`. The natural next step was to run the script.
-
-Three operational facts surfaced at that moment that the spec hadn't accounted for. `carmack_eval.py` lives only on the MBP. The production-champion adapter symlink resolves only on the Mini. The MBP GPU was at that moment fully loaded by tonight's autoresearch nightly, mid-eval on its own adapter. And `~/.sanctum/state/production-champion.json` didn't exist anywhere — the file the calibrator needs to read in order to write doesn't exist yet, which means tonight's run would have had to bootstrap it manually, which means tonight's run would have been racing whatever the nightly's Phase 3 promotion writes if it found a winner.
 
 A five-master council convened on the timing. Cilghal: a measurement taken under racing conditions is just a prettier phantom than the one you already distrust. Windu: I will not starve the council's own inference path so a non-urgent job can win one bounded night. Mundi: a bounded stale-gate night costs hours of delay, not days. Qui-Gon dissented to *defer-thirty-minutes* — wait for the nightly to finish, rsync the adapter, run it clean — but agreed the racy options were out. Yoda ranked the four paths and ruled DEFER\_TOMORROW with one binding instruction: tonight, push the six reviewed commits to GitHub and leave the state file un-bootstrapped, so Phase 3 has nothing to clobber. Tomorrow with a human present and an idle machine, run it watched.
 
