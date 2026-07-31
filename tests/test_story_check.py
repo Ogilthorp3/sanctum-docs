@@ -114,6 +114,63 @@ def test_a_truly_unframed_block_still_errors():
         os.unlink(tmp)
 
 
+# ── the Cast Constitution ────────────────────────────────────────────────────
+
+def test_cast_counts_match_their_sources():
+    """CONTRIBUTING's Cast Constitution fixes four counts to two sources of
+    truth. If a champion swap adds a routed seat, or a new agent gets a page,
+    the doctrine must be updated in the same commit — not discovered later as
+    prose that lies (audit 2026-07-31)."""
+    import json
+    roster = json.loads((ROOT / "src/data/council-roster.json").read_text())
+    routed = len(roster["agents"])
+    characters = len(list((ROOT / DOCS / "agents").glob("*.mdx")))
+
+    contributing = (ROOT / "CONTRIBUTING.md").read_text()
+    m = re.search(r"\*\*Routed seats\*\*\s*\|\s*(\d+)", contributing)
+    assert m, "Cast Constitution table missing its Routed-seats row"
+    assert int(m.group(1)) == routed, (
+        f"CONTRIBUTING says {m.group(1)} routed seats; council-roster.json has {routed}")
+
+    m = re.search(r"\*\*Named characters\*\*\s*\|\s*(\d+)", contributing)
+    assert m, "Cast Constitution table missing its Named-characters row"
+    assert int(m.group(1)) == characters, (
+        f"CONTRIBUTING says {m.group(1)} named characters; agents/ has {characters} pages")
+
+
+def test_evergreen_pages_do_not_state_bare_cast_counts():
+    """Evergreen pages must name the SET a cast number counts ('five routed
+    seats'), never a bare 'five agents'. Dated field notes are historical
+    snapshots and exempt by the Constitution's rule 5."""
+    bare = re.compile(
+        r"\b(five|six|seven|eight|nine)\s+(agents|intelligences|seats|minds|robes)\b",
+        re.I)
+    qualified = re.compile(
+        r"\b(routed|council|named|non-routed|reasoning|specialized)\b", re.I)
+    # Lines that are self-defining in place: the reader cannot be confused, and
+    # rewriting them would cost real craft. Each is exact-matched, so an edit to
+    # the line re-arms the rule.
+    ALLOW = {
+        # The doctrine page's opener — and the roster table sits directly below it.
+        "Seven minds share one table, and on most questions they disagree. That is the point.",
+        # Enumerates its own arithmetic: 5 + 1 + 1 = 7.
+        "Five Jedi, one Mac-side librarian, and one operations chancellor — **seven seats, and the table is full.** Each has a single domain. If a request spans two, route it. The full wiring — who calls whom, and how — lives in the [agents architecture](../architecture/agents/).",
+    }
+    offenders = []
+    for p in sorted((ROOT / DOCS).rglob("*.mdx")):
+        rel = str(p.relative_to(ROOT / DOCS))
+        if re.match(r"operations/20\d\d-\d\d-\d\d", rel):
+            continue                      # dated field note — historical
+        for i, line in enumerate(p.read_text().splitlines(), 1):
+            if line.strip() in ALLOW:
+                continue
+            for m in bare.finditer(line):
+                window = line[max(0, m.start() - 60): m.end() + 40]
+                if not qualified.search(window):
+                    offenders.append(f"{rel}:{i}: {m.group(0)}")
+    assert not offenders, "bare cast counts (name the set):\n  " + "\n  ".join(offenders)
+
+
 # ── hero uniqueness gate ─────────────────────────────────────────────────────
 
 def test_hero_dupe_check_exits_clean_on_current_corpus():

@@ -421,3 +421,35 @@ permanent), the portals stay exempt, the joual pages keep their French cast.
 A checker change that fails the gold standard is a broken check, not a strict
 one. The full Astro build remains the final word on MDX validity — run it
 before you push.
+
+## The Cast Constitution
+
+The cast is counted four different ways, all of them legitimate, which is
+exactly why every number must say **which set it counts**. Before the 2026-07-31
+audit, one page said "Seven minds" and "Six robes" twenty lines apart and
+another said "five specialized intelligences" and "seven robes" — no arithmetic
+was wrong, and no reader could tell.
+
+| Set | Count | Who | Source of truth |
+|-----|------:|-----|-----------------|
+| **Named characters** | 9 | Yoda, Windu, Qui-Gon, Mundi, Cilghal, Jocasta, Mothma, Ahsoka, Tommy | one `.mdx` each in `agents/` |
+| **Council seats** | 7 | the above minus Ahsoka (satellite) and Tommy (force-ghost) | `/architecture/agents/` |
+| **Routed seats** | 5 | Yoda, Mundi, Qui-Gon, Windu, Cilghal | `src/data/council-roster.json` — the only file that knows |
+| **Non-routed** | 2 | Jocasta (records), Mothma (ops) — real seats, no model assignment of their own | `/architecture/agents/` |
+
+Rules:
+
+1. **Never write a bare cast number.** Not "five agents" but "the five routed
+   seats"; not "nine seats" (there are seven) but "nine named characters".
+2. **Tommy is not a seat.** He is a `force-ghost`: no tools, no permissions, no
+   model. Counting him among working agents is a category error he would enjoy
+   pointing out.
+3. **Ahsoka is not on the council.** She is the chalet satellite.
+4. **Routed counts come from the JSON, never from memory** — same doctrine as
+   [The Single-Roster Rule](#the-single-roster-rule). `tests/test_story_check.py`
+   asserts the doctrine page's routed-seat count still matches
+   `council-roster.json` and that the named-character count matches the pages on
+   disk, so a champion swap or a new agent cannot silently make the prose lie.
+5. **Dated field notes are historical.** A 2026-06 note that says "nine agents"
+   recorded what was true that night; leave it. Only evergreen pages are
+   held to the present tense.
