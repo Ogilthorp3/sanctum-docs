@@ -232,7 +232,13 @@ CAST_NAMES = ["tommy", "yoda", "windu", "qui-gon", "quigon", "cilghal", "mundi",
               "gollum", "abyssinian", "deadpool", "hermes", "albert", "maester"]
 ROLES = ["operator", "engineer", "reader", "haushold", "hausehold", "family",
          "human", "someone", "nobody", "owner", "kid", "child", "person",
-         "people", "council", "haus", "neo", "you", "i", "we", "me", "my", "our"]
+         "people", "council", "haus", "neo", "you", "i", "we", "me", "my", "our",
+         # French inhabitant tokens — the QC/joual pages have real cast (a parent,
+         # a child, Tommy) but the reader/parent is addressed in French. Only
+         # French-ONLY words that never appear in English prose (no "on", "ton",
+         # "ta", "parent") so English pages are unaffected.
+         "tu", "toi", "vous", "tes", "nous", "enfant", "enfants",
+         "maman", "papa", "famille"]
 INHABITANTS = CAST_NAMES + ROLES
 INHAB_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in INHABITANTS) + r")\b", re.I)
 CAST_RE = re.compile(r"\b(" + "|".join(re.escape(w) for w in CAST_NAMES) + r")\b", re.I)
@@ -279,9 +285,11 @@ EXPLAIN = {
     "cast/reference-density": "DELIBERATELY ABSENT. Nothing here rewards more cast, more "
                               "franchises or more references. A checker that scores allusions "
                               "produces pages that sprinkle them.",
-    "book/no-lineage": "Tommy trips this, and so do four other excellent pages. The best pages "
-                       "on this site are self-contained. It names the amnesia; book/orphan-page "
-                       "does the enforcing.",
+    "book/no-lineage": "After the 2026-07 sweep, ONLY Tommy trips this — his page is a "
+                       "self-contained first-person monologue with no outbound links, and that "
+                       "is correct and permanent. index-genre portals are exempt (they ARE the "
+                       "lineage hub, linking out via <Card> components, which now count). It "
+                       "names the amnesia; book/orphan-page does the enforcing.",
     "budget/chapter": "1600 words standard, 2000 hard ceiling — about seven minutes, which is a "
                       "chapter you finish in one sitting. This REPLACES the 1200-word Five-Minute "
                       "Rule, for a measured reason: the site's best pages already sit at 1155 "
@@ -496,7 +504,21 @@ def check_page(path: pathlib.Path, rep: Report, sidebar_slugs: set, inbound: Cou
     if genre != "index" and rel != "404.mdx":
         if slug not in sidebar_slugs and inbound.get(slug, 0) == 0:
             err("book/orphan-page", "unreachable: no sidebar entry and no inbound link")
-    if not LINK_RE.search(re.sub(IMG_RE.pattern, "", body_text)):
+    # Portal/landing pages (genre "index") ARE the lineage hub — they link out
+    # via <Card>/<LinkCard> components, not markdown links, so exempt them the
+    # same way orphan-page and budget already do. Also count component links
+    # (href=/link=) so any page that links via a Starlight component counts as
+    # having lineage.
+    has_md_link = LINK_RE.search(re.sub(IMG_RE.pattern, "", body_text))
+    # A component link counts as lineage only if it points at an internal DOC
+    # route — not an image/asset download. Mirror the markdown-link exclusions
+    # (see load_inbound): skip http(s), and skip asset extensions (.heic/.png/…).
+    comp_targets = re.findall(r'(?:href|link)\s*=\s*["\'](/[^"\']*)["\']', body_text)
+    has_component_link = any(
+        not re.search(r"\.(heic|png|jpe?g|svg|webp|gif|pdf|mp4|mov|zip)$", t, re.I)
+        for t in comp_targets
+    )
+    if genre != "index" and not has_md_link and not has_component_link:
         warn("book/no-lineage", "no internal links — the page has no lineage")
 
     # ---- budget — see EXPLAIN["budget/chapter"] for why 1600, not 1200
