@@ -13,13 +13,13 @@ It didn't. Not once, across a long day of looking. Every time proxyd looked guil
 
 ## The cascade that looked like a crash
 
-The 502 wasn't one failure. It was four, stacked, each for a different reason and all in the same instant. The local Claude-Max bridge was wedged. Grok's credits were spent. glm-52 — the one metered cloud rung in the fallback chain — was walled off by a daily USD cap that had silently stuck. And the local cathedral 413'd on the enormous contexts being thrown at it. Every seat was genuinely down. The proxy walked the whole ladder, found no rung that would hold, and reported exactly that. It wasn't describing a broken router. It was describing a broken world upstream, faithfully.
+The 502 wasn't one failure. It was four, stacked, each for a different reason and all in the same instant. The local Claude-Max bridge was wedged. Grok's credits were spent. glm-52 — the one metered cloud rung in the [fallback chain](/architecture/fallback-continuity/) — was walled off by a daily USD cap that had silently stuck. And the local cathedral 413'd on the enormous contexts being thrown at it. Every seat was genuinely down. The proxy walked the whole ladder, found no rung that would hold, and reported exactly that. It wasn't describing a broken router. It was describing a broken world upstream, faithfully.
 
 ## Two bugs the panic was hiding
 
 Under the cascade sat two real defects, and they were worth the outage to find.
 
-The first was money. Claude on the Max subscription is a flat fee — you pay once, the tokens are free. But the code metered it anyway, charging $15/$75 per million once daily Anthropic tokens crossed a 500k gate. "Free" traffic was quietly billed and jammed the shared USD cap. We made Claude unconditionally $0 in `budget_policy.rs` and dropped the gate; only genuinely-metered glm-52 counts against the ceiling now.
+The first was money. Claude on the Max subscription is a flat fee — you pay once, the tokens are free. But the code metered it anyway, charging $15/$75 per million once daily Anthropic tokens crossed a 500k gate. "Free" traffic was quietly billed and jammed the shared USD cap. We made Claude unconditionally $0 in `budget_policy.rs` and dropped the gate; only genuinely-metered glm-52 counts against the ceiling now. The [budget policy](/architecture/proxyd-budget/) is the ledger that decides which rung costs real dollars — and it was billing the one rung that never does.
 
 The second was that the ceiling, once tripped, never came back down. The daily USD counter didn't reset when the agent went idle — it stayed stuck for days, a closed valve nobody was turning. A timer-driven rollover fixed it.
 
@@ -39,7 +39,7 @@ The re-audit's own recommended auth fix — change a heartbeat's `target: "last"
 
 ## The router that was blamed for being slow
 
-"The proxy seems slow." We stopped guessing and measured: proxyd's own overhead is about 2 milliseconds. The latency was never the router. It was the model generating tokens, and a tail of requests spilling onto a swap-thrashed local 35B. A committed benchmark now guards that floor, so "fast" is a measured claim instead of a feeling.
+"The proxy seems slow." We stopped guessing and measured: [proxyd](/architecture/proxy/)'s own overhead is about 2 milliseconds. The latency was never the router. It was the model generating tokens, and a tail of requests spilling onto a swap-thrashed local 35B. A committed benchmark now guards that floor, so "fast" is a measured claim instead of a feeling.
 
 ## The heartbeat that ate the cathedral
 
@@ -53,4 +53,6 @@ The source fix is correct, and the source fix is fragile: it lives in VM config,
 
 ## What a router is for
 
-Six times the proxy looked guilty — the 502, the money, the slowness, the dark cathedral — and six times it was the messenger, reporting honestly on a world that really was, in that moment, on fire upstream. A router's whole job is to tell the truth about the country it routes into. This one did. Believe the router; go find the fire it is pointing at.
+Six times the proxy looked guilty — the 502, the money, the slowness, the dark cathedral — and six times it was the messenger, reporting honestly on a world that really was, in that moment, on fire upstream. A router's whole job is to tell the truth about the country it routes into. This one did.
+
+In the hero sketch, Tommy the Abyssinian sits on the console with his back to the router's calm dial, watching the distant doorways burn. He has the right idea. The switchboard was never worth staring at. Believe the router; go find the fire it is pointing at.

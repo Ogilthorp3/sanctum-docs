@@ -1,15 +1,17 @@
 ---
 title: MBP Reboot Runbook
-description: What to check on the MacBook Pro after a reboot to confirm the shadow, off-box watchers, and dev state all came back clean.
+description: The five-minute sanity check for the MacBook Pro after a reboot — confirm the shadow, the off-box watchers, and the trust topology all came back the way they were supposed to.
 ---
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-The MacBook Pro runs the Sanctum shadow — the MBP's `sanctum-mlx` on `:8902` (plain + bearer) and `:8903` (mTLS) serves as the high-availability fallback when the Mac Mini's `:1337/:1338` goes dark. It also runs two off-box watchers that probe the Mini over Tailscale, because if the Mini panics nothing Mini-local can tell anyone.
+The MacBook Pro just came back up. Somewhere in the last ninety seconds, four launch agents woke on their own, a Rust server claimed two ports, and two watchers started poking the Mac Mini across Tailscale to confirm it was still breathing. You did none of it. That is the whole point.
 
-![A technical pencil sketch of a sentinel monitor system on a dark workstation, twin listener arrays pulsing with teal authentication glow, paper schematics pinned overhead showing reboot-recovery choreography, clean hand-drawn lines, no text.](./images/hero-mbp-reboot.png)
+![A technical pencil sketch of a sentinel workstation waking from reboot, twin listener arrays pulsing with teal authentication glow, paper schematics pinned overhead charting the recovery choreography, clean hand-drawn lines, no text.](./images/hero-mbp-reboot.png)
 
-None of this requires a human after a reboot — every agent is `RunAtLoad=true` or `StartInterval`-scheduled. This page is the five-minute sanity check you run if you want to confirm the environment actually came back the way it was supposed to.
+The MBP runs the Sanctum shadow. Its `sanctum-mlx` binds `:8902` (plain + bearer) and `:8903` (mTLS), and it stands as the high-availability fallback for when the Mini's `:1337/:1338` goes dark. It also carries two off-box watchers that probe the Mini over Tailscale — because if the Mini panics, nothing Mini-local is left alive to tell anyone. This is Qui-Gon's kind of paranoia, wired into [the council's resilience doctrine](/architecture/resilience-doctrine/): the watcher must never share a fate with the thing it watches.
+
+None of it needs a human after a reboot. Every agent is `RunAtLoad=true` or `StartInterval`-scheduled, and the plists on disk are the only source of truth. So the checklist below is not a recovery procedure — it is a five-minute question: did the machine come back exactly as it left?
 
 ## What starts on login, automatically
 
@@ -20,9 +22,11 @@ None of this requires a human after a reboot — every agent is `RunAtLoad=true`
 | `com.sanctum.council-drift-offbox` | 1 h `StartInterval` | Runs `deploy-sanctum-mlx.sh verify` against the Mini |
 | `com.sanctum.agent-markdown-sync` | `RunAtLoad=true` | Syncs agent docs between repos |
 
-The shadow plist carries `LimitLoadToSessionType = Aqua`, so it waits for the user session before binding Metal. Expect 60–70 seconds from login to the first successful probe — the 27 billion parameters still need to load.
+The shadow plist carries `LimitLoadToSessionType = Aqua`, so it waits for the user session before binding Metal. Expect 60–70 seconds from login to the first successful probe. The 27 billion parameters still need to load, and Metal does not hurry.
 
 ## Five-minute sanity check
+
+Five checks, in order. Each one confirms a layer above the last — agents, then listeners, then the mTLS handshake, then the two watchers that live off the box.
 
 <Steps>
 
@@ -73,6 +77,8 @@ The shadow plist carries `LimitLoadToSessionType = Aqua`, so it waits for the us
 
 ## If something didn't come back
 
+Rare, but it happens. A session dies dirty, a plist gets disabled by hand, Tailscale sulks. Here is how we put each piece back.
+
 <Aside type="note">
 All recovery paths are idempotent. Running them twice does nothing bad.
 </Aside>
@@ -108,11 +114,11 @@ Either the Mini is unreachable over Tailscale (the common case — check `tailsc
 ~/.sanctum/certs/clients/<probe-name>.key
 ```
 
-If the files are gone, the probes all fall back to bearer over `:1337` with no code change — the token at `~/.sanctum/secrets/council-mlx.token` is the failsafe. If the files are present and TLS still fails, the certs expired (check with `openssl x509 -in <file> -noout -dates`) — see the cert-rotation roadmap item.
+If the files are gone, the probes all fall back to bearer over `:1337` with no code change — the token at `~/.sanctum/secrets/council-mlx.token` is the failsafe. If the files are present and TLS still fails, the certs expired (check with `openssl x509 -in <file> -noout -dates`) — see the [mTLS migration](/operations/mtls-migration/) for the cert-rotation path.
 
 ## What's in /tmp
 
-Nothing important. Every test script I've run today wrote to `/tmp/sanctum-mtls-test/` and was cleaned up before this page was written. A reboot clears `/tmp` anyway; if you see anything sanctum-related in there after a reboot, file a bug against the script that put it there.
+Nothing important. The mTLS test scripts write to `/tmp/sanctum-mtls-test/`, and they clean up after themselves. A reboot clears `/tmp` anyway. If you spot anything sanctum-related in there after a reboot, file a bug against the script that put it there — the directory is supposed to be empty.
 
 ## What survives the reboot
 
@@ -125,4 +131,6 @@ Nothing important. Every test script I've run today wrote to `/tmp/sanctum-mtls-
 
 ## One thing the reboot can't fix
 
-(Resolved 2026-05-03.) The Mini's `:1337` was, for a stretch, served by a non-canonical `sanctum-mlx` invocation without TLS args. The signed `com.sanctum.mlx` LaunchAgent is now the only thing binding `:1337`, mTLS-only, with the signed manifest gate in place. The MBP shadow on `:8903` is symmetric (signed, notarized, mTLS) and is wired into `sanctum-server`'s `council-secure` fallback chain. Reboots no longer change the trust topology — the plist on disk is the only source.
+For a stretch, the Mini's `:1337` was served by a non-canonical [`sanctum-mlx`](/architecture/sanctum-mlx/) invocation without TLS args — a quiet hole in the trust topology that no reboot would ever close, because rebooting only re-ran the wrong thing faithfully. That was resolved 2026-05-03. The signed `com.sanctum.mlx` LaunchAgent is now the only thing binding `:1337`, mTLS-only, with the signed manifest gate in place. The MBP shadow on `:8903` is symmetric — signed, notarized, mTLS — and wired into `sanctum-server`'s `council-secure` fallback chain.
+
+That is the reassuring part. A reboot can only bring back what the plists describe, so the plists had to become the whole truth. Get that right once and the machine can wake up alone at 3 a.m., rebuild itself from disk, and never phone you. The best runbook is the one you never have to open.
