@@ -7,11 +7,11 @@ import { Aside, Steps } from '@astrojs/starlight/components';
 
 ![Two thrones under one cathedral vault — a lit MoE brain and a dozing DENSE brain, a single padlock shared between them, a signpost that routes requests by name, and Tommy supervising from the altar rail.](./images/hero-2026-07-06-the-cathedral-holds-two-minds.png)
 
-The Cathedral has spent its life serving one model at a time. It doubled its *seats* once (Devstral, Cilghal-Heretic, and a main), but those were separate processes on separate ports — three tenants, three leases. This is different: **one process, one port, two full models**, and a request chooses which mind answers it by name. It is the kind of thing that sounds reckless right up until the moment you realise the machinery was already 90% there, waiting, with a `#[allow(dead_code)]` on it.
+The [Cathedral](/architecture/sanctum-mlx/) has spent its life serving one model at a time. It [doubled its *seats* once](/operations/2026-05-14-the-cathedral-doubled-itself/) (Devstral, Cilghal-Heretic, and a main), but those were separate processes on separate ports — three tenants, three leases. This is different: **one process, one port, two full models**, and a request chooses which mind answers it by name. It is the kind of thing that sounds reckless right up until the moment you realise the machinery was already 90% there, waiting, with a `#[allow(dead_code)]` on it.
 
 ## Why two minds
 
-We benchmarked the dense 27B against the 35B-A3B MoE champion on the honest 109-case eval and, after a properly rubric-grounded pairwise re-judging, they came out **statistically tied** — 14 wins each, 0.714 vs 0.705 overall. The MoE is 3.7× faster (45 vs 12 tok/s on the Mini). The dense model is easier to fine-tune and edges the leakage-resistant heldout tier. When two models are peers on quality but differ on speed and temperament, picking one is leaving value on the table. So we stopped picking. Route the workhorse traffic to the fast MoE, route the hard calls to the deep dense reasoner, and let the request decide.
+We benchmarked the dense 27B against the 35B-A3B MoE champion on the honest [109-case eval](/architecture/eval-harness/) and, after a properly rubric-grounded pairwise re-judging, they came out **statistically tied** — 14 wins each, 0.714 vs 0.705 overall. The MoE is 3.7× faster (45 vs 12 tok/s on the Mini). The dense model is easier to fine-tune and edges the leakage-resistant heldout tier. When two models are peers on quality but differ on speed and temperament, picking one is leaving value on the table. So we stopped picking. Route the workhorse traffic to the fast MoE, route the hard calls to the deep dense reasoner, and let the request decide.
 
 ## How it works
 
@@ -35,7 +35,9 @@ Two large models executing GPU ops together under **default** MLX allocation get
 
 Merged to `main` as a **dark land**: ten commits, every task spec-and-quality reviewed plus a whole-branch pass that caught two bugs the per-task reviews couldn't see. Single-model deploys are unaffected. The dual configuration lives in a **staged plist that is never bootstrapped** — it does not run until someone measures the memory ceiling on the actual Mini during a soak and decides, deliberately, to cut over.
 
-That is the whole point of a dark land: the code is in the building, the lights are off, and turning them on is a separate, sober decision. The Cathedral now *can* hold two minds. Whether it *will*, on the 64 GB machine that also runs a coder model and a VM, is a number the soak is currently measuring — one probe every ten minutes, for a day.
+That is the whole point of a dark land: the code is in the building, the lights are off, and turning them on is a separate, sober decision. The Cathedral now *can* hold two minds. Whether it *will*, on the 64 GB machine that also runs a coder model and a VM, is [a number the soak is currently measuring](/architecture/capacity-doctrine/) — one probe every ten minutes, for a day.
+
+Tommy watches the soak from the altar rail, unimpressed, as he watches everything. Fifteen years of dawn patrols taught him that a haus does not need more minds; it needs the one it has to stay warm. On that, at least, the architecture agrees with the cat: whatever the ceiling turns out to be, the primary never cools.
 
 <Aside type="note">
 Rollback is one line: drop `--model-secondary` from the args, `bootout`/`bootstrap`, and the Cathedral forgets it ever had a second mind. It kept the first one warm the entire time.

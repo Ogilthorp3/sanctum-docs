@@ -7,11 +7,11 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Pencil sketch on dark void of a single sharp blade resting across the page, severing two tangled threads — one frayed colima rope, one memory-vault loop closing on itself — atmospheric, anatomical](./images/hero-2026-04-27-the-vajrayogini-cut.jpg)
 
-Two carryover issues from the 2026-04-26 trilogy redux were still bleeding when this session opened. By the end of it, both were closed at the root, not papered over.
+Vajrayogini carries a curved knife. It is not drawn for enemies. The iconography turns it inward — to sever the two threads of your own delusion in one motion, so cleanly that neither grows back. Two threads were still bleeding when this session opened, both named the night before in the [2026-04-26 trilogy redux](/operations/2026-04-26-valve-trilogy-redux/) and both left un-cut. We had described them well and fixed neither. By the end of the night both were closed at the root, not papered over.
 
 ## Issue one: Colima 0.10.1 → OrbStack
 
-The redux's sweep had named the symptom: `colima ssh` reports a healthy Docker daemon and healthy containers, but the host couldn't reach `127.0.0.1:8123` or `127.0.0.1:3100` because Lima's host-side TCP forwarding died within minutes. The smoking gun in `~/.colima/_lima/colima/ha.stderr.log` was `failed to set up forwarding tcp port 8123: exit status 255` — the SSH `ControlMaster` connection backing Lima's port forwards was dropping, and `colima restart` only bought ~3 minutes of uptime before the master died again. `0.10.1` is the latest Homebrew stable; no upgrade available.
+The symptom was already on record. `colima ssh` reports a healthy Docker daemon and healthy containers, yet the host couldn't reach `127.0.0.1:8123` or `127.0.0.1:3100`, because Lima's host-side TCP forwarding died within minutes. The smoking gun in `~/.colima/_lima/colima/ha.stderr.log` was `failed to set up forwarding tcp port 8123: exit status 255` — the SSH `ControlMaster` connection backing Lima's port forwards was dropping, and `colima restart` only bought ~3 minutes of uptime before the master died again. `0.10.1` is the latest Homebrew stable; there is no upgrade to reach for.
 
 Three options had been on the table:
 
@@ -19,7 +19,7 @@ Three options had been on the table:
 2. Bind containers to the bridged vmnet interface
 3. Add a watchdog action that detects the symptom and runs `colima restart`
 
-A watchdog daemon that restarts a broken thing every few minutes is exactly the kind of workaround Steve Jobs would reject. Replace the broken thing.
+A daemon that restarts a broken thing every few minutes is not a fix — it is a confession you decided to put on a schedule. Steve Jobs would reject it on sight. So we picked option one. Replace the broken thing.
 
 ### What changed
 
@@ -27,7 +27,7 @@ A watchdog daemon that restarts a broken thing every few minutes is exactly the 
 brew install --cask orbstack
 ```
 
-OrbStack is the Apple-platform-native Docker replacement built by ex-Docker-Mac engineers. Native virtualization, native networking, no SSH-forwarded ports.
+OrbStack is the Apple-platform-native Docker replacement built by ex-Docker-Mac engineers. Native virtualization, native networking, no SSH-forwarded ports — which is to say, nothing left in the path that was breaking.
 
 **Migration steps:**
 
@@ -44,9 +44,9 @@ The signal-cli stack that was retired in the yoda-chat consolidation (2026-04-26
 
 ## Issue two: phase-4 valve — shed-effectiveness gating
 
-The memory-vault re-shed loop was the same shape as the SIGSTOP redux, one layer up. The valve sheds memory-vault on every ORANGE tick. `launchd` respawns it. Swap stays at 26 GB. The valve hits ORANGE again on the next cooldown, sheds again. 3 sheds in 12 minutes that day, 10 across the prior four days. The shed succeeded every time; it just wasn't doing anything.
+The [memory-vault re-shed loop](/operations/pressure-valve/) was the SIGSTOP redux one layer up, and it wore the same tell. The valve sheds memory-vault on every ORANGE tick. `launchd` respawns it. Swap stays at 26 GB. The valve hits ORANGE again on the next cooldown, sheds again. 3 sheds in 12 minutes that day, 10 across the prior four days. The shed succeeded every time. Not one of them did anything.
 
-The principle (vajrayogini): a remediation should be observable in the signal it tries to relieve. If the last N applications didn't move the metric, escalate or stop.
+That is the exact delusion vajrayogini cuts: a remediation you cannot observe in the signal it claims to relieve. If the last N applications didn't move the metric, escalate or stop — don't keep swinging at the same knot and calling the swing a fix.
 
 ### What ships
 
@@ -69,7 +69,7 @@ The smallest TIER_2 service on this Mini is `memory-vault` at ~50 MB resident. A
 
 ## What's whole now
 
-Per the doctrine — "closed-loop, honest, bounded, defense-in-depth, fix root cause in layers":
+Held against the [capacity doctrine](/architecture/capacity-doctrine/) — "closed-loop, honest, bounded, defense-in-depth, fix root cause in layers":
 
 - **HA + outline reachable from host** — closed-loop (OrbStack's native networking is the loop), no SSH ControlMaster fragility, no daemon to fight every 3 minutes.
 - **Family-facing services don't lie** — honest (OrbStack reports failures up; the watchdog reports them up).
@@ -81,6 +81,8 @@ Per the doctrine — "closed-loop, honest, bounded, defense-in-depth, fix root c
 - **Memory pressure root cause** is structural: 64 GB Mini at 26 GB swap with LM Studio coder-14b (8.4 GB), sanctum-mlx 35B (varies), Colima retired. Phase-4 closes the loop's noise, but doesn't invent more RAM. A future session may need to evict at the next tier (KillAllowed) or reduce the resident model footprint.
 - **Watchdog still references colima** in some places (catalog updated; legacy boot scripts and Living Force manifests cleaned in a follow-up). Documented as such; not blocking.
 - **OrbStack failure mode is unknown** — every tool fails differently. The first OrbStack flap will teach us its character; until then we're trusting it on reputation.
+
+Two threads, one cut. The blade doesn't pretend the room is clean now — Colima left a memory-pressure problem it was only ever hiding, and OrbStack is trusted on reputation until its first flap says otherwise. What changed is smaller and truer than that: nothing in the family's path to Home Assistant breaks every three minutes, and the valve can finally hear whether anyone is listening when it sheds. Pick, ship, document. The rest waits for a session that isn't tonight's.
 
 ## Related
 

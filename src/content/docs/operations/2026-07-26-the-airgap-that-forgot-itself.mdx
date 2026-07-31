@@ -5,7 +5,7 @@ description: A hypervisor migration silently restored the VM's internet. Nothing
 
 import { Aside, Steps } from '@astrojs/starlight/components';
 
-![A pencil-sketched stone wall with a small gate set into it. The gate hangs slightly ajar and a teal glow spills through the gap at its base; a brass bell wired down to the threshold is caught mid-ring, having just noticed. An Abyssinian cat sits in the foreground watching the gap.](./images/hero-the-airgap-that-forgot-itself.png)
+![A pencil-sketched stone wall with a small gate set into it. The gate hangs slightly ajar and a teal glow spills through the gap at its base; a brass bell wired down to the threshold is caught mid-ring, having just noticed. Tommy the Abyssinian sits in the foreground, keeping watch on the gap the way he keeps watch on everything.](./images/hero-the-airgap-that-forgot-itself.png)
 
 The OpenClaw VM has no internet. That was the design, it was written down, and a NAT window had been explicitly considered and rejected. On 26 July we discovered it had been reachable on the open internet for roughly eight days.
 
@@ -25,7 +25,7 @@ Every probe the doctrine cited as proof of the airgap came back inverted:
 
 The default route told the rest of the story: `via 192.168.5.2 dev eth0`, the signature of Lima's slirp gateway. `limactl list` confirmed a `vz` VM named `sanctum-vm`, and there were no UTM bundles left on the machine at all.
 
-This is the regression doctrine doing its job. When something that worked stops working — or in this case, when something that was *true* stops being true — the answer is in what changed, not in the physics. The break was in the diff: a hypervisor swap.
+This is the [regression doctrine](/operations/2026-07-03-verify-before-you-fortify/) doing its job. When something that worked stops working — or in this case, when something that was *true* stops being true — the answer is in what changed, not in the physics. The break was in the diff: a hypervisor swap.
 
 ## Cutting it back, without cutting the agents
 
@@ -81,13 +81,13 @@ While brokering the one real internet dependency, proxyd was asked for an image 
 
 That is worse than an outage. An outage reports itself; a plausible, well-formed, false artifact does not. The seat was reverted rather than shipped.
 
-The ruling that followed: seats should declare a capability, fallback should only traverse the same capability class, and a cross-class request should fail closed with an error that cannot be mistaken for a result. That work belongs in proxyd's fallback path, which was under active surgery by another session at the time — so it was handed over rather than duplicated. Two sessions editing one fallback loop is its own kind of incident.
+The ruling that followed: seats should declare a capability, fallback should only traverse the same capability class, and a cross-class request should fail closed with an error that cannot be mistaken for a result. That work belongs in [proxyd's fallback path](/architecture/fallback-continuity/), which was under active surgery by another session at the time — so it was handed over rather than duplicated. Two sessions editing one fallback loop is its own kind of incident.
 
 ## Credentials, while we were in there
 
 The dead provider held a plaintext API key. Windu's instruction was to revoke rather than rotate — *"inert behind the airgap is not dead; it is one hypervisor migration away from live."* The key and the reopened airgap were the same incident.
 
-The sweep that followed found **ten more** plaintext credentials: five Google keys sitting in per-agent `models.json`, and five Anthropic keys in stale `.bak` files left behind by a database import. All eleven are now purged or quarantined, and the live config surface greps clean.
+The sweep that followed found **ten more** plaintext credentials: five Google keys sitting in per-agent `models.json`, and five Anthropic keys in stale `.bak` files left behind by a database import. All eleven are now purged or quarantined, and the live config surface greps clean. A live key's only correct home is the [secrets trifecta](/architecture/secrets-trifecta/); not one of these eleven had ever been near it.
 
 One found by accident implies others nobody has looked for. That turned out to be exactly right.
 
@@ -95,4 +95,6 @@ One found by accident implies others nobody has looked for. That turned out to b
 
 Nothing, in the end. The VM lost no capability it was actually using, the agents never noticed, and the boundary went from an assumption to a control that files a complaint when it's violated.
 
-The uncomfortable part is the eight days. Not that the airgap broke — platforms change, that's their job — but that a security property everyone believed in had no one checking it. The fix isn't the firewall rule. The fix is the thing that fails loudly on a Tuesday when Lima ships a new default.
+The uncomfortable part is the eight days. Not that the airgap broke — platforms change, that's their job — but that a security property everyone believed in had no one checking it. Tommy the Abyssinian has patrolled these grounds at dawn and at dusk for fifteen years, unasked, never missing a day. The airgap had no such habit. For eight days it guarded nothing and told no one.
+
+The fix isn't the firewall rule. The fix is the thing that fails loudly on a Tuesday when Lima ships a new default — a boundary that keeps watch even when nobody's watching the boundary.
