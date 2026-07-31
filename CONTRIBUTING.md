@@ -422,6 +422,22 @@ A checker change that fails the gold standard is a broken check, not a strict
 one. The full Astro build remains the final word on MDX validity — run it
 before you push.
 
+### Bolted cameos
+
+`echo-audit.py` measures one thing `story-check` cannot: a landing that names a
+character who appears **nowhere else on the page**. That is a stage exit for an
+actor who was never in the scene, and it is what you get when a cast warning is
+cleared the cheapest way available. The 2026-07 sweep produced 54 of them.
+
+Fix it in one of two directions — never a third:
+
+- give the character a real beat earlier in the body, so the closing callback
+  lands on something, or
+- close on the page's own subject and leave the cast out entirely.
+
+A page is allowed to have no cast in its landing. A page is not allowed to
+borrow one for a sentence.
+
 ## The Cast Constitution
 
 The cast is counted four different ways, all of them legitimate, which is

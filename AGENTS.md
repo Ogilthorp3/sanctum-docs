@@ -71,6 +71,14 @@ in CI. None of them are suggestions.
    both are over budget corpus-wide. Reach for the page's OWN imagery: open
    inside its subject, land on a callback to its opening.
 
+   **The bolted-cameo trap.** `cast/alt-text-cameo` fires when a character is
+   named only in your alt text, and the cheapest way to clear it is to bolt a
+   Tommy sentence onto the last line. Do not do that. The 2026-07 sweep did it
+   54 times and the audit now measures it directly (`BOLTED cameo`): a landing
+   that names someone who appears nowhere else on the page is a stage exit for
+   an actor who was never in the scene. Either give the character a real beat
+   in the body, or land on the page's own subject and leave the cast out.
+
 ## Before you commit
 
 Run BOTH checkers on what you changed, then build:

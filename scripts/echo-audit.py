@@ -34,7 +34,15 @@ OPENING_DEVICES = {
         r"\b\d{1,2}[:h]\d{2}\b|\b\d{1,2}\s?(AM|A\.M\.)\b")),
 }
 LANDING_CAST_BUDGET = 0.10          # any single character closing >10% of the book
-TIC_BUDGET = 12                     # any pet phrase appearing more than this
+# A BOLTED cameo is the precise defect: a landing that names a character who
+# appears nowhere else on the page. The 2026-07 sweep created 54 of them by
+# satisfying cast/alt-text-cameo the cheapest way available — one closing line.
+# An earned cameo (the character is present earlier) is fine at any volume.
+BOLTED_BUDGET = 0.05
+# Tic budget is per 100 pages, not absolute. An absolute 12 was miscalibrated
+# for a 300-page book: a phrase used once on 26 different pages is house voice,
+# not a tic — a reader meets it every tenth page. A tic is felt when it clusters.
+TIC_PER_100 = 5.0
 TICS = [
     "on purpose.",
     "the whole point",
@@ -64,19 +72,25 @@ def main():
 
     open_hits = {k: [] for k in OPENING_DEVICES}
     land_hits = Counter()
+    bolted_hits = Counter()
+    bolted_pages = []
     tic_hits = Counter()
 
     for p in pages:
         b = body_of(p)
         rel = os.path.relpath(p, DOCS)
         first = b[:400]
-        last = b[-500:].lower()
+        last, rest = b[-500:].lower(), b[:-500].lower()
         for name, (_, rx) in OPENING_DEVICES.items():
             if rx.search(first):
                 open_hits[name].append(rel)
         for who in LANDING_CAST:
-            if re.search(r"\b" + re.escape(who) + r"\b", last):
+            rx = re.compile(r"\b" + re.escape(who) + r"\b")
+            if rx.search(last):
                 land_hits[who] += 1
+                if not rx.search(rest):
+                    bolted_hits[who] += 1
+                    bolted_pages.append((who, rel))
         low = b.lower()
         for t in TICS:
             tic_hits[t] += low.count(t.lower())
@@ -95,10 +109,22 @@ def main():
         if pct > LANDING_CAST_BUDGET:
             over += 1
             print(f"note:   landing on «{who}»: {got}/{n} ({pct:.0%}) — budget {LANDING_CAST_BUDGET:.0%} [OVER]")
-    for t, got in tic_hits.most_common():
-        if got > TIC_BUDGET:
+    for who, got in bolted_hits.most_common():
+        pct = got / n
+        flag = "OVER" if pct > BOLTED_BUDGET else "ok"
+        if pct > BOLTED_BUDGET:
             over += 1
-            print(f"note:   tic «{t}»: {got}× — budget {TIC_BUDGET} [OVER]")
+        print(f"note:   BOLTED cameo «{who}» (named only in the closing beat): "
+              f"{got}/{n} ({pct:.0%}) — budget {BOLTED_BUDGET:.0%} [{flag}]")
+        if flag == "OVER":
+            for w, rel in [x for x in bolted_pages if x[0] == who][:8]:
+                print(f"note:       {rel}")
+    for t, got in tic_hits.most_common():
+        per100 = got * 100.0 / n
+        if per100 > TIC_PER_100:
+            over += 1
+            print(f"note:   tic «{t}»: {got}× = {per100:.1f} per 100 pages — "
+                  f"budget {TIC_PER_100} [OVER]")
     if over:
         print(f"note: {over} echo(es) over budget — vary the device on the next pages "
               f"you touch, or schedule a de-tic pass. A beat repeated this often "
