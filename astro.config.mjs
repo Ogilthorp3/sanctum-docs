@@ -266,6 +266,7 @@ export default defineConfig({
 						{ label: 'Drift Sentinel', slug: 'operations/drift-sentinel' },
 						{ label: 'Beta Readiness', slug: 'operations/beta-readiness' },
 						{ label: 'Operational History', slug: 'operations/operational-history' },
+						{ label: 'Living Force — Case Files & Field Notes', slug: 'operations/living-force-annex' },
 						{ label: 'Stability Window', slug: 'operations/stability-window' },
 						{ label: 'Yoda Warmth', slug: 'operations/yoda-warmth' },
 						{ label: 'Roadmap', slug: 'operations/roadmap' },
