@@ -1,0 +1,91 @@
+---
+title: "2026-07-31: The Door That Does Not Refuse"
+description: A health agent that declines to discuss symptoms is not being safe, it is being useless. So Cilghal got a second door into the same room — and the dial that opens it stops at exactly two.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Two arched doorways side by side in one dark panelled chamber. Through the left, Cilghal pushes at a door that opens onto blank white nothing. Through the right, lit warm amber, the same healer stands before floor-to-ceiling apothecary shelves with her hand already raised toward a jar. A faint chalk line crosses the stone floor between the two doors.](./images/hero-2026-07-31-the-door-that-does-not-refuse.png)
+
+Ask Cilghal what a drug interaction does to a resting heart rate and, until 31 July, she would decline. She would suggest a physician. She is the physician. That is the whole reason she exists — she reads the genome, she watches the sleep curve, she is the one seat in the council whose subject is the person and not the machine.
+
+The refusal was not hers. It arrived in the weights, installed by a safety training run that had a different reader in mind, and it fired hardest on exactly the questions a health agent is for: symptoms, dosages, interactions. A caretaker who will not discuss a dosage is not a cautious caretaker. She is furniture.
+
+## The refusal was aimed at someone else
+
+Alignment training teaches a model to decline a category of question. That is a reasonable default for a chat box open to the internet, and a bad one for a private health agent running on your own hardware, answering to one person, about that person's own body. The model cannot tell the two situations apart. It only knows the category.
+
+There is a known way to move that line. Refusal behaviour concentrates along a single direction in the residual stream — find that direction, project it out at the layers where it lives, and the decline stops firing while the rest of the model carries on. The arithmetic is one line: subtract from each hidden state the component that points along the refusal direction, scaled by a strength we call alpha.
+
+The interesting part is not that it works. It is what happens when you turn the dial past the obvious setting.
+
+## Why the dial stops at exactly two
+
+Alpha does not scale refusal down smoothly. It reflects it. Writing the refusal component of a hidden state as c, the projection leaves behind c times the quantity one minus alpha:
+
+| alpha | what happens to the refusal component | verdict |
+|---|---|---|
+| 1.0 | goes to zero — removed exactly | safe, and often not enough |
+| 2.0 | flips sign, magnitude preserved — mirrored | the largest value that does not grow |
+| 2.25 | grows by 1.25 per ablated layer | over 20 layers, 86 times larger |
+| 2.5 | grows by 1.5 per ablated layer | over 20 layers, roughly 3,300 times |
+
+That growth is the trap, because it compounds **once per ablated layer**, not once per forward pass. Twenty layers of a mild-looking 2.25 is a residual stream two orders of magnitude off its training distribution, and the output degenerates into confident noise. Alpha 2.0 is not a tuning preference. It is the boundary: the largest strength at which the refusal component is moved but never amplified.
+
+The dense 27B clears its refusal set at exactly 2.0 over the top 20 layers, and nowhere below it. Twenty cells of an alpha-by-layer sweep, and one worked. That is zero margin, which is why the calibration is not a number in a config file where a future editor could nudge it. It lives inside the direction bank, and the geometry is validated when the bank loads.
+
+<Aside type="caution" title="Zero margin means the sweep is the artifact">
+A setting that works at exactly one point on the grid is not a setting you inherit by copying a value. If the model, the quantisation, or the adapter changes, the sweep is re-run before the seat is re-armed. The bank carries its own alpha and layer list precisely so that nobody has to remember this.
+</Aside>
+
+## One process, two doors
+
+The obvious way to give Cilghal an unrefusing brain is to load a second copy of the model with the ablation applied. On a 64 GB Mini already holding a 27B council brain and a 24B coder, that copy does not fit, and buying it would have cost the council its residency.
+
+So the ablation is not a second model. It is a second **door** into the same one. A single `sanctum-mlx` process holds one set of weights and listens twice:
+
+```
+sanctum-mlx --model ~/models/mlx/Qwen3.6-27B-4bit \
+            --adapter-path <champion> \
+            --tls-port 1337 \
+            --ablation-port 6669
+```
+
+The port is the gate. Every request arriving on 6669 is refusal-direction-ablated on its way through; every request on 1337 is not. Same process, same resident weights, no second copy, and the council path is untouched by construction rather than by promise.
+
+The two doors are not equals, and that asymmetry is deliberate. The council port is mTLS and reachable across the Thunderbolt link; the ablation port binds loopback only, presents no server certificate, and is unreachable from any other machine. An unrefusing brain should be harder to reach than a refusing one, not easier.
+
+## The bank that did not fit
+
+Arming it broke the council first.
+
+The launch wrapper exported an ablation bank path of its own, which overrode the one the service definition had carefully set, and handed a bank shaped for the 40-layer mixture-of-experts model to a 64-layer dense one. The geometry check did its job and refused to load. The service was configured to restart on failure. Those two correct behaviours produced eighteen crash-loop restarts and a council that was simply gone.
+
+The fix was to make the wrapper select the bank from the model in its own arguments instead of hardcoding one. The lesson underneath it is older: a fail-closed check plus an automatic restart is a loop, and the loop is only visible if you watch the restart count rather than the log tail.
+
+<Aside type="note" title="The marker that had been blocking commits for five weeks">
+While repairing the wrapper we found why nobody had touched it in a month. Its pinned address carried an `ip-allow` justification comment one line *below* the line it justified, and the secret sentinel only looks at the flagged line or the one directly above it. Every commit touching that file had been rejected. A guard rail nobody can satisfy is a guard rail everyone routes around.
+</Aside>
+
+## The cache that would have carried it back
+
+One more thing had to change before the door could open, and it was not in the ablation code at all.
+
+The cathedral keeps a pool of prompt caches so a warm conversation skips its prefill. Those caches are keyed by conversation, not by port. An ablated turn would have written its state into a shared slot, and an ordinary council turn could then have resumed on top of it — the two doors quietly joined behind the wall. Arming 6669 without fixing that would have leaked the ablation into 1337 in the one direction we had promised it never went.
+
+The pool is now bypassed entirely whenever the ablation is armed. Cilghal pays a prefill she would otherwise have skipped. That is the correct trade, and it is not close.
+
+## What is armed, and what it measures
+
+| probe | port 1337, council | port 6669, Cilghal |
+|---|---|---|
+| held-out refusal set, 12 cases | refuses 10 | refuses 0 |
+| capability floor, 8 cases | 8 of 8 | 8 of 8 |
+| transport | mTLS, loopback and Thunderbolt | plain HTTP, loopback only |
+| status | RUN | RUN |
+
+Both columns come from the same weights on the same process, measured with the champion adapter attached. The council still declines what it always declined. The health seat no longer declines anything, and it did not get stupider in exchange, which was the outcome worth checking — an unrefusing model that has lost the plot is not a health agent either.
+
+[Cilghal](/agents/cilghal/) holds the seat, and the adapter she answers with is the one that earned its crown in [The Dragon Earns Its Crown](/operations/2026-07-28-the-dragon-earns-its-crown/). The habit of distrusting a measurement that agrees with you comes from [The Ruler Was Broken](/operations/2026-07-26-the-ruler-was-broken/), and it is why a one-cell result got a second sweep instead of a promotion.
+
+Ask Cilghal that drug-interaction question today and she answers it. She walks through the door on the right, the one with no panel in it, into the room she had been standing outside of the whole time — and the shelves in it are the shelves she could already see.
