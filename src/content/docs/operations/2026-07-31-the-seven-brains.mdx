@@ -1,0 +1,85 @@
+---
+title: "2026-07-31 — The Seven Brains"
+description: >-
+  Neurodiversity is paramount: every Jedi seat now rides a named proxyd brain
+  end-to-end — CLI brainstorm/council, OpenClaw agents, and Mini proxyd — with
+  Jocasta and Mon Mothma as first-class agents, Cilghal on the heretic, and
+  reboot durability via openclaw.json.enc.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The council is not five voices in one robe. It is seven brains that disagree on
+purpose. This note is the ship record for the 2026-07-31 alignment: one map,
+three layers, no reboot gap.
+
+## The map
+
+| Seat | Alias | Upstream (Mini live) |
+|---|---|---|
+| **Yoda** | `council-max-thinking` | Fable 5 · effort max · Max bridge `:3456` |
+| **Windu** | `council-spacial` | Gemini 3.1 Pro · `:6543` |
+| **Qui-Gon** | `council-code` | Devstral · cathedral `:3301` |
+| **Ki-Adi-Mundi** | `council-finance` | Grok 4.5 · OAuth `:4200` |
+| **Cilghal** | `council-heretic` | ablated 27B champion · `:6669` |
+| **Jocasta** | `council-brain` | Opus 5 · effort medium · `:3456` |
+| **Mon Mothma** | `council-brain` | Opus 5 · effort medium · `:3456` |
+
+Jocasta and Mothma share the Opus-medium brain on purpose (archives and ops are
+the same subscription tier). Everyone else is a different family. CLI
+`brainstorm` counts **families**, not robes — three Claude seats still count as
+one designed family with a redundant badge.
+
+## What was wrong
+
+- **CLI** (`sanctum brainstorm` / `sanctum council`) still had Mundi on
+  Yoda's Fable seat and Cilghal on plain cathedral Qwen. Brainstorm only
+  summoned five seats — no Jocasta, no Mothma.
+- **OpenClaw** had five agents; Signal could not reach Jocasta or Mothma.
+- **proxyd** had Devstral as `council-devstral` while `council-code` pointed
+  at Qwen — so "code" did not mean Devstral.
+- The biggest reboot trap: **`openclaw.json` is gitignored**. The SoT is
+  `openclaw.json.enc`. A plaintext edit survives only until the next gateway
+  start where the `.enc` is newer — then SOPS overwrites the roster from the
+  encrypted source. Without re-encrypt, a Mini reboot quietly undoes the agents.
+
+## What shipped
+
+| Layer | Change | Landed |
+|---|---|---|
+| `sanctum-cli` | 7-seat brainstorm + council models; tests updated | `7df48ef` on `origin/main` |
+| Mini proxyd | `council-code` → Devstral; `council-heretic` alias | `f28376c` on Mini `sanctum-config` |
+| OpenClaw | 7 agents; `council-tiered` model ids; re-encrypt | `a6b8b85` on `openclaw-config` (`.enc` + sample) |
+| Mini CLI venv | non-editable install of `7df48ef` into `cli-venv` | on-box |
+
+## Reboot permanence checklist
+
+1. **proxyd** loads `~/.sanctum/sanctum-proxy/config.yaml` from disk (tracked).
+2. **OpenClaw gateway** decrypts `openclaw.json.enc` → `openclaw.json` at start
+   (`scripts/sops-start.sh`). After re-encrypt, the seven-agent map is the
+   encrypted SoT — not a floating plaintext edit.
+3. **`sanctum` on Mini** imports from `cli-venv` site-packages (not a `/tmp`
+   worktree). Pulling a new CLI release still requires an explicit
+   `pip install` (or the house upgrade path) — that is intentional, not a
+   silent reboot rewrite.
+4. **Backends that must already be up:** Max bridge `:3456`, Gemini `:6543`,
+   Devstral `:3301`, Grok OAuth `:4200`, heretic `:6669`, cathedral `:1337`.
+   LaunchAgents for those services are independent of this roster ship.
+
+## Operator notes
+
+- Live CLI fan-out: `sanctum brainstorm "…"` (seven panels) and
+  `sanctum council "…"` (same seven + Yoda synthesis).
+- After any future OpenClaw edit:  
+  `cd ~/.openclaw && bash scripts/update-config.sh && git add openclaw.json.enc openclaw.json.sample && git commit && git push`.
+- Devstral cold-prefill after a `:3301` restart can take minutes; proxyd
+  `ttfb_timeout_secs: 300` on `council-code` is the intentional budget.
+
+## EETISMAD score for this ship
+
+| Gate | Status |
+|---|---|
+| **E2e Tested** | Proxyd smoke: max-thinking, spacial, heretic, brain green; finance returns; code needs long TTFB after cold start. CLI unit suite green on the roster commit. |
+| **In Sanctum-docs** | This field note. |
+| **Merged** | `sanctum-cli` + `openclaw-config` pushed; Mini proxyd commit on origin history. |
+| **Deployed** | Mini proxyd hot-reloaded config; OpenClaw re-encrypted; Mini `cli-venv` running `7df48ef` roster. Gateway restart will decrypt the new agents. |
