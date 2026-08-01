@@ -1,0 +1,83 @@
+---
+title: "2026-07-31: The Reboot That Stayed Up"
+description: "After a long day of boot-path scars — cathedral ablation crash-loops, force-flow bind storms, health-tunnel SSH spam, free-brain false criticals, Ark cutover leftovers, and kitchen lights that went super-bright on every Tuya reconnect — the permanent contract is: strip optional seats so core binds, suppress noise until boot-ready, and never call light.turn_on with color_temp alone."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A Mini reboot is the only honest test of the haus. Everything can look green in a warm process table and still fail the first cold load of a 27B model under swap. This note is the pre-reboot land of that work: what broke, what was permanent, and what still requires one deliberate cold boot to call **EETISMAD**.
+
+## The scars that came back every boot
+
+**Cathedral (`:1337`).** With `--ablation-port` set, a refusal-direction bank that failed to arm (wrong geometry for dense Qwen3.6-27B vs MoE `[40,2048]`) made sanctum-mlx **fail-closed with exit(1)** — and take the council seat down with it. launchd KeepAlive then crash-looped the load under multi‑tens of GiB of swap.
+
+**Force Flow (`:4077`).** KeepAlive thrash without a singleton left EADDRINUSE storms and a process that answered HTTP while launchd said "not running."
+
+**Health tunnel.** SSH to the Lima VM before `:22` was up → exit 255 spam.
+
+**Free-sub brains.** Single-probe Gemini flaps and pre-boot state edges looked like CRITICAL outages.
+
+**Ark cutover.** Backup canary still probed **T9** after primary restic moved to `/Volumes/Ark/sanctum-restic`.
+
+**Kitchen lights.** Green automation *Tuya Reconnect Color Guard* fired on `unavailable → on` and called `light.turn_on` with **only** `color_temp` — these Tuya bulbs snap to full brightness. Family comfort is not 3000K at bri 180; SmartLife truth is **bri 100, hs [29, 88.2], rgb [255, 139, 30]**.
+
+## Permanent fixes (on disk, live on the Mini)
+
+| Area | Fix |
+|------|-----|
+| `bin/sanctum-mlx-launch` | Geometry-validate ablation bank; **strip `--ablation-port`** if unarmed so `:1337` always binds |
+| `bin/force-flow-launch.sh` + failsafe | Singleton on `:4077`; heal only when `/health` is down (PPID=1 is normal under launchd) |
+| `bin/health-tunnel-launch.sh` | Wait for VM `:22`; exit 75 TEMPFAIL instead of 255 |
+| `bin/sanctum-boot-ready` | Default wait **900s**; `--check` revalidates live ports |
+| `scripts/free-sub-brain-sentinel.sh` | Streak gate + AGY auto-heal; chat transient → degraded not out |
+| Backup canary + scripts | Primary **Ark**; scripts under `~/.sanctum/scripts/`; plists rewired off `~/Backups/` |
+| `bin/ha-green-bridge.py` | Comfort on kitchen + corner RGB + corridor; pin Tuya color-guard OFF |
+| Albert summer curfew | Holiday **23:00** restored (exam-week 22:30 rolled back) |
+
+Runbooks: `runbooks/clean-reboot.md`, `runbooks/kitchen-comfort-lights.md`, package `ha-green/packages/kitchen_comfort.yaml`.
+
+<Aside type="tip" title="Optional seats must not kill required ones">
+Heretic ablation is optional. Council inference is not. If a secondary flag can `exit(1)` the process that owns `:1337`, the launcher must drop the flag before exec — not hope the bank is always perfect after every model swap.
+</Aside>
+
+## Comfort lights (verified with the family)
+
+Super-bright white was not "HA lying" — it was the wrong *mode*. Color-temp paths looked cold and harsh on these bulbs. The accepted default is the warm **hs/rgb** preset from SmartLife, applied on **off / unavailable → on** for:
+
+- `light.kitchen_1`…`_6`
+- `light.corner_rgb_1`…`_6` + group
+- `light.corridor_rgb_1`…`_4` + group
+
+## Pre-reboot EETISMAD legs
+
+| Leg | Status before cold boot |
+|-----|-------------------------|
+| **Deployed** | Live on Mini (bridge, launchers, devices.yaml, boot-ready env) |
+| **In docs** | This field note + runbooks |
+| **Merged** | Pathspec land to sanctum-config (+ related) |
+| **E2E tested** | Spot-tested warm; **cold-boot checklist still required** |
+
+## Cold-boot checklist (the missing E2E)
+
+After login, wait ~15–20 minutes for model load, then:
+
+```bash
+sanctum-boot-ready --check && echo READY
+# expect READY only if 4040/1337/4077 listen
+
+for p in 4040 1337 4077 3301; do
+  lsof -nP -iTCP:$p -sTCP:LISTEN >/dev/null && echo UP :$p || echo DOWN :$p
+done
+
+bash ~/.sanctum/scripts/pqc-status.sh | tail -8
+launchctl print gui/$(id -u)/com.sanctum.mlx 2>&1 | grep -E 'runs =|state ='
+df -h /Volumes/Ark /Volumes/ARK-GO
+curl -sf http://127.0.0.1:4077/screen/schedule?child=albert | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["schedules"]["albert"])'
+rg -n 'STRIP --ablation|ablation ARMED|FAIL-CLOSED' ~/.openclaw/logs/sanctum-mlx.log | tail -5
+```
+
+**Pristine means:** boot-ready true, core ports up, PQC all hops, mlx `runs` low (not a crash-loop), Ark mounted, Albert holiday curfew 23:00, no pqc/cathedral/free-sub CRITICAL in the boot window.
+
+## Doctrine, one line
+
+When something that worked breaks after reboot, ask what **changed** between boots — and never let an optional seat (Heretic, a color-temp "guard," a pre-VM SSH) take down the required one.
