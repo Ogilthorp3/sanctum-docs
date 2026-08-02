@@ -1,0 +1,79 @@
+---
+title: "2026-08-01: The Seal Only One Crate Carried"
+description: Two model seats, one cathedral binary, one weight-verification feature — and only one seat was using it. Finding out which took an evening; arming the other one crash-looped it four times first.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Two identical wooden crates on an inspection bench, lit by one amber lamp that is the only colour in an otherwise graphite sketch. A paper list lies unrolled between them and a bead of spilled sealing wax sits by the lamp's base. Both crates stand open and empty, and nothing about them shows which one was ever checked.](./images/hero-2026-08-01-the-seal-only-one-crate-carried.png)
+
+The cathedral has been checking its own weights since 26 July. Every time the council's 27B starts, it reads a manifest, verifies an ed25519 signature over it, then re-hashes all nine model files before it will answer a single question. Sixteen gigabytes, ten seconds, and a log line that says *weights are unmodified*.
+
+Qui-Gon's coder was not doing any of that. Same binary. Same feature. Nobody had turned it on.
+
+## The asymmetry was the finding
+
+It is easy to imagine the failure here as "nothing verified the weights." That was our first guess and it was wrong — the 27B path was already correct, and had been for a week. The real shape is stranger and more useful: **two seats run the identical binary, one passes its weights through a signature check and the other waves them through, and no dashboard anywhere shows the difference.**
+
+The evidence sat in the log the whole time, in a line nobody read:
+
+```
+WARN sanctum_mlx: no --manifest provided — skipping weight integrity check.
+                 Run with --manifest <path> to enable.
+```
+
+The binary was telling the truth every single boot. A warning that fires on every start and blocks nothing becomes part of the wallpaper — which is the same lesson a leak scanner taught us the same morning, seventeen false alarms deep.
+
+So the gap was one seat, not the system. `--manifest`, `--manifest-sig` and `--manifest-pubkey` went into the council's service definition on 26 July, alongside an unrelated memory fix. The coder's had none of the three.
+
+## Integrity is not authenticity
+
+Worth separating, because the two failures they catch are different and the cheaper one is not the interesting one.
+
+| what you have | what it detects | what it misses |
+|---|---|---|
+| sha256 manifest | bit-rot, truncated download, half-finished copy | someone swapping weights and rewriting the manifest to match |
+| signature over that manifest | the manifest itself being edited after the fact | nothing, if you actually check it |
+
+A manifest alone is a promise you made to yourself. The signature is what makes it a promise someone else has to break. So the private half of the signing key lives **only on the workstation** — never on the Mini that serves the models. A machine that could sign its own manifests could authorize its own replacement weights, which would make the whole exercise decorative. Signing is a deliberate ritual performed somewhere else.
+
+## Arming it took the seat down four times
+
+The coder's manifest existed. It was unsigned, and it had been generated from the wrong directory.
+
+The working seat's manifest records bare paths — `config.json`, `model-00001-of-00003.safetensors`. The coder's recorded them with the model directory glued to the front. The binary resolves every entry against the model path it was given, so each line doubled:
+
+```
+expected .../Devstral-Small-2-24B-Instruct-2512-4bit/Devstral-Small-2-24B-Instruct-2512-4bit/config.json
+```
+
+Missing file, so the verifier did exactly what it promised: refused to serve. Then the service manager restarted it. Then it refused again. Four restarts before the auto-revert caught it and put the old configuration back.
+
+<Aside type="caution" title="A fail-closed check plus an automatic restart is a crash loop">
+This is the second time in two days the same shape has bitten: a correct safety check, plus a supervisor that retries on failure, equals an outage. The check was right to refuse. The supervisor was right to restart. Nothing was buggy, and the seat was still gone. Any new fail-closed gate needs a revert path armed before it goes anywhere near a supervised service — and the thing to watch is the restart counter, not the port.
+</Aside>
+
+Finding it took one look at the seat that worked. Both manifests, side by side, one field different. The whole diff was a directory prefix.
+
+## What a manifest should and should not cover
+
+The first regeneration swept up everything in the model directory and produced thirty-two entries, seventeen of which were `.cache/huggingface/**` — download bookkeeping. More than half the manifest was describing files that have nothing to do with what the model says. That would have wired a fail-closed startup gate to a directory that any routine cache prune is entitled to empty.
+
+The rule that came out of it: a manifest covers the files that **determine behaviour**, and nothing else. Configs, tokenizers, the weights themselves. Not the README, not the version-control metadata, not the download cache. The coder's tokenizer is on the list precisely because a tokenizer is behaviour — its tool-call formatting has already cost this haus a debugging session once.
+
+Thirteen entries. Verified against disk, then signed, then armed.
+
+## What it costs
+
+Nothing is free, and this one is measurable:
+
+| seat | files | bytes | hash time at every launch |
+|---|---|---|---|
+| council 27B | 9 | 16.1 GB | 9.9 s |
+| coder | 13 | 14.1 GB | 75.5 s |
+
+Fewer bytes, seven times longer — the 27B's weights were warm in the page cache and the coder's were not. Seventy-five seconds is real, and it lands on a seat whose cold start was already slow enough to need a five-minute timeout budget. It is affordable. It is not invisible, and pretending otherwise is how a security control gets quietly removed six months later by whoever is debugging a slow startup.
+
+The council seat whose weights were already being checked is the one that also carries [the door that does not refuse](/operations/2026-07-31-the-door-that-does-not-refuse/), which is a good argument for having checked them: an ablated health brain is exactly the model you want to be certain nobody swapped. The full seat roster and which brain each one runs is in [The Seven Brains](/operations/2026-07-31-the-seven-brains/).
+
+The council still boots in ten seconds and answers with weights it has proved are the ones we approved. The coder now does the same, and takes a minute longer about it. Both crates get opened at the bench now — which only ever seemed like a small change because one of them had been sailing past it since the day the check was switched on.
