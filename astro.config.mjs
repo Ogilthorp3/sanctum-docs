@@ -126,6 +126,7 @@ export default defineConfig({
 						{ label: 'Smart Router Cathedral', slug: 'architecture/smart-router-cathedral' },
 						{ label: 'Hybrid Sidecar', slug: 'architecture/hybrid-sidecar' },
 						{ label: 'Sanctum MLX', slug: 'architecture/sanctum-mlx' },
+						{ label: 'ds4max (Local Flash)', slug: 'architecture/ds4max' },
 						{ label: 'Sanctum TTS', slug: 'architecture/sanctum-tts' },
 						{ label: 'Sanctum Triage', slug: 'architecture/sanctum-triage' },
 						{ label: 'LoRA in Rust', slug: 'architecture/lora-rust' },
