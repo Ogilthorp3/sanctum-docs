@@ -226,6 +226,7 @@ export default defineConfig({
 						{ label: 'Jocasta \u2014 CRM', slug: 'agents/jocasta' },
 						{ label: 'Mothma \u2014 Operations', slug: 'agents/mothma' },
 						{ label: 'Ahsoka \u2014 Satellite', slug: 'agents/ahsoka' },
+						{ label: 'ds4-agent \u2014 Oracle', slug: 'agents/ds4-agent' },
 					],
 				},
 				{
