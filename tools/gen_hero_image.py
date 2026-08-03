@@ -91,8 +91,9 @@ DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux
 # the page is actually about him. Appended by --wizard so individual prompts
 # don't have to re-describe him and he stays visually consistent across pages.
 WIZARD_CAMEO = (
-    ". Small in the background, a robed wizard figure with a tall staff "
-    "tipped by a single softly glowing amber halo watches from the dust "
+    ". Small in the background, a robed wizard figure with long dreadlocks "
+    "and a cap crowned with small deer antlers, holding a tall staff "
+    "tipped by a single softly glowing amber halo, watches from the dust "
     "haze, back turned, unhurried, hand-drawn in the same pencil style"
 )
 
