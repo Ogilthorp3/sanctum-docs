@@ -218,6 +218,7 @@ export default defineConfig({
 					label: 'Agents',
 					items: [
 						{ label: 'Tommy \u2014 Guardian Spirit', slug: 'agents/tommy' },
+						{ label: 'Wizard \u2014 The Human', slug: 'agents/wizard' },
 						{ label: 'Yoda \u2014 Consigliere', slug: 'agents/yoda' },
 						{ label: 'Windu \u2014 Security', slug: 'agents/windu' },
 						{ label: 'Qui-Gon \u2014 Efficiency', slug: 'agents/quigon' },

@@ -85,6 +85,17 @@ ASPECT_DIMS = {
 }
 DEFAULT_FLUX_VENV = pathlib.Path.home() / "Projects" / "comfy-lab" / ".venv-flux"
 
+# ── the Wizard cameo ─────────────────────────────────────────────────────────
+# Like Tommy, the Wizard (the haus's one human, robe and staff, playa-issued)
+# may appear in heroes as a small background figure — never the subject unless
+# the page is actually about him. Appended by --wizard so individual prompts
+# don't have to re-describe him and he stays visually consistent across pages.
+WIZARD_CAMEO = (
+    ". Small in the background, a robed wizard figure with a tall staff "
+    "tipped by a single softly glowing amber halo watches from the dust "
+    "haze, back turned, unhurried, hand-drawn in the same pencil style"
+)
+
 # ── where Flux may run ───────────────────────────────────────────────────────
 # Measured 2026-07-26 on manoir (Mac Mini M4, 64 GB): one 1344x768 / 40-step
 # render peaked at 36 GiB resident. The Mini was already carrying the council,
@@ -433,6 +444,8 @@ def main() -> None:
     ap.add_argument("--steps", type=int, default=40, help="Flux inference steps (local)")
     ap.add_argument("--seed", type=int, default=42, help="Flux seed (local)")
     ap.add_argument("--dry-run", action="store_true", help="local: verify env, don't render")
+    ap.add_argument("--wizard", action="store_true",
+                    help="append the Wizard cameo (small background figure, house-consistent)")
     # imagen knob
     # Ultra is the house standard (Bert, 2026-07-29: "Apple standard, so Imagen 4
     # Ultra, so that everything is gorgeous"). $0.06/image vs $0.04 standard and
@@ -442,6 +455,9 @@ def main() -> None:
                     help="Imagen model (imagen backend). Default: Ultra, the house "
                          "quality bar. Cheaper tiers exist but are not the standard.")
     a = ap.parse_args()
+
+    if a.wizard:
+        a.prompt = a.prompt.rstrip(". ") + WIZARD_CAMEO
 
     if a.backend == "imagen":
         gen_imagen(a)
