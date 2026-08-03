@@ -314,7 +314,6 @@ export default defineConfig({
 								{ label: '2026-08-01 — The Seal Only One Crate Carried', slug: 'operations/2026-08-01-the-seal-only-one-crate-carried' },
 								{ label: '2026-07-31 — The Door That Does Not Refuse', slug: 'operations/2026-07-31-the-door-that-does-not-refuse' },
 								{ label: '2026-07-31 — The Seven Brains', slug: 'operations/2026-07-31-the-seven-brains' },
-								{ label: '2026-07-31 — The Reboot That Stayed Up', slug: 'operations/2026-07-31-the-reboot-that-stayed-up' },
 								{ label: '2026-07-29 — The Key Baked Into the Wall', slug: 'operations/2026-07-29-the-key-baked-into-the-wall' },
 								{ label: '2026-07-29 — The Firewall That Quarantined the Dishwasher', slug: 'operations/2026-07-29-the-firewall-that-quarantined-the-dishwasher' },
 								{ label: '2026-07-29 — The Alarm Nobody Could Answer', slug: 'operations/2026-07-29-the-alarm-nobody-could-answer' },
