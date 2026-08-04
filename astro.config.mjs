@@ -272,7 +272,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-								{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
+								{ label: '2026-08-04 — The Quest That Wore Unknown', slug: 'operations/2026-08-04-quest-that-wore-unknown' },
+{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
 								{ label: '2026-07-31 — The Reboot That Stayed Up', slug: 'operations/2026-07-31-the-reboot-that-stayed-up' },
 								{ label: '2026-07-29 — The Alarm Nobody Could Answer', slug: 'operations/2026-07-29-the-alarm-nobody-could-answer' },
 								{ label: '2026-07-28 — The Cache That Overwrote the Source', slug: 'operations/2026-07-28-the-cache-that-overwrote-the-source' },

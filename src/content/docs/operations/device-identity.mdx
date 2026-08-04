@@ -197,6 +197,84 @@ MAC and does not guest-pause**. Only true strangers hit the
 unknown-during-curfew quarantine. Vacation TVs (shared devices on a
 satellite Purple) stay media, not intruders.
 
+## Flow / OUI screen identity (2026-08-04)
+
+Some screens never give Columbo a usable name. Meta Quest Wi-Fi Private
+Address is the archetype: **no Meta OUI, no DHCP hostname**, only
+`Unknown-…` on the box — while live flows hit `graph.oculus.com`. Steam Deck
+and Switch are better (Valve/Nintendo OUI + hostnames when awake) but still
+rotate and can appear empty for days.
+
+The engine now enrolls those devices the same way parents expect curfew to
+work: **identity follows the hardware signal, then curfew follows the screen.**
+
+### Config surface (`devices.yaml` screens)
+
+| Field | Role |
+|---|---|
+| `macs` | Static pin floor (current known MACs) |
+| `hostname_patterns` | DHCP / Bonjour name globs (`*quest*`, `*steamdeck*`, `*switch*`) |
+| `oui_prefixes` | Hardware vendor blocks (Valve `2C:A1:F2`, Nintendo `48:F1:EB`, …) |
+| `flow_host_patterns` | Distinctive DNS hosts (`oculus.com`, `steampowered.com`, `nintendo.net`) |
+
+Columbo **device-canon** (`~/.sanctum/firewalla/device-canon.json`, exposed as
+`columbo-overrides.json`) holds the Firewalla display name so rename survives
+empty DHCP (`Meta Quest (Albert)`, `Nintendo Switch 1`, …). Engine load seeds
+overrides for every static screen MAC.
+
+### Adoption path
+
+Every discovery tick (host list) and every other tick (flow sample):
+
+1. Score screens that match hostname / OUI / flow host.
+2. Resolve **one** target via `_resolve_identity_screen`:
+   - already enrolled → refresh name only
+   - hostname hit → that screen
+   - NIC sibling of enrolled MAC → that screen
+   - **empty `macs` slot among matches** → fill it (Switch 2 gets the next
+     unenrolled Nintendo device when Switch 1 is already filled)
+   - sole match (Quest, Deck) → adopt
+   - multi-filled ambiguous → **do not auto-adopt**; log `AMBIGUOUS … identity`
+3. `_adopt_mac_to_screen` writes the MAC into `devices.yaml`, Columbo override,
+   bridge rename, clears guest-stranger state, and **blocks immediately** if
+   that screen's curfew is already active.
+
+### Curfew stranger rejoin (same ship)
+
+Unknowns offline at curfew-start used to miss the rising-edge sweep, then
+rejoin after 23:00 without re-triggering first-discovery (registry restore
+puts them in `_known_macs`). Offline→online during child curfew now
+auto-pauses unreviewed strangers (`unknown-rejoin-during-curfew auto-pause`).
+Parent-approved guests and yaml-enrolled screens are exempt.
+
+### Albert's screens (manoir, 2026-08-04)
+
+| Screen key | Identity | Notes |
+|---|---|---|
+| `meta_quest` | MAC + oculus flow hosts | Private MAC; flows are the reliable signal |
+| `nintendo_switch_1` | MAC `48:F1:EB:E5:0D:CA` + Nintendo OUI/flow | Nightly curfew already closed-loop |
+| `nintendo_switch_2` | Empty slot + same Nintendo signals | First new Nintendo device fills here |
+| `steam_deck` | Empty + Valve OUI + Steam flows | Auto-adopts on first Deck Wi-Fi / Steam host |
+
+Apple Vision Pro advertises `RealityDevice` — classified as **Apple / personal**,
+not Meta Quest. Do not enroll it as Albert's screen.
+
+### Operator checks after a rotation
+
+```bash
+# Screen inventory (Quest should show is_screen + Meta Quest name)
+curl -s http://127.0.0.1:4077/screen/devices | jq '.devices[] | select(.is_screen)'
+
+# Status device_count > 0 for quest / switch_1; deck / switch_2 after first sighting
+curl -s http://127.0.0.1:4077/screen/status | jq '.screens[] | select(.key|test("quest|switch|steam|ps5"))'
+
+# Adopt / rejoin lines
+grep -E 'SCREEN IDENTITY ADOPT|unknown-rejoin-during-curfew|AMBIGUOUS'   ~/.sanctum/logs/force-flow.stderr.log | tail -20
+```
+
+Unit coverage: `tests/test_quest_flow_identity.py`,
+`tests/test_unknown_rejoin_curfew.py` in `sanctum-screen-time`.
+
 ## Verifying it works
 
 ```bash
