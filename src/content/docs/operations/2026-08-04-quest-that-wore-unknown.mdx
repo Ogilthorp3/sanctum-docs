@@ -1,0 +1,67 @@
+---
+title: The Quest that wore Unknown
+description: Albert's Meta Quest played past 23:00 because identity never left Unknown-6a7d — flow-based enrollment, stranger rejoin pause, and Switch/Deck parity closed the gap on 2026-08-04.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+# The Quest that wore Unknown
+
+**Date:** 2026-08-04  
+**Status:** Live on manoir (engine + `devices.yaml`); unit-gated; identity docs updated
+
+## What the parent saw
+
+After holiday curfew (23:00), the Meta Quest was still on Wi-Fi. VRVANA PC was
+blocked correctly. The Quest was not.
+
+## What the logs said
+
+| Layer | Finding |
+|---|---|
+| Presence | `F6:2A:B9:37:6A:7D` online from ~23:16 through ~00:18 |
+| Firewalla name | `Unknown-6a7d` — empty DHCP, private MAC, vendor Unknown |
+| Flows | Live `graph.oculus.com` + `fbcdn` — it was the Quest |
+| Enforcement | Zero `BLOCKED` lines for that MAC, ever |
+| Curfew-start sweep | Missed — offline ~22:45–23:05 |
+| First-discovery pause | Missed — MAC already in discovery registry |
+
+`RealityDevice` was a red herring: that hostname is the **Apple Vision Pro**,
+enrolled under Bert as personal, not Albert's screen.
+
+## Fixes shipped
+
+1. **Enroll `meta_quest`** with static MAC + `flow_host_patterns` (oculus hosts).
+2. **Flow / OUI / hostname adopt** — rotated private MACs re-pin without a
+   parent typing a MAC; Columbo device-canon holds the display name.
+3. **Offline→online during curfew** auto-pauses unreviewed strangers
+   (`unknown-rejoin-during-curfew`).
+4. **Steam Deck + both Switches** get the same identity surface (empty Deck /
+   Switch 2 slots fill on first sighting; second Nintendo device prefers
+   Switch 2 when Switch 1 is full).
+5. **AVP** classified as Apple personal, not Meta VR.
+
+Deep reference: [Device Identity — Flow / OUI screen identity](/operations/device-identity/#flow--oui-screen-identity-2026-08-04).
+
+## What E2E still needs a body in the room
+
+Unit tests cover adopt resolution and rejoin pause. Live checks confirm Quest
+and Switch 1 on `:4077` with holiday 23:00. **Not yet exercised on this ship:**
+
+- First Wi-Fi join of Steam Deck → auto-adopt log
+- Second Switch power-on → fills `nintendo_switch_2`
+- Full night: Quest rejoin after 23:00 → pause line in force-flow log
+
+Power the Deck or Switch 2 once on haus Wi-Fi, then:
+
+```bash
+grep -E 'SCREEN IDENTITY ADOPT|host screen identity|flow screen identity' \
+  ~/.sanctum/logs/force-flow.stderr.log | tail -20
+curl -s http://127.0.0.1:4077/screen/status | jq '.screens[] | select(.key|test("steam|switch|quest"))'
+```
+
+<Aside type="tip" title="Parents' mirrors still matter">
+Network identity stops multiplayer and cloud. Downloaded Quest games and
+Switch offline titles need the platform Family Center / parental mirrors —
+see the Parents' Guide mirror pages for Meta, Nintendo, and Steam.
+</Aside>
