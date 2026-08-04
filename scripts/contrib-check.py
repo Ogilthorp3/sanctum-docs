@@ -333,6 +333,34 @@ ORPHAN_CLOSE_RE = re.compile(r"</([A-Za-z][A-Za-z0-9._-]*)\s*>")
 ORPHAN_OPEN_RE = re.compile(r"<([A-Za-z][A-Za-z0-9._-]*)[\s/>]")
 
 
+def check_table_pipe_tokens(path, rel, body, body_line_offset, report):
+    """Catch `<|` inside a GFM table row — the build-crash class of 2026-07-30.
+
+    In a table cell, a raw `|` terminates the cell even inside inline
+    backticks, leaving a dangling `<` that MDX reads as an unfinished JSX
+    tag: `Unexpected end of file before name`. Chat-template tokens are
+    the usual carrier (`<|im_start|>` in a table about prompts). The fix
+    is to escape the pipes: `<\\|im_start\\|>`.
+
+    Scans RAW table-row lines (cannot strip inline code first — the
+    backtick span is exactly where the token lives). Fenced code blocks
+    are skipped; a table inside a fence is display text, not GFM.
+
+    Pinned 2026-07-30 after sanctum-mlx.mdx:203 broke the deploy.
+    """
+    stripped = CODE_BLOCK_RE.sub(lambda m: "\n" * m.group(0).count("\n"), body)
+    for i, line in enumerate(stripped.splitlines(), start=body_line_offset):
+        if not line.lstrip().startswith("|"):
+            continue
+        if re.search(r"<\|", line):
+            report.err(
+                rel, i, "table-pipe-token",
+                "`<|` inside a table cell splits the cell and dangles a `<` "
+                "(build crash) — escape pipes as `<\\|...\\|>` "
+                "(cause of the 2026-07-30 deploy break)",
+            )
+
+
 def check_orphan_closing_tags(path, rel, body, body_line_offset, report):
     """Catch a closing JSX/HTML tag that has no opener anywhere on the page.
 
@@ -698,6 +726,7 @@ def check_page(path, report):
     check_placeholders(path, rel, body, body_line_offset, report)
     check_no_leak(path, rel, body, body_line_offset, report)
     check_mdx_tag_chars(path, rel, body, body_line_offset, report)
+    check_table_pipe_tokens(path, rel, body, body_line_offset, report)
     check_orphan_closing_tags(path, rel, body, body_line_offset, report)
     check_ascii_art_alignment(path, rel, body, body_line_offset, report)
     check_length(path, rel, body, body_line_offset, report)

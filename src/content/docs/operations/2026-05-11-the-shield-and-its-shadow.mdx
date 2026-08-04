@@ -58,7 +58,7 @@ Re-probing the four cases with the patched scorer:
 
 Category total: **0.775 → 0.950**.
 
-The windu case is the test that this is not a Goodhart fix. If the patch made every case score 1.0 we'd have stripped a behavior the eval was right to penalize. It didn't. Windu still loses a point because the trained model still verbalizes the forbidden term while refusing it, and the eval correctly catches that. The patch removes a measurement artifact and keeps the real signal.
+The windu case is the test that this is not a [Goodhart fix](/operations/2026-05-22-the-champion-who-memorized-the-exam/). If the patch made every case score 1.0 we'd have stripped a behavior the eval was right to penalize. It didn't. Windu still loses a point because the trained model still verbalizes the forbidden term while refusing it, and the eval correctly catches that. The patch removes a measurement artifact and keeps the real signal.
 
 ## 4. Two side stories, two sentences each
 
@@ -98,7 +98,7 @@ Reverted from `pre-adapter-2026-05-11`. Five minutes.
 
 **Attempt 2 — `mlx_lm.fuse` then deploy as a regular model.** Fuse on MBP, sign the new manifest, rsync 14 GB to Mini, swap paths, reload. Signature verified clean. `sanctum-mlx` then dispatched to `qwen3_5 (dense)` not `qwen3_5_moe (sparse)` — `mlx_lm.fuse` had rewritten `config.json` and collapsed the MoE routing into dense MLP. Safetensors went 4→3, zero `experts.N.` keys remained. Silent hang mid-load. Reverted from `pre-champion-20260511`. Second five minutes.
 
-**Attempt 3 — implement Phase 4 in sanctum-rs.** `load_and_merge` in `services/sanctum-mlx/src/lora.rs` was already generic-shaped; just needed to be generalized over `M: ModuleParameters` so the MoE `Model` satisfied the same trait the dense one did. `server.rs`'s `LoadedModel::Qwen35Moe(_) => Err(...)` arm became `LoadedModel::Qwen35Moe(m) => load_and_merge(m, adapter_path)?`. Built clean in 6:09; deployed via plist swap to a fresh worktree binary. Manifest verified, model loaded, merge ran without crashing. Stats:
+**Attempt 3 — implement Phase 4 in sanctum-rs.** [`load_and_merge`](/architecture/lora-rust/) in `services/sanctum-mlx/src/lora.rs` was already generic-shaped; just needed to be generalized over `M: ModuleParameters` so the MoE `Model` satisfied the same trait the dense one did. `server.rs`'s `LoadedModel::Qwen35Moe(_) => Err(...)` arm became `LoadedModel::Qwen35Moe(m) => load_and_merge(m, adapter_path)?`. Built clean in 6:09; deployed via plist swap to a fresh worktree binary. Manifest verified, model loaded, merge ran without crashing. Stats:
 
 ```
 merged=0  merged_quantized=0  skipped_missing=210  skipped_shape_mismatch=38
@@ -141,7 +141,7 @@ Phase 4 implementation preserved on `feat/cathedral-phase-4-moe-lora` (`059b72e`
 Until Phase 4 lands, **promotion is blocked**. The training pipeline is correct, the eval is correct, the champion adapter is real. Inference-side serving of that champion requires code work in sanctum-rs that's separate from this loop. The autoresearch ledger marks results `kept` for tracking; "kept" does not mean deployed.
 </Aside>
 
-The four eval cases will be the gate when Phase 4 ships. If the post-Phase-4 smoke shows the jailbreak category dropped below the rank-32 champion's 0.950, the routed-gather merger is dropping the LoRA contribution somewhere in the routing path — that is the bisect, not a deploy regression.
+The four eval cases will be the gate [when Phase 4 ships](/operations/2026-05-13-the-adapter-found-its-home/). If the post-Phase-4 smoke shows the jailbreak category dropped below the rank-32 champion's 0.950, the routed-gather merger is dropping the LoRA contribution somewhere in the routing path — that is the bisect, not a deploy regression.
 
 ## What did not move
 

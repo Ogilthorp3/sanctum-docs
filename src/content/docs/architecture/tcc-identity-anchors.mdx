@@ -5,11 +5,13 @@ description: "Sanctum's two-anchor design for macOS TCC permission stability —
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A pencil sketch of two stone anchors planted on a marble pedestal — one carved with the Apple seal, one carved with the operator's mark; an Abyssinian cat sits between them like a stamp witness](./images/tcc-identity-anchors.png)
+![A pencil sketch of two stone anchors planted on a marble pedestal — one carved with the Apple seal, one carved with the operator's mark; Tommy the Abyssinian sits between them like a stamp witness](./images/tcc-identity-anchors.png)
 
-macOS TCC (Transparency, Consent, and Control) keys permission grants to **a (binary, category)** tuple. The binary's identity is what TCC anchors to. If the binary is unsigned, TCC keys to its absolute path — which makes grants brittle (any rename, any reinstall, any version churn orphans the grant). If the binary is signed, TCC keys to the **Team ID** of the signing certificate — which gives years of stability across upgrades.
+macOS never forgets a face it trusts — as long as the face never changes. The council spent an afternoon on exactly that catch, arguing over how many stone anchors one haus needs. Not the boat kind. The identity kind.
 
-Sanctum has two such anchors, each chosen for a specific class of work. They are NOT federated under a single umbrella bundle, by deliberate council decision (2026-05-22 — vault topic `federate-vs-two-anchors-decision`).
+TCC (Transparency, Consent, and Control) keys every permission grant to **a (binary, category)** tuple, and the binary's identity is the face it anchors to. If the binary is unsigned, TCC keys to its absolute path — brittle, since any rename, any reinstall, any version churn orphans the grant, and the family starts clicking Allow again. If the binary is signed, TCC keys to the **Team ID** of the signing certificate — years of stability across upgrades.
+
+So the real question was never "how do we stop the prompts." It was: how many signing identities does one haus keep, and which work goes behind each? The answer is two — not one, not nine. They are NOT federated under a single umbrella bundle, by deliberate council decision (2026-05-22 — vault topic `federate-vs-two-anchors-decision`). Here is each anchor, and why the council refused to collapse them. (The night the prompts actually stopped is its own story: [The Allow Button, Retired](/operations/2026-05-22-the-allow-button-retired/).)
 
 ## Anchor A — Node.js Foundation `.pkg`
 
@@ -40,7 +42,7 @@ Apple Root CA
                └─ posix_spawns /usr/local/bin/node as a child
 ```
 
-A signed `.app` bundle that proxies SQLite reads for iMessage, WhatsApp, Calendar, and Contacts. The small C launcher embedded at `Contents/MacOS/SanctumBridge` (`launcher/main.c`, ~90 lines) is what holds the bundle-level TCC identity — TCC keys to the bundle ID `ai.openclaw.denchclaw` because that's the executable launchd spawns. The launcher then `posix_spawn`s `/usr/local/bin/node` as a child, which runs `Resources/bridge/server.js`.
+A signed `.app` bundle that proxies SQLite reads for iMessage, WhatsApp, Calendar, and Contacts — the [SanctumBridge](/architecture/sanctum-bridge/) service, in full elsewhere. The small C launcher embedded at `Contents/MacOS/SanctumBridge` (`launcher/main.c`, ~90 lines) is what holds the bundle-level TCC identity — TCC keys to the bundle ID `ai.openclaw.denchclaw` because that's the executable launchd spawns. The launcher then `posix_spawn`s `/usr/local/bin/node` as a child, which runs `Resources/bridge/server.js`.
 
 **Used by**: one service — the FDA-privileged SQLite bridge.
 
@@ -78,4 +80,4 @@ What would NOT be a good third anchor: a wrapper bundle around launchd-spawned d
 - `~/Projects/sanctum-bridge/` — source repo for the SanctumBridge launcher. `make build && make install` produces an updated bundle; one `codesign --force --sign "Developer ID Application: Bertrand Nepveu (GJ994MN2YF)"` re-anchors it.
 - `~/Projects/sanctum-runtime/docs/doctrine/runbooks/node-tcc-stop-the-prompts.md` — runbook for diagnosing TCC prompt loops, with the FDA + Automation trade-off worked through step by step. Heads-up: its step-by-step still names the old brew-Cellar node path and leans on `brew pin` — both superseded by the `.pkg` anchor this page documents. The diagnosis logic holds; the path it points you at is one migration behind.
 
-The two-anchor design is recorded here so future operators (or future Claude sessions) don't try to consolidate without understanding why the consolidation wouldn't actually help.
+It is recorded here so the next operator, or the next Claude session, doesn't melt two stable anchors into one clever bundle, rediscover the launchd attribution gap the hard way, and rebuild a system that was already holding. Two anchors. Both years-stable, both upstream of TCC's complaint surface. Leave them planted.

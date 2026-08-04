@@ -1,0 +1,126 @@
+---
+title: "2026-07-31 — The Seven Brains"
+description: >-
+  Neurodiversity is paramount: every Jedi seat now rides a named proxyd brain
+  end-to-end — CLI brainstorm/council, OpenClaw agents, and Mini proxyd — with
+  Jocasta and Mon Mothma as first-class agents, Cilghal on the heretic, and
+  reboot durability via openclaw.json.enc.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Seven brain models stood in a row on a workbench under a single amber lamp, each one built of a different material — one of clockwork gears, one crystalline, one woven wire, the rest in varying weaves of bone and stone — no two alike.](./images/hero-2026-07-31-the-seven-brains.png)
+
+The council is not five voices in one robe. It is seven brains that disagree on
+purpose. This note is the ship record for the 2026-07-31 alignment: one map,
+three layers, no reboot gap.
+
+## The map
+
+| Seat | Alias | Upstream (Mini live) |
+|---|---|---|
+| **Yoda** | `council-max-thinking` | Fable 5 · effort max · Max bridge `:3456` |
+| **Windu** | `council-spacial` | Gemini 3.1 Pro · `:6543` |
+| **Qui-Gon** | `council-code` | Devstral · cathedral `:3301` |
+| **Ki-Adi-Mundi** | `council-finance` | Grok 4.5 · OAuth `:4200` |
+| **Cilghal** | `council-heretic` | ablated 27B champion · `:6669` |
+| **Jocasta** | `council-brain` | Opus 5 · effort medium · `:3456` |
+| **Mon Mothma** | `council-brain` | Opus 5 · effort medium · `:3456` |
+
+Jocasta and Mothma share the Opus-medium brain on purpose (archives and ops are
+the same subscription tier). Everyone else is a different family. CLI
+`brainstorm` counts **families**, not robes — three Claude seats still count as
+one designed family with a redundant badge.
+
+## What was wrong
+
+- **CLI** (`sanctum brainstorm` / `sanctum council`) still had Mundi on
+  Yoda's Fable seat and Cilghal on plain cathedral Qwen. Brainstorm only
+  summoned five seats — no Jocasta, no Mothma.
+- **OpenClaw** had five agents; Signal could not reach Jocasta or Mothma.
+- **proxyd** had Devstral as `council-devstral` while `council-code` pointed
+  at Qwen — so "code" did not mean Devstral.
+- The biggest reboot trap: **`openclaw.json` is gitignored**. The SoT is
+  `openclaw.json.enc`. A plaintext edit survives only until the next gateway
+  start where the `.enc` is newer — then SOPS overwrites the roster from the
+  encrypted source. Without re-encrypt, a Mini reboot quietly undoes the agents.
+
+## What shipped
+
+| Layer | Change | Landed |
+|---|---|---|
+| `sanctum-cli` | 7-seat brainstorm + council models; tests updated | `7df48ef` on `origin/main` |
+| Mini proxyd | `council-code` → Devstral; `council-heretic` alias | `f28376c` on Mini `sanctum-config` |
+| OpenClaw | 7 agents; `council-tiered` model ids; re-encrypt | `a6b8b85` on `openclaw-config` (`.enc` + sample) |
+| Mini CLI venv | non-editable install of `7df48ef` into `cli-venv` | on-box |
+
+## Operational context windows (64 GB dual-cathedral)
+
+These are **door caps**, not the models' theoretical 256k. They keep OpenClaw
+turns inside client patience (~120 s) and keep both seats resident.
+
+| Seat path | Process | `max_prompt_tokens` | Cache slots | OpenClaw `contextWindow` ad |
+|---|---|---:|---:|---:|
+| Cilghal / local Qwen / heretic | 27B `:1337` + `:6669` | **16384** | 4 (binary default) | **16384** |
+| Qui-Gon (`council-code`) | Devstral `:3301` | **32768** | 4 (binary default*) | **32768** |
+
+\*Deployed `sanctum-mlx` does not yet expose `--prompt-cache-slots` (flag
+crash-loops the LaunchAgent). Target remains 2 slots for Devstral once the
+binary ships the flag; until then dual residency relies on Metal memory
+limits (`--metal-memory-limit-mb 22528`).
+
+Why not higher: 27B prefills ~97 tok/s (16k ≈ 170 s prefill alone). Devstral is
+faster but pays ~2.5 GiB KV per 16k slot. Live OpenClaw tool turns often hit
+10–30k on Qui-Gon; ads must match the door so agents stop packing past 413.
+
+Durable pins:
+
+- 27B: `~/.sanctum/launchagents/com.sanctum.mlx.plist` → `--max-prompt-tokens 16384`
+- Devstral: `~/.sanctum/launchagents/com.sanctum.mlx-devstral-rust.plist` →
+  `--max-prompt-tokens 32768` (tracked SoT, Library → symlink)
+- OpenClaw: `openclaw.json.enc` (re-encrypt after any ad change)
+
+Cloud OpenRouter Qwen seats keep their large windows — only **local cathedral**
+paths are clamped.
+
+## Reboot permanence checklist
+
+1. **proxyd** loads `~/.sanctum/sanctum-proxy/config.yaml` from disk (tracked).
+2. **OpenClaw gateway** decrypts `openclaw.json.enc` → `openclaw.json` at start
+   (`scripts/sops-start.sh`). After re-encrypt, the seven-agent map **and** the
+   16k/32k context ads are the encrypted SoT — not a floating plaintext edit.
+3. **`sanctum` on Mini** imports from `cli-venv` site-packages (not a `/tmp`
+   worktree). Pulling a new CLI release still requires an explicit
+   `pip install` (or the house upgrade path) — that is intentional, not a
+   silent reboot rewrite.
+4. **Backends that must already be up:** Max bridge `:3456`, Gemini `:6543`,
+   Devstral `:3301`, Grok OAuth `:4200`, heretic `:6669`, cathedral `:1337`.
+   LaunchAgents for those services are independent of this roster ship.
+
+## Operator notes
+
+- Live CLI fan-out: `sanctum brainstorm "…"` (seven panels) and
+  `sanctum council "…"` (same seven + Yoda synthesis).
+- After any future OpenClaw edit:  
+  `cd ~/.openclaw && bash scripts/update-config.sh && git add openclaw.json.enc openclaw.json.sample && git commit && git push`.
+- Devstral cold-prefill after a `:3301` restart can take minutes; proxyd
+  `ttfb_timeout_secs: 300` on `council-code` is the intentional budget.
+- Context overflow on Qui-Gon/Cilghal: `/reset` or shrink tool dumps — do **not**
+  raise the operational cap on a dual-resident 64 GB Mini.
+
+## EETISMAD score for this ship
+
+| Gate | Status |
+|---|---|
+| **E2e Tested** | Proxyd smoke: max-thinking, spacial, heretic, brain green; finance returns; code needs long TTFB after cold start. CLI unit suite green on the roster commit. OpenClaw ads assert 16k/32k after decrypt. |
+| **In Sanctum-docs** | This field note (incl. 64 GB context-cap table). |
+| **Merged** | `sanctum-cli` + `openclaw-config` + Mini proxyd + Devstral LaunchAgent pushed. |
+| **Deployed** | Mini proxyd config live; OpenClaw re-encrypted with 16k/32k ads; cathedral argv 16k/32k; Devstral slots=2 in LaunchAgent SoT. |
+
+The map is the point, not the hardware. Seven seats thinking with one set of
+weights would agree with each other by construction, and a council that cannot
+disagree is a single opinion with extra latency. Each seat now reasons on a
+brain chosen for its job — including [Cilghal on the ablated health
+port](/operations/2026-07-31-the-door-that-does-not-refuse/), which is a seat
+that had to stop refusing before it could be useful. That is what makes the
+disagreement worth listening to.

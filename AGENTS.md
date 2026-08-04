@@ -7,17 +7,21 @@ It is the source of truth for voice, structure, images, and the rules
 that will fail your commit if you violate them.
 
 This file exists because AI agents too often skip straight to the edit.
-The six rules below are the ones that break most often and fail fastest
+The eight rules below are the ones that break most often and fail fastest
 in CI. None of them are suggestions.
 
-## The six you can't skip
+## The eight you can't skip
 
 1. **Every new page has a unique hero image.** Pencil sketch, dark background,
    one teal or amber accent halo. Generate with `tools/gen_hero_image.py` in
    this repo (`sanctum-docs/tools/`) — the single canonical generator; there
    is no copy in the parent Claude_Code repo. The image goes in
    `<category>/images/` next to the page. No SVGs for heroes. No stock
-   photos. No clip art.
+   photos. No clip art. **Unique means visually unique**: never reuse another
+   page's art and never near-duplicate a composition — the deploy gate runs
+   `python3 tools/hero-dupe-check.py . 10` (perceptual hash; needs `pillow`)
+   and fails on any two pages whose heroes look alike, even with different
+   bytes. Regenerate the duplicate; do not lower the threshold.
 
 2. **No emojis in prose.** The only allowed files are the Holocron portal
    pages — `index.mdx`, `index-qc.mdx`, and `qc.mdx` — which use `⚜` and
@@ -48,19 +52,51 @@ in CI. None of them are suggestions.
    `<3 attempts` is the most common case. Three valid fixes:
    `&lt;20%`, `` `<20%` `` (inline code), or reword to `under 20%`.
    `contrib-check.py` will catch this locally before the deploy does.
+   **Table cells have a second trap:** a raw `|` inside a table cell splits
+   the cell *even inside backticks*, so a chat token like `` `<|im_start|>` ``
+   in a table dangles a `<` and kills the build. Write `` `<\|im_start\|>` ``.
+   (Cause of the 2026-07-30 deploy break; `contrib-check.py` now catches it.)
+
+7. **The Narrative Standard is gated.** `story-check.py` is the other half of
+   the checker: every page needs a cold-open hook (never "This page
+   describes..."), a spine, someone in the room, a real landing, and lineage
+   links. Errors block the deploy. The gold standard is `agents/tommy.mdx` —
+   match the craft, not the first person (rule: you are not Tommy unless you
+   are Tommy). Frame carries the story; reference/config bodies stay dry.
+
+8. **Vary the music.** The corpus is watched by `scripts/echo-audit.py`
+   (weekly, advisory): a device repeated across the book stops being a
+   surprise. Don't default to a clock-time cold open ("It is 2 AM...") and
+   don't land on Tommy unless the page has *earned* him — as of 2026-07-31
+   both are over budget corpus-wide. Reach for the page's OWN imagery: open
+   inside its subject, land on a callback to its opening.
+
+   **The bolted-cameo trap.** `cast/alt-text-cameo` fires when a character is
+   named only in your alt text, and the cheapest way to clear it is to bolt a
+   Tommy sentence onto the last line. Do not do that. The 2026-07 sweep did it
+   54 times and the audit now measures it directly (`BOLTED cameo`): a landing
+   that names someone who appears nowhere else on the page is a stage exit for
+   an actor who was never in the scene. Either give the character a real beat
+   in the body, or land on the page's own subject and leave the cast out.
 
 ## Before you commit
 
-Run the checker on what you changed:
+Run BOTH checkers on what you changed, then build:
 
 ```bash
 python3 scripts/contrib-check.py src/content/docs/path/to/your-page.mdx
+python3 scripts/story-check.py  src/content/docs/path/to/your-page.mdx
+npm run build   # the only gate that catches every MDX crash class
 ```
 
-It validates the rules above plus frontmatter completeness and hero-image
-file presence. Exit 0 means you're clear; exit 1 means you have to fix
-something before the PR merges. The same check runs in GitHub Actions on
-every PR.
+contrib-check validates correctness (frontmatter, hero presence, leaks,
+MDX traps); story-check validates the narrative shape (hook, spine, cast,
+landing, lineage). Exit 0 on both means you're clear; errors block the PR
+gate AND the deploy gate. If you generated a hero, also run
+`python3 tools/hero-dupe-check.py . 10` (needs `pillow`) — the deploy
+fails on visually-duplicate art. If you touched the checkers themselves,
+`python3 -m pytest tests/ -q` must stay green: it pins the calibration
+contract (Tommy = exactly one permanent warning).
 
 ## When in doubt
 

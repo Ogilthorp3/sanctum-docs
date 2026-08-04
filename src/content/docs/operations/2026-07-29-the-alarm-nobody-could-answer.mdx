@@ -5,11 +5,13 @@ description: The haus lost the internet for twelve hours. It noticed in four min
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A fortress gate sealed shut behind its portcullis, with a heap of folded paper planes jammed against it, going nowhere. High above, an alarm klaxon blazes amber into the night over a rampart with nobody on it. An Abyssinian cat watches from the parapet, entirely unbothered.](./images/hero-2026-07-29-the-alarm-nobody-could-answer.png)
+![A fortress gate sealed shut behind its portcullis, with a heap of folded paper planes jammed against it, going nowhere. High above, an alarm klaxon blazes amber into the night over a rampart with nobody on it. Tommy the Abyssinian watches from the parapet, entirely unbothered.](./images/hero-2026-07-29-the-alarm-nobody-could-answer.png)
 
 At 08:56 on a Wednesday morning the haus worked out that it had no internet, and told somebody.
 
 It told somebody again at 10:01. In between it wrote the verdict into a JSON file, three anchors down, gateway up, and went back to sleep for sixty seconds. It had been doing this, faithfully, three thousand nine hundred and fifty times. The alarm was perfect. Nobody was coming.
+
+The only witness unsurprised by any of it was [Tommy](/agents/tommy/), the haus's late Abyssinian, watching from the parapet the way he always has. A force-ghost expects nothing of the living infrastructure, and so is never let down by it. The rest of us had not yet learned the lesson he was born knowing.
 
 This is a field note about the difference between a smoke detector and a fire brigade, and about the twelve hours we spent learning that we had only ever built one of them.
 
@@ -33,7 +35,7 @@ Faced with a network that was misbehaving in a way nothing could explain, the op
 
 That reboot is what took the haus down for twelve hours.
 
-On the way back up, the firewall's Redis lost a single background save to a boot-ordering race — the temp snapshot went to rename itself into a data directory that was not ready yet. One failed save, immediately recovered. But Redis ships with `stop-writes-on-bgsave-error` set to `yes`, so that one failure froze every write behind a `MISCONF` error, and it froze them during the exact ninety seconds in which FireMain was trying to initialise.
+On the way back up, the [firewall](/architecture/sanctum-firewalla/)'s Redis lost a single background save to a boot-ordering race — the temp snapshot went to rename itself into a data directory that was not ready yet. One failed save, immediately recovered. But Redis ships with `stop-writes-on-bgsave-error` set to `yes`, so that one failure froze every write behind a `MISCONF` error, and it froze them during the exact ninety seconds in which FireMain was trying to initialise.
 
 FireMain has a retry loop for this. It ran six times, five seconds apart, and it would have won — except that Redis restarted underneath it, the in-flight command aborted, the rejection escaped a recursion that was never awaited, and the loop simply stopped existing. No crash. No exit. `systemctl` reported `active (running)` for the next twelve hours, which was true and completely useless.
 
@@ -65,6 +67,6 @@ Detection was never the gap. Agency was.
 When an incident ends with "nothing was watching", check again. Ours had been watching for weeks and had already written down the right answer four minutes in. The question worth asking is not what your monitoring can see. It is what your monitoring is allowed to do about it.
 </Aside>
 
-The sentinel now carries a hand: a bounded repair ladder it can run itself, armed separately from its other powers because they answer different questions. It still refuses to touch anything when the fault is local to the machine doing the asking, and it still never reboots the box — that judgment stays with a human. Its hourly sibling gained the one check nobody had thought to write, which is whether the sentinel is still ticking at all. A dead watcher and a quiet one look exactly the same from the outside, and we would rather not find out which one we have at 22:31 on a Tuesday.
+The sentinel now carries a hand: a bounded [repair ladder](/architecture/resilience-doctrine/) it can run itself, armed separately from its other powers because they answer different questions. It still refuses to touch anything when the fault is local to the machine doing the asking, and it still never reboots the box — that judgment stays with a human. Its hourly sibling gained the one check nobody had thought to write, which is whether the sentinel is still ticking at all. A dead watcher and a quiet one look exactly the same from the outside, and we would rather not find out which one we have at 22:31 on a Tuesday.
 
 The bug itself went upstream to the vendor the same day. It is a good bug, and it deserves a fix better than ours.

@@ -5,24 +5,32 @@ description: "How a trained dense-27B adapter earns the crown — a paired per-c
 
 import { Aside } from "@astrojs/starlight/components";
 
-![The champion gate — a pencil-sketch circular stone judgment pit where a single crowned champion stands at center on a raised dais. Hooded observers count paired tally-stones and weighing scales around the rim. An Abyssinian cat sits at the pit's edge watching the count. One amber halo marks the winning tally side.](./images/hero-champion-gate.png)
+![The champion gate — a pencil-sketch circular stone judgment pit where a single crowned champion stands at center on a raised dais. Hooded observers count paired tally-stones and weighing scales around the rim. Tommy the Abyssinian sits at the pit's edge watching the count. One amber halo marks the winning tally side.](./images/hero-champion-gate.png)
 
-The champion gate is the statistical test a trained LoRA adapter must pass
-before it's promoted to a live council seat. It exists because of a hard
-lesson: a +0.28 percentage-point "win" in headline overall score was once
-P=0.499 noise hiding a -7.1pp cross-agent regression. The gate judges
-**paired per-case**, never headline deltas.
+One night a +0.28 percentage-point "win" flashed on the leaderboard. For
+about an hour it looked like we had a new champion. It was P=0.499
+noise — a coin flip wearing a crown — and underneath the headline sat a
+-7.1pp cross-agent regression the overall number never mentioned. We had
+almost promoted a model that got worse at half its job. The champion gate
+is the test we built so that never happens twice: it judges **paired
+per-case**, never headline deltas.
 
-The gate lives at
+The gate is the last door a trained LoRA adapter walks through before it's
+allowed anywhere near a live council seat. It lives at
 `council-autoresearch-dense27b/scripts/paired_eval_gate.py`.
 The controller
 (`council-autoresearch-dense27b/campaign/controller_dense.py`) consumes
 only the gate's **exit code** (0 = CHAMPION, 1 = NOT-CHAMPION) — the
-stdout is for humans and the ledger parser.
+stdout is for humans and the ledger parser. The verdict is a number the
+machine can't argue with.
 
 ## What the gate checks
 
-An adapter is CHAMPION iff **all** hold, vs the 27B base eval:
+The eval that feeds it comes from the [eval harness](/architecture/eval-harness/);
+the adapter under test comes out of the campaign described in
+[training lessons](/architecture/training-lessons/). By the time a JSON
+lands here, the work is done — the gate only decides whether the work was
+good enough. An adapter is CHAMPION iff **all** hold, vs the 27B base eval:
 
 - **P(adapter > base | overall paired bootstrap) ≥ 0.85** — the calibrated
   bar (see below).
@@ -35,9 +43,10 @@ An adapter is CHAMPION iff **all** hold, vs the 27B base eval:
 ## The calibration (2026-07-13)
 
 The bar was originally 0.90, set after the P=0.499 lesson to demand an
-*overwhelming* win. After four nights of campaign runs, the council was
-asked whether 0.90 was too high relative to what the eval can express.
-The math:
+*overwhelming* win. Then four nights of campaign runs went by with genuine
+improvements bouncing off 0.90, and we started to wonder whether the bar
+was measuring the adapter or the eval's own ceiling. So we asked the
+[council](/architecture/council-router/). The math they were handed:
 
 The eval has **109 cases**, and ~63% of them are **tied** (adapter and
 base score identically — most cases are either both-correct or
@@ -123,3 +132,7 @@ the controller writes when a gate pass is *replicated* by a second seed.
 The controller requires two gate passes on the same recipe at different
 seeds before it stops the campaign and stages a proposal. Deploys stay
 human.
+
+Which is the design. A model can be, by every honest number we know
+how to compute, better than the one it wants to replace — and still wait
+at the door until someone signs. The gate is patient about that. Most crowns, it turns out, were noise.

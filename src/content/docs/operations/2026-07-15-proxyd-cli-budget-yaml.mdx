@@ -1,31 +1,42 @@
 ---
 title: "2026-07-15: Proxyd CLI budget.yaml + green/red banners"
-description: Claude CLI shared USD pool, sanctum subs+local only, hot-reload budget.yaml, DEGRADED local context fit. Deployed on manoir.
+description: One hot-reloaded budget.yaml drives the shared $50/day Claude CLI pool, model pricing, and sanctum seat policy — with a green route line and a red DEGRADED line so you can watch the meter. Live on manoir.
 ---
 
 import { Aside } from "@astrojs/starlight/components";
 
-![A pencil-sketched shared water tank with a marked fill line and several taps drawing from it at once, a card of handwritten rates clipped to its side mid-swap while the taps keep running. A cat sits beside it.](./images/hero-2026-07-15-proxyd-cli-budget-yaml.png)
+![A pencil-sketched shared water tank with a marked fill line and several taps drawing from it at once, a card of handwritten rates clipped to its side mid-swap while the taps keep running. A cat keeps watch beside it.](./images/hero-2026-07-15-proxyd-cli-budget-yaml.png)
 
+Every Claude CLI turn in the haus drinks from one $50/day pool, and until this week nobody could watch it drop. That gauge is now `budget.yaml`, bolted to the tank. Mundi — who tracks every dollar the hausehold spends — can read the meter instead of guessing at it.
 
 ## What landed
 
-Hot-reloaded **`~/.sanctum/sanctum-proxy/budget.yaml`** drives Claude CLI spend (**$50/day** shared), model pricing, and sanctum seat policy. Route notices are **one green line** in iTerm2; truncated local context is **one red DEGRADED line**. Follow-ups: once-per-prompt banners (PR #29) and free-sub-first fallbacks. A temporary **$150** raise during Max weekly limit was **reverted to $50**.
+The file hot-reloads. Edit **`~/.sanctum/sanctum-proxy/budget.yaml`**, save, and the running proxy picks up the new numbers without a restart: the shared **$50/day** Claude CLI cap, per-model pricing, and which sanctum seats are allowed to spend. No redeploy. No dropped turn mid-edit.
 
-Full reference: [Proxyd budget.yaml](/architecture/proxyd-budget/).
+Two banners tell you what the proxy decided. Every route notice is a single **green line** in iTerm2 — one call, one glance. When a local model has to truncate context to fit, you get a single **red DEGRADED line** instead, so a quietly shortened prompt never passes for a clean one.
+
+We already know what comes next: once-per-prompt banners (**PR #29**) so a chatty turn stops painting the terminal green, and free-sub-first fallbacks so the pool only pays once the subscriptions run dry.
+
+One honest scar sits in the history. During a Max weekly-limit squeeze we bumped the pool to **$150** to keep working. It was meant to be temporary, and it is back to **$50**. The gauge should read what the tank actually holds.
 
 ## Proof
 
-- `cargo test -p sanctum-proxy` — **68 unit tests** green (incl. fit_context)
+None of the above is a claim until it is green.
+
+- `cargo test -p sanctum-proxy` — **68 unit tests** pass (incl. `fit_context`)
 - `test_e2e_budget_route.sh` — health, hot-reload, cap in `/stats`, binary markers
 - Merged to **sanctum-rs `main`**: PR #28 (budget.yaml), PR #29 (banner once-per-prompt)
-- Live manoir `:4040`: agent `claude-code` pool active; binary `~/.sanctum/bin/proxyd`
+- Live manoir **`:4040`**: agent `claude-code` pool active; binary `~/.sanctum/bin/proxyd`
 
 ## Deferred (archived tags, not on main)
+
+Two branches did not make the cut, and saying so out loud is part of keeping the record honest.
 
 - `archive/feat-proxyd-presidio-scrub` — deeper OpenRouter PII scrub (Presidio wiring partially on main; full D1 branch archived)
 - `archive/feat-proxy-hardening` — mixed WIP (model_scout cert bypass + unrelated mlx/admit) — **not** merge-ready
 
 ## Source
 
-**main** only. Deploy: build `sanctum-proxy` from sanctum-rs, install to `~/.sanctum/bin/proxyd`, `pkill -x proxyd` / launchd kickstart.
+**main** only. To deploy: build `sanctum-proxy` from sanctum-rs, install the binary to `~/.sanctum/bin/proxyd`, then `pkill -x proxyd` and let launchd kickstart it back up. The full field reference is [Proxyd budget.yaml](/architecture/proxyd-budget/), and the longer story of why the proxy stopped being the thing we blamed lives in [The proxy was never the problem](/operations/2026-07-21-the-proxy-was-never-the-problem/).
+
+Mundi checks the gauge every morning now. For a week it has read fifty dollars, and stayed there.

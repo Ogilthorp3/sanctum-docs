@@ -40,7 +40,9 @@ Then there was signal-health, which fired **46 "Signal Down" criticals** in
 those same 48 hours, each off a single `curl` read, and each one *restarting
 signal-cli* — needlessly bouncing a transport that was carrying messages fine.
 The guard didn't just lie; it acted on its lie, and the action was a small
-self-inflicted outage.
+self-inflicted outage. We had seen this shape once before, the day
+[R2D2 stopped paging itself](/operations/2026-06-01-r2d2-stops-paging-itself/) —
+a supervisor so eager to help it became its own incident.
 
 ## The deeper cost
 
@@ -66,7 +68,9 @@ And a convention to go with them, three rules deep:
 1. **Probe the authoritative signal, not a proxy that drifts.** Ask
    `loggedIn`, not a keychain expiry field. Ask launchctl `state = running`,
    not a banner that folds in someone else's backend. Ask for an end-to-end
-   reply when one is cheap. The honest signal is usually the boring one.
+   reply when one is cheap. The honest signal is usually the boring one — the
+   lesson [the vision probe taught us when it lied](/operations/2026-05-10-the-vision-probe-lied/)
+   by trusting the wrong readout.
 2. **Confirm before a critical.** No panic-class page off a single read, ever.
 3. **Be honestly blind.** When you could not observe the thing, return
    `unknown` — never fabricate `down`. A guard that admits it couldn't see is
@@ -92,7 +96,10 @@ After the fixes landed, the count of false criticals went to zero. The Claude-Ma
 keep-warm reads `loggedIn` and stopped its half-hourly lie. The castellan canary
 confirms the deadman twice before it dares the panic page. signal-health stopped
 restarting a transport that was never down. The guards still watch everything
-they watched before — they just earn their certainty before they shout.
+they watched before — they just earn their certainty before they shout. Two
+lines in `alert-confirm.sh` became a clause in
+[the reliability doctrine](/architecture/reliability-doctrine-v1/): confirm,
+then cry.
 
 <Aside type="note">
 The cure for a guard that cries wolf is not a quieter guard. A quieter guard

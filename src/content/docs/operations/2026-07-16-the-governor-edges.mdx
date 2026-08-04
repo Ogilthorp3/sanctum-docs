@@ -1,33 +1,41 @@
 ---
 title: "The Governor Edges"
-description: "Wiring sanctum-triage to Castellan admission, reading Chitti posture directly, and deploying the spend tracker loop for Thalamus."
+description: "Finishing the P4 Governor: unifying metabolic authority under Castellan, wiring Chitti posture to Thalamus, and metering per-agent spend — filing the edges of a machine that was already spinning."
 date: 2026-07-16
 ---
 
 
-![A pencil-sketched craftsman kneeling to file the last rough edge of a governor that is already built and spinning, teal light streaming from the machine — finishing the edges, not rebuilding it.](./images/hero-2026-07-16-the-governor-edges.png)
+![A pencil-sketched craftsman kneeling to file the last rough edge of a governor already built and spinning, teal light streaming from the machine — finishing the edges, not rebuilding it.](./images/hero-2026-07-16-the-governor-edges.png)
 
-# The Governor Edges
+Every guide to building a governor starts with a blank workbench. Ours started with one already bolted down and turning. The P4 Governor — the thing that decides what the haus is allowed to spend of itself before it starts shedding load — was not a machine we needed to build today. It was a machine we needed to stop pretending we still had to build.
 
-**Date:** 2026-07-16
+The plan (aligned in `01-architecture-alignment.md`) said as much in the quietest possible language: the governor already exists. It is [Castellan](/architecture/the-castellan/) deciding who gets admitted, and it is [sanctum-triage](/architecture/sanctum-triage/) doing the reflexive killing when the body runs hot. Two organs, one job, and until today they were not entirely sure that was the arrangement. So we did not roll steel. We knelt down with a file and took the burrs off the edges that were catching.
 
-The plan for the P4 Governor (as aligned in `01-architecture-alignment.md`) was implemented today. The goal was never to build a new governor from scratch, but rather to finish the edges of the one that already exists (`Castellan` + `sanctum-triage`).
+## One hand on the throttle
 
-## 1. Wiring Triage to Castellan
-Previously, `sanctum-triage` ran its own manual memory polling (parsing `vm_stat` outputs) and made independent L2 SIGTERM decisions on Apple bloat when free memory dropped below 8GB. This resulted in a three-way fragmentation of metabolic authority between Castellan, triage, and the watchdog memory sentinel.
+The first edge was a governance problem disguised as a memory-management problem. `sanctum-triage` had been running its own manual memory polling — parsing `vm_stat` output, watching for free memory to drop below 8GB, and firing independent L2 SIGTERM decisions on Apple bloat when it did. Castellan was doing its own headroom math. The watchdog memory sentinel had opinions too. Three organs, all convinced they were the one holding the throttle, none of them talking. Metabolic authority split three ways is not resilience; it is a haus where three people reach for the thermostat.
 
-Today, we stripped the manual memory polling out of `sanctum-triage`. It now queries Castellan's `/status` endpoint (`:2189`) and respects its `headroom_mb` calculation. If Castellan reports a negative headroom (meaning admission control is actively shedding or denying), triage executes the Apple bloat sweep as a backstop.
+So we took the polling out of triage entirely. It now asks Castellan the way everyone else does — a query to `/status` on `:2189` — and respects Castellan's own `headroom_mb` calculation as the single source of truth. Triage still keeps its reflex, but it fires on a signal instead of a hunch: if Castellan reports negative headroom, meaning admission control is already actively shedding or denying, triage runs the Apple bloat sweep as a backstop. One organ decides the state of the body. The other reacts to it. This is the whole [capacity doctrine](/architecture/capacity-doctrine/) in miniature — the reflex is allowed to be fast precisely because it no longer has to be right on its own.
 
-## 2. Reading Chitti Posture
-The alignment document specified that when Castellan sheds/denies, or when Chitti posture spikes to `>= Alert`, we should post a Thalamus item. Since Castellan's `api.rs` already posts to Thalamus upon admission denial, we only needed to add the Chitti posture check.
+## Wiring the alarm to the cortex
 
-`sanctum-triage` now continuously polls Chitti's `/mood` endpoint. If the posture spikes to `alert` or `fever`, triage posts a high-priority alert to Thalamus, providing the cortex with immediate visibility into the body's acute stress. 
+The second edge was about who gets told. The alignment document was specific: when Castellan sheds or denies, or when [Chitti](/architecture/chitti/) posture spikes to `>= Alert`, a Thalamus item should be posted — the body's acute stress made visible to the part of the system that thinks. Half of that was already done. Castellan's `api.rs` posts to Thalamus the moment it denies an admission; it had been quietly narrating its own refusals all along. What was missing was the body's own voice.
 
-## 3. The Spend Tracker
-To fulfill the requirement for daily per-agent digests and 80% budget alerts, we added an asynchronous `spend_tracker_loop` to `sanctum-triage`.
+So triage now continuously polls Chitti's `/mood` endpoint. If posture spikes to `alert` or `fever`, it posts a high-priority alert to Thalamus. Cilghal would appreciate the symmetry: the haus already tracked its own heart rate, but nothing was wired to say the heart rate out loud where the cortex could hear it. Now it is. When the body runs a fever, someone upstairs finds out before the fever finds the door.
 
-This loop runs every 5 minutes, securely pulling `/stats` from Proxyd over HTTPS (using the local CA bundle). It tracks token consumption across all seated models.
-- **Spend Digest:** It writes a daily summary to `~/.sanctum/memory/inbox/spend-YYYY-MM-DD.md`, ensuring the data eventually consolidates into the Vault.
-- **Budget Alerts:** If any agent crosses 80% of their allocated daily budget (`tokens_used / daily_limit`), it fires a critical Thalamus alert to intercept runway behavior before it hits the hard cap.
+## Metering the appetite
 
-The updated `sanctum-triage` binary was cross-compiled on the MBP and deployed directly to the Mac Mini host, completing the P4 Governor implementation.
+The third edge belonged to Mundi. The requirement was mundane and non-negotiable: daily per-agent spend digests, and an alert before any single agent eats its whole budget. We added an asynchronous `spend_tracker_loop` to `sanctum-triage`.
+
+The loop runs every five minutes and pulls `/stats` from Proxyd over HTTPS, verified against the local CA bundle — no plaintext, no shortcuts, even for a token count. It tracks consumption across every seated model and does two things with it:
+
+- **Spend digest.** It writes a daily summary to `~/.sanctum/memory/inbox/spend-YYYY-MM-DD.md`, which means the numbers eventually consolidate into the Vault where everything the haus knows about itself ends up.
+- **Budget alerts.** If any agent crosses 80% of its allocated daily budget (`tokens_used / daily_limit`), it fires a critical Thalamus alert — early enough to intercept a runaway agent before it hits the hard cap, not after.
+
+An agent about to spend its month in an afternoon is exactly the kind of thing you want to hear about at 80%, not at 100%. Mundi has never once tolerated finding out after the fact, and now neither does the governor. The budget-side detail lives in [proxyd-budget](/architecture/proxyd-budget/) if you want the ledger's view of it.
+
+## The last burr
+
+The updated `sanctum-triage` binary was cross-compiled on the MBP and deployed directly to the Mac Mini host — the training station builds, production runs, the way it always does here. That was the last burr. The P4 Governor did not get built today; it got finished. Two organs that were guessing at each other now share one source of truth, the body has a wire to the cortex, and the appetite has a meter with an alarm on it.
+
+The machine was already spinning. We just stopped it from catching.

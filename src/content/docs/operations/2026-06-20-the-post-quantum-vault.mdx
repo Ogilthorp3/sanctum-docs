@@ -12,17 +12,21 @@ description: >-
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A vault door etched with a crypto lattice and a fused classical-plus-quantum lock, guarding data for thirty years. Tommy keeps the words you carry in your head.](./images/hero-the-post-quantum-vault.png)
+![A vault door etched with a crypto lattice and a fused classical-plus-quantum lock, guarding thirty years of data behind a key that lives only in someone's head — the way the haus's guardian spirit keeps what matters.](./images/hero-the-post-quantum-vault.png)
+
+A patient adversary does not need to break your encryption. He needs to copy it,
+and wait.
 
 Most of the stack defends data **in motion** — mTLS on `:1337`, post-quantum key
-exchange at the proxy, WireGuard between machines. But the hardest part of the
-threat model isn't the wire; it's the **archive**. Some data is sensitive
-*forever*, and forever is long enough that a patient adversary can copy the
-ciphertext today and wait for a quantum computer to read it later. Harvest-now,
-decrypt-later. The answer is not a faster classical cipher. It's a vault whose
-confidentiality does not rest on a problem a quantum computer makes easy.
+exchange at the [proxy](/architecture/proxy/), WireGuard between machines. That
+is the wire, and the wire is the easy part. The hard part is the **archive**.
+Some data stays sensitive *forever*, and forever is long enough for that patient
+adversary to harvest the ciphertext today and read it the morning a quantum
+computer finally boots. Harvest-now, decrypt-later. A faster classical cipher
+does not save you here. Only a vault whose confidentiality does not rest on a
+problem a quantum computer makes easy.
 
-`sanctum-vault` is that vault: quantum-resistant **at-rest** encryption, plus a
+`sanctum-vault` is that vault. Quantum-resistant **at-rest** encryption, plus a
 recovery ceremony deliberate enough to trust with data you can afford neither to
 lose nor to leak.
 
@@ -30,10 +34,11 @@ lose nor to leak.
 
 The seal wraps a data-encryption key with the **X-Wing** KEM combiner
 (`draft-connolly-cfrg-xwing-kem`): **X25519** (classical) *and* **ML-KEM-768**
-(post-quantum, FIPS 203) combined so the result is at least as strong as the
+(post-quantum, FIPS 203), combined so the result is at least as strong as the
 stronger half. The payload itself is sealed under a committing **AES-256-GCM**
 AEAD, framed in 1 MiB chunks, with a **separately signed manifest** carrying the
-algorithm identifiers and the recipient fingerprint.
+algorithm identifiers and the recipient fingerprint. Belt and suspenders — and
+the suspenders came back from the future to warn us.
 
 <Aside type="tip" title="Why hybrid">
 A pure post-quantum scheme asks you to bet everything on a young primitive;
@@ -44,7 +49,8 @@ alone, still leaves the other half standing.
 
 ## The ceremony — mint, anchor, drill, seal
 
-Encryption is the easy 10%. The 90% that earns trust is custody and recovery.
+Encryption is the easy 10%. The 90% that earns trust is custody and recovery —
+the part nobody watches until the night it is the only thing that matters.
 
 - **Mint, air-gapped.** `mint-recipient` runs under `sudo unshare -n` — a network
   namespace with no interface but loopback — so the secret key has no exfiltration
@@ -73,8 +79,8 @@ accept — so we keep a negative control next to every positive one.
 
 ## What "verified" actually means
 
-The seal was put through an end-to-end sweep — real artifacts crossing real
-boundaries, not structural assertions:
+The seal was put through an end-to-end sweep. Real artifacts crossed real
+boundaries. Not "the field exists" — the bytes match.
 
 | Property | How it was proven |
 | --- | --- |
@@ -86,9 +92,10 @@ boundaries, not structural assertions:
 
 ## Three boundary gotchas
 
-This is the "Contracts at the Boundary" doctrine in miniature — every one of these
-was a bug caught *before* it shipped, because the test was written from the
-consumer's reality instead of the producer's hope.
+This is the [Contracts at the Boundary](/architecture/engineering-discipline/)
+doctrine in miniature. Every one of these was a bug caught *before* it shipped,
+because the test was written from the consumer's reality instead of the
+producer's hope.
 
 1. **Exit codes lie across `limactl shell`.** Run a guest command through it and
    even `-- false` returns `0` — the outer exit code carries no information. Every
@@ -107,8 +114,8 @@ consumer's reality instead of the producer's hope.
 
 ## Honest edges
 
-Two things the sweep found and did **not** paper over — because a security page
-that only lists wins is a marketing page.
+Two things the sweep found and did **not** paper over. A security page that only
+lists wins is a marketing page.
 
 <Aside type="danger" title="Verification is environment-sensitive">
 Known-answer tests are only as good as the host that runs them. The ML-KEM-768
@@ -130,6 +137,9 @@ air-gapped."
 </Aside>
 
 ---
+
+The diceware words never touch a disk. They live in exactly one place: your
+head. So does the vault.
 
 The doctrine, in one line: **encrypt for the adversary you'll face in thirty
 years, recover from something you can carry in your head, and trust no gate you

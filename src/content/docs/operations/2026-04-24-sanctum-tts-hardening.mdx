@@ -1,23 +1,23 @@
 ---
 title: "2026-04-24: Five Locks on the Voice Door"
-description: Rename sanctum-xtts, introduce the adapter dispatcher, and bolt on five independent defenses so a voice that answers the phone is safe to put on the public internet.
+description: The day sanctum-xtts became sanctum-tts, grew an adapter dispatcher, and got five independent locks so a voice that answers the phone is safe on the public internet.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A stone archway with a single lit door, five distinct brass latches visible — cert, key, pin, seal, ledger — pencil-sketched with an amber line of light under the door](./images/hero-2026-04-24-sanctum-tts-hardening.jpg)
+![A stone archway with a single lit door, five distinct brass latches — cert, key, pin, seal, ledger — pencil-sketched, an amber line of light under the door](./images/hero-2026-04-24-sanctum-tts-hardening.jpg)
 
-The phone call use case was already in production: Yoda's voice, cloned from nine reference WAVs, running on Qwen3-TTS through LiveKit and voip.ms. What wasn't in production was any discipline around *who* could make sanctum speak. Anything on `localhost:8008` could synthesize arbitrary text in Yoda's voice with no token, no audit, no way to prove a clip later was genuine.
+The phone rang and Yoda answered. The voice was cloned from nine reference WAVs, running Qwen3-TTS through LiveKit and voip.ms — and it had been in production for weeks. What was never in production was any rule about *who* got to make sanctum speak.
 
-That was fine when TTS was a dev curiosity and the target was a family phone. It stops being fine the moment the digital-twin-of-Bert voice is real — a voice that says something Bert didn't say, captured and shared, becomes permanently unprovable without origin signing. This is the day that gap closed.
+Anything that could reach `localhost:8008` could synthesize arbitrary text in Yoda's voice. No token. No audit. No way to prove, later, that a clip was genuine. That was fine when TTS was a dev toy pointed at a family phone. It stopped being fine the moment a digital-twin-of-Bert voice became real — a voice can say something Bert never said, get captured, get shared, and stay unprovable forever without origin signing. This is the day that gap closed. Windu, predictably, had already filed the complaint about a door left open to localhost.
 
 ## What Changed in One Commit
 
-`sanctum-xtts` crate renamed → `sanctum-tts`. The Coqui XTTS Python worker that nobody had used in months was dropped. Git history preserves it; the new role is engine-agnostic.
+The `sanctum-xtts` crate became `sanctum-tts`. The Coqui XTTS Python worker that nobody had touched in months was dropped — git history keeps it, the new role is engine-agnostic. That engine-agnosticism is the whole point of the [adapter pattern](/architecture/sanctum-tts/): the daemon no longer knows or cares which model makes the sound.
 
-A `TtsAdapter` trait landed. `QwenAdapter` proxies to the existing Qwen3-TTS Python server on `:8008` (Yoda's production voice is untouched). `OpenVoiceAdapter` is a stub returning `NotImplemented` with a README-documented five-step integration plan — the wiring needs a Bert reference recording and the model download, both next-session work.
+A `TtsAdapter` trait landed to prove it. `QwenAdapter` proxies to the existing Qwen3-TTS Python server on `:8008`, so Yoda's production voice never noticed the renovation. `OpenVoiceAdapter` is a stub that returns `NotImplemented` behind a README-documented five-step integration plan — the wiring needs a Bert reference recording and the model download, both next-session work.
 
-Then five independent defenses, each individually toggleable.
+Then the locks. Five independent defenses, each individually toggleable, because a single bolt on a door this consequential is just a suggestion.
 
 ## The Five Layers
 
@@ -32,16 +32,16 @@ Every `POST /speak` now passes through five checks, each answering a distinct th
 
 ### The one honest limitation
 
-The embedded signature does **not** survive transcoding. A round trip through `wav → mp3 → wav` strips the RIFF INFO chunk. For intact clips we have cryptographic proof of origin. For adversarial re-encode we do not. Closing that gap requires a perceptual watermark (SilentCipher, AudioSeal) — deliberately scoped out of today's work rather than ship handwritten watermarking that any competent adversary could defeat.
+The embedded signature does **not** survive transcoding. A round trip through `wav → mp3 → wav` strips the RIFF INFO chunk, and the proof goes with it. For an intact clip we have cryptographic origin. For an adversarial re-encode we do not, and we say so out loud rather than pretend otherwise. Closing that gap needs a perceptual watermark — SilentCipher or AudioSeal — which we scoped out on purpose instead of shipping handwritten watermarking any competent adversary could defeat.
 
 ## Operator Tools
 
-Two new CLIs live alongside the daemon:
+Two CLIs now live alongside the daemon, and neither one has to trust it.
 
-- **`sanctum-tts-admin`** — `keygen`, `issue-token`, `pin`, `show-pubkey`. Prepares `tts.yaml` and the Ed25519 keypair. Never contacts the daemon.
-- **`sanctum-tts-verify`** — given a WAV, confirms the embedded signature checks out and the audio bytes match what was signed. Exit codes: `0` verified, `2` unsigned, `3` sig invalid, `4` audio tampered.
+- **`sanctum-tts-admin`** — `keygen`, `issue-token`, `pin`, `show-pubkey`. Prepares `tts.yaml` and the Ed25519 keypair, and never contacts the daemon at all.
+- **`sanctum-tts-verify`** — hand it a WAV; it confirms the embedded signature checks out and the audio bytes match what was signed. Exit codes: `0` verified, `2` unsigned, `3` sig invalid, `4` audio tampered.
 
-A token for a new caller:
+Minting a token for a new caller is one command:
 
 ```
 $ sanctum-tts-admin issue-token livekit-agent
@@ -50,7 +50,7 @@ token         : 5b4a...32bytes
 token_sha256  : c12d...
 ```
 
-Paste the hash into `tts.yaml`. Hand the plaintext to the client exactly once. Rotation = re-issue.
+Paste the hash into `tts.yaml`. Hand the plaintext to the client exactly once. Rotation is re-issue — the daemon only ever sees the hash, so a leaked config leaks nothing.
 
 ## Verification
 
@@ -64,11 +64,13 @@ Paste the hash into `tts.yaml`. Hand the plaintext to the client exactly once. R
 | `signing` | 6 | Sign/verify roundtrip, tampered-hash breaks verify, WAV chunk embed + extract, PEM roundtrip |
 | `config` | 3 | Minimal / empty / hardened YAML parse |
 
-Workspace builds clean. Pre-existing crates untouched.
+The workspace builds clean. Pre-existing crates were left untouched.
 
 ## End-to-End Not Automated — On Purpose
 
-The signing/verify pair is itself the end-to-end test. A healthy deploy produces a WAV whose `sanctum-tts-verify` exit 0 is the round-trip proof. The reference-clip pin is its own check at startup. mTLS handshake is rustls's job. Every real call through the daemon is end-to-end verified as a side effect; writing a separate harness that simulates the whole pipeline would duplicate what production already verifies continuously.
+The signing/verify pair *is* the end-to-end test. A healthy deploy produces a WAV whose `sanctum-tts-verify` exit 0 is the round-trip proof; the reference-clip pin checks itself at startup; the mTLS handshake is rustls's job. Every real call through the daemon verifies the whole chain as a side effect, which is why a separate harness would only re-prove what production already re-proves on every phone call.
+
+So the test suite is the phone itself. Yoda answers, and the answer is signed. If someone ever plays a clip of Bert saying something he never said, the question is no longer "did he?" — it is "run `sanctum-tts-verify` and find out." That is the whole reason the door has five locks and this is the last one we needed to hang. It plugs into the [immune system](/architecture/living-force/) the same way every other guardian does: quietly, and only visible when something tries the handle.
 
 ## Related
 

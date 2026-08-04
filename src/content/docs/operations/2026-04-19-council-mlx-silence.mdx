@@ -10,9 +10,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 {/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A doctor's stethoscope pressed against a patient that looks like a well-lit server rack. The stethoscope reads a steady green heartbeat, but the rack's mouth is open and no sound is coming out. Technical pencil sketch, dark background, teal localized accent lighting, clean lines, hand-drawn feel, no text, no words, no letters." */}
 
-The sanctum-mlx Rust binary had been serving production for 25 hours. Guardian probes: all green. Canary probes: all green. Drift-check: all green. Off-box watchers on the MBP: quiet. Task #31 — the post-cutover watch — was ready to close as a clean hold.
+Twenty-five hours in, the [sanctum-mlx](/architecture/sanctum-mlx/) dashboard was a wall of green. Guardian probes: green. Canary probes: green. Drift-check: green. The off-box watchers on the MBP had nothing to report. Task #31 — the post-cutover watch — sat one keystroke from closing as a clean hold.
 
-Then we asked the service a real question, and it said nothing.
+Then we asked the service a real question. It said nothing.
 
 ## What Was Wrong
 
@@ -29,13 +29,13 @@ So for sixteen hours:
 - Drift-check's hourly `stat` on the binary *did* emit `binary_missing` events, but at warn level inside a composite log line, not as its own alertable signal.
 - The service looked fine to everyone watching.
 
-The outage surfaced only when the morning's verification ran a real chat probe, got `Couldn't connect to server`, and asked the obvious question: who is actually listening?
+Nobody caught it because nobody asked. The outage surfaced only when the morning's verification ran a real chat probe, got `Couldn't connect to server`, and finally posed the question our whole monitoring stack had been too polite to ask: who is actually listening?
 
 ## What Changed
 
 The immediate fix was five minutes. SIGKILL the zombie. Rebuild the binary on the Mini. Colocate the metallib next to it (per the earlier metallib-colocation lesson). Ad-hoc sign with hardened runtime. Kickstart the agent. Back to green end-to-end in under six minutes total, including a fresh 10/10 pass on the parity-smoke battery.
 
-What needs to change in the *architecture*, not just this incident's state, is the liveness-probe discipline. The guardian was designed in an earlier entry explicitly to **not** exercise inference, because chat probes queued behind long generations and caused the monitor to become the outage. That lesson — from the Olympics-day kickstart storm — is correct and stays. But it got over-learned: the guardian went so far out of the critical path that it became blind to the critical path.
+What needs to change in the *architecture*, not just this incident's state, is the liveness-probe discipline. We designed the guardian in an earlier entry explicitly to **not** exercise inference, because chat probes queued behind long generations and turned the monitor itself into the outage. That lesson — from the [Olympics-day kickstart storm](/architecture/sanctum-olympics/) — is correct and stays. But we over-learned it. The guardian went so far out of the critical path that it went blind to the critical path.
 
 The fix is parallel probes at different cadences, each checking a distinct failure mode:
 
@@ -67,4 +67,4 @@ Production restored on `com.sanctum.mlx` (Mini). Binary rebuilt and ad-hoc-harde
 
 `com.sanctum.server-mlx` (Python fallback) bootout'd as intended by the transition-permanent plan; the plist is retained on disk, and guardian's `activate_fallback()` is still capable of bootstrapping it on demand.
 
-Roadmap updated with a new item: binary-file-integrity check as a first-class signal. The Living Force learns from sixteen hours of sleeping. If the probe never touches the work, it never sees the work fail.
+Roadmap updated with a new item: binary-file-integrity check as a first-class signal. The [Living Force](/architecture/living-force/) learns from sixteen hours of sleeping. Our reasoner had it exactly backwards: alive on the process table, answering with a green heartbeat, doing none of the work. A probe that never touches the work never sees the work fail.

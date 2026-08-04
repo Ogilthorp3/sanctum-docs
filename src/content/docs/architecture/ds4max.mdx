@@ -1,0 +1,104 @@
+---
+title: ds4max — Local Flash at Haus Scale
+description: Smart DwarfStar agent launcher on the MBP — memory-aware full residency vs SSD streaming, Think Max, Claude_Code chdir, and the EETISMAD bar.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Pencil sketch of a MacBook memory gauge forking into a solid full-resident path and a dashed SSD-streaming path under a small bright star.](./images/hero-ds4max.jpg)
+
+DeepSeek-V4-Flash-0731 fits on a 128 GB MacBook. Fitting is not the same as *shipping*. The failure mode is launching `ds4-agent` with a 1M context and Think Max while Chrome leftovers and LanguageTool still hold the reclaimable pool, then spending twenty minutes wondering whether Metal is broken or the kernel is thrashing. `ds4max` is the admission gate for that launch: measure free RAM, pick full residency or SSD streaming, pick the largest context that still allows Think Max when possible, and only then start the agent in `~/Projects/Claude_Code`.
+
+**Date:** 2026-08-02 · **Status:** Active · **Host:** MBP (M4 Max 128 GB)
+
+This page is the operator doctrine. Weights stay on disk under `~/Projects/ds4/gguf/`. Wrappers live in `~/.sanctum-mbp/bin/` and reach `PATH` through `~/.local/bin` symlinks — same durability rule as `gitsync`.
+
+## What You Run
+
+```bash
+ds4max --check     # plan only: mode, ctx, expert cache, think
+ds4max             # plan + launch ds4-agent
+ds4max -p "…"      # same, with an initial prompt
+test-ds4max        # E2E smoke (planner + install; does not load weights)
+```
+
+Defaults the planner fills when you do not override them:
+
+| Knob | Smart default |
+|------|----------------|
+| Model | DeepSeek-V4-Flash-0731 q2-imatrix (`ds4flash.gguf` → GGUF) |
+| Workdir | `~/Projects/Claude_Code` (`--chdir`) |
+| Thinking | `--think-max` if ctx ≥ 393216, else `--think` |
+| Residency | Full if reclaimable RAM covers weights+KV+headroom; else `--ssd-streaming` |
+| Context ladder | 1M → 750k → 500k → 393216 → 256k → 128k → 64k |
+
+## Capacity Math (Flash on Metal)
+
+Flash uses compressed attention. Context buffers are cheap relative to the GGUF:
+
+| Context | Approx. KV+scratch | Weights + ctx (q2 ~81 GiB) |
+|--------:|-------------------:|---------------------------:|
+| 393k (Think Max min) | ~6.4 GiB | ~87 GiB |
+| 500k | ~8.0 GiB | ~89 GiB |
+| 1M | ~15.7 GiB | ~96 GiB |
+
+Full residency is fastest and remains preferred when reclaimable memory covers **weights + context buffers + headroom (~10 GiB) + agent overhead (~2 GiB)**. That is the same class of rule as the [Capacity Doctrine](/architecture/capacity-doctrine/): refuse or reshape the load *before* Metal allocates.
+
+When full does not fit, SSD streaming keeps non-routed tensors resident and caches routed MoE experts with a GiB budget derived from leftover reclaimable RAM (floored and capped). Decode can slow on expert misses; prefills often stay usable. Prefer full when you have the RAM; stream when you need 1M Think Max on a busy laptop.
+
+<Aside type="tip">
+Reclaimable RAM for the planner is macOS `free + speculative + inactive + purgeable` pages from `vm_stat` — not Activity Monitor's casual "Memory Used." Closing apps moves pages into inactive; they already count as reclaimable. Killing zombie `agent-browser` Chromes and LanguageTool frees *active* RSS that was not fully reclaimable yet.
+</Aside>
+
+## Planner Ladder
+
+At launch `ds4max` scores candidates and picks the first that fits:
+
+1. **Full** + largest ctx on the ladder (bonus for Think Max–eligible ctx)
+2. **Stream** + largest ctx + expert cache sized from leftover RAM
+3. Smaller ctx steps down the ladder
+4. Think Max only when ctx ≥ 393216 (engine floor)
+
+Overrides win: `-c`, `--think-max` / `--think` / `--nothink`, `--ssd-streaming`, `--chdir`, `-m`. Env pins: `DS4_CTX`, `DS4MAX_CHDIR`, `DS4MAX_HEADROOM_GIB`, `DS4MAX_MIN_EXPERT_GIB`, `DS4MAX_MAX_EXPERT_GIB`.
+
+```bash
+ds4max --prefer-full      # never stream; fail if full will not fit
+ds4max --prefer-stream    # bias to streaming even if full might fit
+ds4max --force            # launch best plan even if slightly over estimate
+ds4max -c 500000          # pin context; still choose full vs stream
+```
+
+## Install Surface (Durability)
+
+| Path | Role |
+|------|------|
+| `~/Projects/ds4/` | Upstream DwarfStar tree + `gguf/` weights |
+| `~/.sanctum-mbp/bin/ds4{,-agent,max}` | Tracked wrappers (Metal env, defaults) |
+| `~/.local/bin/ds4*` | Symlinks into `sanctum-mbp` — live == repo |
+| `~/.sanctum-mbp/bin/test-ds4max.sh` | E2E smoke |
+
+Wrappers export absolute `DS4_METAL_*_SOURCE` paths so `--chdir` into Claude_Code does not break shader load. That bug class is why absolute Metal paths are not optional.
+
+## EETISMAD
+
+Shipping bar for haus tools that leave the laptop. Expanded:
+
+**Everything E2E Tested, in Sanctum-docs, Merged And Deployed.**
+
+| Letter | Meaning for ds4max |
+|--------|--------------------|
+| **E**verything **E**2E **T**ested | `test-ds4max` green; planner chooses a coherent plan under live `vm_stat` |
+| **i**n **S**anctum-**d**ocs | This page + sidebar entry |
+| **M**erged | Landed in `sanctum-mbp` (wrappers) and `sanctum-docs` (this chapter) via `gitsync` |
+| **A**nd **D**eployed | Symlinks live on `PATH`; model GGUF present; `ds4max --check` returns OK |
+
+If any letter fails, it is not done. A clever script in `~/.local/bin` that is not in the config repo is not durable. Docs without a sidebar entry are not shipped. A plan that never ran `test-ds4max` is narration.
+
+## Related
+
+- [Capacity Doctrine](/architecture/capacity-doctrine/) — refuse bad loads before the kernel panics
+- [Engineering Discipline](/architecture/engineering-discipline/) — tests, secrets, shipping bar
+- [gitsync](/architecture/gitsync/) — how wrappers and docs land
+- [Sanctum MLX](/architecture/sanctum-mlx/) — the other local-inference seat (council path)
+
+Upstream engine: [antirez/ds4](https://github.com/antirez/ds4). Quant weights: [antirez/deepseek-v4-gguf](https://huggingface.co/antirez/deepseek-v4-gguf) (`*-0731*` for the GA Flash checkpoint).

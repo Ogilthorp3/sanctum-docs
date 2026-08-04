@@ -1,15 +1,17 @@
 ---
 title: Privacy
-description: What data leaves your Mac, where it goes, what's encrypted, what we never collect. The honest version.
+description: What data leaves your Mac, where it goes, what's encrypted, what we never collect. The honest version, kept in a very short ledger.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A pencil sketch of a wooden chest with three brass keyholes on a clean desk; an Abyssinian cat sits beside it, paw on a small ledger labeled "what crossed the threshold"](./images/privacy.png)
+![A pencil sketch of a wooden chest with three brass keyholes on a clean desk; Tommy the Abyssinian sits beside it, one paw resting on a small ledger labeled "what crossed the threshold"](./images/privacy.png)
 
-Sanctum is opinionated about your data: as much of it as possible stays on hardware you own. This page is the operator's honest accounting of what crosses the threshold, where it goes, who can read it.
+A wooden chest sits on the desk, three brass keyholes, nothing spilled. Beside it, Tommy — the haus's Abyssinian, now a force-ghost — keeps one paw on a ledger titled *what crossed the threshold*. The ledger is short. We work to keep it that way: Sanctum is opinionated about your data, and as much of it as possible stays on hardware you own. What follows is the operator's honest accounting of the few things that do cross, where they go, and who can read them.
 
 ## TL;DR
+
+Five rows. Then the details, for anyone who — on a privacy page especially — refuses to trust a summary table.
 
 | Category | Where it lives | Who can read it |
 |---|---|---|
@@ -21,16 +23,16 @@ Sanctum is opinionated about your data: as much of it as possible stays on hardw
 
 ## What sanctum-cli sends, and to where
 
-**Nothing**, unless you explicitly configure it. The CLI has no analytics pixel, no anonymous-usage telemetry, no opt-out backdoor that's actually opt-out-after-an-error-once. The `~/.sanctum/telemetry/cli.jsonl` file mentioned in the source is a *local* command-log — it stays on your Mac and is gitignored.
+**Nothing**, unless you explicitly configure it. No analytics pixel. No anonymous-usage telemetry. No opt-out backdoor that's actually opt-out-after-an-error-once. The `~/.sanctum/telemetry/cli.jsonl` file mentioned in the source is a *local* command-log — it stays on your Mac and is gitignored.
 
-When you DO configure things:
+When you DO configure things, two doors open, and both are locked from your side:
 
-- **Cloud backup** — your sanctum data is encrypted on your Mac with restic (AES-256, your operator-chosen passphrase) and uploaded to whichever bucket you set up during `sanctum onboard`. Cloudflare R2 / Backblaze B2 / Google Drive can see the ciphertext blobs. None of them can read the contents without your passphrase.
-- **LLM providers** — if you chat with Claude / Gemini, those prompts go to Anthropic / Google per their terms. Local cathedrals (Yoda 35B on `:1337`, Coder-14B on `:1338`) keep the prompt and the reply on your Mac.
+- **Cloud backup** — your sanctum data is encrypted on your Mac with restic (AES-256, your operator-chosen passphrase) and uploaded to whichever bucket you set up during `sanctum onboard`. Cloudflare R2 / Backblaze B2 / Google Drive can see the ciphertext blobs. None of them can read the contents without your passphrase. The full recovery story lives in [Backup & Restore](/operations/backup-restore/).
+- **LLM providers** — if you chat with Claude / Gemini, those prompts go to Anthropic / Google per their terms. Local cathedrals (Yoda 35B on `:1337`, Coder-14B on `:1338`) keep the prompt and the reply on your Mac. Nothing leaves.
 
 ## Credentials we ask you for, and what they grant
 
-All credentials live in macOS Keychain (`security find-generic-password -s sanctum/...`). The bundle is mode 600. None of these are sent anywhere by Sanctum itself — they're stored locally so the CLI can use them when you ask it to.
+All credentials live in macOS Keychain (`security find-generic-password -s sanctum/...`). The bundle is mode 600. None of these are sent anywhere by Sanctum itself — they're stored locally so the CLI can use them when you ask it to, and not one second before.
 
 | Credential | What it grants Sanctum | What it would grant someone who stole it |
 |---|---|---|
@@ -40,7 +42,7 @@ All credentials live in macOS Keychain (`security find-generic-password -s sanct
 | `sanctum/r2-*` / `b2-*` | Read/write your backup bucket | Access to your encrypted backups (still ciphertext) |
 | `sanctum/firewalla-bridge-token` | Local Firewalla MSP API access | LAN-scoped; useless outside your network |
 
-If your Mac is compromised, you should `sanctum keys backup` immediately to a separate device, then rotate these on the respective vendor dashboards. The `sanctum keys backup` bundle is AES-256-CBC + PBKDF2 with a passphrase you choose — keep that passphrase somewhere safe (your password manager).
+If your Mac is compromised, don't deliberate. Run `sanctum keys backup` immediately to a separate device, then rotate these on the respective vendor dashboards. The `sanctum keys backup` bundle is AES-256-CBC + PBKDF2 with a passphrase you choose — keep that passphrase somewhere safe, like your password manager. How these keys stay in sync across stores is its own story: [The Secrets Trifecta](/architecture/secrets-trifecta/).
 
 ## What we explicitly do not do
 
@@ -52,7 +54,7 @@ If your Mac is compromised, you should `sanctum keys backup` immediately to a se
 
 ## What we collect when you file a bug
 
-The [bug-report template](https://github.com/Ogilthorp3/sanctum-cli/issues/new/choose) asks for:
+You choose what to hand over, and the [bug-report template](https://github.com/Ogilthorp3/sanctum-cli/issues/new/choose) asks for the least it can:
 
 - sanctum-cli version (e.g. `v0.10.0`)
 - macOS version + chip
@@ -63,10 +65,10 @@ The form has a mandatory checkbox: **"I have NOT pasted credentials."** When in 
 
 ## The doctrine
 
-Sanctum's first family-facing service made an honesty mistake in April 2026 — an API claimed success when the underlying enforcement had silently failed. The fix (sanctum-screen-time Layer 1) became a doctrine: family-facing services must be **honest, bounded, defense-in-depth, no silent failures**. Privacy is a subset of that. We won't claim "no data sent" when there's an analytics pixel; we won't claim "encrypted" when only the transport is encrypted; we won't claim "you have control" when there's a "reset everything" link on a vendor's web console.
+We learned this one the hard way. Sanctum's first family-facing service made an honesty mistake in April 2026 — an API claimed success when the underlying enforcement had silently failed. The fix (sanctum-screen-time Layer 1) hardened into a doctrine: family-facing services must be **honest, bounded, defense-in-depth, no silent failures**. Privacy is a subset of that. We won't claim "no data sent" when there's an analytics pixel. We won't claim "encrypted" when only the transport is encrypted. We won't claim "you have control" when there's a "reset everything" link on some vendor's web console.
 
-If you find a privacy claim on this page that doesn't match what Sanctum actually does, file an issue. We'll either fix the code or fix the claim — but the page and the code stay matched.
+So hold us to it. If you find a privacy claim on this page that doesn't match what Sanctum actually does, file an issue. We'll either fix the code or fix the claim — but the page and the code stay matched, and Tommy's ledger stays short. That's the whole arrangement, and it's the one contract in this haus that never needs renegotiating.
 
 <Aside type="note">
-The signing chain that protects the binaries you install ([TCC Identity Anchors](/architecture/tcc-identity-anchors/)) is the technical backbone behind these claims. Apple Root CA → Developer ID Application: Node.js Foundation `HX7739G8FX` for `/usr/local/bin/node`; Apple Root CA → Developer ID Application: Bertrand Nepveu `GJ994MN2YF` for SanctumBridge.app. Stable for years; tamperable only by Apple revoking the cert or by you running unsigned binaries on top.
+The signing chain that protects the binaries you install ([TCC Identity Anchors](/architecture/tcc-identity-anchors/)) is the technical backbone behind these claims, and it pairs naturally with the broader [Security](/operations/security/) model. Apple Root CA → Developer ID Application: Node.js Foundation `HX7739G8FX` for `/usr/local/bin/node`; Apple Root CA → Developer ID Application: Bertrand Nepveu `GJ994MN2YF` for SanctumBridge.app. Stable for years; tamperable only by Apple revoking the cert or by you running unsigned binaries on top.
 </Aside>

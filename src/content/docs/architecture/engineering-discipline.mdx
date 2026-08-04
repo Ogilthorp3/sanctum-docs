@@ -5,22 +5,19 @@ description: Every shipping component carries its own suite, zero hardcoded keys
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Engineering Discipline — the security fortress where every commit is tested and every key is rotated.](./images/hero-engineering-discipline.png)
-
-# Engineering Discipline
-
-**Date:** 2026-04-11
-**Status:** Active
+![A pencil-sketch fortress of tests and rotated keys, one commit crossing the drawbridge under guard.](./images/hero-engineering-discipline.png)
 
 Running AI agents in your haus is either professional engineering or professional negligence. There is no middle ground. The same system that controls your kid's screen time also holds your API keys, your health data, and the credentials to your fund's deal flow pipeline. If that sentence doesn't make you want to write tests, nothing will.
 
-This page documents the standards that keep Sanctum from becoming a cautionary tale — the kind forwarded around Hacker News with subject lines like "man lets AI agents manage home, discovers API key on public GitHub three weeks later." The rule is simple: if it's not tested, it doesn't exist. The corollary is the one this page keeps honest — if it's deleted, it doesn't get to claim coverage either.
+**Date:** 2026-04-11 · **Status:** Active
+
+So this page documents the standards that keep Sanctum from becoming a cautionary tale — the kind forwarded around Hacker News with subject lines like "man lets AI agents manage home, discovers API key on public GitHub three weeks later." The rule is simple: if it's not tested, it doesn't exist. The corollary is the one this page keeps honest — if it's deleted, it doesn't get to claim coverage either.
 
 ## Test Coverage
 
 Every shipping component carries its own suite, and every suite runs independently. No untested code ships. No exceptions. No "we'll add tests later." Later is where bugs go to breed.
 
-The components that matter are the ones still on disk. The table below tracks what actually exists and runs today, not the ghosts of training experiments past.
+The components that matter are the ones still on disk. The table below tracks what actually exists and runs today, not the ghosts of training experiments past. [Sanctum Olympics](/architecture/sanctum-olympics/) is the harness that keeps the AI half honest; the suites here keep the plumbing honest.
 
 | Component | Suite | What It Verifies |
 |-----------|-------|------------------|
@@ -29,6 +26,7 @@ The components that matter are the ones still on disk. The table below tracks wh
 | Secret Rotation | `~/.sanctum/scripts/secret-rotation.sh --full` | 6-phase sweep (see below) |
 | Docs Quality | `scripts/contrib-check.py` | Frontmatter, haus rule, emoji ban, `<digit` escapes, hero presence |
 | Build Release | `tests/test_build_release.sh` | Prerequisites, binary, metallib, dist packaging, deploy flags |
+| ds4max (MBP Flash) | `~/.sanctum-mbp/bin/test-ds4max.sh` | Wrappers symlinked into config repo, planner plan, model size class, Metal shaders |
 
 ```bash
 # Run a suite against the thing it actually tests — locally, no SSH
@@ -36,6 +34,7 @@ bash ~/Projects/sanctum-rs/services/sanctum-proxy/test_e2e_proxy.sh   # proxyd e
 python3 ~/Projects/sanctum-olympics/test_olympics.py                  # olympics
 bash  ~/.sanctum/scripts/secret-rotation.sh --full                    # secret sweep
 python3 ~/Projects/Claude_Code/sanctum-docs/scripts/contrib-check.py src/content/docs/architecture/engineering-discipline.mdx
+bash  ~/.sanctum-mbp/bin/test-ds4max.sh                          # MBP ds4max E2E
 ```
 
 Every suite can be run by a human who just woke up and doesn't remember what day it is. That is a design requirement, not an accident — and the same discipline is why the rows that lost their code lost their place in the table.
@@ -76,7 +75,7 @@ macOS Keychain
   Zero browser. Zero human. Zero downtime.
 ```
 
-The rotator doesn't ask for permission. It mints the new value, proves it works, propagates it to the Keychain and the SOPS vault, and kills the old one — and because it validates the shape and aborts before propagation if verify fails, a half-rotated secret never reaches a service. If you're still rotating API keys by logging into a dashboard and clicking buttons, you're doing it wrong — and more importantly, you're doing it rarely, which means your keys are old, which means the blast radius when one leaks is measured in months.
+The rotator doesn't ask for permission. It mints the new value, proves it works, propagates it to the Keychain and the [SOPS vault](/architecture/secrets-trifecta/), and kills the old one — and because it validates the shape and aborts before propagation if verify fails, a half-rotated secret never reaches a service. If you're still rotating API keys by logging into a dashboard and clicking buttons, you're doing it wrong — and more importantly, you're doing it rarely, which means your keys are old, which means the blast radius when one leaks is measured in months.
 
 ## Infrastructure Quality
 
@@ -122,7 +121,7 @@ The trade-off is real: native modules with `glibc` symbol requirements (Pillow, 
 
 ## Cloud Proxy Hardening
 
-The cloud proxy (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sanctum-proxy`, on `:4040`) sits between the council and the upstream providers. It started life as a Python script and is a Rust binary now — the usual Sanctum arc: Python while a thing is feature-organic, Rust once it's load-bearing. It exists because giving seven AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
+The [cloud proxy](/architecture/sanctum-cloud-proxy/) (`proxyd`, the Rust daemon at `~/Projects/sanctum-rs/services/sanctum-proxy`, on `:4040`) sits between the council and the upstream providers. It started life as a Python script and is a Rust binary now — the usual Sanctum arc: Python while a thing is feature-organic, Rust once it's load-bearing. It exists because giving seven AI agents unlimited access to a pay-per-token cloud API is how you wake up to a surprise invoice. Five layers of protection:
 
 | Layer | What It Does |
 |-------|-------------|
@@ -145,5 +144,20 @@ Every commit follows the same discipline:
 5. **Push** — ship it
 
 If any step fails, the commit doesn't ship. This is not optional. This is not aspirational. This is how the haus runs.
+
+## EETISMAD — The Shipping Bar
+
+When a tool leaves a single session's `/tmp` and becomes something the haus depends on, the bar is one word that expands to a checklist:
+
+**Everything E2E Tested, in Sanctum-docs, Merged And Deployed.**
+
+| Letter | Gate |
+|--------|------|
+| **E**verything **E**2E **T**ested | A named smoke or suite a half-awake human can run; green before claim |
+| **i**n **S**anctum-**d**ocs | A real chapter (sidebar entry, unique hero), not a vault sticky |
+| **M**erged | Landed with `gitsync` into the durable repo (`sanctum-mbp`, `sanctum-docs`, …) |
+| **A**nd **D**eployed | Live path is the repo path (symlink), consumer verified through that path |
+
+A wrapper that only exists as a one-off file in `~/.local/bin` is not deployed. Docs without a sidebar slug are not in Sanctum-docs. "It worked once on my laptop" is not E2E. EETISMAD is how we say "done" without lying. Local Flash launch on the MBP is the standing example — see [ds4max](/architecture/ds4max/).
 
 Because the only thing worse than an AI agent making a mistake is one making a mistake with your API keys, your health data, and your kid's screen time schedule all in the same system — and nobody finding out until the credit card bill arrives. The discipline isn't paranoia. It's the minimum viable responsibility for running this kind of infrastructure in a place where people sleep.

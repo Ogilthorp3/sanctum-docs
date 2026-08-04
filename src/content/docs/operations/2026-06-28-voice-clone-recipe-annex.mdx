@@ -5,17 +5,13 @@ description: "Reproducible mechanics behind the Bert voice-clone epic: the three
 
 import { Aside } from '@astrojs/starlight/components';
 
-![A pencil sketch on a dark background: an open lab notebook on a workbench beside a ribbon microphone, three gauge dials sketched on the page labeled noise, words, and identity, a teal halo over the notebook and a faint amber glow on one dial needle, with a soldering iron and a coil of cable at the desk edge](./images/2026-06-28-voice-clone-recipe-annex.png)
+![A pencil sketch on a dark background: an open lab notebook on a workbench beside a ribbon microphone, three gauge dials on the page labeled noise, words, and identity, a teal halo over the notebook and a faint amber glow on one dial needle — the bench where a voice clone is scored](./images/2026-06-28-voice-clone-recipe-annex.png)
 
-This is the reproducible-mechanics companion to
-[The Franglais Turing Test](/operations/2026-06-28-the-franglais-turing-test/).
-Read that page first for the story; read this one to rebuild the rig.
+A voice clone good enough to fool the family is one bad gate away from a clone that emits confident gibberish. We know, because we built both by accident. This is the bench behind [The Franglais Turing Test](/operations/2026-06-28-the-franglais-turing-test/). Read that page for the story. Read this one to rebuild the rig.
 
 ## The three-gate scorer
 
-One scorer (`eval/score_voice.py`) is the source of truth for every engine. A
-candidate differs from a rival only in which wav it produced; scoring is
-identical, so cross-engine comparison is apples-to-apples.
+One scorer, `eval/score_voice.py`, is the source of truth for every engine. A candidate differs from a rival only in which wav it produced. Scoring is identical, so cross-engine comparison stays apples-to-apples — the same discipline as the [eval harness](/architecture/eval-harness/).
 
 | Gate | Measures | Method | Pass |
 |------|----------|--------|------|
@@ -23,11 +19,7 @@ identical, so cross-engine comparison is apples-to-apples.
 | Intel | The right words | Parakeet STT `:9000`, bag-of-words overlap (multiset intersection / expected word count) vs expected text | overlap `>= 0.70` |
 | Cosine | Sounds like Bert | resemblyzer cosine vs a real-Bert anchor (centroid of held-out real clips) | higher = closer; ceiling ~0.96 |
 
-The intelligibility gate is what makes the harness trustworthy. A noise-only or
-noise-plus-cosine harness green-lights *speech-shaped gibberish* — audio that is
-spectrally clean and carries enough timbre to score a non-trivial cosine, yet
-transcribes as a degenerate loop. Identity without intelligibility is a
-hallucinated impostor.
+The intelligibility gate is what makes the harness trustworthy. Drop it and the rig lies to you. A noise-only or noise-plus-cosine harness green-lights speech-shaped gibberish: audio that is spectrally clean, carries enough timbre for a non-trivial cosine, yet transcribes as a degenerate loop. Identity without intelligibility is a hallucinated impostor.
 
 <Aside type="caution">
 Parakeet `:9000` transiently false-zeroes the intel gate under rapid sequential
@@ -38,9 +30,7 @@ transient hiccup, not a silent wav. A flaky read is not a failing sample.
 
 ## The Chatterbox T3 LoRA recipe
 
-Chatterbox is a ~0.5B Llama-style T3 text-to-token backbone feeding a frozen
-S3Gen codec stage. The fine-tune is a **LoRA on the T3 backbone only, S3Gen
-frozen**.
+Chatterbox is a ~0.5B Llama-style T3 text-to-token backbone feeding a frozen S3Gen codec stage. The fine-tune is a **LoRA on the T3 backbone only, S3Gen frozen**. We learned the dials the hard way.
 
 - **Train against the transformer** (`model.t3.tfmr`) with a **manual
   teacher-forced cross-entropy**, not the model's own `t3.loss()` — which has an
@@ -58,10 +48,7 @@ frozen**.
 
 ## Multilingual base
 
-Chatterbox-Multilingual is the same identity on a 23-language base
-(`t3_mtl23ls`) with a French tokenizer and a required `language_id` parameter.
-Isolated in its own venv (`.venv-cbx-mtl`). The text must be re-tokenized with
-the multilingual tokenizer, though the S3 speech tokens carry over.
+Chatterbox-Multilingual is the same identity on a 23-language base (`t3_mtl23ls`), with a French tokenizer and a required `language_id` parameter. We isolate it in its own venv, `.venv-cbx-mtl`. The text must be re-tokenized with the multilingual tokenizer; the S3 speech tokens carry over.
 
 <Aside type="caution">
 A silent trap on the multilingual venv: `pip` pulled `setuptools 82`, which
@@ -71,6 +58,8 @@ dropped `pkg_resources`, which made the PerTh watermarker silently initialize to
 </Aside>
 
 ## Apple-Silicon notes
+
+Two machines, one flaky link between them. Here is where they bite you.
 
 - Heavy generation and training run on the MacBook Pro over the TB5 link; the
   Mini holds the council. Run long fine-tunes off the flaky link (cloud/HF GPU,
@@ -84,52 +73,28 @@ dropped `pkg_resources`, which made the PerTh watermarker silently initialize to
   TTS/STT stack is Python; the Rust `sanctum-tts :8007` dispatcher is built but
   not yet deployed.
 
-## The Québécois campaign (2026-07-04 addendum)
+## The Québécois campaign
 
-The bilingual clone shipped English at Turing grade and French at
-"way too Parisian" — Bert's native ear, the only accent instrument that
-matters. The campaign to fix it produced three durable artifacts: a locked
-best-of-Chatterbox French recipe, a calibrated accent judge, and an F5-TTS
-fine-tune pipeline that measurably moves a base model's accent prior.
+This part is a 2026-07-04 addendum. The bilingual clone shipped English at Turing grade and French at "way too Parisian." The judge was Bert's native ear — the only accent instrument that matters in this haus. Fixing it produced three durable artifacts: a locked best-of-Chatterbox French recipe, a calibrated accent judge, and an F5-TTS fine-tune pipeline that measurably moves a base model's accent prior. This is the sibling work to [council fallback and voice](/operations/2026-06-26-council-fallback-and-voice/).
 
-### The locked Chatterbox French recipe
+## The locked Chatterbox French recipe
 
-Before pivoting engines, the deployed recipe got its ceiling measured — ~24
-scored candidates across every dial. The keeper, live in
-`sanctum-bert-say.py`:
+Before pivoting engines, we measured the deployed recipe's ceiling — about 24 scored candidates across every dial. The keeper lives in `sanctum-bert-say.py`:
 
 | Language | Model | cfg | Post |
 |----------|-------|-----|------|
 | EN | `cbx-bert-mlx-q8` (English base) | 0.5 | none — Turing-approved |
 | FR | `cbx-bert-mtl-mlx-q8` (multilingual base, `language_id=fr`) | **0.55** | **no atempo, no chunking** |
 
-FR cfg 0.55 (up from 0.4) killed two birds: the "réalitéééé" stutter was a
-low-cfg sampling degeneracy *amplified by* the old `atempo 0.9` stretch — and
-higher cfg is naturally slower, so the atempo crutch got deleted outright.
+FR cfg 0.55, up from 0.4, killed two birds. The "réalitéééé" stutter was a low-cfg sampling degeneracy, amplified by the old `atempo 0.9` stretch. Higher cfg is naturally slower, so the atempo crutch got deleted outright.
 
-The measured ceilings that forced the pivot: **prosody** plateaus flat/robotic
-(~60/100 across 19 candidates — T3-architectural, no dial breaks it) and
-**French accent** is doubly blocked — the multilingual base carries a Parisian
-prior no reference overrides, while the English base has no French phoneme
-inventory at all (it mangles "chu" into a glitch). A leading English word
-("Hey,") even primes the whole utterance anglophone — cold-start language
-bleed, proper nouns ("Bertrand", "Outremont") hit hardest.
+The ceilings that forced the pivot were architectural. Prosody plateaus flat and robotic, around 60/100 across 19 candidates — a T3 trait no dial breaks. French accent is doubly blocked. The multilingual base carries a Parisian prior no reference overrides. The English base has no French phoneme inventory at all — it mangles "chu" into a glitch. Even a leading English word, "Hey," primes the whole utterance anglophone. That is cold-start language bleed, and proper nouns ("Bertrand", "Outremont") hit hardest.
 
-### The calibrated forced-choice judge
+## The calibrated forced-choice judge
 
-The old absolute-score Gemini rubric rated a clip Bert heard as flatly
-Parisian at joual **95/100**. Twice-burned rule: **an LLM ear cannot score
-accent on an absolute scale.** It can, however, pick which of two anchors a
-clip sits closer to.
+The old absolute-score Gemini rubric rated a clip Bert heard as flatly Parisian at joual **95/100**. So we made a rule, twice-burned: **an LLM ear cannot score accent on an absolute scale.** It can, however, pick which of two anchors a clip sits closer to.
 
-`f5-eval/accent_judge.py`: clip X judged against A = real Bert Québécois and
-B = a France-French TTS anchor (macOS `Eddy (French (France))`), three runs,
-majority vote, plus a resemblyzer identity cosine vs a Bert-FR anchor. Before
-trusting it, it must pass a calibration set with known answers — including
-the exact clip the old rubric blew, which it now calls Parisian, agreeing
-with the native ear. The judge returns *cited phonetic markers* (affrication,
-nasal quality, diphthongization, laxing), which turns it from a scoreboard
-into a debugging instrument.
+`f5-eval/accent_judge.py` judges clip X against A — real Bert Québécois — and B — a France-French TTS anchor (macOS `Eddy (French (France))`). Three runs, majority vote, plus a resemblyzer identity cosine against a Bert-FR anchor. Before we trust it, it must pass a calibration set with known answers. That set includes the exact clip the old rubric blew. The judge now calls it Parisian, siding with the native ear. It also cites its phonetic markers — affrication, nasal quality, diphthongization, laxing — which turns it from a scoreboard into a debugging instrument.
 
 <Aside type="caution">
 Transcripts feed everything downstream — and Whisper launders joual: measured
@@ -140,30 +105,15 @@ training labels must be verbatim or the model never learns what written joual
 sounds like.
 </Aside>
 
-### F5-TTS: moving the prior instead of fighting it
+## F5-TTS: moving the prior instead of fighting it
 
-F5-TTS (flow-matching DiT, full fine-tune only) is the pivot because its
-failure is *fixable*: zero-shot with the only public French base
-(`RASPIAUDIO/F5-French-MixedSpeakers-reduced`, LibriVox European French,
-v0 arch) scored **Parisian 0/9, confidence 100** even with a perfect joual
-reference — the reference cannot beat the base prior — but the prior itself
-moves with training, which is exactly what Chatterbox never offered.
+F5-TTS is the pivot because its failure is fixable. It is a flow-matching DiT, full fine-tune only. Zero-shot, the only public French base (`RASPIAUDIO/F5-French-MixedSpeakers-reduced`, LibriVox European French, v0 arch) scored Parisian 0/9 at confidence 100 — even with a perfect joual reference. The reference cannot beat the base prior. But the prior itself moves with training, which is exactly what Chatterbox never offered.
 
-Campaign v1 (886 fr + 95 franglais clips, 47 min, Whisper labels, LR 1e-5,
-5280 updates): the accent climbed in textbook phonetic order — affrication
-[t͡sy] at update 500, diphthongization [lɑʊ̯] by 1000, vowel laxing
-pis→[pɪs] and the first probe-level QUEBEC verdict by 1500-2000 — peaked at
-3/9 québécois votes around updates 2000-3500, then overfit back down to 0/9.
-Native-ear check at the peak: "still parisian, but getting there" — judge and
-ear agree, third time.
+Campaign v1 trained on 886 French plus 95 franglais clips — 47 minutes, Whisper labels, LR 1e-5, 5280 updates. The accent climbed in textbook phonetic order. Affrication [t͡sy] at update 500. Diphthongization [lɑʊ̯] by 1000. Then vowel laxing, pis→[pɪs], and the first probe-level QUEBEC verdict by 1500-2000. It peaked at 3/9 québécois votes around updates 2000-3500, then overfit back down to 0/9. Native-ear check at the peak: "still parisian, but getting there." Judge and ear agreed, a third time.
 
-v2 attacks v1's measured limits: Gemini-verbatim labels (the joual is in the
-text now), joual-dense clips oversampled ×2-3, the ~106 English-heavy
-"franglais" rows dropped (only one genuinely code-switched clip exists in the
-whole corpus — the diglossia strikes again), and training deliberately stopped
-inside v1's peak zone (~2940 updates).
+v2 attacks v1's measured limits. Labels are now Gemini-verbatim, so the joual lives in the text. Joual-dense clips are oversampled ×2-3. The ~106 English-heavy "franglais" rows are dropped — only one genuinely code-switched clip exists in the whole corpus, and the diglossia strikes again. Training stops deliberately inside v1's peak zone, around 2940 updates.
 
-### Apple-Silicon F5 traps, banked
+## Apple-Silicon F5 traps, banked
 
 - `f5-tts-mlx` is v1-arch-hardcoded (`text_mask_padding=True`, no
   `pe_attn_head`); a converted v0 French checkpoint loads clean and generates
@@ -180,3 +130,5 @@ inside v1's peak zone (~2940 updates).
   EMA-only size — budget `keep_last_n` against real disk, and copy any
   peak checkpoint out before the pruner eats it (v1's two best checkpoints
   died this way; v2's eval loop preserves best-so-far automatically).
+
+None of this is done. v2 is training inside the peak zone, the judge is watching, and somewhere in the haus Bert will play the next clip and tell us, in one word, whether it is still Paris. That verdict outranks every gate on this page. The rig exists only to get us close enough that his answer is worth waiting for.

@@ -13,7 +13,7 @@ It's a single `.app` bundle running on `127.0.0.1:4078` whose entire job is to r
 
 ## Why a `.app` bundle and not a script
 
-TCC attaches Full Disk Access to a *signed code identity*. Granting FDA to `Terminal.app` extends to every shell child it spawns — but that scope is wider than it looks and easily lost when the shell host changes (iTerm vs Terminal vs a `tmux` reattach). An app bundle with its own `CFBundleIdentifier` carries its own TCC entry, so the grant survives reboots, shell reorganizations, and Homebrew updates that swap node versions.
+TCC attaches Full Disk Access to a *signed code identity*. Granting FDA to `Terminal.app` extends to every shell child it spawns. But that scope is wider than it looks, and easily lost when the shell host changes — iTerm vs Terminal vs a `tmux` reattach. An app bundle with its own `CFBundleIdentifier` carries its own TCC entry, so the grant survives reboots, shell reorganizations, and Homebrew updates that swap node versions.
 
 The bundle is a 94-line C launcher (`launcher/main.c`, ~56 lines once you strip the header comment) that `posix_spawn`s Node against `Resources/bridge/server.js`. The launcher itself links only `libSystem` + `Foundation` — but its code identity isn't the whole story, because it `exec`s `/usr/local/bin/node`, and that path is the load-bearing decision. `/usr/local/bin/node` is the Node.js Foundation `.pkg` install: signed, notarized, and pinned to a path that never moves. Homebrew node was retired from the bridge on 2026-05-21 precisely because TCC keys the FDA grant to a binary path, and brew's versioned Cellar path churns on every upgrade. The `.pkg` path stays put forever, so the grant does too.
 

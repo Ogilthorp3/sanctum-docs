@@ -1,6 +1,6 @@
 ---
 title: Sanctum Proxy
-description: The intelligent LLM routing engine — a single Rust binary that replaced a Python stack and learned to think.
+description: The one door every LLM request in the haus passes through — a ~10MB Rust binary that routes, translates, and bills, and never negotiates.
 ---
 
 import { Card, CardGrid, Aside, Steps, Tabs, TabItem } from '@astrojs/starlight/components';
@@ -9,111 +9,82 @@ import proxyRouting from './images/sanctum-proxy-routing.svg';
 
 ![Tommy working the door at the Sanctum Proxy — six layers of routing, one velvet rope](./images/sanctum-proxy-bouncer.png)
 
-The Sanctum Proxy is a ~10MB Rust binary that routes every LLM request in the platform. It replaced a Python LiteLLM stack that has since been retired from the live path -- the daemon, the launch wrapper, the config all moved over in March 2026. (A docstring or two still says "LiteLLM" in the model-scout helper; the comment is older than the rewrite.) The Rust proxy does the same job with less RAM, less latency, and zero opinions about garbage collection.
+Every LLM request in the haus passes through one door. Every agent, every Claude Code session, every voice query funnels into a single ~10MB Rust binary on port 4040 — bouncer, translator, and accountant in one fast organism. It stands between your agents and the cloud providers who bill by the breath, and it does not negotiate.
 
-It listens on port 4040. It knows about 28 models across three providers -- Gemini, OpenRouter, and a clutch of local seats on Apple Silicon. It maintains a fallback chain for nearly every one of them. And it has a budget system that will cut off an agent mid-sentence if the math says so. The proxy does not negotiate. The proxy does not feel bad about it.
+It replaced a Python LiteLLM stack now retired from the live path -- daemon, launch wrapper, and config all moved over in March 2026. (A docstring or two still says "LiteLLM" in the model-scout helper; the comment predates the rewrite.) The Rust version does the same job with less RAM, less latency, and no opinions about garbage collection. It knows 28 models across three providers -- Gemini, OpenRouter, and local seats on Apple Silicon -- keeps a fallback chain for nearly every one, and runs a budget that cuts an agent off mid-sentence if the math says so. It does not feel bad.
 
 ## What It Does
 
-Every agent, every Claude Code session, every voice query -- all of it flows through this binary. One process. No microservice archipelago. Just a single Rust daemon standing between your agents and the cloud providers who bill by the breath.
+The proxy receives an OpenAI-compatible request, decides which provider handles it, transforms it into that provider's format, streams the response back, and tracks every token spent. One process -- a single Rust daemon, no microservice archipelago.
 
-The proxy receives an OpenAI-compatible request, decides which provider should handle it, transforms the request to match that provider's format, streams the response back, and tracks every token spent. Think of it as a bouncer, a translator, and an accountant fused into one very small, very fast organism.
-
-Config-driven. One `config.yaml` file declares the models, the fallback chains, the quality tiers, and the budget limits. Edit the file and the binary notices -- it watches `~/.sanctum/sanctum-proxy/config.yaml` and hot-reloads on change, logging `Config reloaded successfully` like a butler clearing his throat. No database. Just a YAML file and convictions.
-
+It is config-driven. One `config.yaml` declares the models, fallback chains, quality tiers, and budget limits. Edit the file and the binary notices: it watches `~/.sanctum/sanctum-proxy/config.yaml` and hot-reloads on change, logging `Config reloaded successfully`. No database -- just a YAML file and convictions.
 
 ## Performance Benchmark
 
-The Rust proxy is built for absolute minimum overhead. In a local stress test using ApacheBench (`ab -n 50000 -c 100`), the proxy's core HTTP event loop achieved staggering results:
+The proxy is built for absolute minimum overhead. In a local ApacheBench stress test (`ab -n 50000 -c 100`), the core HTTP event loop turned in numbers that are almost rude:
 
-*   **142,000+ Requests Per Second** (mean)
-*   **Sub-Millisecond Latency**: 0.7ms mean response time
-*   **Zero Drop Rate**: 50,000 requests processed with 100 concurrent connections and zero failures.
-*   **P99 Latency**: 2 milliseconds
+| Metric | Result |
+|--------|--------|
+| Throughput | 142,000+ requests/sec (mean) |
+| Mean latency | 0.7ms (sub-millisecond) |
+| P99 latency | 2ms |
+| Drop rate | zero -- 50,000 requests, 100 concurrent connections, no failures |
 
-This means the `sanctum-proxy` adds virtually zero measurable overhead to your LLM API calls. Your bottleneck is purely the speed of light to the cloud providers or the inference speed of your local models. The routing layer itself is essentially frictionless. John Carmack would indeed be proud.
+The routing layer adds virtually zero measurable overhead; your bottleneck is the speed of light to the cloud providers or the inference speed of your local models.
 
 ## The 6-Layer Routing Engine
 
-When a request arrives, it falls through six layers of increasingly opinionated decision-making. The first layer that has a strong opinion wins. The others shut up.
+When a request arrives it falls through six layers of increasingly opinionated decision-making. The first layer with a strong opinion wins; the rest shut up.
 
 <ZoomImage src={proxyRouting.src} alt="Sanctum Proxy 6-layer routing engine" />
 
+Layer 1 is the velvet rope. `claude-opus-max` and `council-secure` are tier 0 -- they go where they're told, always, no second-guessing. If the agent asked for Opus, Opus is what it gets. Tout sauf de l'ostie de root beer.
 
-
-Layer 1 is the velvet rope. `claude-opus-max` and `council-secure` are tier 0 -- they go where they're told, always. The proxy does not second-guess these requests. It does not optimize them. It delivers them with the quiet deference of a butler who knows better than to suggest a cheaper wine. Tier 0 gets the real thing. Tout sauf de l'ostie de root beer. If the agent asked for Opus, Opus is what the agent gets.
-
-Layer 6 is the bouncer. When an agent exhausts its daily token budget, every subsequent request gets rerouted to a local model running on Apple Silicon three feet away. The agent can still think. It just thinks smaller. Like being demoted from a corner office to a broom closet -- you can still have ideas, but the ambiance has changed.
+Layer 6 is the bouncer, and here the metaphor is nearly literal: it is the same job Tommy worked at the front gate for fifteen years. When an agent burns through its daily token budget, every subsequent request is rerouted to a local model on Apple Silicon three feet away. The agent can still think, just smaller.
 
 ## Budget System
 
-> **2026-07-15:** Claude CLI spend is now driven by hot-reloaded [`budget.yaml`](/architecture/proxyd-budget/) ($50/day shared USD pool). See that page for green/red banners and local DEGRADED context fit.
+> **2026-07-15:** Claude CLI spend is now driven by hot-reloaded [`budget.yaml`](/architecture/proxyd-budget/) ($50/day shared USD pool). See that page for the green/red banners and local DEGRADED context fit.
 
-Five AI agents sharing one wallet. What could go wrong.
+Five AI agents share one wallet. Each gets a token bucket backed by a lock-free `AtomicI64` -- no mutexes, no contention, correct under concurrent burn because atomic operations have no feelings about fairness -- the ideal temperament for handling money.
 
-Each agent gets a token bucket backed by a lock-free `AtomicI64`. No mutexes. No contention. Five agents can burn tokens simultaneously and the counters stay correct because atomic operations don't have feelings about fairness -- they just increment. This is, incidentally, the ideal personality for anything handling money.
-
-The system tracks Claude Max free-token allocation separately, because free tokens are the most dangerous kind. They feel infinite until they aren't. Free tokens get spent first. When they're gone, paid tokens start. When those hit the daily ceiling, the circuit breaker fires and all traffic diverts to local models. The party's over. Everyone goes haus to Apple Silicon.
-
-Every token transaction writes to a JSONL log via an async `mpsc` channel. Non-blocking. Batch-flushed. The budget system never slows down a request to write a receipt. It's the financial equivalent of speed-running your accounting -- technically correct, delivered at wire speed, with the audit trail written in the margins.
+Claude Max free-token allocation is tracked separately, because free tokens are the most dangerous kind -- they feel infinite until they aren't. They get spent first, then paid tokens; when those hit the daily ceiling the circuit breaker fires and all traffic diverts to local models. Every transaction writes to a JSONL log via an async `mpsc` channel -- non-blocking, batch-flushed.
 
 <Aside type="tip">
-  Budget defaults to 500K tokens per agent per day. Claude Max contributes ~500K free daily tokens across all agents. The numbers are configurable. The math is not optional.
+  Budget defaults to 500K tokens per agent per day. Claude Max contributes ~500K free daily tokens across all agents. Configurable numbers; non-optional math.
 </Aside>
 
 ## Subscription Zero-Rating
 
-When an agent routes traffic through a provider backed by an unlimited subscription—specifically Anthropic (Claude Max) or Gemini (Studio Ultra)—the proxy applies a zero-rating policy. These requests do not consume any tokens from the agent's daily budget, nor do they add to the USD spend tracking. They are genuinely free, effectively making local use of the subscription unlimited. Only metered API calls (like OpenRouter) actually draw down the budget limits.
+When an agent routes through a provider backed by an unlimited subscription -- Anthropic (Claude Max) or Gemini (Studio Ultra) -- the proxy applies a zero-rating policy: those requests draw nothing from the daily token budget and add nothing to USD spend tracking. They are genuinely free -- local use of the subscription is effectively unlimited. Only metered calls -- OpenRouter -- draw down the limits.
 
 ## The Claude Code Incident
 
-The proxy was built for agents. Then Claude Code showed up -- a different species of client entirely, with different assumptions about authentication, model naming, and the basic social contract of an API request. The proxy failed in two ways that 52 passing tests didn't catch. The tests were green. The system was on fire. This is, apparently, what progress looks like.
+The proxy was built for agents. Then Claude Code showed up -- a different species of client. It broke the proxy in two ways that 52 passing tests never caught. The tests were green; the system was on fire.
 
-Here's how it went down.
-
-Claude Code sends model IDs like `claude-haiku-4-5-20251001`. The proxy knew about 17 models. It had strong opinions about all of them. This was not one of them. Unknown model. Door's closed. Go away.
-
-Meanwhile -- and this is the part where the proxy became the kind of helpful that gets people killed in horror movies -- Claude Code authenticates with an OAuth token via the `authorization` header. The proxy, in an act of breathtaking helpfulness, *replaced it with its own API key*. It saw a perfectly valid credential, thought "I know a better one," and swapped it out like a valet who decides your car keys would work better if they were his car keys.
-
-The request arrived at Anthropic carrying credentials from a different billing context. Anthropic, with the warmth of a bank teller who has just been handed someone else's driver's license, declined the transaction.
-
-Two bugs. Both invisible to the test suite. Both obvious in retrospect -- which is, of course, the only time anything is obvious.
+Claude Code sends model IDs like `claude-haiku-4-5-20251001`. The proxy knew about 17 models; this was not one: unknown model, door closed. Worse, Claude Code authenticates with an OAuth token in the `authorization` header -- and the proxy, in an act of breathtaking helpfulness, *replaced it with its own*. The request reached Anthropic carrying credentials from a different billing context, and was declined.
 
 <Aside type="danger" title="The lesson that launched 7 tests">
-  When you expand the scope of a system -- new client, new auth method, new model format -- the existing test suite covers the old scope. It tells you nothing about the new one. Write tests for the new use case *before* deploying. The 52 tests that passed were correct. They were also irrelevant.
+  When you expand a system's scope -- new client, new auth, new model format -- the existing suite covers the old scope and says nothing about the new one. Write the new tests *before* deploying. The 52 that passed were correct. They were also irrelevant.
 </Aside>
 
-The fix: auto-passthrough for any `claude-*` model not in the config (no routing, no transformation, just forward it and keep your hands to yourself). Auth priority: client OAuth token wins over proxy API key, always, no exceptions, no helpful overrides. Seven new integration tests that send requests the way Claude Code actually sends them, not the way the proxy wished they would.
-
-That passthrough reflex is also the foundation the `claude` terminal's online/offline lane was later built on — native Max when the uplink is up, the local Cathedral when it isn't. See the field-note [The Claude Code Lane](/operations/2026-07-04-the-claude-code-lane/) for how a fifteen-line fallback chain, a stale `.zshrc` comment, and a dead seat hiding behind a green test turned that reflex into a proper offline seat.
+The fix: auto-passthrough for any `claude-*` model not in the config (no routing, no transformation, hands off), and a hard auth priority -- the client's OAuth token wins over the proxy API key, always. Seven new integration tests send requests the way Claude Code actually sends them. That reflex later became the foundation of the `claude` terminal's online/offline lane -- native Max when the uplink is up, the local Cathedral when it isn't; the field note [The Claude Code Lane](/operations/2026-07-04-the-claude-code-lane/) tells the rest.
 
 ## Streaming Token Tracking
 
-This is the bug that earned its own council session. Five AI agents convened in the digital equivalent of a smoke-filled room, argued about streaming protocol semantics with the intensity of constitutional scholars debating a comma, and voted unanimously to deploy a fix immediately rather than shadow-test it. When the robots skip their own safety protocol because the situation is that urgent, you should probably pay attention.
+This bug earned its own council session. Five AI agents argued streaming-protocol semantics, then voted unanimously to deploy the fix immediately rather than shadow-test. When the robots skip their own safety protocol, pay attention.
 
-The problem was quiet and catastrophic. Streaming SSE responses -- the kind Claude Code sends for every single interaction -- were returning zero tokens. The proxy faithfully logged `input_tokens: 0, output_tokens: 0` for the most expensive traffic in the entire system. The budget circuit breaker, whose sole reason for existence is to notice when money is being spent, watched Claude Code burn through token allocations and reported: all clear. Everything's fine. Nothing to see here. The meter is definitely running. It just reads zero.
+Streaming SSE responses -- the kind Claude Code sends for every interaction -- were returning zero tokens. The proxy faithfully logged `input_tokens: 0, output_tokens: 0` for the most expensive traffic in the system, and the budget circuit breaker, whose sole job is to notice money being spent, reported all clear. The council's verdict: "This is not a tracking bug. It is a budget circuit breaker that does not fire."
 
-The council's verdict was succinct and damning: "This is not a tracking bug. It is a budget circuit breaker that does not fire."
-
-A budget system that can't see your most expensive traffic isn't a budget system. It's a decorative gauge on the dashboard of a car with no brakes.
-
-The fix: `StreamUsageExtractor`, a state machine that captures token counts from the final events in an SSE stream. Two-phase for Anthropic (input tokens arrive in `message_start`, output tokens in `message_delta`). Single-phase for OpenAI-format providers, with `stream_options: {"include_usage": true}` injected into the request. If the connection drops before the final event, it estimates from content bytes and marks the entry `source: "estimated"` -- because an honest guess beats a confident zero.
-
-Hard cap: 50 concurrent tracked streams. After that, new streams get estimated rather than buffered. The proxy protects itself from its own diligence. Even accounting has limits.
+The fix is `StreamUsageExtractor`, a state machine that reads token counts from an SSE stream's final events -- two-phase for Anthropic (input tokens in `message_start`, output in `message_delta`), single-phase for OpenAI-format providers with `stream_options: {"include_usage": true}` injected. If the connection drops first, it estimates from content bytes and marks the entry `source: "estimated"` -- an honest guess beats a confident zero. Hard cap: 50 concurrent tracked streams; past that they get estimated, not buffered. Even accounting has limits.
 
 ## Automated Model Discovery (Model Scout)
 
-Because the proxy maintains static YAML configurations, staying ahead of new AI models could easily become a manual chore. To prevent this, Sanctum leverages a dedicated `model-scout` background service running on the Mac.
-
-The scout wakes up every Monday at 06:23 (via `com.sanctum.model-scout.plist`) and pings the OpenRouter and Google AI APIs. It parses the resulting JSON payloads against the current `config.yaml` state to dynamically rate models you *aren't* currently using. The scoring algorithm assigns points based on low input/output token costs, massively expanded context windows, and recent release timestamps. 
-
-When interesting candidates—such as a new zero-cost tier or a highly capable $2/M context giant—are detected, two things happen:
-1. **Memory Vault Report**: A structured Markdown event digest is deposited directly into `~/.sanctum/memory/events`, containing score breakdowns and cost metrics for offline observation.
-2. **Jedi Council Orchestration**: Using the `council-router`, the scout automatically fires a formal `normal` priority request directly to **Qui-Gon** (the infrastructure agent on the VM). Qui-Gon is explicitly instructed to review the new metrics and independently convene the rest of the Jedi Council to vote on structural proxy upgrades.
+Static YAML does not update itself, so a `model-scout` service does the reading. Every Monday at 06:23 (via `com.sanctum.model-scout.plist`) it wakes on the Mac, pings the OpenRouter and Google AI APIs, and scores every model you *aren't* using against the current `config.yaml` -- points for low input/output token costs, bigger context windows, and recent release dates. When something interesting turns up (a new zero-cost tier, a capable $2/M context giant) it drops a structured Markdown digest -- score breakdowns, cost metrics -- into `~/.sanctum/memory/events`, and fires a `normal`-priority request through the `council-router` to **Qui-Gon**, the infrastructure agent on the VM, who convenes the Jedi Council to vote on structural upgrades. The proxy does not upgrade itself. It nominates.
 
 ## Configuration
 
-The proxy reads a single `config.yaml`. The schema is flat and unglamorous: a `host`/`port` pair up top, `models` as a list (each with a `provider`, an `api_model`, and an optional `api_base` for the local seats), a `fallbacks` map, and a `budget` block. No `providers` section -- the provider lives on each model. The binary watches the file and reloads on change, so most edits don't even cost a restart.
+The proxy reads a single `config.yaml`: a `host`/`port` pair, `models` as a list (each with a `provider`, an `api_model`, and an optional `api_base` for the local seats), a `fallbacks` map, and a `budget` block. There is no `providers` section -- the provider lives on each model.
 
 ```yaml
 # ~/.sanctum/sanctum-proxy/config.yaml (abbreviated)
@@ -149,55 +120,57 @@ budget:
   alert_threshold_pct: 80
 ```
 
-Notice `smart_route`. That flag is a scar from v0.1. The original code had a hardcoded list of routable tiers buried in `route.rs` -- a little secret the config file didn't know about. Config said one thing. Code did another. The config lost, quietly, for weeks, while everyone stared at the YAML and wondered why tier 2 models weren't routing correctly. Now `smart_route: bool` lives in the YAML where it belongs, and the code reads it without editorial comment. Trust issues, resolved through explicit declaration. Therapy for software.
+The `smart_route` flag is a scar from v0.1. The original code kept a hardcoded list of routable tiers buried in `route.rs`; config said one thing, code did another, and the config lost quietly for weeks while everyone wondered why tier 2 models weren't routing. Now `smart_route: bool` lives in the YAML where it belongs -- therapy for software.
 
-The important practical split is this: `council-brain` is Claude Opus (Max subscription — the unpinned `claude-opus-4` alias resolves to the latest Opus, 4.8 today), served not from a metered Anthropic key but natively through the Rust proxy using the extracted Claude Max OAuth session token. The proxy automatically intercepts OAuth keys and routes requests natively to the Developer API via `Authorization: Bearer`, so the subscription does the paying without the latency of a CLI wrapper. It's the default brain, but the router triages: code tasks drop to the local Devstral-Small-2-24B on `:3301` (`council-code`; the earlier Coder-14B was retired 2026-06-07), general chat drops to the local Qwen 3.6 35B-A3B (`council-mlx`) so nothing small-talk-shaped leaves the haus, and vision and security-domain work go to Gemini 3.1 Pro. `council-secure` -- which handles Cilghal and Mundi's domain-specific work -- is a Gemini 3.1 Pro seat pinned to `quality_tier: 0`, so it never gets rerouted out from under them. The current `council-brain` cross-provider fallback chain is GLM 5.2 then local offline models. The proxy does the triage. Every decision is visible in config and in the JSONL usage log (`~/.sanctum/metrics/token-usage.jsonl`) instead of buried in agent prompt folklore.
+The practical split matters more. `council-brain` is the default brain -- Claude Opus on the Max subscription -- served not from a metered Anthropic key but natively: the proxy intercepts the extracted Claude Max OAuth session token and hits the Developer API via `Authorization: Bearer`, so the subscription pays without a CLI wrapper. From there the router triages:
+
+| Task | Seat | Routes to |
+|------|------|-----------|
+| Default reasoning | `council-brain` | Claude Opus 4.8 (Max, via the `:3456` bridge) |
+| Code | `council-code` | local `Devstral-Small-2-24B-Instruct-2512-4bit` on `:3301` (the earlier Coder-14B was retired 2026-06-07) |
+| General chat | `council-mlx` | local Qwen 3.6 35B-A3B -- nothing small-talk-shaped leaves the haus |
+| Vision + security | `council-secure` | Gemini 3.1 Pro, pinned `quality_tier: 0` for Cilghal and Mundi's work -- never rerouted |
+
+The current `council-brain` cross-provider fallback chain is GLM 5.2, then local offline models. Every decision is visible in config and in the JSONL usage log (`~/.sanctum/metrics/token-usage.jsonl`), not buried in agent prompt folklore.
 
 ## Claude Code Startup Preflight
 
-Claude Code is no longer treated as a polite client that will either have valid auth or fail quietly in a corner. It has a dedicated startup preflight because the real-world failure mode was too annoying to leave to chance.
+Claude Code is not trusted to have valid auth or fail quietly; that failure mode was too annoying, so it gets a dedicated startup preflight. The moving parts:
 
-The moving parts are:
+| Piece | Role |
+|-------|------|
+| `ANTHROPIC_BASE_URL` at `https://127.0.0.1:4040` | Claude Code's entry point; proxyd speaks HTTPS with mTLS, so the session trusts the Sanctum CA via `NODE_EXTRA_CA_CERTS=~/.sanctum/certs/ca.crt` |
+| `com.sanctum.proxyd` | the proxy runs as this system LaunchDaemon, launched through `~/.sanctum/bin/proxyd-launch`, which injects the Gemini, OpenRouter, and Claude Max OAuth Session tokens from `~/.sanctum/secrets/` |
+| `~/.local/bin/claude-wrapper` | wraps the local `claude` command |
+| `tools/claude_session_preflight.sh` | the wrapper runs it before executing the real Claude binary |
 
-- Claude Code points `ANTHROPIC_BASE_URL` at `https://127.0.0.1:4040` -- proxyd speaks HTTPS with mTLS now, so the session also trusts the Sanctum CA via `NODE_EXTRA_CA_CERTS=~/.sanctum/certs/ca.crt`
-- the proxy runs as the system LaunchDaemon `com.sanctum.proxyd`, launched through `~/.sanctum/bin/proxyd-launch` -- a wrapper that injects the Gemini, OpenRouter, and Claude Max OAuth Session tokens from `~/.sanctum/secrets/`. The proxy uses the OAuth token to natively hit Anthropic without metered billing.
-- the local `claude` command is wrapped by `~/.local/bin/claude-wrapper`
-- that wrapper runs `tools/claude_session_preflight.sh` before executing the real Claude binary
+The preflight checks whether the Claude Team token in `~/.openclaw/agents/main/agent/auth-profiles.json` and its Keychain copy under `anthropic-api-key` are present, synchronized, and valid against Anthropic. If the token is invalid it calls `tools/refresh_claude_team_token.sh --refresh`:
 
-The preflight checks whether the Claude Team token in `~/.openclaw/agents/main/agent/auth-profiles.json` and the Keychain copy under `anthropic-api-key` are:
+| Step | Action |
+|------|--------|
+| setup-token | runs `claude setup-token` |
+| browser | opens the Claude Team OAuth page in the operator's default browser |
+| code | prompts for the returned code in the same terminal session -- or uses `agent-browser` for the hermetic automation path |
+| sync | writes the refreshed token back to Keychain |
+| restart | kickstarts `com.sanctum.proxyd` so the new token takes effect |
 
-1. present
-2. synchronized
-3. actually valid against Anthropic
-
-If the token is invalid, it calls `tools/refresh_claude_team_token.sh --refresh`, which:
-
-- runs `claude setup-token`
-- opens the Claude Team OAuth page in the operator's default browser
-- prompts for the returned code in the same terminal session
-- can optionally use `agent-browser` for the hermetic automation path
-- syncs the refreshed token back to Keychain
-- kickstarts the proxy daemon (`com.sanctum.proxyd`) so the new token takes effect
-
-This is not part of the proxy binary itself. That is deliberate. The proxy should route requests, not grow a browser and start roleplaying as an OAuth session manager. The preflight sits at the session boundary, where the repair can happen before the first real request hits the proxy and dies with `invalid x-api-key`.
+None of this lives in the proxy binary, on purpose: the proxy should route requests, not grow a browser and roleplay as an OAuth session manager. The repair happens at the session boundary, before the first real request hits the proxy and dies with `invalid x-api-key`.
 
 <Aside type="note">
-  The wrapper resolves the latest Claude binary dynamically from `~/.local/share/claude/versions/`. Claude updates do not require editing the wrapper unless the install layout itself changes, in which case the universe has chosen violence and you will know soon enough.
+  The wrapper resolves the latest Claude binary dynamically from `~/.local/share/claude/versions/`, so Claude updates do not require editing the wrapper unless the install layout itself changes.
 </Aside>
 
-The repair path also has its own local E2E harness:
+The repair path has its own local E2E harness:
 
 ```bash
 bash ~/Documents/Claude_Code/tests/test-claude-team-refresh-e2e.sh
 ```
 
-That test swaps Anthropic out for a local `file://` auth page and a fake `setup-token` binary, then proves the URL capture, browser click-through, code handoff, token sync, and proxy restart all work end to end. This is a much better way to debug the plumbing than waiting for a real token to expire and hoping the identity provider is in a cooperative mood.
+It swaps Anthropic out for a local `file://` auth page and a fake `setup-token` binary, then proves the URL capture, browser click-through, code handoff, token sync, and proxy restart all work end to end.
 
 ## Test Coverage
 
-The coverage now sits beside live checks for the `sanctum-mlx` (`:1337`) and Devstral (`com.sanctum.mlx-devstral-rust`, `:3301`) native-MLX seat reachability, fallback resilience, Claude Code OAuth passthrough, and the local Claude Max auth-recovery harness. Because if your local tiers are part of the promise, they belong in the test count and in the blame when they break.
-
-The tests live in the service-doctor skill because the proxy is a service and the doctor makes haus calls. It's also the only medical professional in the system that doesn't charge by the token.
+The suite sits beside live checks for `sanctum-mlx` (`:1337`) and Devstral (`com.sanctum.mlx-devstral-rust`, `:3301`) native-MLX seat reachability, fallback resilience, Claude Code OAuth passthrough, and the local Claude Max auth-recovery harness. Local tiers are part of the promise, so they belong in the test count -- and in the blame when they break. The tests live in the [service-doctor](/architecture/services/#model-routing) skill, because the proxy is a service and the doctor makes haus calls -- the only one in the system that does not charge by the token.
 
 ```bash
 # Run the full suite
@@ -208,6 +181,4 @@ bash /Users/neo/Projects/openclaw-skills/service-doctor/tests/test-proxy.sh
 # models (Coder-14B, the old Gemma seat), not the proxy misbehaving.
 ```
 
-<Aside>
-  For model routing tiers and fallback chains, see [Services](/architecture/services/#model-routing). For the incident that inspired the Living Force principles, see [The Living Force](/architecture/living-force/). For the council session that approved the streaming fix, the minutes are exactly as dramatic as you'd expect from five AI agents voting on their own budget enforcement.
-</Aside>
+The council session behind the streaming fix and the incident that inspired [The Living Force](/architecture/living-force/) principles are on the record elsewhere. Day to day the proxy asks for none of that drama: the door opens, the request goes where it should, the meter runs true, and when the budget runs dry the whole haus steps quietly back three feet to the Apple Silicon in the corner. Tommy worked that same door for fifteen years and never once let the wrong thing through. The binary is just keeping the shift.

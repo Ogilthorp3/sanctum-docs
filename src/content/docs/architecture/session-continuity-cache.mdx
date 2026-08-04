@@ -5,13 +5,15 @@ description: "A design for smoothing mid-session model switches — so a fallbac
 
 import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
-![The proxy hands a still-lit conversation thread from one AI seat to the next mid-flight — the thread never goes dark, even as the brain behind it changes](./images/hero-session-continuity-cache.png)
+![A still-lit conversation thread passes from one AI seat to the next mid-flight — the thread never goes dark, even as the brain behind it changes](./images/hero-session-continuity-cache.png)
+
+The quota runs out mid-sentence. The [Sanctum Proxy](/architecture/proxy/) does exactly what it was built to do — it swings to the next seat in the fallback chain without dropping a byte of history — and the very next reply reads like you handed your notebook to a stranger who skimmed it in the hallway and started talking. Same transcript. Different mind. The handoff worked. Continuity didn't.
 
 <Aside type="caution" title="Design, not shipped">
-This page describes a **planned** proxy capability, not a live one. It is on the [Roadmap](/operations/roadmap/) under *Later*. Nothing here runs yet. It exists so the idea is written down honestly instead of living in one operator's memory.
+This is a **planned** proxy capability, not a live one. It sits on the [Roadmap](/operations/roadmap/) under *Later* — nothing here runs yet. It is written down so the idea lives somewhere more honest than one operator's memory.
 </Aside>
 
-The [Sanctum Proxy](/architecture/proxy/) walks a fallback chain: `Max → Gemini → Grok → glm-52 → cathedral`. When the top seat runs out of quota mid-conversation, the next seat takes over. The routing works. The *feeling* does not: the reply after a switch can read like you handed your notebook to a new person who skimmed it and started talking. This page is about closing that gap.
+That chain is real: the proxy walks `Max → Gemini → Grok → glm-52 → cathedral`, and when the top seat runs out of quota mid-conversation the next one takes over. The routing works. This page is about the gap the routing leaves behind — the one you can feel but not point at.
 
 ## The problem is not what it looks like
 
@@ -63,6 +65,8 @@ The proxy's statelessness is *why* it does 142k req/s at sub-millisecond overhea
 - **Correctness.** A stale or wrong preamble is worse than none — it actively misleads the new seat. It must be rebuilt from the live transcript, never trusted past its turn.
 - **Who writes the note.** The preamble has to come from somewhere. A cheap local model summarising each turn adds load to the very cathedral we are trying to protect; deriving it mechanically from the transcript is cheaper but blunter. Open question.
 - **Scope creep.** The line between "continuity preamble" and "the proxy has a memory now" is thin and load-bearing. If this feature starts remembering things across sessions, it has failed and become a shadow Jocasta.
+
+None of this is hard because the code is hard. It is hard because a router that remembers is one honest bug away from a router that knows too much — and the stranger reading your notebook is a smaller problem than the stranger who quietly kept a copy. So the cache stays small, stays forgetful, and earns its statefulness one painful switch at a time. Until then, [Jocasta](/architecture/jocasta-mcp/) keeps the memory, and the proxy keeps forgetting on purpose.
 
 ## Status
 

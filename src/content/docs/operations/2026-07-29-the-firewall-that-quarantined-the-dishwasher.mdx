@@ -1,0 +1,111 @@
+---
+title: "2026-07-29: The Firewall That Quarantined the Dishwasher"
+description: Twenty-nine haushold devices sat indefinitely blocked. Every unblock reported success and reverted within minutes, because the thing re-applying them was the firewall's own cloud.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![A pencil-sketched kitchen at night. A dishwasher, a printer and a television each sit behind a small iron gate, and every gate carries the same unreadable official seal glowing faintly teal. A clerk's rubber stamp hovers above them mid-press, having stamped all three identically without looking. Tommy the Abyssinian sits among the gated appliances, looking up at the stamp, unimpressed.](./images/hero-the-firewall-that-quarantined-the-dishwasher.png)
+
+The printer stopped printing. The battery telemetry that the power-failure protection reads went dark. Somebody tried to watch television in the basement and could not. None of it looked related, and none of it looked like a firewall problem, because nobody had touched the firewall.
+
+Twenty-nine devices were blocked indefinitely. The list reads like an inventory of a haus rather than a threat model: a Bosch dishwasher, a B-Hyve sprinkler timer, an ESP sensor, an EcoFlow battery, a Brother printer, a Netgear access point, a television, fifteen smart bulbs, and one person's iPhone.
+
+## The first wrong answer
+
+Seven of them were blocked in a single burst — inside the same 0.04 seconds. Machine-fast, so something automated did it, and the timestamp landed near a forwarding-plane repair earlier the same day. That is a clean story: a heal ran, and it left MAC blocks behind with no expiry.
+
+So we lifted them. The [Firewalla bridge](/architecture/sanctum-firewalla/) returned `success: true` and `verified: true` on every one, and a fresh query confirmed it: twenty-nine blocks down to twenty-one.
+
+Minutes later they were back, with new timestamps.
+
+<Aside type="caution" title="A successful write that does not stay written">
+`fw-unblock-device` was not lying. It really did remove the block, and the block really was gone when we checked. It came back afterwards. Any tool that verifies immediately after acting will report success here — the failure only exists in the gap between the check and the next observation.
+</Aside>
+
+That sent the investigation somewhere expensive. If something keeps re-applying blocks, something must be *running*. We suspected the security-alarm sentinel (it only pulls and posts — `posted=0`, it never blocks). We suspected the infrastructure doctor, which does have auto-heal authority (both of its runs that hour logged `no-mechanical-rung` and took no action). We suspected a concurrent agent session, because one had been active in exactly that window. All three were wrong, and one of them was an accusation aimed at a colleague on no evidence beyond timing.
+
+## Reading the evidence instead of theorising about it
+
+The breakthrough was mundane: stop asking *who did this* and look at the thing itself. One policy object, printed in full:
+
+```json
+{
+  "action": "block",
+  "purpose": "dap",
+  "target": "FA:CE:DE:CA:CA:01",
+  "type": "mac",
+  "timestamp": "1785373682",
+  "pid": "40948"
+}
+```
+
+`"purpose": "dap"`. Device Access Policy — the firewall's own feature. It builds a per-device **default-deny allowlist from the vendor's cloud**, and anything the cloud does not recognise gets `defaultAction: block`.
+
+A vendor cloud has no idea what a Bosch dishwasher is. Or a sprinkler timer, or a bare ESP module, or a solar battery. So it denied them, and it was right on its own terms and catastrophically wrong on ours.
+
+Two properties made this hard to see, and they are the transferable part:
+
+<Steps>
+1. **The blocks look hand-made.** They are ordinary MAC policies with no expiry — indistinguishable from a deliberate block in every field except one. The only tell is `purpose`, and nothing surfaces it.
+
+2. **A background task re-asserts them every six seconds.** The re-created rules arrived 6 seconds apart, sequentially, walking a device list. That cadence is what makes the "a script is fighting me" theory so compelling — because functionally, one was.
+</Steps>
+
+A theory that explains the evidence is not the same as the correct theory. Every suspect had motive and opportunity; none had done it.
+
+## What the monitor got right, and what it could not fix
+
+A `device_quarantine` probe had been written that same day, after an earlier round of the same symptom. Its rule is precise: **an indefinite MAC block on a device that is not a managed screen**. A legitimate [screen-time](/architecture/screen-time/) block is bounded and lands on a device the roster knows about, so anything else is suspect by construction.
+
+It fired correctly. It went RED, named the count, listed the MACs, and noted that seven shared one timestamp — *"created in a burst, so something automated did this rather than a person."* The evidence string contained the whole case.
+
+It also could not do anything about it, by design: that seat surfaces and proposes, it never lifts a block itself. The reasoning is that the one thing worse than a wrongly-blocked printer is an agent that can quietly unblock a child's tablet. That constraint held, and it was correct — but it means a RED here is a request for a human, not a self-healing event.
+
+<Aside type="tip" title="The monitor was never the problem">
+Three separate probes reported this accurately — the RED, its evidence string, and a WAN attestation alongside it. The gap was not detection. It was that the fix lived at a layer none of them could reach.
+</Aside>
+
+## The actual fix
+
+The remedy was not a script and not a rule. It was two feature flags on the box:
+
+```bash
+fw-features.sh --disable dap_bg_task   # stop the re-application loop first
+fw-features.sh --disable dap           # then the policy generator itself
+```
+
+Order matters. Disabling the generator while its background task still runs leaves the task re-asserting what the generator already produced.
+
+Then the residue: turning the feature off stops *new* rules, it does not remove existing ones. Those had to be deleted by policy id — matching `purpose: dap` only, never a deliberate human block.
+
+Twenty-nine to zero, and it stayed at zero through a ninety-second watch where the loop had previously fired every six.
+
+## Making it the default
+
+A fix applied once to one box is a story. The same fix encoded into onboarding is a product, so it became a tool — `fw-apply-sanctum-defaults` — that any new installation runs:
+
+- sets the flags and **verifies each from the box**, rather than trusting the API's own success field (that field said `verified: true` all evening while the policy quietly returned)
+- sweeps leftover `purpose=dap` rules, scoped so it can never touch a deliberate block
+- is idempotent, so `--check` doubles as an ongoing drift probe — worth having, because a box can be reset or re-paired and silently regain the behaviour
+- has `--revert`, because this is a real trade and not everyone will want it
+
+Proving it worked required more than running it on the box that was already fixed, where it correctly does nothing. The box was reverted to vendor stock, confirmed to be genuinely in the new-user state, and then the tool was run against that. Testing a fix only against the already-fixed case proves nothing except that it is idempotent.
+
+Two portability bugs surfaced from running it rather than reading it: `declare -A` aborts under the bash 3.2 that macOS ships, and joining a summary array on spaces shattered `"dap: true -> false"` into four separate JSON strings.
+
+## The trade, stated plainly
+
+Turning this off gives up automatic per-device allowlisting. A stricter haushold might want exactly that behaviour — unknown devices denied until approved.
+
+Sanctum's stance is the opposite: *nothing permanently blocked, only intruders, and known IoT devices should be fine.* Cloud-guessed allowlisting contradicts that directly, because the cloud's guess about a sprinkler timer is not a security judgement — it is an absence of knowledge rendered as a denial. Alarm-based detection is unaffected and keeps working.
+
+## What to take from it
+
+**A block that returns is not necessarily being re-created by an attacker or a bug in your own code.** Vendor features reconcile toward a desired state, and a local override is not a state change. Before hunting for the process that is fighting you, check whether something is simply *syncing*.
+
+**Print the object before theorising about the object.** The answer had been sitting in a single field of the policy for hours while three innocent suspects were investigated on the strength of timing alone.
+
+**Consider what a haushold device failing actually looks like.** Not an alert — [a printer that does not print](/operations/2026-05-16-the-door-the-printer-opened/), and a television that does not turn on. The people who find these problems first are usually not the ones reading the dashboard.
+
+The hero image has the whole case in it: a clerk's rubber stamp coming down identically on a dishwasher, a printer and a television, sealing all three without once looking at what they were. Tommy the Abyssinian sits among the gated appliances, watching the stamp, unimpressed — which is the correct response to a machine that mistook not-knowing for a verdict. He held that pose for fifteen years before he was a force-ghost. The firewall could stand to learn it.

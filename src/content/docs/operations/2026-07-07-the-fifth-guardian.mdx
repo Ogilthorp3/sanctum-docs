@@ -5,107 +5,45 @@ description: "The twin was dead, but the catalog still knew how to raise it — 
 
 import { Aside } from "@astrojs/starlight/components";
 
-![The fifth guardian — a technical pencil sketch of an open spellbook on a drafting table, its page showing a wiring diagram of a small haus with one resurrection rune still glowing faintly amber, while a draftsman's hand erases it; four dark chess pieces stand toppled at the table's edge, a fifth stands upright inside the book itself, and an Abyssinian cat observes from the corner of the table.](./images/hero-the-fifth-guardian.png)
+![The fifth guardian — a technical pencil sketch of an open spellbook on a drafting table, its page a wiring diagram of a small haus with one resurrection rune still glowing faintly amber as a draftsman's hand erases it; four dark chess pieces lie toppled at the table's edge, a fifth stands upright inside the book itself, and an Abyssinian cat watches from the corner.](./images/hero-the-fifth-guardian.png)
 
-The twin that would not die took four guardians down with it: the
-restart policy, the registry remediation, ha-self-healer, and
-service-doctor's `--fix` mode. The decommission note closed with a rule —
-*enumerate everything with authority to restart it* — and for a day the
-enumeration looked complete. Then a routine checkup asked an idle
-question, and the answer was a fifth hand nobody had counted.
+The [twin that would not die](/operations/2026-07-06-the-twin-that-would-not-die/) took four guardians down with it. Restart policy, registry remediation, ha-self-healer, service-doctor's `--fix` mode — all four, gone. The decommission note closed with a rule: *enumerate everything with authority to restart it.* For a day, the enumeration looked complete. Then a routine checkup asked an idle question. The answer was a fifth hand nobody had counted — and, from the corner of the table, an Abyssinian who had seen this coming.
 
 ## The map still held the spell
 
-The runtime service layer renders from catalog truth:
-`instance.yaml` plus `runtime_catalog.yaml`, through one renderer, into
-forty-four manifests the watchdog lives by. The decommission had done the
-right thing at the *manifest* — the live `home-assistant.yaml` was
-hand-edited to point its probes at the Green (`10.0.0.3`), zero its
-restart budget, and carry a note saying exactly why. But rendered files
-are outputs, not sources. The catalog override for `home_assistant`
-still read the way it had for months: probe localhost, and when it fails,
-`cd ~/.openclaw/homeassistant && docker compose up -d homeassistant`.
+The runtime service layer renders from [catalog truth](/architecture/config-system/): `instance.yaml` plus `runtime_catalog.yaml`, through one renderer, into forty-four manifests the watchdog lives by. The decommission had done the right thing at the *manifest*. The live `home-assistant.yaml` was hand-edited to point its probes at the Green (`10.0.0.3`), zero its restart budget, and carry a note saying exactly why. But rendered files are outputs, not sources. The catalog override for `home_assistant` still read the way it had for months: probe localhost, and when it fails, `cd ~/.openclaw/homeassistant && docker compose up -d homeassistant`.
 
-`render --check` said `DIFF home-assistant.yaml` and meant: the next
-write-mode render — one routine `sanctumctl render` — would overwrite
-the safe manifest with the old one and hand the watchdog the twin's
-defibrillator back. The hand-edit wasn't a fix. It was a loan against
-the render, and the render always collects.
+`render --check` said `DIFF home-assistant.yaml`. It meant something exact. The next write-mode render — one routine `sanctumctl render` — would overwrite the safe manifest with the old one and hand the watchdog the twin's defibrillator back. The hand-edit wasn't a fix. It was a loan against the render. And the render always collects.
 
-Porting the truth into the catalog needed the renderer to say three
-things it couldn't. `actions: []` now means *alert-only* — emit the
-empty list and suppress the auto-generated heal fallback, for services
-the watchdog must never touch. `metadata_note:` carries the
-do-not-resurrect warning into the rendered manifest. And `ip_allow:`
-teaches the renderer to append the inline `# ip-allow:` justifications
-the endpoint-resolution lint demands — `yaml.safe_dump` cannot write a
-comment, and a bare `10.0.0.3` in a rendered file is indistinguishable
-from drift. The pre-commit hook proved the lint was no formality: it
-blocked the fix itself twice until every literal carried its reason.
+Porting the truth into the catalog needed the renderer to say three things we hadn't taught it. `actions: []` now means *alert-only* — emit the empty list and suppress the auto-generated heal fallback, for the services we never want it to touch. `metadata_note:` carries the do-not-resurrect warning into the rendered manifest. And `ip_allow:` teaches the renderer to append the inline `# ip-allow:` justifications the [endpoint-resolution lint](/architecture/endpoint-resolution/) demands — `yaml.safe_dump` cannot write a comment, and a bare `10.0.0.3` in a rendered file is indistinguishable from drift. The pre-commit hook proved the lint was no formality. It blocked the fix itself twice, until every literal carried its reason.
 
 ## The daemons the audit could not see
 
-The same checkup flagged three manifests referencing launchd plists that
-"did not exist": `com.sanctum.firewalla`, `com.sanctum.server-mlx`,
-`com.sanctum.watchdog-rust`. One was a real rename — the MLX seat's
-label is `com.sanctum.mlx` now, and its manifest still probed for a
-python launcher (`sanctum-server-dynamic`) that no running process
-matches; the health check literally could not see the server it guarded.
+The same checkup flagged three manifests referencing launchd plists that "did not exist": `com.sanctum.firewalla`, `com.sanctum.server-mlx`, `com.sanctum.watchdog-rust`. One was a real rename. The MLX seat's label is `com.sanctum.mlx` now, and its manifest still probed for a python launcher (`sanctum-server-dynamic`) that no running process matches. The health check literally could not see the server it guarded.
 
-The other two existed all along. The bridge and the watchdog run as
-**system LaunchDaemons** in `/Library/LaunchDaemons`, and the audit only
-globbed `~/Library/LaunchAgents` — `launchctl list` from a user session
-cannot see the system domain either. Both daemons carry `KeepAlive`;
-launchd itself is their restart mechanism, and no passwordless
-`launchctl` exists for the system domain, so their manifests' heal
-commands pointed at user-agent plists that were never there. Both are
-alert-only now — and the watchdog doubly so, since `sanctumd` is the
-remediation engine and cannot restart itself. One label for the road:
-the file is `watchdog-rust.plist`, but the label loaded inside it is
-`com.sanctum.watchdog`. The filename lies.
+The other two existed all along. The bridge and the watchdog run as **system LaunchDaemons** in `/Library/LaunchDaemons`, and the audit only globbed `~/Library/LaunchAgents`. `launchctl list` from a user session cannot see the system domain either. Both daemons carry `KeepAlive`. launchd itself is their restart mechanism, and no passwordless `launchctl` exists for the system domain, so their manifests' heal commands pointed at user-agent plists that were never there. Both are alert-only now — and the watchdog doubly so, since `sanctumd` is the remediation engine and cannot restart itself.
+
+One label for the road. The file is `watchdog-rust.plist`, but the label loaded inside it is `com.sanctum.watchdog`. The filename lies.
 
 ## The doctor fainted before every diagnosis
 
-None of this had paged anyone, because the instrument that would have
-reported it was broken in the most quiet way possible: `sanctumctl
-doctor` crashed on an `AttributeError` — a bare `Namespace()` handed to
-`verify()`, which reads `args.dry_run` — *after* the render checks but
-*before* the verify suites ever ran. Every doctor run for who knows how
-long had died between the X-ray and the bloodwork.
+None of this had paged anyone. The instrument that would have reported it was broken in the quietest way possible. `sanctumctl doctor` crashed on an `AttributeError` — a bare `Namespace()` handed to `verify()`, which reads `args.dry_run` — *after* the render checks but *before* the verify suites ever ran. Every doctor run for who knows how long had died between the X-ray and the bloodwork.
 
-Fixing the one-liner unmasked three failures that predated the sweep and
-had simply never been seen. The port-uniqueness test counted disabled
-services, so `command_center` (`enabled: false` since the dashboard
-merge, both nominally `:3002`) read as a conflict — disabled services
-reserve no port now, matching the renderer that skips them. And the
-immune-system harness had fallen behind the temple-era watchdog binary
-three separate ways: the living-force temple probe wants mTLS certs no
-sandbox has (`LIVING_FORCE_COUNCIL_ENABLED=false`); the Healing posture
-that follows a successful heal drops the per-service restart budget to
-`max − 2`, which at the default of three left budget one — already
-spent — so the failed-remediation path was budget-blocked before it
-could fail (`WATCHDOG_MAX_RESTARTS_PER_HOUR=10` in the harness); and
-`checks_run` increments before the snapshot is stored, so gating on the
-counter and reading `/health` is a race the harness now polls through.
+Fixing the one-liner unmasked three failures that predated the sweep and had simply never been seen. The port-uniqueness test counted disabled services, so `command_center` (`enabled: false` since the dashboard merge, both nominally `:3002`) read as a conflict. Disabled services reserve no port now, matching the renderer that skips them.
+
+The immune-system harness had fallen behind the temple-era watchdog binary three separate ways. First, the living-force temple probe wants mTLS certs no sandbox has (`LIVING_FORCE_COUNCIL_ENABLED=false`). Second, the Healing posture that follows a successful heal drops the per-service restart budget to `max − 2`; at the default of three that left budget one, already spent, so the failed-remediation path was budget-blocked before it could fail (`WATCHDOG_MAX_RESTARTS_PER_HOUR=10` in the harness). Third, `checks_run` increments before the snapshot is stored, so gating on the counter and reading `/health` is a race the harness now polls through.
 
 <Aside type="caution" title="The fifth-guardian lesson">
 Remediation *configuration* is a guardian too. When you decommission a
-service, the enumeration isn't done at the last process with authority
-to restart it — it ends at the last **source of truth** that can teach a
-process to. A hand-edit to a rendered file doesn't remove the spell from
-the book; it just hides the book. And keep the doctor honest first: a
-checkup that crashes halfway reports health by omission.
+service, the enumeration isn't done at the last process with authority to
+restart it — it ends at the last **source of truth** that can teach a process
+to. A hand-edit to a rendered file doesn't remove the spell from the book; it
+just hides the book. And keep the doctor honest first: a checkup that crashes
+halfway reports health by omission.
 </Aside>
 
 ## What remains
 
-The catalog now says what the haus means: the Green is the only Home
-Assistant, the manifest carries its own warning, and a write-mode render
-reproduces the safe state byte for byte — proven, since the sweep ended
-with exactly that render. The audit sees both launchd domains. The
-doctor finishes: exit 0, `89 + 31 + 39` checks, zero failures, and the
-immune harness proves both the self-heal and the failed-remediation
-paths again, 10 for 10.
+The catalog now says what the haus means. The Green is the only Home Assistant, the manifest carries its own warning, and a write-mode render reproduces the safe state byte for byte — proven, since we ended the sweep with exactly that render. The audit sees both launchd domains. The doctor finishes: exit 0, `89 + 31 + 39` checks, zero failures, and the immune harness proves both the self-heal and the failed-remediation paths again, 10 for 10.
 
-The twin still rests. Now the book that knew how to wake it has
-forgotten, and the physician who would have noticed is back on rounds.
+The twin still rests. The book that knew how to wake it has forgotten the spell, and the physician who would have noticed is back on rounds. Four guardians hold the line; the fifth is the one that remembers what the other four are for.
