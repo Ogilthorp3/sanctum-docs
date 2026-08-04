@@ -312,6 +312,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-04 — The Healer Learns a New Pipeline', slug: 'operations/2026-08-04-the-healer-learns-a-new-pipeline' },
 								{ label: '2026-08-03 — The Haus Grows Senses', slug: 'operations/2026-08-03-the-haus-grows-senses' },
 								{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
 								{ label: '2026-08-01 — The Seal Only One Crate Carried', slug: 'operations/2026-08-01-the-seal-only-one-crate-carried' },

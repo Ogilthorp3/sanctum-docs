@@ -1,0 +1,36 @@
+---
+title: "2026-08-04: The Healer Learns a New Pipeline"
+description: "Three ETL failure pages, one question — why didn't R2D2 fix them? Two were correct restraint, one was a pipeline the healer had never met. The audit also woke a failing test that was guarding something real, and ended with every haus job answering to one name."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A small sketched droid tending a wall of pipes, one lamp glowing amber, while Tommy supervises](./images/hero-2026-08-04-the-healer-learns-a-new-pipeline.png)
+
+Three failure pages landed in one morning, all wearing the same traceback: could not lock the workspace database. The Wizard asked the only question that matters about an autonomous healer: *why didn't R2D2 fix them?*
+
+The answer split three ways. Two were restraint. One was ignorance. Each teaches something different about automation.
+
+## Two pages were restraint, not failure
+
+The mail and message pipelines lost a lock race, retried through their connection helper, logged a warning, and moved on. The lock holder was young and finished within minutes. R2D2's detector looked, found no writer stale enough to kill, and did nothing. Exactly right. A healer that "fixes" ordinary contention is a healer that papers over load you should be able to see. Restraint is a feature with a spelling: thirty minutes of stale before anything dies.
+
+## One page was ignorance
+
+The calendar pipeline went CRITICAL on the same moment of contention — because it was new, and new in two ways. The healer had never met it: the recipe registry is the allowlist, and a pipeline absent from the registry is invisible on purpose. And the pipeline itself connected to the database raw, with zero retries, while every sibling writer went through the retrying helper. One instant of contention, one CRITICAL page, no second chance.
+
+Both gaps closed the same hour. The script now retries like its siblings — landed in its own repo, already live through the symlink. The healer's registry and heal script both know the calendar now, proven with a dry-run and then a real run that landed clean. And since the morning's other change, the healer no longer rehearses first: a genuinely stuck writer dies on first detection, inside a cooldown, with auth-shaped failures still refused loudly. Ask it to be automatic and it will be — for every pipeline it has been introduced to.
+
+## The dead test that was telling the truth
+
+Running the healer's full suite surfaced one failing test everyone had learned to shrug past. It was not flaky. The alarm was right. It was pinning a safety filter — only *block*-type DNS rules may ever be judged stale, never *allow* rules — and a rewrite months back had silently dropped that filter from the deployed code. The suite had been failing honestly ever since, the way a smoke alarm fails honestly in an empty house. Filter restored, fifty-two of fifty-two green, and the doctrine holds: a red test you have stopped reading is a guard you have already lost.
+
+## One name for everything
+
+The same audit ended the era of tribal namespaces. Ten jobs that answered to their agents' names answer to the haus now — one prefix, repo-tracked, symlinked, with every reference migrated and the audit tooling simplified because "ours" is finally a mechanical question. The stale-lock cleaner also learned to watch the busiest repo on the box, which had somehow never been on its list while growing three orphan locks in two days.
+
+<Aside type="tip">
+An autonomous healer is a vocabulary, not a spell. It fixes what it has been taught, refuses what belongs to humans, and stays silent about what it has never met — so when a new pipeline is born, introducing it to the healer is part of shipping it. See [the shipping bar](/architecture/engineering-discipline/): deployed means the *healer* knows, too.
+</Aside>
+
+The pages will come again. That is what pipelines do. But the next lock storm will meet a healer that already knows the calendar, retries where retrying is owed, kills only what is genuinely stuck, and leaves an audit line either way. Nobody has to ask why.
