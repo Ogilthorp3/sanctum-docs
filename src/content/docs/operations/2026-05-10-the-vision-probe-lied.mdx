@@ -7,7 +7,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![A pencil-sketch forensic tableau: a brass diagnostic probe needle pointing confidently to a healthy green dial, while behind it a magnetic-tape spool labeled SWAP has unspooled onto the floor and a chained padlock marked DAY 3 hangs from a sealed door, with a small cathedral spire standing quietly in the distance, its front door wide open and no guard in sight](./images/the-vision-probe-lied.png)
 
-The afternoon started with what looked like a new bug. Three vision-canary failures in nine minutes: `multi_code=0, models_code=200`. Same shape as the mlx 0.30.6 races we had chased for weeks. PR #10's mutex was supposed to have closed those. First instinct: a missed path.
+The afternoon started with what looked like a new bug. Three vision-canary failures in nine minutes: `multi_code=0, models_code=200`. Same shape as the mlx 0.30.6 races we had chased for weeks. [PR #10's mutex](/operations/2026-05-10-the-stress-test-caught-it/), shipped only that morning, was supposed to have closed those. First instinct: a missed path.
 
 The instinct was wrong. The probe was telling the truth, but about the wrong server.
 
@@ -37,7 +37,7 @@ Three processes had collectively pushed the Mini past capacity:
 | ~13 GB | `LM Studio` worker (Coder-14B GGUF) | autoloaded by the LM Studio Guardian twenty-eight minutes earlier, exactly when the failure window opened |
 | ~1.3 GB + 368% CPU | `qemu-system-aarch64` | the known QEMU HVF idle-spin bug, four cores stolen permanently from a 16-core CPU |
 
-Total resident: ~70 GB on a 64 GB machine. The eleven-hour cathedral uptime had brought it to the edge. The Coder-14B autoload at 12:42 EDT was the straw.
+Total resident: ~70 GB on a 64 GB machine. The eleven-hour cathedral uptime had brought it to the edge. The Coder-14B autoload at 12:42 EDT was the straw — an auto-loader claiming memory it did not check first, the same failure mode we wrote up in [Honest Green](/operations/2026-05-02-honest-green/), now one layer down.
 
 A second session was already mid-flight migrating that QEMU VM to Lima `vmType=vz` — the permanent fix for the 368% CPU thief. We got out of the way, watched load drop from 19.49 to 8.03 as their Phase 1 completed, then looked at the next layer.
 
@@ -56,7 +56,7 @@ $ ls ~/Library/LaunchAgents/com.sanctum.mlx.plist.*
 ... (etc.)
 ```
 
-Backups everywhere. The live plist had been renamed during the May 7 disable-compile experiments and never restored. Cathedral kept serving for three days unsupervised. The Sunday 04:00 weekly-restart cron had exited 5 because its `launchctl bootstrap` could not find the plist. The script had no precondition check. The exit-5 went to a log nobody read.
+Backups everywhere. The live plist had been renamed during the [May 7 disable-compile experiments](/operations/2026-05-07-the-council-fell-silent/) and never restored. Cathedral kept serving for three days unsupervised. The Sunday 04:00 weekly-restart cron had exited 5 because its `launchctl bootstrap` could not find the plist. The script had no precondition check. The exit-5 went to a log nobody read.
 
 The fix was mechanical and low-risk. The most recent backup's `ProgramArguments` matched the running cathedral's `ps -ww -o command` byte for byte. Copy backup to the canonical path, `plutil -lint`, SIGTERM the orphan, wait one second for `:1337` to free, `launchctl bootstrap gui/$(id -u)`, poll `/v1/models` until 200. Twenty-seven seconds of total downtime. One canary tick failed inside the restart window and aged out of the SLO immediately.
 

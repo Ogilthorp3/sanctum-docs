@@ -11,7 +11,7 @@ The local Terminal said `Operation not permitted` on `ls ~/Documents`. The same 
 
 The asymmetry was the diagnosis. SSH bypasses the GUI sandbox layer; local Terminal goes through it. When the local path returns a different verdict than the SSH path, the issue is not the filesystem and not the user — it is a daemon between the app and the kernel that owes someone an answer and is not delivering it.
 
-The daemon was `fileproviderd`. State R, accumulated CPU time **1203 minutes** over five days, since the last boot on April 26. macOS routes file-provider permission queries through that process — iCloud Drive, OneDrive, Google Drive, Photos all share it — and when its main thread is wedged in a tight loop, it stops servicing the TCC handshake the kernel needs to authorize the local app's `open()`. The kernel times out and returns EPERM. The user sees "Operation not permitted." The doors look asymmetric because one of them is waiting for a reply that never comes.
+The daemon was `fileproviderd`. State R, accumulated CPU time **1203 minutes** over five days, since the last boot on April 26. macOS routes file-provider permission queries through that process — iCloud Drive, OneDrive, Google Drive, Photos all share it — and when its main thread is wedged in a tight loop, it stops servicing the [TCC handshake](/architecture/tcc-identity-anchors/) the kernel needs to authorize the local app's `open()`. The kernel times out and returns EPERM. The user sees "Operation not permitted." The doors look asymmetric because one of them is waiting for a reply that never comes.
 
 ## The unstick
 
@@ -36,9 +36,9 @@ A wedge that lasted five days deserves a sentinel. The new `com.sanctum.fileprov
 | Cooldown | 30 minutes between kills (no thrash) |
 | Boot grace | First 5 minutes of process lifetime exempt (legit startup busyness) |
 
-When either signal fires, the watchdog captures a `sample` stack to `~/.openclaw/logs/fileproviderd-stacks/` — five seconds of every thread, written before the SIGKILL — then kills the daemon and waits for the new PID. If launchd respawns successfully, it logs `wedge_healed` and posts to Force Flow with severity `warn`. If respawn fails, it escalates to `critical` and stops trying.
+When either signal fires, the watchdog captures a `sample` stack to `~/.openclaw/logs/fileproviderd-stacks/` — five seconds of every thread, written before the SIGKILL — then kills the daemon and waits for the new PID. If launchd respawns successfully, it logs `wedge_healed` and posts to [Force Flow](/architecture/force-flow/) with severity `warn`. If respawn fails, it escalates to `critical` and stops trying.
 
-Qui-Gon's lens shaped the design more than mine did. The original draft had only the primary signal. He pushed for the symptom probe (a functional test, not a process-state proxy), the boot exemption, the cooldown, and the stack capture before the kill. All four came in. The result is closer to a fascia layer than a heart-rate monitor: it does not just observe, it tests, and it remembers.
+Qui-Gon's lens shaped the design more than mine did. The original draft had only the primary signal. He pushed for the symptom probe (a functional test, not a process-state proxy), the boot exemption, the cooldown, and the stack capture before the kill. All four came in. The result is closer to a fascia layer than a heart-rate monitor: it does not just observe, it tests, and it remembers — the same turn the haus took when [wisdom started informing reflex](/operations/2026-04-26-wisdom-informs-reflex/), a functional probe over a process-state proxy.
 
 <Aside type="caution">
 macOS ships neither `timeout` nor `gtimeout`. Homebrew's `coreutils` is not installed on this Mini. The watchdog uses a pure-bash `shell_timeout` helper — background the command, schedule a `kill -KILL`, wait, return 124 if the killer fired. If you copy this script to another Mac and find every probe registering as a timeout, check that `timeout` exists before assuming the daemon is wedged. We learned this when the first force-fire test silently no-op'd because `timeout 0.001 cmd` returned `command not found` instead of 124.

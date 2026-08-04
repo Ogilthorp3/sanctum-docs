@@ -7,13 +7,13 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![A pencil sketch of a small stamped clay tablet locked in a glass cabinet — the kind a courier carries to prove they may enter, drawn beside an Abyssinian cat asleep on the cabinet's flat top](./images/2026-05-22-the-allow-button-retired.png)
 
-A weekly thing was happening: a node prompt would pop up — "node would like to access X" — and the operator would click Allow. Then a few days later, same dialog, different category. "I allow them when they pop up, but this is not Apple-like and military-grade." That was correct. Apple-like is the permission landing once and staying landed. Family-friendly is the dialog never appearing in the first place because the system has its own identity.
+Every few days the same dialog surfaced — "node would like to access X" — and the operator clicked Allow. A few days later, same dialog, different category. "I allow them when they pop up, but this is not Apple-like and military-grade." That was correct. Apple-like is the permission landing once and staying landed. Family-friendly is the dialog never appearing in the first place because the system has its own identity.
 
 This is the story of how that became true.
 
 ## What was actually happening
 
-macOS's TCC framework keys permission grants to two things: the exact path of the binary that's requesting, and the specific category of access. Brew node lives at `/opt/homebrew/Cellar/node/X.Y.Z/bin/node`. Every `brew upgrade node` changes the X.Y.Z, which changes the path, which orphans every previous grant. Pinning brew node stopped the path-churn. The cadence dropped from "every few days" to "every few weeks." That was a real win.
+macOS's TCC framework keys permission grants to two things: the exact path of the binary that's requesting, and the specific category of access. (The full two-anchor design has its own [architecture page](/architecture/tcc-identity-anchors/); this is the night it got built.) Brew node lives at `/opt/homebrew/Cellar/node/X.Y.Z/bin/node`. Every `brew upgrade node` changes the X.Y.Z, which changes the path, which orphans every previous grant. Pinning brew node stopped the path-churn. The cadence dropped from "every few days" to "every few weeks." That was a real win.
 
 It wasn't enough. Even on a pinned path, each *new* category of access produced a fresh prompt. The 9 sanctum services running on node touch a long tail of resources — Documents one week, AppData the next, Calendar the week after that. Every first-touch is a dialog. Pinning the path doesn't stop that.
 
@@ -53,7 +53,7 @@ Ten sanctum services were running on brew node:
 
 - `dench-proxy.js`, `ha-gateway.js`, `firewalla-bridge.js` (system daemons)
 - `claude-max-api-tailscale.js`, `command-center`, jocasta `message-sync` (user agents)
-- `SanctumBridge.app` server (iMessage / WhatsApp / Calendar / Contacts bridge)
+- [`SanctumBridge.app`](/architecture/sanctum-bridge/) server (iMessage / WhatsApp / Calendar / Contacts bridge)
 - Three `jocasta-mcp` stdio instances spawned on-demand by MCP clients
 
 Each one's path-to-node was tracked down: LaunchAgent plists, system-domain LaunchDaemons, wrapper shell scripts, and one Mach-O C launcher embedded in the SanctumBridge bundle. The bundle launcher needed the most surgery — a `#define NODE_BIN "/opt/homebrew/bin/node"` constant compiled into a binary, plus the whole bundle re-signed with Bertrand's `GJ994MN2YF` Developer ID after the rebuild.
@@ -110,3 +110,5 @@ Two anchors: one Node.js Foundation, one Bertrand Nepveu. Both are years-stable 
 <Aside type="note">
 The pattern under all of this: Apple-grade is rarely the maximum-effort *original* engineering. Apple-grade is usually the work of finding which manufacturer already did the maximum-effort engineering and using their stable identity instead of trying to forge a new one. The bundle attempt was the wrong shape because it tried to make Sanctum the manufacturer of node. The `.pkg` install is the right shape because it lets Node.js Foundation be the manufacturer of node and lets Sanctum be the assembler. The Allow button retired the moment someone else's identity stopped expiring weekly.
 </Aside>
+
+The doctrine we were chasing was already sitting on the flagstone. The node binary just learned to hold still long enough to be recognized the same way.

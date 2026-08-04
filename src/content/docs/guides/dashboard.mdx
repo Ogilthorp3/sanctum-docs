@@ -7,7 +7,9 @@ import { Aside, Steps, Tabs, TabItem, Card, CardGrid } from '@astrojs/starlight/
 
 Every haus has a thermostat. This haus has a mission control. The command center dashboard is the primary interface for monitoring and managing a Sanctum instance — real-time visibility into service health, VM status, Docker containers, and network peers, all rendered in a browser window that your spouse will never voluntarily open.
 
-The root shell at `http://localhost:1111/` serves the Command Center React app directly — the page title is `… Command Center`, not a chat window. The backend can swap in a Jocasta chat shell at `/` when a `jocasta.html` sits next to the running server, but the shipped build doesn't include one, so you get the dashboard. The operational data lives behind the same backend on `/api/*`.
+The loopback shell at `http://127.0.0.1:1701/` serves the Command Center React app directly — the page title is `… Command Center`, not a chat window. On the tailnet, reach the same app through the PQ terminator at `https://manoir.tail…:1111/` (WebAuthn passkey). The operational data lives behind `/api/*` on the same process.
+
+Mutating API calls also need **[parent unlock](/guides/parent-unlock/)** (Touch ID or PIN) when that policy is enabled — passkey is the front door; biometrics open the write path.
 
 If you want the same core surfaces in a native macOS shell instead of a browser tab, see the [Holocron App](/guides/holocron-app/). Same Sanctum, less tab sprawl, slightly higher expectations.
 
@@ -15,19 +17,20 @@ If you want the same core surfaces in a native macOS shell instead of a browser 
 
 ## Architecture
 
-The dashboard runs a **Vite + React** frontend served by an **Express** backend on port 1111, bound on all interfaces. You reach it directly at `http://manoir.local:1111/` (or by IP). The number of layers involved in showing you a green dot is, frankly, unreasonable.
+The dashboard runs a **Vite + React** frontend served by an **Express** backend on port **1701** (NCC-1701), loopback by default. Tailnet clients use **`:1111`** (post-quantum terminator → `:1701`). The number of layers involved in showing you a green dot is, frankly, unreasonable.
 
 There's also a `:80` reverse proxy in the haus, but it does **not** front the command center. The `com.sanctum.dench-proxy` Node LaunchDaemon forwards port 80 to the Holocron renderer on `:19001`, with a hostname rule sending `force/flow.*` to Force Flow on `:4077`. The dashboard is not in that path.
 
 ```
-Browser → http://manoir.local:1111  → Express backend (:1111) → Vite/React frontend
+Local    → http://127.0.0.1:1701     → Express + React (Command Center)
+Tailnet  → https://manoir…:1111      → PQ terminator → :1701
 
 Browser → http://<host> (:80)        → com.sanctum.dench-proxy (Node) → :19001 (Holocron)
                                                                        → :4077 (Force Flow, if host starts force/flow)
 ```
 
 <Aside type="tip">
-  The only mDNS broadcaster installed (`com.sanctum.mdns-docs`) advertises `sanctum.local` for the docs site on `:4321` — not a dashboard hostname. There is no mDNS alias for the command center today, so reach it by IP or `manoir.local:1111` like an animal.
+  The only mDNS broadcaster installed (`com.sanctum.mdns-docs`) advertises `sanctum.local` for the docs site on `:4321` — not a dashboard hostname. Prefer `127.0.0.1:1701` on manoir or the MagicDNS `:1111` front door from the admin laptop.
 </Aside>
 
 ## Dashboard Panels

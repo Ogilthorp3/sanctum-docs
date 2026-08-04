@@ -1,15 +1,15 @@
 ---
 title: Backup & Restore
-description: Automated daily backups and disaster recovery procedures. Because hope is not a strategy.
+description: Automated daily backups, offsite copies, and disaster recovery — the layers that turn a 3 AM disk noise from a catastrophe into an inconvenience.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
 
-![The stages of backup grief — denial, anger, bargaining, testing, acceptance](./images/backup-stages-of-grief.png)
+![The stages of backup grief, pencil-sketched — denial, anger, bargaining, testing, acceptance](./images/backup-stages-of-grief.png)
 
 If you're reading this calmly, on a Tuesday afternoon, with a cup of coffee — good. You're doing this right.
 
-If you're reading this at 3 AM because a disk just made a sound disks should never make — we're sorry. But this is exactly why this page exists, and past-you was smart enough to set up backups. Unless past-you didn't, in which case present-you has our deepest condolences.
+If you're reading this at 3 AM because a disk just made a sound disks should never make, we're sorry. But this is exactly why the page exists, and past-you was smart enough to set up backups. Unless past-you didn't, in which case present-you has our deepest condolences.
 
 ## Daily Backup (on manoir)
 
@@ -51,15 +51,15 @@ Each daily run only ships *changed blocks*. Typical delta after the first snapsh
 If it took you more than a weekend to configure, it gets backed up. That's the rule. Weekday-afternoon work is expendable. Weekend work is sacred. Restic dedup means even "back up everything" costs almost nothing past day one.
 </Aside>
 
-### Encryption
+## Encryption
 
-The entire repo — every byte that hits T9 or leaves your machine for Google Drive — is encrypted client-side with AES-256 using a passphrase from macOS Keychain (`sanctum-backup-key`). Even if someone walked off with T9 or compromised your Drive folder, they would see opaque ciphertext blobs.
+Every byte that hits T9 or leaves your machine for Google Drive is encrypted client-side with AES-256, using a passphrase from macOS Keychain (`sanctum-backup-key`). Walk off with T9 or compromise the Drive folder, and all you get is opaque ciphertext blobs.
 
 <Aside type="danger">
 The Keychain entry is the **single trust anchor**. Lose `sanctum-backup-key` from both Keychain *and* 1Password and the data is genuinely unrecoverable — restic has no backdoor, which is exactly the security model you want. Mirror it to 1Password the day you create it. Then test the restore once a quarter so "I have a backup" doesn't quietly decay into "I had a backup."
 </Aside>
 
-### Retention (GFS, enforced by restic forget --prune)
+## Retention (GFS, enforced by restic forget --prune)
 
 ```
 --keep-daily 7    # last 7 daily snapshots
@@ -73,9 +73,9 @@ Runs inline on every backup. Restic's prune does block-level garbage collection 
 Earlier iterations used a custom GFS function in bash that ran weekly via a separate LaunchAgent (`com.triptyq.backup-retention`). It worked, but split logic between two scripts and used a different host-naming convention. Both have been retired in favor of restic's built-in policy + a single canonical job.
 </Aside>
 
-### Why we moved off iCloud full-copy snapshots
+## Why we moved off iCloud full-copy snapshots
 
-Until 2026-04-26 the daily backup was an `rsync` of `~/.sanctum` into a new dated directory under `iCloud/Backups/daily/YYYY-MM-DD/`. Each snapshot was a full copy. iCloud Drive doesn't understand hardlinks, so even a `--link-dest`-based incremental wouldn't have worked through the Files-app sync layer. The result, observed empirically:
+This layer used to be simpler, and simpler was the problem. Until 2026-04-26 the daily backup was an `rsync` of `~/.sanctum` into a new dated directory under `iCloud/Backups/daily/YYYY-MM-DD/`. Each snapshot was a full copy. iCloud Drive doesn't understand hardlinks, so even a `--link-dest`-based incremental wouldn't have worked through the Files-app sync layer. The result, observed empirically:
 
 - 15 daily directories on internal SSD: **356 GB**
 - Each snapshot: ~46 GB of mostly-identical bytes copied fresh
@@ -140,6 +140,8 @@ The retired `backup-retention.sh` and `~/.openclaw/scripts/icloud-backup.sh` liv
 
 ## Restoring from restic
 
+The scripts above are the front door; this is the manual set of keys for when you want one file, not the whole house.
+
 ```bash
 export RESTIC_PASSWORD=$(security find-generic-password -a sanctum-backup -s sanctum-backup-key -w)
 
@@ -167,7 +169,7 @@ restic -r rclone:gdrive-sanctum:sanctum-restic check
 
 ## Disk-Pressure Tripwire
 
-The 2026-04-26 incident — internal SSD at 95% capacity from full-copy iCloud snapshots — exposed a missing layer: there was no early signal. The `/status` endpoint of the Navigator Sidecar (`navigator-sidecar.js`, port 3344) now emits a `disk` block:
+The 2026-04-26 incident — internal SSD at 95% capacity from full-copy iCloud snapshots — exposed a missing layer: there was no early signal. The `/status` endpoint of the Navigator Sidecar (`navigator-sidecar.js`, port 3344) now emits a `disk` block, and it surfaces on the [Holocron dashboard](/architecture/holocron-gui/) like every other health signal:
 
 ```json
 {
@@ -192,7 +194,7 @@ This is a tripwire, not a janitor. It tells you the disk is filling; it doesn't 
 
 ## Weekly Cross-Machine Snapshot (MBP pulls from manoir)
 
-The daily backup lives on the Mini. If the Mini itself is compromised — disk failure, filesystem corruption, malicious actor — that backup is gone with it. The weekly snapshot is the second dimension: pulled from manoir to the MBP every Saturday 04:30, SHA256-pinned, rotated to last 8.
+The daily backup lives on the Mini. If the Mini itself is compromised — disk failure, filesystem corruption, malicious actor — that backup is gone with it. The weekly snapshot is the second dimension, and it shares the paranoia lineage of the [backup deadman](/operations/backup-deadman/): pulled from manoir to the MBP every Saturday 04:30, SHA256-pinned, rotated to last 8.
 
 ```bash
 # Manual run from MBP
@@ -204,7 +206,7 @@ The daily backup lives on the Mini. If the Mini itself is compromised — disk f
 ### Pipeline
 
 - `tools/backup-sanctum.sh` tars `~/.sanctum/{scripts,services,state,docs,bin,boot,instance.yaml}` plus critical LaunchAgent plists on manoir via SSH.
-- `~/.sanctum/secrets/` is **excluded** — secrets live in keychain / 1Password / SOPS, not this tarball.
+- `~/.sanctum/secrets/` is **excluded** — secrets live in keychain / 1Password / SOPS (the [secrets trifecta](/architecture/secrets-trifecta/)), not this tarball.
 - `~/.sanctum/logs/` is excluded — too large, not load-bearing.
 - The tarball is pulled to `~/Backups/sanctum-mini/sanctum-mini-<timestamp>.tgz`.
 - A `.sha256` trailer is written alongside. `shasum -a 256 -c <file>.sha256` verifies integrity.
@@ -251,3 +253,7 @@ tar -xzf sanctum-mini-20260417-222652.tgz \
 <Aside type="caution">
 The tarball stores paths as `Users/neo/...` (no leading slash). Extract to `/` if you want the filesystem layout restored in place, or extract to a staging directory and `rsync` selectively. Never `tar -xzf` into `/` without reading the contents first — the snapshot includes LaunchAgent plists that will start services on next load.
 </Aside>
+
+## The 3 AM test
+
+Strip away the restic internals and the LaunchAgent plists and the whole architecture reduces to one question, asked at 3 AM when the disk makes the sound: is there a copy that isn't on that disk? T9 answers first. Google Drive answers if T9 is gone. The MBP answers if manoir itself is gone. Run the quarterly drill and the answer stays yes; skip it, and "I have a backup" quietly decays into "I had a backup" — the one sentence this entire page exists to keep you from ever saying out loud.

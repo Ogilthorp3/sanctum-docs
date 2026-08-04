@@ -402,3 +402,74 @@ Config lives in `~/.sanctum/instance.yaml` under `router:`. Full per-Jedi ration
 Tommy's pages are written as if by a dead cat who has strong opinions about network segmentation. They are the gold standard. If your page wouldn't survive Tommy's editorial review — if it's generic, or timid, or tries too hard — revise it until it would.
 
 You don't have to be Tommy. But Tommy has to not be embarrassed by you.
+
+## The Gates (how the standard keeps itself)
+
+The standard above is enforced by machines, not memory. Four layers, all in
+this repo:
+
+| Gate | What it proves | When it runs |
+|------|----------------|--------------|
+| `scripts/contrib-check.py` | The page is **correct** — frontmatter, hero present, no leaks, no MDX crash traps (incl. `<|` in table cells) | PR (changed files) + deploy (full corpus) |
+| `scripts/story-check.py` | Someone will **read** it — hook, spine, cast, landing, lineage, chapter budget | PR (changed files) + deploy (full corpus). Errors block; the gold standard keeps exactly one permanent warning |
+| `tools/hero-dupe-check.py` | The art is **unique** — perceptual hash across every hero; two pages must never share visually-identical art even with different bytes | Deploy (full corpus) |
+| `scripts/echo-audit.py` | The book still **varies its music** — corpus-level sameness (opening devices, landing characters, tic phrases) against written budgets | Weekly health audit, advisory only |
+
+`tests/test_story_check.py` pins the calibration contract: `agents/tommy.mdx`
+must pass with exactly one warning (`book/no-lineage`, documented and
+permanent), the portals stay exempt, the joual pages keep their French cast.
+A checker change that fails the gold standard is a broken check, not a strict
+one. The full Astro build remains the final word on MDX validity — run it
+before you push.
+
+### Bolted cameos
+
+`echo-audit.py` measures one thing `story-check` cannot: a landing that names a
+character who appears **nowhere else on the page**. That is a stage exit for an
+actor who was never in the scene, and it is what you get when a cast warning is
+cleared the cheapest way available. The 2026-07 sweep produced 54 of them.
+
+Fix it in one of two directions — never a third:
+
+- give the character a real beat earlier in the body, so the closing callback
+  lands on something, or
+- close on the page's own subject and leave the cast out entirely.
+
+A page is allowed to have no cast in its landing. A page is not allowed to
+borrow one for a sentence.
+
+## The Cast Constitution
+
+The cast is counted four different ways, all of them legitimate, which is
+exactly why every number must say **which set it counts**. Before the 2026-07-31
+audit, one page said "Seven minds" and "Six robes" twenty lines apart and
+another said "five specialized intelligences" and "seven robes" — no arithmetic
+was wrong, and no reader could tell.
+
+| Set | Count | Who | Source of truth |
+|-----|------:|-----|-----------------|
+| **Named characters** | 11 | Yoda, Windu, Qui-Gon, Mundi, Cilghal, Jocasta, Mothma, Ahsoka, Tommy, Oracle, Wizard | one `.mdx` each in `agents/` |
+| **Council seats** | 7 | the above minus Ahsoka (satellite), Tommy (force-ghost), Oracle (ds4 offload) and Wizard (human) | `/architecture/agents/` |
+| **Routed seats** | 5 | Yoda, Mundi, Qui-Gon, Windu, Cilghal | `src/data/council-roster.json` — the only file that knows |
+| **Non-routed** | 2 | Jocasta (records), Mothma (ops) — real seats, no model assignment of their own | `/architecture/agents/` |
+
+Rules:
+
+1. **Never write a bare cast number.** Not "five agents" but "the five routed
+   seats"; not "eleven seats" (there are seven) but "eleven named characters".
+2. **Tommy is not a seat.** He is a `force-ghost`: no tools, no permissions, no
+   model. Counting him among working agents is a category error he would enjoy
+   pointing out.
+3. **Ahsoka is not on the council.** She is the chalet satellite.
+3b. **The Wizard is not a seat either.** He is the haus's one `human` agent —
+   the actuator of last resort. Counting him among the models is flattering
+   to the models. Oracle likewise sits outside the council: a ds4 offload
+   engine, not a robe.
+4. **Routed counts come from the JSON, never from memory** — same doctrine as
+   [The Single-Roster Rule](#the-single-roster-rule). `tests/test_story_check.py`
+   asserts the doctrine page's routed-seat count still matches
+   `council-roster.json` and that the named-character count matches the pages on
+   disk, so a champion swap or a new agent cannot silently make the prose lie.
+5. **Dated field notes are historical.** A 2026-06 note that says "nine agents"
+   recorded what was true that night; leave it. Only evergreen pages are
+   held to the present tense.

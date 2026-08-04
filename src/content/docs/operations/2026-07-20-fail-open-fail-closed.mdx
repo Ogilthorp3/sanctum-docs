@@ -5,40 +5,40 @@ description: "An audit of the two CRM surfaces — the browser extension that wr
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Fail open, fail closed — a technical pencil sketch in the Sanctum docs house style, hand-drawn black-and-white, wide 16:9. Two heavy doors set side by side in a stone wall of a haus cellar. The left door hangs wide open with a worn "READ" plate, warm light spilling through onto the floor. The right door is shut and barred with a "WRITE" plate, a single small deadbolt thrown. An Abyssinian cat sits between them facing the barred door, one amber halo resting on the thrown bolt.](./images/hero-fail-open-fail-closed.png)
+![Fail open, fail closed — a technical pencil sketch in the Sanctum docs house style, hand-drawn black-and-white, wide 16:9. Two heavy doors set side by side in a stone wall of a haus cellar. The left door hangs wide open with a worn "READ" plate, warm light spilling through onto the floor. The right door is shut and barred with a "WRITE" plate, a single small deadbolt thrown. Tommy, the haus's force-ghost cat, sits between them facing the barred door, one amber halo resting on the thrown bolt.](./images/hero-fail-open-fail-closed.png)
 
-Two surfaces touch the deal CRM. One reads, one writes. The audit that prompted this note was meant to answer a simple question — do they both work? — and the honest answer came back split. The read side was solid. The write side had learned a bad habit.
+Two surfaces touch the deal CRM. One reads. One writes. The audit that prompted this note meant to answer one plain question — do they both work? — and the honest answer came back split. The read side was solid. The write side had picked up a bad habit.
 
 ## The two surfaces
 
-The dealflow pipeline is the reader. `affinity-sync` pulls both deal lists from Affinity into the local mirror once a night; `dealflow-meeting-prep` reads that mirror, joins in the live interaction history, and sorts every active deal into needs-you, scheduled, or cold. It never writes back. The only thing that writes to the live CRM is the browser extension: when you send a LinkedIn conversation to Affinity, it finds or creates the contact and posts the messages as a note.
+The dealflow pipeline is the reader. `affinity-sync` pulls both deal lists from Affinity into the local mirror once a night. `dealflow-meeting-prep` reads that mirror, joins in the live interaction history, and sorts every active deal into needs-you, scheduled, or cold. It never writes back. The only thing that writes to the live CRM is the browser extension. Hand it a LinkedIn conversation and it finds or creates the contact, then posts the messages as a note. The full shape of both surfaces lives in [Sanctum CRM](/architecture/crm-architecture/); the reader's brief is [Dealflow Intelligence](/architecture/dealflow-intelligence/).
 
 That asymmetry matters more than it looks. A reader that guesses wrong shows you a slightly stale brief. A writer that guesses wrong leaves a permanent mark in the system of record.
 
 ## The habit
 
-Before it posts a note, the extension checks whether the conversation is already there, so it does not duplicate. The check fetched the contact's existing notes and looked for a match. The bug was in the failure branch. If that fetch errored — a timeout, a rate-limit, a blip — the code caught the error and returned "no existing notes found." Which reads, one line later, as "safe to post." So a transient network hiccup did not skip the send or surface a warning. It re-posted the entire conversation as a fresh duplicate, and reported success.
+Before it posts a note, the extension checks whether the conversation is already there, so it does not duplicate. The check fetched the contact's existing notes and looked for a match. The bug lived in the failure branch. If that fetch errored — a timeout, a rate-limit, a blip — the code caught the error and returned "no existing notes found." One line later, that reads as "safe to post." So a transient network hiccup did not skip the send or raise a warning. It re-posted the entire conversation as a fresh duplicate, and reported success.
 
 The comment above it said, in as many words, allow sending on error. Fail open. For a read that is a defensible default — show something rather than nothing. For a write it is exactly backwards.
 
 <Aside type="caution" title="The tell">
-The signature of a fail-open write is a `catch` block that returns the same shape as the success-with-nothing case. "No notes found" and "could not check for notes" collapsed into one value, and the caller could no longer tell a clean slate from a blind spot.
+The signature of a fail-open write is a `catch` block that returns the same shape as the success-with-nothing case. "No notes found" and "could not check for notes" collapsed into one value. The caller could no longer tell a clean slate from a blind spot.
 </Aside>
 
 ## The doctrine: a write fails closed
 
-The fix was to split those two outcomes back apart. The notes fetch now propagates its failure instead of swallowing it. The duplicate check, on that failure, returns a distinct "could not verify" flag rather than "not a duplicate." And the sender, seeing that flag, stops: it returns a retryable error instead of creating a note. The escape hatch is Force Send, an explicit override for the human who has looked and decided to post anyway.
+The fix was to pull those two outcomes back apart. The notes fetch now propagates its failure instead of swallowing it. On that failure, the duplicate check returns a distinct "could not verify" flag rather than "not a duplicate." The sender sees the flag and stops. It returns a retryable error instead of creating a note. The escape hatch is Force Send — an explicit override for the human who has looked and decided to post anyway.
 
 Said as a rule: a read may fail open and guess, because the cost is a stale glance. A write must fail closed and stop, because the cost is a corrupted record. When you cannot tell whether an action is safe, not acting is the safe action.
 
-The same pass hardened the request layer underneath. Every call to Affinity now carries a 15-second timeout, so a hung request can no longer stall the extension's worker indefinitely, and a rate-limit or server error is retried with backoff instead of silently dropping a field write. And the find-or-create step now reuses an existing company only on an exact name match — a fuzzy search hit used to be enough to link a contact to the wrong firm, which is the one mistake worse than a duplicate.
+The same pass hardened the request layer underneath. Every call to Affinity now carries a 15-second timeout. A hung request can no longer stall the extension's worker indefinitely. A rate-limit or server error is retried with backoff, instead of silently dropping a field write. And the find-or-create step now reuses an existing company only on an exact name match. A fuzzy search hit used to be enough to link a contact to the wrong firm — the one mistake worse than a duplicate.
 
 ## The reader's turn
 
-The dealflow side had its own smaller version of the same lesson. Its rollback tool — the documented way to undo a bulk cleanup run — crashed on the most common undo log it was handed, because it read the log's shape after assuming it. And the pager that is supposed to make a pipeline failure loud would go quiet if the alert service itself was down, with nothing written to disk to prove the page was ever attempted. Both now fail loudly: the rollback reads the shape first, and every page leaves a dated breadcrumb on disk tagged sent or undelivered, so a silent alerter can no longer produce a silent failure.
+The dealflow side had its own, smaller version of the same lesson. Its rollback tool — the documented way to undo a bulk cleanup run — crashed on the most common undo log it was handed. It read the log's shape after assuming it. And the pager that is supposed to make a pipeline failure loud would go quiet whenever the alert service itself was down. Nothing was written to disk to prove the page was ever attempted. Both now fail loudly. The rollback reads the shape first. Every page leaves a dated breadcrumb on disk, tagged sent or undelivered, so a silent alerter can no longer produce a silent failure. It is the same diagnostic asymmetry the daemon work first named in [Asymmetric Doors](/operations/2026-05-01-asymmetric-doors/): the safe default is not fixed, it depends on which way the risk runs.
 
 <Aside type="note" title="How it was checked">
-The reader was validated end to end against the live CRM — key, fetch, a real mirror write, classification of every active deal, the briefing that consumes it, the freshness guard, and the delivery boundary — all green. The writer's logic is covered by its unit suite, which now locks in the fail-closed contract. The one boundary left for a human is the true browser-to-CRM send, because exercising it for real would create a live contact.
+The reader was validated end to end against the live CRM. Key, fetch, a real mirror write, classification of every active deal, the briefing that consumes it, the freshness guard, the delivery boundary — all green. The writer's logic is covered by its unit suite, which now locks in the fail-closed contract. One boundary is left for a human: the true browser-to-CRM send, because exercising it for real would create a live contact.
 </Aside>
 
-The deal CRM is not a place for optimism. Optimism is a reader's luxury. On the write side, the kind thing to do — the thing Tommy would sign off on — is to refuse to guess.
+The deal CRM is not a place for optimism. Optimism is a reader's luxury.

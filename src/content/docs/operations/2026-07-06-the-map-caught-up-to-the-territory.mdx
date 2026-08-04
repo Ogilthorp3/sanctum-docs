@@ -7,17 +7,20 @@ import { Aside } from "@astrojs/starlight/components";
 
 ![The map caught up to the territory — a pencil-sketch cartographer's desk where an old faded map is half redrawn in fresh ink that finally matches the miniature landscape beyond: tiny Mac Mini buildings, a bridge, and a small temple with a teal-glowing kyber crystal. Retired ghost-buildings on the faded half are gently crossed out.](./images/hero-map-caught-up.png)
 
-The Documents→Projects migration landed weeks of drift in one night's lap.
-When the dust settled, the map — instance.yaml, the runtime catalog, the
-service manifests, the test suites — described a haus that no longer
-existed. This is the field note from the night the map caught up.
+Nothing was *down*. That was the trap.
+
+The Documents→Projects migration had landed weeks of drift in one night's
+lap. The health registry read all-pass, the watchdog's damped INFO noise
+had been stable for weeks, every service answered its probe. But the map —
+instance.yaml, the runtime catalog, the service manifests, the test
+suites — now described a haus that no longer existed. This is the field
+note from the night we made it catch up.
 
 ## The shape of the drift
 
-Nothing was *down*. That was the trap. The health registry read all-pass,
-the watchdog's damped INFO noise had been stable for weeks, and every
-individual service answered its probe. The drift lived one layer up, in
-the declarations:
+The drift lived one layer up, in the declarations. Everything underneath
+was healthy; every line that named it had quietly gone stale. We had to
+read all of them:
 
 - **The renderer pruned what it didn't know.** `render_runtime_services.py`
   writes the full manifest set and removes strays — so the hand-authored
@@ -29,7 +32,8 @@ the declarations:
   `sanctum-tts` and port 8008 stay constant across backend transitions.*
   The rescue-commit catalog inverted it — `qwen3-tts` became the node name
   and the doctrine name disappeared, which is exactly what the
-  runtime-audit graph spec was written to catch.
+  [runtime-audit graph spec](/operations/runtime-drift-audit/) was written
+  to catch.
 - **The vm was modeled as qemu.** The catalog's health check looked for a
   `qemu-system-aarch64` process. The VM has run under OrbStack since the
   qemu retirement; the watchdog dutifully "healed" a VM that was never
@@ -45,7 +49,8 @@ the declarations:
 
 ## What the fix looked like
 
-The renderer learned two small doctrines. `provides:` aliases are now
+We taught [the renderer](/architecture/config-system/) two small
+doctrines. `provides:` aliases are now
 first-class dependency tokens, and an override may pin a public `name:` —
 so `sanctum-tts` renders under its constant name with `qwen3-tts` as the
 back-compat alias, and every `requires:` list that referenced either
@@ -59,13 +64,14 @@ Forty-four manifests render clean, `--check` idempotent.
 ## The tests had drifted too
 
 Half the "failures" were suites asserting the previous world: plain-HTTP
-probes against the mTLS-only Temple (Fort Knox hardening, July 5 — no
+probes against the [mTLS-only Temple](/architecture/temple-of-the-kyber/)
+(Fort Knox hardening, July 5 — no
 plain listener, client CA required), an http probe against the Rust
 proxy's https, a `last_ingested` field the health-center API renamed to
 `has_data`, an LM Studio bridge assertion for a stack decommissioned in
 June, and a "VM reaches mac MLX" check that Fort Knox deliberately closed
 (the VM holds no client cert; VM workloads ride cloud providers via the
-gateway). Each assert was moved to the verified present rather than
+gateway). Each assert we moved to the verified present rather than
 deleted — the mTLS probe now uses the canary client cert minted for
 exactly this purpose.
 
@@ -84,7 +90,8 @@ dead architecture walking, flagged `lmstudio-coder14b` unhealthy every
 ten minutes for weeks. It is env-gated (`LIVING_FORCE_COUNCIL_ENABLED`),
 so the staged watchdog plist now ships it `false`; the ghost goes silent
 at the next clean lifecycle. Porting the roll-call to the mTLS Temple
-seats is sanctum-rs work for another night.
+seats is sanctum-rs work for
+[another night](/operations/2026-07-06-the-ghost-leaves-the-machine/).
 
 The board work: the Holocron sidecar wanted three greens. The LinkedIn
 monitor already knew how to say SKIPPED honestly; the OBLITERATUS monitor
@@ -106,3 +113,7 @@ the service that fails — it's the declaration that still describes the
 old world while everything underneath it moved. Render from one source
 of truth, make the renderer refuse what it can't verify, and let the
 test suites assert the present tense.
+
+The haus never went dark. It just spent a few weeks being described by a
+map of somewhere it used to be. By sunrise the two agreed again, and we
+went to bed trusting the territory.

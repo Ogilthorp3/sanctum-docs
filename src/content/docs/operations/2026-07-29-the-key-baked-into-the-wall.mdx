@@ -1,0 +1,68 @@
+---
+title: "2026-07-29: The Key Baked Into the Wall"
+description: The token that holds the children's curfew was sitting in a binary we had pushed to the internet. Closing that hole meant changing the lock while the whole family stayed inside the haus — and finding out whether the locks knew how to re-key themselves.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A locksmith's workshop at night. A single brass key lies split open on the bench, its cut edge glowing, while a fresh-cut twin cools beside it. Behind, a heavy oak door stands wide with warm light and a family's shadows moving unbothered within. On a high shelf an Abyssinian cat watches the swap with one paw resting on a ring of older keys.](./images/hero-2026-07-29-the-key-baked-into-the-wall.png)
+
+Every night the haus locks a few doors. Not the front door — the small ones: the tablet that must go dark before ten, the console that sleeps at bedtime, the streaming stick that is not allowed to leak a show past curfew. A single credential holds all of it. A forty-eight-character token that the enforcement engine presents, like a keyring, every time it needs to hold a door shut.
+
+This is a field note about the morning we found that key photocopied into the blueprints we had handed out — and about the harder, better thing than shredding the copies, which is changing the lock while nobody has to leave the house.
+
+## The custody check
+
+It began as a chore. We were hardening the firewall for a bad day that may never come, and one of the dull, necessary items on the list was *credential custody* — for every secret the haus relies on, answer one question: who can read it, and from where?
+
+The bridge token failed that question in the least dramatic and most complete way possible. It was not stolen. It was published. The forty-eight characters that control the enforcement API were compiled into `sanctum-watchdog` — a real, working binary — and that binary was tracked in a repository, and that repository had been pushed. A secret does not have to be in your source to leak; `strings` reads a compiled artifact as happily as a text file. The key was in the wall of the haus, and we had mailed photographs of the wall.
+
+This was not the week's first lesson in trusting the wrong copy of a thing — [the cache that overwrote the source](/operations/2026-07-28-the-cache-that-overwrote-the-source/) and [the secret that was never missing](/operations/2026-07-26-the-secret-that-was-never-missing/) had already taught the haus that a derived copy is not a source of truth. This time the derived copy was a compiled one.
+
+It was worse than one wall. The same token was typed as a plain literal into three helper scripts — one of them synced to every machine in the haus — plus a scatter of `.bak` files and, for good measure, a chat transcript. Five copies of the key, in five kinds of hiding place, none of them a hiding place at all.
+
+<Aside type="caution">
+The guard we trusted only ever checked for secret *files* — an `id_ed25519`, a `.pem`, anything named like a key. A secret baked inside a legitimate binary, or typed into an ordinary-looking script, walked straight past it. We had built a bouncer who checks IDs at the door and never looks at what people are already wearing.
+</Aside>
+
+And then the cut that stung, because it was ours and it was avoidable: the training station — the laptop where a great deal of this code is actually written and committed — had no pre-commit guard installed *at all*. The other machine had the full checklist. This one had nothing. The guard everybody assumed stood at every door stood at exactly one. That is how all five copies had walked out in the first place.
+
+## Making the key worthless, not just hidden
+
+The instinct, when you find a leaked secret, is to scrub it — delete the copies, purge the file, feel clean. Scrubbing is the fast path, and the fast path is a trap. A key you have merely hidden again is a key an attacker who already has a photograph can still cut. The durable move is the slower one: make the old key *open nothing*, so every photograph in every repository's history turns into a picture of a shape that no longer fits any lock.
+
+So the work went in order, boring layer before exciting one.
+
+First, stop baking the key into the wall. The watchdog now reads the token at runtime — from the environment, then from the secret file on disk — and never carries a copy compiled inside it. The three scripts were taught the same manners. The published binary, which nothing actually ran, was deleted from the repository outright.
+
+Second, hire a bouncer who checks what people are wearing. A new sentinel scans every staged change — text directly, and binaries by reading their `strings` — for the exact shape of a live secret, for private-key headers, for the tell-tale grammar of a token typed after an equals sign. A runtime read does not trip it; a hard-coded literal does. It was installed on *both* machines this time, and — the part that matters — it was tested by trying to commit the very leak we had just cleaned, on the real repository, and watching it refuse.
+
+<Aside type="tip">
+The lesson we wrote on the wall in permanent marker: a guard that lives on one machine is a guard that lives nowhere, because work flows to whichever machine has no guard. Coverage is the whole product. A checklist with a gap is a map of where to walk in.
+</Aside>
+
+## Changing the lock with the family home
+
+Only then, with the key no longer leaking from anywhere new, did we come to the part that could actually hurt someone.
+
+Rotating the token means minting a new one, writing it into the source of truth, and restarting the bridge so it demands the new key from that moment on. But the bridge is not a toy. At the instant we reached for it, twenty-three devices were under an active block, and the entire children's curfew — the [screen-time enforcement](/operations/screen-time-enforcement/) that makes the haus trustworthy to the one family that depends on it — runs through this exact door. Change the lock clumsily and a kid is either locked out of the internet at noon or handed it back at midnight. You do not get to take the haus offline to re-key it. The family is home. The lights are on. Dinner is cooking.
+
+Two facts made it survivable. The blocks themselves live on the firewall, not in the bridge — they are the deadbolts already thrown, and restarting the doorman does not open them. And the enforcement engine, months ago, had already been burned by exactly this: a token rotation once left it clutching a stale key for four hours, quietly failing every command. The scar tissue from that day is a reflex we built in afterward — on any rejection, throw away the cached key, re-read the source, and try once more.
+
+We changed the lock. We watched.
+
+The new key was accepted. The old key, presented deliberately, was refused — the flat `401` that means *this opens nothing now*. And the enforcement engine, holding a key that had gone stale under its own hand a heartbeat earlier, did the thing we had taught it: it hit a closed door, understood, went back to the keyring, and let itself in with the new one — without being told, without a human, without dropping a single command. We read its log afterward the way you check on a sleeping child. Successful writes on the far side of the rotation. No stuck failures. It never woke up.
+
+## What now stands watch
+
+A leak is not closed when the hole is patched; it is closed when someone is watching the place the next one will appear. Tommy — the haus's patron Abyssinian, dead these many years and unbothered by it — keeps that kind of watch: he does nothing, perfectly, until the one moment doing nothing would be a mistake. Two new sentinels came out of the same week in his image, both quiet until they are not.
+
+One watches the tailnet keys — the credentials that grant out-of-band reach to the Mini — and warns *before* one expires, because a key that dies in its sleep takes your emergency door with it, and you find out at the worst possible moment. Today the nearest expiry is eighty-seven days out; the day it reads fourteen, someone hears about it.
+
+The other keeps a census. It remembers every device that has ever been on the haus network and the night it first appeared, and if a machine nobody has ever seen joins at three in the morning, it says so out loud. An asset you cannot name is one you cannot defend.
+
+The old key still exists, frozen in the history of two repositories and one forgotten chat log — and it does not matter, because it is a photograph of a lock that no longer exists. That is the whole point. You do not win by making the copies disappear. You win by making them meaningless.
+
+<Aside type="note">
+The doctrine, in one line: hide a secret and you have bought a day; rotate it and you have bought back the day it leaked. The fix for a leaked key is a new key — everything before that is housekeeping.
+</Aside>

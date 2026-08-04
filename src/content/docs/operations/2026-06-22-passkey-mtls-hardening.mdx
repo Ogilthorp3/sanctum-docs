@@ -9,18 +9,18 @@ import { Aside } from '@astrojs/starlight/components';
 
 {/* TODO(hero): generate via tools/gen_hero_image.py — prompt: "A small gatehaus at night. A single sentry presses a glowing fingerprint onto a teal-lit door lock; the door has no keyhole, only the fingerprint pad. Off to the side, two tiny armored couriers swap wax-sealed scrolls through a narrow slot. Technical pencil sketch, dark background, teal localized accent lighting, amber halo on the fingerprint, clean hand-drawn lines, no text, no words, no letters." */}
 
-The command-center dashboard on `:1111` served genome data, Apple Health, Withings, supplements, and lab reports to anyone who could reach it. The tailnet ACL kept strangers out, but inside the perimeter the front door had no lock at all. This is the day it got one — and the lock is a fingerprint.
+The command-center dashboard on `:1111` served genome data, Apple Health, Withings, supplements, and lab reports to anyone who could reach it. The tailnet ACL kept strangers out, but inside the perimeter the front door had no lock at all. This is the day it got one. The lock is a fingerprint.
 
 ## The doctrine: who is on the other end
 
 The right answer is not one mechanism, it is two, chosen by who is knocking. Apple worked this out a long time ago: security you have to think about is not security, it is homework. So the rule split clean.
 
-- **Machines** get full **mutual TLS with post-quantum key exchange**. A daemon does not fumble a cert; the canary client cert lives in the keychain and the handshake is invisible.
+- **Machines** get full **mutual TLS with post-quantum key exchange**. A daemon does not fumble a cert. The canary client cert lives in the keychain — one leg of the [secrets trifecta](/architecture/secrets-trifecta/) — and the handshake is invisible.
 - **Humans** get a **passkey** — WebAuthn, Touch ID, bound to the Secure Enclave. Not a browser client cert. A cert file can be exported and stolen; a passkey cannot leave the Enclave, and it proves *you*, not just your hardware.
 
 ## Machine to machine: mTLS+PQ
 
-The cathedral on `:1337` is the reference — `mtls.rs` runs X25519MLKEM768 (post-quantum hybrid key exchange) with ML-DSA client-cert verification, `--no-plain` so no unauthenticated path exists. On this day the Devstral coder seat on `:3301` was folded into the same posture: launched with `--tls-cert/--tls-key/--tls-client-ca --no-plain`, the castellan probe moved to the canary cert, and proxyd's `council-code` backend flipped to `https` with `mtls: true`. Because proxyd hot-reloads its config file, the encrypted route went live with **zero** council restart — verified end to end, a live request returning over mTLS.
+The cathedral on `:1337` is the reference — `mtls.rs` runs X25519MLKEM768 (post-quantum hybrid key exchange) with ML-DSA client-cert verification, `--no-plain` so no unauthenticated path exists. It is the posture the [April mTLS migration](/operations/2026-04-21-mtls-migration/) established, now extended one port further. On this day the Devstral coder seat on `:3301` was folded in: launched with `--tls-cert/--tls-key/--tls-client-ca --no-plain`, [the castellan](/architecture/the-castellan/) probe moved to the canary cert, and proxyd's `council-code` backend flipped to `https` with `mtls: true`. Because proxyd hot-reloads its config file, the encrypted route went live with **zero** council restart. Verified end to end, a live request returning over mTLS.
 
 ## Human to dashboard: a passkey, not a cert
 
@@ -32,7 +32,7 @@ The tailnet ACL is already the device perimeter — only Bert's tagged devices r
 
 ## The cert that makes WebAuthn legal
 
-WebAuthn refuses to run on a site with a TLS certificate error — full stop. The terminator had been presenting a private Sanctum-CA cert, which every browser flags. The fix was not to install that CA on every device (that is the un-Apple homework). Tailscale issues real Let's Encrypt certs for MagicDNS names once **HTTPS Certificates** is enabled in the admin console — one toggle, free on every plan. After the toggle:
+WebAuthn refuses to run on a site with a TLS certificate error. Full stop. The terminator had been presenting a private Sanctum-CA cert, which every browser flags. The fix was not to install that CA on every device (that is the un-Apple homework). Tailscale issues real Let's Encrypt certs for MagicDNS names once **HTTPS Certificates** is enabled in the admin console — one toggle, free on every plan. After the toggle:
 
 ```bash
 tailscale cert --cert-file le-manoir.crt --key-file le-manoir.key manoir.tail7c6d11.ts.net

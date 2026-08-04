@@ -8,9 +8,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![sanctum-cli config — five intricate hand-forged brass keys on a single ring with a worn leather strap, each key uniquely cut, an amber halo from above. One ring, one block, every key earning its place.](./images/hero-sanctum-yaml.png)
 
-The `sanctum` CLI keeps all of its settings in a single block — `cli:` — inside the instance file at `~/.sanctum/instance.yaml`. The rest of that file ([`instance.yaml`](./instance-yaml)) describes the whole constellation: networking, node topology, every service. This page covers only the slice the CLI itself reads and validates. The split is deliberate — the loader pulls out just the `instance:` and `cli:` keys and leaves the operator's other tools to own theirs.
+Open `~/.sanctum/instance.yaml` expecting the usual config sprawl and the file is almost rude about how little it asks of you: two required keys and a lot of white space. That one file ([`instance.yaml`](./instance-yaml)) describes the entire constellation — networking, node topology, every service — but the `sanctum` CLI only ever reads two slices of it. The loader pulls out the `instance:` and `cli:` keys, validates those, and leaves every other tool to own the rest without complaint. This page is the second slice: `cli:`, the block the CLI itself reads.
 
-The block is optional. A fresh install runs on defaults; you add a `cli:` block only when you want to steer routing, pick a provider, or point backups somewhere. `sanctum onboard` scaffolds a minimal `instance.yaml` (just `instance: { name, slug }`) when none exists, then walks its numbered steps — it never opens an editor. When something is wrong, `sanctum config validate` names the offending key before anything downstream gets a chance to fail more interestingly.
+The block is optional, which is the point. A fresh install runs entirely on defaults; you add a `cli:` block only when you want to steer routing, pick a provider, or point backups somewhere. `sanctum onboard` scaffolds a minimal `instance.yaml` (just `instance: { name, slug }`) when none exists, then walks its numbered steps — it never opens an editor. And when a key is wrong, `sanctum config validate` names the offender out loud, before anything downstream gets the chance to fail more interestingly. The whole design assumes you will get it wrong at least once; it just refuses to be quiet about it.
 
 <Aside type="note">
 The CLI loads this through pydantic v2 with `extra="forbid"` (see `sanctum_cli/config.py`), so a typo in a key name fails loudly with a precise pointer rather than silently doing nothing. Comments in the YAML survive on disk but never reach the parser. Write notes for the future operator (probably you, in six months) liberally.
@@ -74,7 +74,7 @@ cli:
     fallback: claude
 ```
 
-A `then:` value names a *seat* — `claude`, `gemini`, or `mlx_local` — not a specific model. Which model sits behind each seat lives in the provider block below, so you can swap the model without rewriting every rule.
+A `then:` value names a *seat* — `claude`, `gemini`, or `mlx_local` — not a specific model. Which model sits behind each seat lives in the provider block below, so you can swap the model without rewriting every rule. It is the same seat vocabulary the [Smart Router](../architecture/dynamic-model-routing) speaks one layer up.
 
 ---
 
@@ -210,3 +210,7 @@ The env vars the CLI actually honors at runtime, grepped straight from `sanctum_
 <Aside type="caution">
 Notice what is *not* on this list: there is no env var that injects a secret directly. Every key still resolves through the Keychain tuple. That is on purpose — env-var secrets surface in process listings, shell history, and crash dumps in places config files do not.
 </Aside>
+
+---
+
+That is the whole `cli:` block: five keys on one ring, each earning its place, and not a single secret riding along on any of them — the tokens stay in Keychain, exactly as the [secrets trifecta](../architecture/secrets-trifecta) demands. When something downstream misbehaves, this file is where you start, because `sanctum config validate` reads it first and will tell you which key is lying. The rest of the constellation waits next door in [`instance.yaml`](./instance-yaml); it just no longer has an opinion about how the CLI is run.

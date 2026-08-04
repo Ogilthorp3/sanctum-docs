@@ -4,13 +4,13 @@ description: The autoresearch ladder now has a watcher — a tiny script that re
 date: 2026-05-23
 ---
 
-![A quiet librarian-style controller reads nightly results.tsv pages at a wooden desk, marking which autoresearch ladder rungs to skip, while a separate picker robot continues climbing the ladder unaware](./images/hero-2026-05-23-the-controller-quiet.png)
+![A quiet librarian-style controller reads last night's results.tsv at a wooden desk and marks which autoresearch ladder rungs to skip, while the picker robot beside it keeps climbing the ladder in order, unaware anyone is watching](./images/hero-2026-05-23-the-controller-quiet.png)
 
 Autoresearch had a picker. The picker walked a ladder of training configurations and tried them in order. Every night. Forever. The order was decided by a human, once, in a Python list.
 
-The ladder is twelve rungs now. Two of them — `recipe-real-only` and `recipe-replay-boost` — vary the *training data* instead of the hyperparameters (Stage 1, yesterday). The picker still walks in order. It does not know that one rung's recipe scored 0.860 last night and another's scored 0.612 the night before. It just walks.
+The ladder — [the one that heals itself](/operations/2026-05-10-the-ladder-that-heals-itself/) — is twelve rungs now. Two of them — `recipe-real-only` and `recipe-replay-boost` — vary the *training data* instead of the hyperparameters (Stage 1, yesterday). The picker still walks in order. It does not know that one rung's recipe scored 0.860 last night and another's scored 0.612 the night before. It just walks.
 
-The controller is the picker's quiet roommate. It runs once, before the picker, every night. It reads `results.tsv` for the last hundred runs. It reads `eval_results_full.json` for every adapter that has one. It groups by recipe, finds the weakest tier in the most recent measurement, identifies which recipe historically lifted that tier most, and decides which ladder rungs to suppress so the picker walks to the rungs that match.
+So we gave the picker a roommate. The controller runs once, before the picker, every night. It reads `results.tsv` for the last hundred runs. It reads `eval_results_full.json` for every adapter that has one. It groups by recipe, finds the weakest tier in the most recent measurement, identifies which recipe historically lifted that tier most, and decides which ladder rungs to suppress so the picker walks to the rungs that match.
 
 Then, by default, it writes that decision into a log file and exits 0. The picker walks the full ladder, as if the controller did not exist. The training proceeds. The controller, quiet.
 
@@ -46,7 +46,7 @@ Kill switch is one shell command:
 rm ~/.sanctum/autoresearch-controller-active
 ```
 
-Both are deliberate. Neither requires a code change, a plist edit, or a deploy. The controller reads the sentinel state once at the top of its run; toggling the file mid-night cannot flip the decision halfway through.
+Both are deliberate. Neither requires a code change, a plist edit, or a deploy: you `touch` a file to hand the controller the wheel, and you `rm` it to take the wheel back. The controller reads the sentinel state once at the top of its run; toggling the file mid-night cannot flip the decision halfway through.
 
 ## The cardinal rule
 
@@ -65,7 +65,7 @@ def decide(history, evals, ladder) -> tuple[list[str], str]:
     """Return (rung_ids to skip, human-readable rationale)."""
 ```
 
-UCB and Thompson sampling are designed-for, not built. When the recipe library grows enough that sample-size confidence matters, the swap is a single subclass.
+UCB and Thompson sampling are designed-for, not built — [the night the bandit picks first](/operations/2026-05-24-the-bandit-picks-first/) is when that swap leaves the drawing board. When the recipe library grows enough that sample-size confidence matters, the swap is a single subclass.
 
 ## The library is the rate-limiter now
 

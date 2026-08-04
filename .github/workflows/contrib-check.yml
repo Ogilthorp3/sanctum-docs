@@ -11,6 +11,9 @@ on:
     paths:
       - "src/content/docs/**/*.mdx"
       - "scripts/contrib-check.py"
+      - "scripts/story-check.py"
+      - "tools/hero-dupe-check.py"
+      - "tests/**"
       - "CONTRIBUTING.md"
       - "AGENTS.md"
   push:
@@ -18,6 +21,9 @@ on:
     paths:
       - "src/content/docs/**/*.mdx"
       - "scripts/contrib-check.py"
+      - "scripts/story-check.py"
+      - "tools/hero-dupe-check.py"
+      - "tests/**"
   workflow_dispatch:
 
 jobs:
@@ -65,3 +71,18 @@ jobs:
         if: steps.changed.outputs.files != ''
         run: |
           python3 scripts/contrib-check.py ${{ steps.changed.outputs.files }}
+
+      # The narrative half of the standard — same diff scope. Errors block;
+      # warnings are advisory (Tommy keeps one on purpose).
+      - name: Run narrative checker (story-check)
+        if: steps.changed.outputs.files != ''
+        run: |
+          python3 scripts/story-check.py ${{ steps.changed.outputs.files }}
+
+      # Calibration contract: the checkers' thresholds are anchored to named
+      # gold-standard pages (tests/test_story_check.py). Any edit to the
+      # checkers, the tools, or those anchor pages must keep the contract.
+      - name: Calibration contract (pytest)
+        run: |
+          python3 -m pip install --quiet pytest pillow
+          python3 -m pytest tests/ -q

@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![The ladder that heals itself — nine rungs against a darkened cliff; one mid-rung cracked but an autonomous welder mid-climb is fusing it back, the three rusted padlocks at the top marking the OOM ceiling.](./images/hero-2026-05-10-ladder-heals.png)
 
-Six nights in a row, the autoresearch nightly fell in the same hole. April 29 through May 5 — every fire identical: launch at 1am, OOM at iter 1, post-flight breadcrumb, no rows added to `results.tsv`, no learnings, eight GPU-hours wasted. The fix on May 7 stopped the silent failure mode by adding a post-flight delta check, but it didn't change the underlying problem: there was no actual research loop. `train.py` carried fixed hyperparameters at the top of the file. `experiment.sh` ran train → eval → keep/revert with the same shape every time. `run_overnight.sh` ran two of those, back-to-back, with the same config.
+Six nights in a row, the autoresearch nightly fell in the same hole. April 29 through May 5 — every fire identical: launch at 1am, OOM at iter 1, post-flight breadcrumb, no rows added to `results.tsv`, no learnings, eight GPU-hours wasted. [The fix on May 7](/operations/2026-05-07-the-council-fell-silent/) stopped the silent failure mode by adding a post-flight delta check, but it didn't change the underlying problem: there was no actual research loop. `train.py` carried fixed hyperparameters at the top of the file. `experiment.sh` ran train → eval → keep/revert with the same shape every time. `run_overnight.sh` ran two of those, back-to-back, with the same config.
 
 Today autoresearch becomes autoresearch.
 
@@ -81,7 +81,7 @@ The other shape change: train and evaluation now run in separate phases.
 
 In v1, every train was followed immediately by its own evaluation pass. Train, eval, decide, restart — fifty-two minutes per loop, of which ten are eval. With four loops a night, that's forty minutes of evaluation. Eight percent of the eight-hour window doing GPU-bound scoring instead of GPU-bound training.
 
-In v2, Phase 1 is up to four train slots back-to-back, each 90 minutes, with a 7-hour cap. Phase 2 is one evaluation pass per adapter that produced a `pending_eval_step.json` breadcrumb. The breadcrumb is dropped by `train.py` after a clean train; eval discovers it via a glob over `adapters-experimental/*/pending_eval_step.json`. Idempotent re-runs skip already-scored adapters because the breadcrumb is removed when scoring lands.
+In v2, Phase 1 is up to four train slots back-to-back, each 90 minutes, with a 7-hour cap. Phase 2 is one [evaluation pass](/architecture/eval-harness/) per adapter that produced a `pending_eval_step.json` breadcrumb. The breadcrumb is dropped by `train.py` after a clean train; eval discovers it via a glob over `adapters-experimental/*/pending_eval_step.json`. Idempotent re-runs skip already-scored adapters because the breadcrumb is removed when scoring lands.
 
 The total wall-clock for the eight-hour window stays constant. The fraction spent on training goes from 84% to about 90%.
 
@@ -137,7 +137,7 @@ The v1 logic resumes on the next cron fire. The morning briefing tells you what 
 
 A few things were deliberately left out of v2 because they belong somewhere else.
 
-**Adapter promotion automation.** Tonight a "kept" row in `results.tsv` still requires the operator to `scp` the adapter to the Mini's candidate dir and trigger Cilghal's promotion drill. That's intentional — auto-promoting model weights from a research nightly into the production council needs a human-in-the-loop gate.
+**Adapter promotion automation.** Tonight a "kept" row in `results.tsv` still requires the operator to `scp` the adapter to the Mini's candidate dir and trigger Cilghal's promotion drill through [the champion gate](/architecture/champion-gate/). That's intentional — auto-promoting model weights from a research nightly into the production council needs a human-in-the-loop gate.
 
 **Cross-rung interactions.** The ladder tests one knob change per rung. Combined-knob rungs (e.g., rank-32 + higher-lr) would multiply the search space without giving the picker any way to pick intelligently among them. If a specific combination becomes worth trying, it gets one new tuple appended to `LADDER`.
 
