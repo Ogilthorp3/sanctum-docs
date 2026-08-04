@@ -312,12 +312,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-<<<<<<< HEAD
 								{ label: '2026-08-04 — The Quest That Wore Unknown', slug: 'operations/2026-08-04-quest-that-wore-unknown' },
-{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
-								{ label: '2026-07-31 — The Reboot That Stayed Up', slug: 'operations/2026-07-31-the-reboot-that-stayed-up' },
-=======
-								{ label: '2026-08-04 — The Backup That Said Yes and Did Nothing', slug: 'operations/2026-08-04-the-backup-that-said-yes' },
+{ label: '2026-08-04 — The Backup That Said Yes and Did Nothing', slug: 'operations/2026-08-04-the-backup-that-said-yes' },
 								{ label: '2026-08-04 — The Healer Learns a New Pipeline', slug: 'operations/2026-08-04-the-healer-learns-a-new-pipeline' },
 								{ label: '2026-08-03 — The Haus Grows Senses', slug: 'operations/2026-08-03-the-haus-grows-senses' },
 								{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
@@ -326,7 +322,6 @@ export default defineConfig({
 								{ label: '2026-07-31 — The Seven Brains', slug: 'operations/2026-07-31-the-seven-brains' },
 								{ label: '2026-07-29 — The Key Baked Into the Wall', slug: 'operations/2026-07-29-the-key-baked-into-the-wall' },
 								{ label: '2026-07-29 — The Firewall That Quarantined the Dishwasher', slug: 'operations/2026-07-29-the-firewall-that-quarantined-the-dishwasher' },
->>>>>>> origin/main
 								{ label: '2026-07-29 — The Alarm Nobody Could Answer', slug: 'operations/2026-07-29-the-alarm-nobody-could-answer' },
 								{ label: '2026-07-28 — The Dragon Earns Its Crown', slug: 'operations/2026-07-28-the-dragon-earns-its-crown' },
 								{ label: '2026-07-28 — The Cache That Overwrote the Source', slug: 'operations/2026-07-28-the-cache-that-overwrote-the-source' },
