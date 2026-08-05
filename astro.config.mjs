@@ -312,8 +312,9 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-05 — The Messenger, Not the Message', slug: 'operations/2026-08-05-the-messenger-not-the-message' },
 								{ label: '2026-08-04 — The Quest That Wore Unknown', slug: 'operations/2026-08-04-quest-that-wore-unknown' },
-{ label: '2026-08-04 — The Backup That Said Yes and Did Nothing', slug: 'operations/2026-08-04-the-backup-that-said-yes' },
+								{ label: '2026-08-04 — The Backup That Said Yes and Did Nothing', slug: 'operations/2026-08-04-the-backup-that-said-yes' },
 								{ label: '2026-08-04 — The Healer Learns a New Pipeline', slug: 'operations/2026-08-04-the-healer-learns-a-new-pipeline' },
 								{ label: '2026-08-03 — The Haus Grows Senses', slug: 'operations/2026-08-03-the-haus-grows-senses' },
 								{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
