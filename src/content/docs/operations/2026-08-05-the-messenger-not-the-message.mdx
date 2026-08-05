@@ -1,0 +1,69 @@
+---
+title: "2026-08-05: The Messenger, Not the Message"
+description: The off-site eye paged that the backups were three days dead. The backups were fine — every courier between them and the eye had quietly stopped walking.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Three stone beacon towers in a line across a graphite landscape. The nearest burns with a tall amber flame, the only colour in the sketch. The middle tower's brazier has gone out — a thin wisp of smoke where fire should be, a ladder leaning unused against its wall. From the farthest tower a watchman points back down the line, alarm notes fluttering from his hand. An Abyssinian cat sits on the path below the dead middle brazier, watching.](./images/hero-2026-08-05-the-messenger-not-the-message.png)
+
+The page said the backups were dead. The backups were fine.
+
+The Cloudflare off-site eye — the one guard that lives off the Mac precisely so the Mac cannot silence it — reported `backup-fresh` sixty-seven hours overdue and `restore-drill` past its eight-day limit. Checked against disk, the accusation fell apart in one command: restic had landed a snapshot on the Ark that very morning, and another on gdrive a minute later. Fifteen point eight gigabytes, both repos, daily, all week.
+
+So the message was healthy. Something between the message and the eye had died, and had been dead for three days without a single sound.
+
+## Three days of polite failure
+
+The chain has four links. The backup beats a heartbeat file in a private GitHub repo. A mirror script reads that file every fifteen minutes and forwards each beat to the Cloudflare eye. The eye's own cron compares ages against limits and pages. Nothing on the Mac can veto it.
+
+The mirror's log told the whole story to nobody:
+
+```
+gh: Not Found (HTTP 404)
+2026-08-05T15:00:01Z ERROR: failed to fetch heartbeats.json
+```
+
+Three hundred and one of those, four per hour, back-to-back since Saturday lunchtime. The mirror never crashed. It ran on schedule, failed politely, wrote a line in a file no one reads, and exited. [The seal only one crate carried](/operations/2026-08-01-the-seal-only-one-crate-carried/) taught us that a warning that fires every boot becomes wallpaper; this was the quieter cousin — an error that fires every fifteen minutes in a log with no reader is not even wallpaper. It is a diary.
+
+The costume mattered too. `Not Found` reads like a missing repo, not a failed login. GitHub answers anonymous callers with 404 on private repos so outsiders cannot map what exists — which means *losing your credentials looks identical to the repo vanishing*. The error message points you at the wrong suspect from the first line.
+
+## What changed was where the key lives
+
+Regression doctrine says the first question is never "what is broken" but "what changed" — and to [diff the working twin](/operations/2026-07-03-verify-before-you-fortify/) before building a theory. Here the working twin was sitting in the same log directory: the backup's own `deadman beat`, which shells out to the very same `gh`, kept landing on GitHub on the 3rd, the 4th and the 5th. Same binary, same account, same repo, opposite outcome. The difference could not be gh, the token, or GitHub. It had to be the room each caller stood in.
+
+It was. On the Sunday morning of 2 August, the weekly brew job upgraded gh. At 11:26 that day a re-auth rewrote `~/.config/gh/hosts.yml` — and the new gh no longer keeps the token there in plaintext. It moved into the macOS keyring. The mirror ran from **cron**, and cron has no session, no keychain, no way to ask. Its gh calls went out anonymous from the next tick onward: last clean mirror at 11:15, first 404 at 11:30. The backup's beats survived because its LaunchAgent runs in the gui domain, where the keyring answers.
+
+One fact, checked in seconds, that a day of theorising would not have produced: the timestamp on `hosts.yml` sat eleven minutes before the first failure.
+
+## The drill that skipped its Sunday
+
+The second overdue check was not the mirror's fault. `restore-drill` was genuinely stale on GitHub too — and the arithmetic that let it happen is worth writing down, because Bert had done everything right.
+
+The weekly canary restores a probe file from both repos every Sunday and beats only on success. To keep reboot catch-up runs cheap, it skipped the restore if one had passed within six days. Then a manual drill ran on a Monday evening. The following Sunday found the stamp five point three days old — inside the window — and skipped. The next real drill would have landed thirteen days after the last beat, against an eight-day limit. The eye paged at day eight, exactly as designed.
+
+The general form is uglier than the incident: with a weekly schedule, *any* skip window longer than a day can be phase-shifted past the limit by one well-meaning manual run. The window is twenty hours now. Every skip it grants is vouched for by a beat less than a day old, which holds the gap under the limit even across a daylight-saving week, and a test pins the ceiling so the number cannot quietly grow back.
+
+<Aside type="note" title="A dedupe window is a promise about cadence">
+Six days did not look like a bug when it shipped; the probe restore takes about fifteen seconds, so there was never a real cost to skip. Any dedupe wider than the gap between scheduled runs is a bet that nobody will ever run the job by hand. Someone — Bert, an agent, a future incident — always runs the job by hand.
+</Aside>
+
+## A tripwire for the courier
+
+Two changes, both boring on purpose. The mirror moved out of cron into a gui-domain LaunchAgent — the exact context the working twin had already proven against the keyring, every morning, three days running. And it now counts its own failures: three consecutive bad runs and it pages Force Flow itself, with the streak resetting on the first clean mirror. Detection drops from sixty-seven hours to forty-five minutes, and the alert names the courier instead of framing the message.
+
+The tests stub exactly one thing — a gh binary that refuses — and listen on real sockets for the page, the haus pattern the canary suite already uses. The overdue drill itself ran the same afternoon: both repos restored the probe, both hashes matched, and the eye went green within the hour.
+
+## Who watches the watchers now
+
+| link in the chain | if it dies silently | what notices |
+|---|---|---|
+| the backup itself | snapshots age | canary freshness gate, then the eye at 26 hours |
+| beats to GitHub | heartbeat file ages | the eye — the mirror forwards stale values faithfully |
+| the mirror | eye's copy ages | its own streak page in 45 minutes; the eye as backstop |
+| the Cloudflare eye | silence | the GitHub Actions eye, independently re-enabled on 1 August |
+| the whole Mac | everything stops | the eye, off-box, which is the point of it |
+
+Every row now has a watcher that does not share its failure mode, and the fastest one lives forty-five minutes from the fault instead of three days.
+
+The eye was never wrong, either time. It said nobody had told it the backups were alive, and nobody had — that is all a dead-man's switch ever says. The lesson this incident leaves behind is about the couriers in between: a reporting chain is infrastructure exactly like the thing it reports on, and the link that fails politely, on schedule, into an unread log, is the one that costs three days. The message was never in danger. The messenger is who we buried.
