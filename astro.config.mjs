@@ -273,6 +273,8 @@ export default defineConfig({
 							items: [
 								{ label: 'Security', slug: 'operations/security' },
 								{ label: 'Privacy', slug: 'operations/privacy' },
+								{ label: 'Model Storage Policy', slug: 'operations/model-storage-policy' },
+								{ label: 'MiniMax H3 Video Lab', slug: 'operations/minimax-h3-video' },
 								{ label: 'The Pressure Valve', slug: 'operations/pressure-valve' },
 								{ label: 'Drift Sentinel', slug: 'operations/drift-sentinel' },
 								{ label: 'Council Always-Alive', slug: 'operations/council-always-alive' },
@@ -312,6 +314,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-05 — The Restore That Never Rang', slug: 'operations/2026-08-05-the-restore-that-never-rang' },
+								{ label: '2026-08-05 — The Vault Across the Wire', slug: 'operations/2026-08-05-the-vault-across-the-wire' },
 								{ label: '2026-08-05 — The Messenger, Not the Message', slug: 'operations/2026-08-05-the-messenger-not-the-message' },
 								{ label: '2026-08-04 — The Quest That Wore Unknown', slug: 'operations/2026-08-04-quest-that-wore-unknown' },
 								{ label: '2026-08-04 — The Backup That Said Yes and Did Nothing', slug: 'operations/2026-08-04-the-backup-that-said-yes' },
