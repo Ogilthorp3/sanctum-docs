@@ -273,8 +273,8 @@ export default defineConfig({
 							items: [
 								{ label: 'Security', slug: 'operations/security' },
 								{ label: 'Privacy', slug: 'operations/privacy' },
-								{ label: 'Model Storage Policy', slug: 'operations/model-storage-policy' },
-								{ label: 'MiniMax H3 Video Lab', slug: 'operations/minimax-h3-video' },
+								// model-storage-policy + minimax-h3-video: local drafts only
+								// (untracked MDX, no heroes). Re-add when EETISMAD-ready.
 								{ label: 'The Pressure Valve', slug: 'operations/pressure-valve' },
 								{ label: 'Drift Sentinel', slug: 'operations/drift-sentinel' },
 								{ label: 'Council Always-Alive', slug: 'operations/council-always-alive' },
