@@ -1,0 +1,73 @@
+---
+title: "2026-08-05: The Vault Across the Wire"
+description: Grok on the satellite had no Memory Vault MCP, so haus slang and closeouts lived one SSH hop away. A stdio bridge to the Mini, a rebuilt FTS index, and a doctor that finally says handshake OK.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A thick archival ledger open on a dark desk, with a single glowing teal filament stretching from its pages across a dark gap to a small laptop silhouette — knowledge travels the wire, not a local copy.](./images/hero-2026-08-05-the-vault-across-the-wire.png)
+
+An agent that cannot read the Memory Vault will invent meanings for words the haus already defined. EETISMAD is the standing example: three letters into the conversation and the session is already guessing, while the definition sits in Engineering Discipline and a dozen closeout notes on the Mini.
+
+The satellite MacBook does not hold that vault. Its `~/.sanctum/memory` is an events mirror. The authoritative tree — thousands of notes, inboxes, knowledge, archives — lives on the Mini. Claude already knew this. Grok's MCP list did not.
+
+## What was missing
+
+Grok's `~/.grok/config.toml` had zero MCP servers configured by hand. Plugin servers arrived (Cloudflare, Vercel, Hugging Face, iMessage). The Memory Vault did not. Tool search for `vault` returned nothing. The session could still SSH and run `vault.sh`, which is fine until you want the model to treat search and read as first-class tools instead of a ritual you have to remember to invoke.
+
+The Rust server already existed: `memory-vault-mcp` on the Mini, stdio transport, FTS5-backed tools (`memory_search`, `memory_read`, `memory_write`, `memory_list`, `memory_delete`, `memory_links`, `memory_consolidate`, `memory_health`). Claude's settings pointed at a binary path that was not even present on the satellite. Nobody had wired the hop.
+
+## The bridge shape
+
+The durable piece is a thin wrapper in the MBP config repo — the same durability rule that refuses orphan scripts in `~/.local/bin`:
+
+```bash
+# ~/.sanctum-mbp/bin/grok-memory-vault-mcp.sh (concept)
+# stdio stays clean: ssh -T, no TTY, remote env points at the Mini vault
+exec ssh -T -o BatchMode=yes \
+  neo@manoir.local \
+  "env MEMORY_VAULT_DIR=/Users/neo/.sanctum/memory /Users/neo/Projects/sanctum-rs/target/release/memory-vault-mcp"
+```
+
+Grok config:
+
+```toml
+[mcp_servers.memory-vault]
+startup_timeout_sec = 120
+command = "/Users/neo/.sanctum-mbp/bin/grok-memory-vault-mcp.sh"
+enabled = true
+```
+
+`startup_timeout_sec = 120` is not superstition. A cold start that finds an empty or rotated index reindexes the whole vault before it answers `initialize`. Eight thousand notes is real wall clock.
+
+## The index that would not open
+
+The first handshake failed for a boring reason that had been recurring for months: `~/.sanctum/memory/.vault.db` was a 4 KiB SQLite stub with a dead WAL, integrity check failing, open returning disk I/O error. A stack of `.vault.db.stale-*` files told the same story in the directory listing.
+
+Rotate the stub aside, drop the orphan `-wal`/`-shm`, let the server recreate and reindex. One cold start later: forty megabytes of index, 8457 notes, `grok mcp doctor memory-vault` green — command found, handshake OK, eight tools discovered.
+
+<Aside type="tip" title="Doctor before you blame the wire">
+If the SSH hop is fine and the binary runs, but initialize still dies, check `.vault.db` size and `PRAGMA integrity_check` on the Mini. A truncated index fails the same way as a broken tunnel, and it is cheaper to fix first.
+</Aside>
+
+## Session attach is not config
+
+Grok attaches MCP servers at session start. Adding a healthy server mid-session does not put tools into the running turn. `grok mcp doctor` can pass while the active chat still has no `memory_search`. The operator action is a restart — the same class of truth as verifying a process start time after a git pull.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `grok mcp doctor memory-vault` handshake + tools list; initialize over the wrapper returns protocol 2024-11-05 |
+| in Sanctum-docs | This field note + sidebar entry |
+| Merged | `sanctum-mbp` wrapper on `origin/main`; Grok user config points at that path |
+| And Deployed | Wrapper executable on the satellite PATH of record; Mini index rebuilt; doctor green from the satellite |
+
+[Jocasta MCP](/architecture/jocasta-mcp/) remains the local-first archivist for on-disk macOS databases. The Memory Vault is the haus's shared markdown memory. They are different seats. This bridge only makes the second one reachable from a satellite agent that previously had to invent [EETISMAD](/architecture/engineering-discipline/) from first principles — the same bar that governs [ds4max](/architecture/ds4max/) and the same-day [restore that finally rang on Signal](/operations/2026-08-05-the-restore-that-never-rang/).
+
+## Related
+
+- [Engineering Discipline](/architecture/engineering-discipline/) — EETISMAD defined
+- [Jocasta MCP](/architecture/jocasta-mcp/) — the other MCP archivist (local SQLite, not the vault)
+- [ds4max](/architecture/ds4max/) — satellite tooling and the same shipping bar
+- [The Restore That Never Rang](/operations/2026-08-05-the-restore-that-never-rang/) — same day, same session, different door
