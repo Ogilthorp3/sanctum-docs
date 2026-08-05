@@ -319,6 +319,7 @@ export default defineConfig({
 								{ label: '2026-08-03 — The Haus Grows Senses', slug: 'operations/2026-08-03-the-haus-grows-senses' },
 								{ label: '2026-08-02 — The Inbox Becomes a Ledger', slug: 'operations/2026-08-02-the-inbox-becomes-a-ledger' },
 								{ label: '2026-08-01 — The Seal Only One Crate Carried', slug: 'operations/2026-08-01-the-seal-only-one-crate-carried' },
+								{ label: '2026-07-31 — The Reboot That Stayed Up', slug: 'operations/2026-07-31-the-reboot-that-stayed-up' },
 								{ label: '2026-07-31 — The Door That Does Not Refuse', slug: 'operations/2026-07-31-the-door-that-does-not-refuse' },
 								{ label: '2026-07-31 — The Seven Brains', slug: 'operations/2026-07-31-the-seven-brains' },
 								{ label: '2026-07-29 — The Key Baked Into the Wall', slug: 'operations/2026-07-29-the-key-baked-into-the-wall' },
