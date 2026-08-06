@@ -1,0 +1,59 @@
+---
+title: "Proxyd host-tools policy"
+description: When proxyd skips Max/Fable/Gemini bridges because tools belong to the caller — PascalCase Claude Code tools pass, foreign harness tools divert, x-sanctum-tool-owner: client forces skip.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Some seats run tools **inside** the backend (Claude Max CLI on `:3456`, Gemini AGY on `:6543`). Others return `tool_use` / `tool_calls` for the **calling harness** to execute (Grok OAuth `:4200`, OpenRouter, cathedral). Mixing those up is worse than an outage: Max will **200 with confabulated tool narratives** and never fall through the ladder (Prime Agent `ipython`, 2026-08-05).
+
+## Detection
+
+A seat is host-tools when:
+
+- `host_tools: true` in `config.yaml`, or
+- `api_base` contains `:3456` or `:6543` (see `ModelEntry::is_host_tools_seat`)
+
+Grok `:4200` is intentionally **not** host-tools — it returns real tool calls.
+
+## Classification (`foreign_client_tools`)
+
+Implemented in `services/sanctum-proxy/src/translate.rs`. Non-empty foreign set → **skip** every host-tools seat for that attempt and continue the fallback chain.
+
+**Host-safe (stay on Max/Fable when requested):**
+
+- Anthropic server tools (`bash*`, `text_editor*`, `computer*` — lowercase prefixes)
+- MCP tools hosted by the CLI (`mcp__…`)
+- Claude Code built-ins by **shape**: PascalCase alphanumeric (`Bash`, `TaskCreate`, `WebFetch`, …)
+- Small legacy alias set (`bash`, `str_replace_editor`, `str_replace_based_edit_tool`)
+
+**Foreign (divert):**
+
+- Explicit denylist: `ipython`, `python_repl`, `code_interpreter`
+- Other non-Pascal / snake_case custom names (`my_custom_tool`)
+
+**Always divert host-tools seats:**
+
+- Request header `x-sanctum-tool-owner: client` (Prime Agent and custom harnesses)
+
+<Aside type="caution">
+Do not reintroduce a frozen list of every Claude Code tool name. Claude Code 2.1.x
+`TaskCreate`/`TaskUpdate` already proved that list rots and silently diverts Fable to
+`grok-best` with a green ROUTE banner. See the ops write-up
+[Fable diverted on TaskCreate](/operations/2026-08-06-fable-diverted-on-taskcreate/).
+</Aside>
+
+## Operator signals
+
+| Header / banner | Meaning |
+|-----------------|--------|
+| `x-sanctum-seated: claude-fable-5` | Primary (or resolved) seat won |
+| `x-sanctum-route: diverted` | Seated ≠ requested |
+| `x-sanctum-route-chain: a > b > c` | Ladder walked |
+| `[sanctum-proxy] ROUTE requested → seated (…)` | Same divert, in the content stream (fresh user prompts only) |
+
+## Related
+
+- [Proxyd budget.yaml](/architecture/proxyd-budget/) — USD pool and green/red banners
+- [Fallback continuity](/architecture/fallback-continuity/) — chain order and context fit
+- Config live path: `~/.sanctum/sanctum-proxy/config.yaml` (`host_tools: true` on Max seats)
