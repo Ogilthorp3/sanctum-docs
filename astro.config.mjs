@@ -121,6 +121,7 @@ export default defineConfig({
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Sanctum Cloud Proxy', slug: 'architecture/sanctum-cloud-proxy' },
+						{ label: 'Proxyd host-tools policy', slug: 'architecture/proxyd-host-tools' },
 						{ label: 'Smart Router', slug: 'architecture/dynamic-model-routing' },
 						{ label: 'How Hard to Think', slug: 'architecture/how-hard-to-think' },
 						{ label: 'Smart Router Cathedral', slug: 'architecture/smart-router-cathedral' },
@@ -314,6 +315,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-06 — Fable Diverted on TaskCreate', slug: 'operations/2026-08-06-fable-diverted-on-taskcreate' },
 								{ label: '2026-08-05 — The Restore That Never Rang', slug: 'operations/2026-08-05-the-restore-that-never-rang' },
 								{ label: '2026-08-05 — The Vault Across the Wire', slug: 'operations/2026-08-05-the-vault-across-the-wire' },
 								{ label: '2026-08-05 — The Messenger, Not the Message', slug: 'operations/2026-08-05-the-messenger-not-the-message' },

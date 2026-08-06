@@ -1,0 +1,84 @@
+---
+title: "2026-08-06: Fable diverted on TaskCreate"
+description: Claude Code 2.1.x TaskCreate/TaskUpdate were treated as foreign client tools, so proxyd skipped every Max/fable host-tools seat and landed on grok-best despite a healthy bridge and credits. Fixed with shape-based recognition; live on manoir.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+
+Claude Code asked for `claude-fable-5`. The bridge was up. Credits were fine. The transcript still opened with:
+
+```text
+[sanctum-proxy] ROUTE claude-fable-5 → grok-best (local · grok-best)
+```
+
+Not a budget story. Not a Max outage. The host-tools gate was reading a **frozen name list** from an older Claude Code surface, and 2.1.x had shipped tools the list did not know.
+
+## What happened
+
+Max / Fable seats are `host_tools` (tools execute inside the Claude Max CLI on `:3456`). Proxyd must not dial those seats when the **caller** owns the tools — Prime Agent’s `ipython` taught that lesson (confabulated tool narratives, no disk write).
+
+The guard was fail-closed on an allowlist: `Bash`, `Read`, `Task`, … If anything outside the list appeared in `tools[]`, every host-tools seat was **skipped** without dialing:
+
+```text
+claude-fable-5 → claude-best-pro → gemini-best-pro → grok-best
+```
+
+Session evidence (MBP Claude CLI, model `claude-fable-5[1m]`): heavy `Bash` use plus **`TaskCreate` / `TaskUpdate`**. Those names were not on the allowlist. Minimal repro against live `:4040`:
+
+| Request tools | Seated (before) |
+|---------------|-----------------|
+| `Bash` + `Read` only | `claude-fable-5` |
+| `Bash` + **`TaskCreate`** | **`grok-best`** + ROUTE banner |
+
+Bridge probe and bare fable pong both worked. Credits never entered the path — the seats were never tried.
+
+## What we changed
+
+In `sanctum-rs` `services/sanctum-proxy/src/translate.rs`, replace the frozen allowlist with **shape-based** host-safe recognition:
+
+| Rule | Host-tools OK? |
+|------|----------------|
+| Known foreign (`ipython`, `python_repl`, `code_interpreter`) | No |
+| Anthropic server tools (`bash_*`, `text_editor_*`, `computer_*`) | Yes |
+| `mcp__*` | Yes |
+| **PascalCase alphanumeric** (`Bash`, `TaskCreate`, `Agent`, future tools) | Yes |
+| Legacy aliases (`bash`, `str_replace_*`) | Yes |
+| Custom snake_case (`my_custom_tool`) | No → divert |
+| Header `x-sanctum-tool-owner: client` | Force skip (unchanged) |
+
+Future Claude Code tools that keep PascalCase do **not** need another allowlist edit. Prime Agent still diverts; still send `x-sanctum-tool-owner: client` for harnesses that own tools.
+
+## Proof
+
+- `cargo test -p sanctum-proxy foreign_client` — 5 tests green (incl. 2.1.x Task surface + snake_case foreign)
+- `pascal_case` helper unit test green
+- Live manoir seating matrix (mTLS via MBP tunnel `:4040`, agent `claude-code`):
+
+| Case | Expected seat | Result |
+|------|---------------|--------|
+| no tools | `claude-fable-5` | PASS |
+| `Bash` + `Read` | `claude-fable-5` | PASS |
+| `TaskCreate` + `TaskUpdate` | `claude-fable-5` | PASS |
+| hypothetical `FutureWidgetZ9` | `claude-fable-5` | PASS |
+| `ipython` | `grok-best` | PASS |
+| `my_custom_tool` | `grok-best` | PASS |
+
+- Merged to **sanctum-rs `main`**: `77023f5` — `fix(proxyd): shape-based host-tools allow for Claude Code tools`
+- Deployed binary `~/.sanctum/bin/proxyd` on manoir (sha256 `23a4a605…`); LaunchDaemon relaunch via kill of old PID (`system/com.sanctum.proxyd` KeepAlive)
+
+## Source / deploy
+
+**main** only. Build and install:
+
+```bash
+cd ~/Projects/sanctum-rs
+cargo build -p sanctum-proxy --release
+# install to manoir ~/.sanctum/bin/proxyd, then:
+# kill the live proxyd PID; launchd system/com.sanctum.proxyd restarts it
+```
+
+Field reference: [Proxyd host-tools policy](/architecture/proxyd-host-tools/). Related: [Proxyd budget](/architecture/proxyd-budget/), [fallback continuity](/architecture/fallback-continuity/).
+
+## Scar
+
+A confident ROUTE banner is not a story about the bridge or the wallet until you have checked **why the primary seat was never dialed**. For host-tools, read `x-sanctum-route-chain` and the tool names on the request — not the Max status page first.
