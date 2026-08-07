@@ -20,12 +20,15 @@ The active inference layer is the cathedral fork at `~/Projects/sanctum-rs-cathe
 | `sanctum-mlx` | mTLS `:1337` | Qwen3.6-35B-A3B-4bit (MoE, model_type `qwen3_5_moe`) plus a Qwen3.6-27B-4bit secondary via dual-residency | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
 | `sanctum-mlx` (label `com.sanctum.mlx-devstral-rust`) | `:3301` | Devstral-Small-2-24B-Instruct-2512-4bit | Coder seat + Qui-Gon's code path |
 
-The two seats differ in exactly the ways their threat models differ:
+The seats differ in exactly the ways their threat models differ:
 
 | Seat | Manifest gate | Binds | Listener |
 |------|---------------|-------|----------|
 | Council `:1337` | ed25519-signed (`ed25519` over `shasum -a 256`) | loopback, the Mini's Tailscale IP, bridge100 `10.10.10.1` (Lima VM path) | mTLS-only (`--no-plain`) — no plain-HTTP or bearer path left to bypass |
 | Devstral `:3301` | plain SHA-256 (no `.sig` shipped for it yet) | loopback only, `127.0.0.1:3301` | local by design; the VM and MBP reach it through the council router, not directly |
+| **Ahsoka satellite `:1338` (chalet)** | optional (warn-only until signed) | loopback `127.0.0.1:1338` | **plain HTTP** for openclaw; Qwen2.5-7B-Instruct-4bit via **qwen2** path; runs as user `sanctum` |
+
+The satellite seat is the same binary family (`sanctum-mlx` + colocated `mlx.metallib`), not a third fork. Field note: [Ahsoka cathedral on the edge](/operations/2026-08-07-ahsoka-cathedral-on-the-edge/).
 
 A disaster fallback, `com.sanctum.mlx-py-fallback`, sits promote-only on `:8901` — the same Qwen3.6-35B-A3B-4bit as `:1337` but an independent Python mlx-lm stack, so a corrupt or missing Rust binary (which kills both seats, since they share one binary file) still leaves a different-stack server able to take over at full parity. It is not always-warm: a resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken agent to free RAM, then kickstarting the Python seat. Transient failover is handled a layer up, in proxyd routing (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust seats run under launchd (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`) with KeepAlive, load weights from disk, and never bind `0.0.0.0`.
 

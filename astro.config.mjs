@@ -317,7 +317,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-						{ label: '2026-08-07 — Service principal wave-1', slug: 'operations/2026-08-07-service-principal-wave-1' },
+								{ label: '2026-08-07 — Service principal wave-1', slug: 'operations/2026-08-07-service-principal-wave-1' },
+								{ label: '2026-08-07 — Ahsoka cathedral on the edge', slug: 'operations/2026-08-07-ahsoka-cathedral-on-the-edge' },
 								{ label: '2026-08-07 — Two Dials, One Bridge', slug: 'operations/2026-08-07-two-dials-one-bridge' },
 								{ label: '2026-08-06 — Fable Diverted on TaskCreate', slug: 'operations/2026-08-06-fable-diverted-on-taskcreate' },
 								{ label: '2026-08-05 — The Restore That Never Rang', slug: 'operations/2026-08-05-the-restore-that-never-rang' },
