@@ -1,0 +1,245 @@
+---
+title: Hive Topology
+description: Isomorphic haus bodies plus a name-only hive plane — multi-site Sanctum without merging LANs, and the MagicDNS contract every fine-tune may assume.
+---
+
+import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
+
+![Two identical glass houses on separate islands, linked by a single teal nerve of light that carries names not cables](./images/hero-hive-topology.png)
+
+You open a shell on the road and type `ssh manoir`. It works. Two weeks later you type the same string from the chalet Mini and it works again. Nobody renumbered a subnet. Nobody published a Tailscale subnet route. The laptop did not need a special VPN profile for "vacation mode." The string was the product.
+
+The failure mode this chapter exists to prevent is the opposite story: one flat `10.0.0.0/24` fantasy spanning two basements, a Firewalla that advertises the wrong site as a mesh, and a fine-tuned model that hardcodes "the Mini is always `.10`" as if there were only one Mini in the world. Multi-site Sanctum is **a fleet of complete organisms**, not one organism with two basements.
+
+## The product in one sentence
+
+> **Same design map at every site. Cross-site by node name only. Never merge L3.**
+
+| Plane | What it is | What it is not |
+|-------|------------|----------------|
+| **Body** | Per-site LAN design map (`.1` FW · `.2` Orbi · `.3` HA · `.10` Mini) | A global address space |
+| **Hive** | Tailscale + MagicDNS + `nodes.*` roster + vault / agents | Subnet routes of whole hauses |
+| **Mind** | Shared topology priors for prompts and fine-tunes | Per-haus fork of the world model |
+
+Open **mesh** (signed LoRA champions between hauses) is a **sibling** plane — see [Champion Gate](/architecture/champion-gate/). Do not overload it as the multi-site control plane.
+
+## Body — isomorphic enclave
+
+Every site reuses the same **local** map. Numbers collide across sites **on purpose** and stay safe because those prefixes are **never advertised** as Tailscale subnet routes.
+
+| Role | Design IP | Identity pin (Firewalla) |
+|------|-----------|---------------------------|
+| Firewalla | `10.0.0.1` | gateway |
+| Orbi AP | `10.0.0.2` | model / hostname match |
+| HA Green (when present) | `10.0.0.3` | `homeassistant` |
+| Mini / brain | `10.0.0.10` | model + Bonjour / dhcp name |
+
+Those `10.0.0.x` values are the **design map** (documentation-range style anchors for the isomorphic body). Live LAN discovery still goes through [endpoint resolution](/architecture/endpoint-resolution/) — the hive never treats them as cross-site addresses.
+
+Implementation: **identity-rebind** in `openclaw-skills/firewalla-toolkit` (`config/identity-pins.json`, install scripts on each box). Match by durable identity, **not MAC**, so Private Wi‑Fi rotation cannot orphan the pin. Sites are separated by Firewalla `lan_uuid` so manoir’s pins never apply on the chalet Purple and vice versa.
+
+## Hive — name-only nervous system
+
+Cross-site traffic uses **node names**. Naming is a product surface.
+
+```bash
+sanctum node names             # cheat sheet
+sanctum node list
+sanctum node resolve chalet    # preferred MagicDNS stem
+sanctum node whoami            # .node_id must equal roster key
+ssh neo@manoir                 # MagicDNS when the machine is named manoir
+```
+
+| Do | Don’t |
+|----|--------|
+| `manoir`, `chalet`, `mbp` | Display codes (`MM64`, `MBP128`) as addresses |
+| `manoir-fw`, `manoir-ha` | Dual live names without a deliberate recovery map |
+| Agent names for agents (`ahsoka`) | Agent names as Tailscale hosts |
+| Resolve at call time | Hardcoded `100.x` ([endpoint resolution](/architecture/endpoint-resolution/)) |
+
+### Naming contract (Apple-simple)
+
+**Jobs test:** *What do you call it when you talk to it?* That string is the only name — roster key, `~/.sanctum/.node_id`, and MagicDNS stem are **the same**.
+
+| Kind | Pattern | Examples |
+|------|---------|----------|
+| Site brain (Mini) | `{place}` | `manoir`, `chalet` |
+| Mobile | `{device}` | `mbp` |
+| Site infra on TS | `{place}-{role}` | `manoir-fw`, `manoir-ha`, `chalet-fw` |
+| Agent | Jedi seat | `yoda`, `ahsoka` — never a TS host |
+
+```yaml
+# Live contract — one name, no dual identity
+mbp:
+  type: mobile
+  tailscale_name: mbp
+```
+
+Legacy stems (`berts-mbp`, `manoir-firewalla`, …) may still appear in `hive-names.yaml` as **recovery matches** so a device that reappears under an old control-plane Name can be re-converged. They are not live aliases and must not be what you put in scripts.
+
+## Converging MagicDNS — `apply-hive-names`
+
+Control-plane renames (the MagicDNS **Name**, not only the device `HostName`) go through the Tailscale API. The durable path is the toolkit, live via symlink:
+
+```bash
+# Live path == repo (Durability Doctrine)
+# ~/.sanctum/tailnet → openclaw-skills/tailnet-toolkit
+~/.sanctum/tailnet/tools/apply-hive-names.sh status
+~/.sanctum/tailnet/tools/apply-hive-names.sh plan
+~/.sanctum/tailnet/tools/apply-hive-names.sh apply --sync-roster
+```
+
+| Piece | Role |
+|-------|------|
+| `hive-names.yaml` | Declarative want-names + match / reject / recovery exact-map |
+| `apply-hive-names.sh` | Plan / apply / status; stem comparison (FQDN → first label) |
+| `ha-check.sh` | `manoir-ha` peer + HTTP + optional LAN probe |
+| `seed-oauth.sh` | One-time OAuth client → SOPS (+ keychain cache) |
+| `tools/lib/ts-auth.sh` | Shared mint; never logs secrets |
+
+Declarative SoT for **names**: `hive-names.yaml`.  
+Declarative SoT for **API credentials**: Mini SOPS store `~/.sanctum/keychain-secrets.enc.json` keys `tailscale-oauth-client-id` / `tailscale-oauth-secret`. Keychain entries with the same service names are a **cache** for GUI sessions; headless tools prefer SOPS (`ts-auth` resolution order).
+
+OAuth client scopes: **ACL write** + **Devices › Core write** (plus tags if you tag devices). Mint check:
+
+```bash
+source ~/.sanctum/tailnet/tools/lib/ts-auth.sh && ts_auth_check
+# expect: auth=ok devices=200
+```
+
+<Aside type="caution" title="Two Names, one machine">
+Tailscale keeps a device **HostName** (set on the node) and a control-plane **Name** (MagicDNS). Device-local `tailscale set --hostname=…` often updates both, but not always — especially when the Name was admin-set. If `status` shows the short name but dig still resolves an old FQDN, run `apply-hive-names apply`. If plan is a no-op and DNS is still wrong, the resolver is caching — not the hive.
+</Aside>
+
+Unit smoke (no network): `python3 ~/.sanctum/tailnet/tools/test-hive-names-match.py`.
+
+## Roster — `instance.yaml` `nodes`
+
+```yaml
+topology:
+  design: isomorphic-enclave
+  hive: name-only
+
+nodes:
+  manoir:
+    type: hub
+    tier: primary          # primary | peer | edge
+    site: manoir
+    ssh_user: neo
+    tailscale_name: manoir
+    capabilities:
+      - vault_authority
+      - inference
+      - ha_site
+
+  chalet:
+    type: satellite
+    tier: edge
+    site: chalet
+    ssh_user: neo
+    tailscale_name: chalet
+    sync:
+      hub: manoir
+    capabilities:
+      - local_inference
+      - satellite
+
+  mbp:
+    type: mobile
+    tier: edge
+    tailscale_name: mbp
+```
+
+| Field | Meaning |
+|-------|---------|
+| `type` | `hub` · `satellite` · `mobile` · `sensor` |
+| `tier` | `primary` (config SoT) · `peer` (multi-hub) · `edge` |
+| `site` | Design-map / identity-pins site id |
+| `tailscale_name` | MagicDNS stem for `sanctum node resolve` |
+| `capabilities` | Static offers for hive work placement |
+
+CLI surface (hive roster + routing):
+
+```bash
+sanctum node list | get | whoami | resolve | validate
+sanctum node offers | can <capability> | route <capability> [--prefer local|fastest|primary|hub:NAME]
+sanctum node vault-host          # primary hop for Memory Vault (name-only)
+sanctum node ensure-hub | declare-peer NAME | export-council
+```
+
+Council-router `config/nodes.json` stores **hive names**, not drift-prone `100.x`. Delivery resolves at call time. Vault hop: `memory-vault/scripts/vault-hive-hop.sh` or `sanctum node vault-host`.
+
+## Capability routing
+
+| Capability | Typical offer |
+|------------|----------------|
+| `vault_authority` | primary hub only |
+| `inference` / `inference_heavy` | primary + peer hubs |
+| `local_inference` | satellites + mobile |
+| `ha_site` | hubs with HA Green |
+| `train` / `mesh_seed` / `council` | hubs |
+
+```bash
+sanctum node route inference --prefer primary
+sanctum node route local_inference --prefer local
+```
+
+## Multi-hub (peer join)
+
+Exactly one **primary** hub (config SoT, vault authority, adopt authority). Additional **peer** hubs keep the same body map and join the hive by name — no renumbering, no LAN merge.
+
+```bash
+sanctum node declare-peer montreal --tailscale-name montreal --site montreal
+# On that Mac: echo montreal > ~/.sanctum/.node_id
+# Deploy identity-rebind on that site's Firewalla with a new site block
+```
+
+1. Same local design map + identity-rebind for that site’s Firewalla.  
+2. Tailscale node online; MagicDNS name stable.  
+3. `sanctum node declare-peer <name>` (or hand-edit roster).  
+4. `.node_id` matches the roster key.  
+5. Sync policy: pull config from primary; never dual-write `instance.yaml` silently.  
+6. Offer metal via `capabilities` — route with `--prefer hub:<name>`.
+
+## Fine-tune mental model (“Sanctum-space”)
+
+A model fine-tuned for Sanctum may **assume**:
+
+1. Every site has the design roles above (when the gear exists).  
+2. Local `.10` is **this** site’s Mini; other brains are **named** hubs/satellites.  
+3. Cross-site actions use **node names**, never guessing which `10.0.0.0/24` is which.  
+4. Offline satellite prefers **local** metal; online hive may route to primary/peer capacity.  
+5. Vault authority lives on the **primary** hub unless a capability says otherwise.
+
+Site-specific facts (room names, people, Nuheat zones) belong in **memory / RAG**, not in weights that hardcode one haus’s LAN quirks.
+
+## Why not merge the mesh?
+
+| Merge L3 | Hive (this design) |
+|----------|---------------------|
+| Must renumber at least one site | Clone site N without renumber |
+| Subnet routers = critical path + blast radius | Failure stays in the enclave |
+| Optimizes bare IPs | Optimizes names (the product) |
+| Breaks “same mental model” if maps diverge | Same map → one curriculum |
+
+Subnet routes remain a **special feature** for dumb IoT that cannot run Tailscale — never the default architecture.
+
+## EETISMAD smoke
+
+| Letter | Proof for this feature |
+|--------|------------------------|
+| **E**2E **T**ested | `ts_auth_check`; `apply-hive-names plan` is a no-op when perfect; `ha-check.sh`; match unit test |
+| **i**n **S**anctum-**d**ocs | This page + sidebar |
+| **M**erged | `openclaw-skills` tailnet-toolkit + SOPS store on Mini config repo |
+| **A**nd **D**eployed | `~/.sanctum/tailnet` symlink → toolkit; live MagicDNS stems |
+
+If plan invents renames forever, the stem comparison regressed (FQDN vs short name). If auth fails, re-seed OAuth into **SOPS** first, then keychain cache.
+
+## Related
+
+- [Node topology](/architecture/node-topology/) — hub / satellite / mobile roles  
+- [Endpoint resolution](/architecture/endpoint-resolution/) — discovery, no hardcoded IPs  
+- [Naming](/operations/naming/) — place layer + retired ledger  
+- [Engineering discipline](/architecture/engineering-discipline/) — EETISMAD shipping bar  
+- [Satellite setup](/guides/satellite-setup/) — adopt flow  
+- [Home Assistant](/guides/home-assistant/) — Green at design `.3` on the hub site  
