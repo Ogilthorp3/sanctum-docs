@@ -147,6 +147,7 @@ export default defineConfig({
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{ label: 'Beta Portability', slug: 'architecture/beta-portability' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
+						{ label: 'Hive Topology', slug: 'architecture/hive-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
 						{ label: 'Port Summary', slug: 'architecture/port-summary' },
 						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
@@ -315,6 +316,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-07 — Two Dials, One Bridge', slug: 'operations/2026-08-07-two-dials-one-bridge' },
 								{ label: '2026-08-06 — Fable Diverted on TaskCreate', slug: 'operations/2026-08-06-fable-diverted-on-taskcreate' },
 								{ label: '2026-08-05 — The Restore That Never Rang', slug: 'operations/2026-08-05-the-restore-that-never-rang' },
 								{ label: '2026-08-05 — The Vault Across the Wire', slug: 'operations/2026-08-05-the-vault-across-the-wire' },
