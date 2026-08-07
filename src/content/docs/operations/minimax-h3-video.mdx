@@ -1,0 +1,79 @@
+---
+title: MiniMax H3 Video Lab
+description: Cold-pack MiniMax H3 + Heretic on the MBP — Blender blockout → ComfyUI structured video with native stereo audio.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![Wireframe blocks dissolving into a holographic video frame above a dark workstation](./images/hero-minimax-h3-video.png)
+
+You can fill an MBP boot volume with one video DiT pack and still have nothing runnable after unplugging the drive that held the weights. MiniMax H3 is the open-weights omni-modal video model (text / image / video / audio → clip with **native stereo audio**). In the haus it is a **cold** pack: occasional creative sessions, stored on external media per the [Model Storage Policy](/operations/model-storage-policy/).
+
+Lab experiment + scripts: `~/Projects/comfy-lab/experiments/minimax-h3-blender/`.  
+Engine matrix note: `~/Projects/blender-lab/ENGINES.md`.
+
+## Requirements
+
+| Piece | Gate |
+|---|---|
+| ComfyUI | **≥ 0.30** core (Desktop app must ship that core; upgrade via `brew upgrade --cask comfy`) |
+| Machine | MBP M4 Max 128 GB (or CUDA box for reliable INT8) |
+| Weights | Cold pack on Transcend/Ark, symlinked into `~/Documents/ComfyUI/models/` |
+| Road | Bring the external volume (symlinks die if unmounted) |
+
+## Weight pack (cold)
+
+On the external volume (example Transcend mount):
+
+- `ai-models/MiniMax-H3/diffusion_models/` — pruned INT8 T2V/I2V/FL2VA and Ref2VA safetensors  
+- `ai-models/MiniMax-H3/text_encoders/` — Heretic Qwen3-VL TE (uncensored conditioning)  
+- `ai-models/MiniMax-H3/vae/` — video + audio VAEs  
+
+Sources: [Comfy-Org/MiniMax-H3](https://huggingface.co/Comfy-Org/MiniMax-H3),  
+[ethanfel Heretic TE](https://huggingface.co/ethanfel/Qwen3-VL-32B-Ultra-Heretic-MiniMax-H3-ComfyUI-INT8-ConvRot).
+
+```bash
+cd ~/Projects/comfy-lab
+./scripts/download-minimax-h3.sh --ref2va
+./scripts/link-minimax-h3-models.sh
+./scripts/minimax-h3-download-status.sh
+```
+
+## Structured pipeline (Blender → H3)
+
+| Step | Tool | Role |
+|---|---|---|
+| 1 | Blender | Gray clay / greenscreen blockout, 24 fps, clear camera move |
+| 2a | ComfyUI **Ref2VA** | Motion plate as video ref + character/style stills |
+| 2b | ComfyUI **FL2VA** | First/last frames from Blender keyframes |
+| 3 | **Heretic** TE | Uncensored Qwen3-VL-32B conditioning |
+| 4 | film-lab | Cut / mix / deliver |
+
+## ComfyUI templates
+
+After upgrade: **Template Library → Video → MiniMax H3** (T2V / I2V / R2V).  
+Swap the stock text encoder for the **Heretic** safetensor when you want uncensored embeddings.
+
+Official docs: [docs.comfy.org MiniMax H3](https://docs.comfy.org/tutorials/video/minimax/minimax-h3).
+
+## Apple Silicon note
+
+Community reports: pruned **INT8** may stall on MPS (`_int_mm` missing). With 128 GB RAM, BF16 or an **MLX** port is the fallback runtime; CUDA Mini/RunPod runs the INT8 Comfy pack cleanly. Weights on this MBP remain the portable SoT either way.
+
+## Smoke verification
+
+```bash
+# Weights resolvable via ComfyUI model dirs
+ls -la ~/Documents/ComfyUI/models/diffusion_models/minimax_h3_*.safetensors
+ls -la ~/Documents/ComfyUI/models/text_encoders/*heretic*
+ls -la ~/Documents/ComfyUI/models/vae/minimax_h3_*
+
+# Lab E2E helper (starts when Comfy listens on :8188)
+~/Projects/comfy-lab/scripts/e2e-minimax-h3-smoke.sh
+```
+
+<Aside type="caution">
+H3 community license has territory restrictions for product use — read the HF card before commercial shipping.
+</Aside>
+
+Cold pack, hot laptop: keep the ark mounted when you create, and leave the boot volume for things that must survive a reboot alone.
