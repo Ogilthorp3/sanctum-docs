@@ -1,0 +1,64 @@
+---
+title: 2026-08-07 — Ahsoka cathedral on the edge
+description: "Chalet satellite brain moved from Python mlx_lm to Rust sanctum-mlx (Qwen2), under service user sanctum — EETISMAD for the serving cutover."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+The chalet caretaker spent months on `python -m mlx_lm.server`. It worked. It was not the cathedral. On 2026-08-07 the satellite brain cut over to the same Rust Metal path the hub uses for Qwen2 dense seats — `sanctum-mlx` — while staying lean enough for a 16 GB M1 and plain HTTP for openclaw.
+
+## What shipped
+
+| Layer | Before | After |
+|-------|--------|-------|
+| Engine | Python `mlx_lm.server` | Rust **`sanctum-mlx`** (cathedral fork) |
+| Model | Qwen2.5-7B-Instruct-4bit | same (`model_type=qwen2`) |
+| Port | plain `:1338` | plain `:1338` (loopback; openclaw unchanged) |
+| Principal | LaunchDaemon as `bert` | LaunchDaemon as **`sanctum`** |
+| Binary | n/a | `~/.sanctum/bin/sanctum-mlx` + **`mlx.metallib`** colocated |
+
+Satellite service principal (not hub wave-1): always-on daemons `ahsoka-brain`, `bootstrap`, `colima`, `firewalla-bridge`, `heartbeat`, `screen-time` run as `UserName=sanctum` with `HOME` still pointing at the operator tree. `chalet-watchdog` stays root (elevated kickstarts). Operator GUI LaunchAgents stay on `bert`.
+
+Install / re-apply (idempotent, run on chalet as root):
+
+```bash
+# from MBP or manoir over MagicDNS
+rsync campaign/ahsoka/chalet-harness/install-chalet-service-user.sh chalet:/tmp/
+ssh chalet 'sudo -n bash /tmp/install-chalet-service-user.sh'
+```
+
+Do **not** run hub-only `sanctum service-user install` on chalet (that path installs proxyd / force-flow / memory-vault).
+
+## Scars closed during the cutover
+
+1. **`cathedral.lock` Permission denied** — `~/.sanctum/state` must be group-writable by `sanctum` or the binary exits before load.
+2. **`Failed to load the default metallib`** — `mlx.metallib` must sit next to `sanctum-mlx` (same directory). Without it the process dies at model-load.
+3. **Stale `bert` python brain** holding `:1338` after the cutover — kill by listen PID; LaunchDaemon KeepAlive only respawns the new binary.
+
+## Gate stack (related, same day)
+
+The 48-case harness and defect-round SFT work live in `council-autoresearch` (`campaign/ahsoka/`). Scoring fix: `exec_pattern` matches **all** transcript commands (including `ha status`), not only light/climate/alarm actuations. Eval servers for adapters also use `sanctum-mlx --adapter-path` so train and gate share one engine.
+
+| Model | 48-case | Timeouts |
+|-------|--------:|---------:|
+| vanilla (no LoRA) | 32/48 | 0 |
+| v2-baseline-300 | 32/48 | 0 |
+| **v4-defect-300** | **34/48** | **0** |
+
+Serving cutover EETISMAD does **not** claim LoRA promote-ready. The ship bar for promote remains ≥36/48 on the gate.
+
+## What EETISMAD looks like here
+
+| Letter | Evidence |
+|--------|----------|
+| **Everything E2E Tested** | Live on chalet: `sanctum-mlx` as user `sanctum`; `GET /v1/models` 200; `POST /v1/chat/completions` returned `cathedral-ok` with `system_fingerprint: sanctum-mlx-0.2.0-native-arm64` |
+| **in Sanctum-docs** | This field note + updates on [Ahsoka](/agents/ahsoka/), [Service Principal](/architecture/service-user/), [Sanctum-MLX](/architecture/sanctum-mlx/) |
+| **Merged** | `council-autoresearch` commits on `campaign/champion-week-2026-06-15` (c7aa744, 4968a7d, …); this docs commit on `sanctum-docs` `main` |
+| **And Deployed** | LaunchDaemon live; binary + metallib on disk; process table shows cathedral, not python |
+
+## Related
+
+- [Ahsoka — Satellite Agent](/agents/ahsoka/)
+- [Service Principal (wave-1)](/architecture/service-user/) — hub path; this note is the satellite sibling
+- [Sanctum-MLX](/architecture/sanctum-mlx/) — cathedral engine
+- [Engineering Discipline](/architecture/engineering-discipline/) — EETISMAD defined
