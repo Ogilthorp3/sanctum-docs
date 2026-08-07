@@ -149,6 +149,7 @@ export default defineConfig({
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Hive Topology', slug: 'architecture/hive-topology' },
 						{ label: 'Services', slug: 'architecture/services' },
+						{ label: 'Service Principal', slug: 'architecture/service-user' },
 						{ label: 'Port Summary', slug: 'architecture/port-summary' },
 						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
 						{ label: 'Holocron GUI', slug: 'architecture/holocron-gui' },
@@ -316,6 +317,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+						{ label: '2026-08-07 — Service principal wave-1', slug: 'operations/2026-08-07-service-principal-wave-1' },
 								{ label: '2026-08-07 — Two Dials, One Bridge', slug: 'operations/2026-08-07-two-dials-one-bridge' },
 								{ label: '2026-08-06 — Fable Diverted on TaskCreate', slug: 'operations/2026-08-06-fable-diverted-on-taskcreate' },
 								{ label: '2026-08-05 — The Restore That Never Rang', slug: 'operations/2026-08-05-the-restore-that-never-rang' },

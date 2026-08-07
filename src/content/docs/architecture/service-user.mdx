@@ -1,0 +1,82 @@
+---
+title: Service Principal (wave-1)
+description: The hub control plane runs as a dedicated sanctum user so daily desktop work cannot take the hive down with it.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+![Two identities over one Mini — amber human desk, teal service guardian](./images/hero-service-user.jpg)
+
+A hub Mac Mini is two jobs wearing one chassis: the aluminum brick that runs the hive, and the desk where you also open Terminal and argue with a spreadsheet. For a long time those jobs shared one login session. Logout, Jump disconnect, or a thrashing iCloud daemon, and the control plane shared the blast radius. Wave-1 ends that co-tenancy without turning macOS features off and without asking you to stop working on the Mini.
+
+The fix is a **service principal** — local user `sanctum` — and three system LaunchDaemons that run as that user: `proxyd`, `force-flow`, and `memory-vault`. Your interactive account stays the daily driver. The hive brain clocks in under a different UID.
+
+## How it works
+
+| Layer | Owner | Survives GUI logout? |
+|-------|-------|----------------------|
+| proxyd (:4040 TLS) | `sanctum` | Yes — system LaunchDaemon |
+| Force Flow (:4077) | `sanctum` | Yes |
+| Memory Vault (:42069) | `sanctum` | Yes |
+| Mail / calendar / personal agents | your login | No (and that is correct) |
+
+LaunchDaemons live under `/Library/LaunchDaemons/` with `UserName=sanctum`. LaunchAgents under the service user are deliberately **not** the model — those need a login session we refuse to auto-open.
+
+Path compatibility for wave-1: process identity is `sanctum`, but `HOME` still points at the operator home so existing launch wrappers that resolve `$HOME/.sanctum/...` keep working. Group `sanctum` gets read on config and secrets, write on state/logs/memory. Parent `~/.openclaw` must be group-executable or Force Flow cannot create its log directory — a small permission detail that looks like a daemon crash until you see `Permission denied` on mkdir.
+
+## Install (part of sanctum-cli)
+
+The public install path is the CLI, not a pile of one-off shell history.
+
+<Steps>
+
+1. **Haus operator recipe** (new hub) ends with a service-principal gate:
+
+   ```bash
+   sanctum onboard --recipe operator
+   ```
+
+   Family Pass (`--recipe family`) does **not** install the service user — CLI-only installs have no proxyd/Force Flow stack to isolate.
+
+2. **Or install explicitly** on an existing hub:
+
+   ```bash
+   sanctum service-user install
+   ```
+
+   That runs `~/.sanctum/scripts/service-user/install-on-new-hub.sh` (from sanctum-config) under `sudo` once: create user/group, ACLs, wave-1 daemons, e2e.
+
+3. **Verify**:
+
+   ```bash
+   sanctum service-user status
+   sanctum service-user check    # exit 1 if unhealthy
+   sanctum self-test --only service
+   sanctum doctor
+   ```
+
+</Steps>
+
+<Aside type="caution">
+Do not schedule `brctl container delete --server` as unattended hygiene. That SPI is account-wide Documents & Data wipe — same as Manage Account Storage — not a safe cron job.
+</Aside>
+
+## What this is not
+
+It is not “turn off iCloud Drive.” Residual FileProvider thrash on a personal Apple ID is weather; alert on Force Flow / proxyd / vault, not on `fseventsd` CPU. It is not a second Mini. You keep working on the hub; the control plane simply no longer shares your session’s fate.
+
+## Rollback
+
+```bash
+sudo ~/.sanctum/scripts/service-user/rollback-wave1.sh
+```
+
+Restores bert-owned daemons from `.pre-wave1` snapshots when present and re-enables the disabled user LaunchAgents.
+
+## Related
+
+- [Services](/architecture/services/) — full catalog
+- [Sanctum Proxy](/architecture/proxy/) — proxyd
+- [Force Flow](/architecture/force-flow/) — notice hub
+- [Memory Vault](/guides/memory-vault/) — cross-session inbox
+- Field note: [2026-08-07 — Service principal wave-1](/operations/2026-08-07-service-principal-wave-1/)
