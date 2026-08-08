@@ -1,0 +1,69 @@
+---
+title: "2026-08-08: The Green Lie"
+description: Force Flow's /health said OK for twenty-five hours while the screen-time enforcement loop lay dead behind it. Four watchdogs, and not one could both see the stall and reach the restart — the service-principal wave-1 sequel.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wall-mounted brass control panel with a single round gauge glowing a calm teal halo over the word HEALTH, while behind the opened panel door the clockwork heart labelled RECONCILE stands frozen mid-gear, cobwebs between its teeth — Tommy the Abyssinian cat holds the panel door open with one paw, unimpressed by the gauge.](./images/hero-2026-08-08-the-green-lie.png)
+
+The page arrived with full authority: **Windu, CRITICAL — screen-time reconcile loop STALLED, heartbeat 76,570 seconds old, enforcement silently frozen.** Twenty-one hours. Bert read it and asked the only question that mattered: *why isn't R2D2 fixing it automatically?*
+
+That question turned out to be the entire incident. The stall was one bug. The silence around it was four.
+
+## Twenty-five hours of green
+
+This is the sequel to [service principal wave-1](/operations/2026-08-07-service-principal-wave-1/). The day the hub's daemons got their own `sanctum` user, the migration moved the process but not the furniture: `usage.db`, `heartbeat.json`, and `alerts.json` stayed owned by Bert. Force Flow came up under its new name, reached `_init_db()`, met a database it could no longer write — and the enforcement loop died at birth, its exception swallowed whole by an asyncio task nobody would ever read.
+
+The HTTP server is a sibling coroutine in the same process. It felt nothing. `/health` served 200. Port 4077 listened. Three process generations — two restarts and a full reboot — died the identical death: *loop starting → Registry loaded → Holidays loaded →* silence. The heartbeat's last tick aged from hours into a full day while every green light on the wall stayed green.
+
+## Four watchers, zero saves
+
+| Watcher | Saw the stall? | Could restart the daemon? | Why nothing happened |
+|---|---|---|---|
+| R2D2 (10 min) | No | No | Zero liveness detectors among its 23; its "force-flow" heals aim at the `:1984` bridge |
+| Windu's Curfew Canary | **Yes** | No — by charter | Escalate-biased, `heal=None` on every check; its page is where this story starts |
+| Force Flow failsafe (60 s) | No | Wrong domain | Probed `/health` — the one signal that lies; logged `ok` every minute, all day |
+| Qui-Gon doctor (hourly) | False positive | Wrong domain | Bert-scoped `lsof` can't see a sanctum-user socket, so it "healed" a phantom outage into `gui/501` — where the plist is `.disabled-wave1`. Three no-op heals, all converged:false |
+
+One layer could see. Different layers could act. No layer could do both, and the layers that acted were aiming at a launchd domain that no longer held the service. A signal/actuator split, installed by the migration and invisible until the first real stall.
+
+## The fix is a ladder, not a patch
+
+Permissions came first — scoped, not sprayed: the state files and their directories opened to group `sanctum`; the git metadata, the config-repo root, and everything a root or bert process executes stayed closed. Then each rung got rebuilt:
+
+- **In-process:** the loop now runs under a fail-loud supervisor. A death gets a CRITICAL traceback and a 60-second restart — never again an unread exception in a bare task.
+- **Failsafe (60 s):** probes `/screen/liveness` — the PII-free dead-man — on every tick. Persistent staleness earns a kickstart at five ticks and a P0 page at eight.
+- **R2D2 (10 min):** a real detector on heartbeat age, a real recipe, a real heal script with a restart-in-flight guard.
+- **Qui-Gon (hourly):** port probes are TCP connects now; `lsof` blindness is retired.
+- **Windu:** unchanged. Family safety still does not improvise; he pages.
+
+Restart authority is the interesting part. The wave-1 daemons live in launchd's **system domain**, and every healer runs as bert. The bridge across is `/etc/sudoers.d/sanctum-kickstart`: three exact-match NOPASSWD lines, kickstart only, no wildcards. Installing that file is not plumbing — it is the haus deliberately granting heal authority across the privilege boundary. Until Bert ran `visudo -cf` and `install`, every healer could only detect and page. After it, the failsafe's `sudo -n` goes through. The boundary stays; the door has one key, and the key has one shape.
+
+## The review that bit its author
+
+An adversarial review panel went over the fix set before landing — nineteen agents, fourteen confirmed findings — and the sharpest ones cut inward. The R2D2 runner SIGKILLs heal scripts at 60 seconds; the new heal polls recovery for three minutes, so every successful heal would have been audited as a failure and paged CRITICAL. A heal that *completed* with exit 3 never paged at all — the exact silent-failure class this whole incident is about, reintroduced by the fix. And the first perms pass had quietly group-opened the config-repo root and the screen-time `.git` — handing the network-exposed service user rename rights over the very healer scripts root executes. All rolled back and rescoped before merge.
+
+The last bug waited for production anyway: the heal's first live fire dumped the `ps` keyword list into the audit trail. `etimes` is a Linux-ism; macOS `ps` only speaks `etime`. The guard had been failing open — politely, invisibly — until the page it produced put its own stderr on Bert's phone.
+
+<Aside type="caution" title="Probe the dead-man, not the door">
+A green `/health` proves a coroutine answered a socket. It does not prove the process is doing its job — the enforcement loop is a sibling task, and siblings die alone. Liveness for anything that *enforces* must come from the work itself: a heartbeat the loop writes, read by something that can either restart it or wake a human.
+</Aside>
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | screen-time suite 833 green (5 failures twin-proven pre-existing on the parent commit); r2d2 suite 52/52; live drills — detector returns `[]` on fresh, heal dry-run clean, failsafe tick logs `liveness: fresh`, Qui-Gon probe `failing: 0`; envelope drill: `sudo -n` kickstart, no password, new PID, liveness fresh 35 s later. Plus one involuntary drill: R2D2's real fire at 17:50Z paged CRITICAL on exit 3 and held its cooldown |
+| in Sanctum-docs | This field note + sidebar entry |
+| Merged | `sanctum-config` `b9fb4ac`, `c008888`, `6d0791a`; `sanctum-screen-time` `5c2d592` — all on `origin/main` |
+| And Deployed | Envelope installed; loop beating (`stale: false`); failsafe/r2d2/quigon are script-per-run and picked the new code up on their next tick |
+
+One residual is parked, not forgotten: the screen-time state files still live inside a git working tree, and directory-write is rename-write. Moving `usage.db` and the heartbeat out of the repo entirely is the follow-up that closes the last edge.
+
+## Related
+
+- [Service principal wave-1](/operations/2026-08-07-service-principal-wave-1/) — the migration this is the sequel to
+- [The Restore That Never Rang](/operations/2026-08-05-the-restore-that-never-rang/) — the previous chapter in closing screen-time's loop
+- [Force Flow](/architecture/force-flow/) — the notification hub whose green light lied
+- [DRI Governance](/operations/2026-07-26-dri-governance-the-council-picks-owners/) — why Windu pages instead of healing
