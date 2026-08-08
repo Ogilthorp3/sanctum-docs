@@ -317,6 +317,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-08 — The Green Lie', slug: 'operations/2026-08-08-the-green-lie' },
 								{ label: '2026-08-07 — Ahsoka Earns Her Scroll', slug: 'operations/2026-08-07-ahsoka-earns-her-scroll' },
 								{ label: '2026-08-07 — The Signature That Comes to You', slug: 'operations/2026-08-07-the-signature-that-comes-to-you' },
 								{ label: '2026-08-07 — Service principal wave-1', slug: 'operations/2026-08-07-service-principal-wave-1' },
