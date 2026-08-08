@@ -1,0 +1,54 @@
+---
+title: "2026-08-07: The Signature That Comes to You"
+description: The dead-man's switch had one job left for a human, and it nagged. So we stopped asking Bert to remember, and taught the proof to knock on his door instead — then spent the evening making a one-tap signature no machine could forge.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide graphite pencil sketch on off-white paper. At dawn a hooded courier climbs the last stone step to a cottage door and holds out a single wax-sealed scroll on an open palm; a hand reaches from the doorway and presses a thumb to the seal. The wax seal is the only colour in the drawing — a small warm amber glow — everything else grey and white. Behind the courier a row of dark stone vaults recedes into morning mist along the path. An Abyssinian cat sits on the doorstep, watching the thumb meet the wax.](./images/hero-2026-08-07-the-signature-that-comes-to-you.png)
+
+The dead-man's switch had one job left for a human, and it nagged.
+
+Three heartbeats keep the backups honest. Two of them are machines vouching for machines — one beats when a snapshot lands fresh, one beats when a restore drill pulls a file back out byte-for-byte. The third is different on purpose. It is Bert's own eye on the week, because a restore that exits zero has still only proven the machine can run; it has not proven the *right things* are inside, and nothing but a human noticing catches the morning someone quietly narrows what gets backed up. That third beat cannot be automated without defeating the point. So it sat there, a weekly chore, and reminded, and reminded — a REMIND at three days, a CHALLENGE at six — a system nagging its owner into being reliable.
+
+That is exactly the machine [the messenger incident](/operations/2026-08-05-the-messenger-not-the-message/) had just finished repairing, and exactly the wrong shape for the one link that has to stay human.
+
+## Stop asking; start proving
+
+The fix was to invert who does the work. Bert should not have to remember to go verify the backup; the backup should show up, once a week, and prove itself.
+
+Now every Sunday morning the canary that already runs the restore drill hands its result to a second job. That job reads what the drill actually *proved* — `~/.zshrc` pulled out of both the Ark and the Google Drive vault, the two hashes identical — and pushes it to Bert's phone as a single sentence with a single button. *This morning's drill pulled your file back out of both repos, byte-identical. One tap signs off the week.* He reads a proof, not a checkbox, and the tap **is** the beat.
+
+The demo, the way Steve Jobs would have insisted on it: not a slide that says the backup works, but the restored file itself, carried to your door and held out on a palm. No tap, no beat — and the off-box eye still pages at eight days, so silence remains the alarm it always was.
+
+## The signature had to be unforgeable
+
+Making the human's signature effortless meant making *effortless* impossible to fake — otherwise the whole un-automatable premise collapses the first time a script learns to press the button. Before shipping, three reviewers went at the design in parallel, each told to break it, and each one drew blood.
+
+The nonce that authorises a beat lived in a file only Bert could read — but the *folder* was writable by the `sanctum` service group, and any of those daemons could delete the file and drop in one with a nonce of its own choosing. A second reviewer found the softer version: the tap travels back through Home Assistant's event bus, where any admin token could read the nonce mid-flight and replay it before Bert's thumb ever moved. A third found that a slow network call in the beat would freeze the same loop that relays the alarm — a backup nudge could deafen the siren.
+
+<Aside type="note" title="A guarantee is a mechanism, not a promise">
+"Un-fakeable by convention" is a sentence in a comment. The fix was to make it arithmetic: the courier now refuses the scroll unless the file it came in is owned by Bert and readable by no one else — and a service daemon, by construction, cannot forge a file it does not own. The tap is checked against Bert's own Home Assistant identity, which the event bus stamps and a forger cannot set. The beat runs off the alarm's thread. Three holes, three locks, each one testable.
+</Aside>
+
+## The night the sign-off got lost
+
+The system shipped and worked on the first live tap. Getting Bert to *see* the notification took the rest of the evening, and every wall it hit belonged to something other than the code.
+
+Home Assistant chose that hour to install two updates — Core, then the whole operating system — and each restart dropped the phone's connection while the Supervisor crashed and came back. Then the notification landed and vanished: it turned out a Focus mode on the phone was quietly eating every non-critical alert, letting only the alarm's screaming-red pushes through. The proof of a working backup is not a screaming-red emergency, and shouldn't be — so it was suppressed, correctly, into silence.
+
+The lesson was the messenger's lesson wearing a new coat. Every layer here was healthy — Home Assistant sent, the pipe was clean, the phone was online — and the alert still died on the last mile, inside a setting no server can see. The proof reached the doorstep. The door was on Do Not Disturb.
+
+## Who signs now
+
+| the link | if it fails silently | who notices |
+|---|---|---|
+| the backup | snapshots age | the freshness gate, then the eye at 26 hours |
+| the restore | a hash won't match | the Sunday drill, loudly, on the spot |
+| the human sign-off | Bert forgets | the proof knocks first; the eye pages at 8 days |
+| the tap's honesty | a daemon forges it | the file it rides in must be Bert's own |
+| the phone itself | Focus eats the push | only Bert, checking his own door |
+
+Every link but the last has a watcher that does not share its failure mode. The last link is a person and a doorstep, which is the whole design: the one beat a machine must never be able to fake is now the one beat that costs Bert a single, effortless, un-forgeable tap.
+
+The switch still has its one human job. But it no longer nags — it knocks, holds out the morning's proof on an open palm, and waits for a thumb it can be certain is Bert's. The message was never the hard part. Teaching the proof to walk to the door, and making sure only the right hand could sign for it, was the work.
