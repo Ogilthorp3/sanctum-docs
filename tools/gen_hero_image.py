@@ -399,22 +399,57 @@ def gen_imagen(a) -> None:
     from google.genai import types
 
     client = genai.Client(api_key=load_key())
-    resp = client.models.generate_images(
-        model=a.model,
-        prompt=a.prompt,
-        config=types.GenerateImagesConfig(number_of_images=1, aspect_ratio=a.aspect),
-    )
-    imgs = getattr(resp, "generated_images", None) or []
-    if not imgs:
-        sys.exit("no image returned (safety filter or quota?)")
-    image = imgs[0].image
     out = pathlib.Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    data = getattr(image, "image_bytes", None)
-    if data:
+
+    # Two different Google image surfaces behind one --model flag:
+    #   imagen-*  -> models.generate_images (a dedicated image endpoint)
+    #   gemini-*  -> models.generate_content, image returned as an inline part
+    # Added 2026-08-09: asked for "Imagen 5 Ultra", which does not exist on this
+    # key — `models.list()` tops out at imagen-4.0-ultra. The genuinely newer
+    # image models are the gemini-*-image family, and they were unreachable
+    # because this function only ever spoke generate_images.
+    if a.model.startswith("gemini"):
+        cfg = None
+        try:
+            cfg = types.GenerateContentConfig(
+                response_modalities=["IMAGE"],
+                image_config=types.ImageConfig(aspect_ratio=a.aspect),
+            )
+        except (AttributeError, TypeError):
+            # Older SDK without ImageConfig: still get an image, just at the
+            # model's default aspect rather than the requested one.
+            cfg = types.GenerateContentConfig(response_modalities=["IMAGE"])
+        resp = client.models.generate_content(
+            model=a.model, contents=a.prompt, config=cfg)
+        data = None
+        for cand in (getattr(resp, "candidates", None) or []):
+            for part in (getattr(getattr(cand, "content", None), "parts", None) or []):
+                inline = getattr(part, "inline_data", None)
+                if inline and getattr(inline, "data", None):
+                    data = inline.data
+                    break
+            if data:
+                break
+        if not data:
+            sys.exit(f"no image returned by {a.model} (safety filter or quota?)")
         out.write_bytes(data)
     else:
-        image.save(str(out))
+        resp = client.models.generate_images(
+            model=a.model,
+            prompt=a.prompt,
+            config=types.GenerateImagesConfig(number_of_images=1,
+                                              aspect_ratio=a.aspect),
+        )
+        imgs = getattr(resp, "generated_images", None) or []
+        if not imgs:
+            sys.exit("no image returned (safety filter or quota?)")
+        image = imgs[0].image
+        data = getattr(image, "image_bytes", None)
+        if data:
+            out.write_bytes(data)
+        else:
+            image.save(str(out))
     # Metered call ($0.02-0.06/image) — ledger it in the haus spend meter, fail-open.
     meter = pathlib.Path.home() / "Projects/Claude_Code/tools/gcp_spend.py"
     if meter.exists():
