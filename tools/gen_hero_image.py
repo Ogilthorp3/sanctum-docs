@@ -6,19 +6,31 @@ wide format, white/off-white background, Tommy the Abyssinian cat observing,
 one subtle localized color halo (teal or amber). Pass the full prompt in.
 
 Two backends, ONE entry point:
-  --backend local  (default)  Flux.1-dev on-device via flux_backend.py — offline,
+  --backend auto   (default)  Try Flux on the render host; fall back to the
+                              metered API if it cannot run. See the WARNING.
+  --backend remote            Force Flux on the render host. Exits 1 rather than
+                              spending if it cannot delegate (verified 2026-08-09).
+  --backend local             Flux.1-dev on THIS box via flux_backend.py — offline,
                               $0, no API key. Needs the torch/diffusers venv
                               (SANCTUM_FLUX_VENV, default ~/Projects/comfy-lab/.venv-flux)
                               and the locally-cached model.
-  --backend imagen            Google Imagen 4 via google-genai — METERED (costs
-                              money). Run with the cli-venv python that has
-                              google-genai. Use only when you deliberately want it.
+  --backend imagen            The metered Google API. Covers BOTH surfaces:
+                              imagen-* via generate_images and gemini-*-image via
+                              generate_content (added 2026-08-09). Run with the
+                              cli-venv python that has google-genai.
+
+WARNING (2026-08-09): the free path is currently DEAD. The render host has no
+FLUX.1-dev snapshot cached — its HuggingFace hub cache is 0 B — so `auto` no
+longer means "free if possible", it means metered every time. `remote` exits 1
+instead of spending, which is the honest choice when you want free-or-nothing.
+Restore the free path by re-downloading the Flux weights to the render host.
 
 Usage:
-  ~/Projects/comfy-lab/.venv-flux/bin/python tools/gen_hero_image.py \
+  # metered (the only working path today) — note the cli-venv python:
+  ~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen \
       --prompt "..." --out src/content/docs/operations/images/hero-x.png
-  # or explicitly paid:
-  ~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen --prompt "..." --out ...
+  # free, once the Flux weights are restored on the render host:
+  python3 tools/gen_hero_image.py --backend remote --prompt "..." --out ...
 
 The default is local so nobody accidentally spends on the API. If the local
 env is missing we FAIL LOUDLY rather than silently falling back to the paid
@@ -482,14 +494,30 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="local: verify env, don't render")
     ap.add_argument("--wizard", action="store_true",
                     help="append the Wizard cameo (small background figure, house-consistent)")
-    # imagen knob
-    # Ultra is the house standard (Bert, 2026-07-29: "Apple standard, so Imagen 4
-    # Ultra, so that everything is gorgeous"). $0.06/image vs $0.04 standard and
-    # $0.02 fast — the difference is a rounding error against a $10 month, and we
-    # only ever re-render a targeted list, never the whole archive.
-    ap.add_argument("--model", default="imagen-4.0-ultra-generate-001",
-                    help="Imagen model (imagen backend). Default: Ultra, the house "
-                         "quality bar. Cheaper tiers exist but are not the standard.")
+    # paid-model knob
+    # Newest-and-best is the house standard (Bert, 2026-07-29: "Apple standard,
+    # so ... everything is gorgeous"; reaffirmed 2026-08-09 asking for the newest
+    # Imagen). The default moved to gemini-3-pro-image on 2026-08-09 for two
+    # reasons:
+    #   1. The ENTIRE imagen-4.0 family is deprecated by Google, EOL 2026-08-17.
+    #      Leaving the default there meant the house hero pipeline would simply
+    #      stop working on a known date.
+    #   2. "Imagen 5 Ultra" does not exist — models.list() on this key tops out
+    #      at imagen-4.0-ultra. The genuinely newer image models are the
+    #      gemini-*-image family.
+    # Economics changed with it, so state them honestly rather than calling it a
+    # rounding error: gemini-3-pro-image bills by OUTPUT TOKENS ($120/1M), which
+    # is $0.134 for the 1K/2K image this tool renders and $0.24 at 4K — versus
+    # $0.06 for the retiring imagen-4.0-ultra. At ~40 heroes/month that is
+    # ~$5.40 against a $10 cap, so the cap is now the real constraint, not
+    # decoration. `--model imagen-4.0-generate-001` ($0.04) remains the cheap
+    # tier until it EOLs. Rates live in tools/gcp_spend.py; a model with no rate
+    # there renders UNLEDGERED (fail-open meter), so add the rate with the model.
+    ap.add_argument("--model", default="gemini-3-pro-image",
+                    help="Paid model (imagen backend — which now covers BOTH the "
+                         "imagen-* generate_images surface and the gemini-*-image "
+                         "generate_content surface). Default: gemini-3-pro-image, "
+                         "$0.134/image. Cheaper tiers exist but are not the standard.")
     a = ap.parse_args()
 
     if a.wizard:
