@@ -56,12 +56,46 @@ for(const id of ORDER_RT){
   });
 }
 
-const cliSeats = [
-  {id:"jocasta",label:"Jocasta",role:"Keeper of records — iMessage, Calendar, Contacts, Mail, CRM, tech-lookout; answers from what is written.",layer:"CLI REPL",logical_model:"council-local/Qwen3.6-27B-4bit",provider:"local",provider_label:"sanctum-mlx (local, mTLS)",api_model:"Qwen3.6-27B-4bit",api_base:"https://127.0.0.1:1337",fallbacks:[],note:"Dense 27B fine-tuned on the Memory Vault — the archivist's own mind."},
-  {id:"mothma",label:"Mon Mothma",role:"Chief of operations — deployments, runbooks, drift, backups, secret rotation; tool-armed.",layer:"CLI REPL",logical_model:"council-brain",provider:"local",provider_label:"sanctum-mlx (local, mTLS)",api_model:"qwen3.6-35b-a3b-4bit",api_base:"https://127.0.0.1:1337",fallbacks:[]}
+// The two CLI-only seats. They are not in the OpenClaw runtime, so they
+// cannot be discovered from openclaw.json — but their MODELS are named in the
+// proxy config like everyone else's, so only identity is declared here and
+// every technical field is resolved below.
+//
+// These used to carry hardcoded provider/api_model/api_base, and they drifted
+// exactly as you would expect: Mon Mothma was published as a local MLX Qwen on
+// :1337 when `council-brain` has long been Opus 5 on the Max-subscription
+// bridge at :3456 — wrong provider, wrong model, wrong endpoint, invisible to
+// the drift check because a constant cannot disagree with itself.
+const CLI_SEATS = [
+  {id:"jocasta",label:"Jocasta",
+   role:"Keeper of records — iMessage, Calendar, Contacts, Mail, CRM, tech-lookout; answers from what is written.",
+   seat:"council-crm",
+   note:"Dense 27B fine-tuned on the Memory Vault — the archivist's own mind."},
+  {id:"mothma",label:"Mon Mothma",
+   role:"Chief of operations — deployments, runbooks, drift, backups, secret rotation; tool-armed.",
+   seat:"council-brain"},
 ];
 
-rows.push(...cliSeats);
+for (const s of CLI_SEATS) {
+  const m = proxyModels.find(x => x.name === s.seat);
+  if (!m) {
+    // A seat that vanished from the proxy config is a real change, not a
+    // formatting detail. Say so loudly rather than publishing a stale guess.
+    console.error(`refresh-roster: CLI seat '${s.id}' references proxy model ` +
+                  `'${s.seat}', which is not in the proxy config — skipping.`);
+    continue;
+  }
+  rows.push({
+    id:s.id, label:s.label, role:s.role, layer:"CLI REPL",
+    logical_model:s.seat,
+    provider:m.provider||"local",
+    provider_label:desc(m.provider||"local", m.api_base),
+    api_model:m.api_model||s.seat,
+    api_base:m.api_base??null,
+    fallbacks:[],
+    ...(s.note?{note:s.note}:{}),
+  });
+}
 
 const out={
   generated_at:new Date().toISOString().replace(/\.\d{3}Z$/,"Z"),
