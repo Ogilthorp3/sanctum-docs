@@ -1,0 +1,88 @@
+---
+title: "2026-08-09: Everyone Says They're Albert's iPhone"
+description: "A one-minute curfew lift turned into the discovery that the haus had never once identified a phone. The bug that was catching the kid's devices was a bug — and removing it opened the hole it had been accidentally plugging."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch: a bespectacled Abyssinian cat sits at a small desk with an open ledger marked PHONEBOOK, inspecting a queue of household gadgets — a television set-top box and a round speaker, each wearing a paper badge reading ALBERT'S IPHONE, beside a wireless bridge — while behind them, in a warm amber glow, a small smartphone tiptoes out the open door carrying a blank badge](./images/hero-2026-08-09-everyone-says-theyre-alberts-iphone.png)
+
+It started as the smallest possible request. Lift the Den Room TV curfew for the night. One `POST /screen/override`, two hours, done in a minute.
+
+Then Bert noticed something in passing: *why is my iPad in the curfew?*
+
+## The first bug is the easy one
+
+His iPad was sitting in Albert's `personal_devices`, inheriting a child's 23:00 curfew. The cause was four lines of hostname matching:
+
+```python
+def _label_hit(label):
+    fl = _fold_label(label)
+    return bool(fl) and (hn == fl or hn in fl or fl in hn)
+```
+
+When iOS hides a device's real name behind Private Wi-Fi Address, it can join broadcasting nothing but the bare word `iPad`. That word is a substring of "Albert's iPad Pro". The `family` dict is walked in `devices.yaml` order, Albert is listed first, and so **every anonymous iPad in the house silently became Albert's** — and was auto-written into his device list, permanently.
+
+The fix was small: a bare device-type word — `iPad`, `iPhone`, `Watch`, `Mac` — now resolves to *no owner at all*, in either direction. It is a device type every member of the family owns at least one of, not an identity. Five regression tests, green suite, shipped.
+
+That fix was correct. It was also the beginning of the actual incident.
+
+## The bug was holding something up
+
+Bert came back with the right question: *if Albert's iPhone or iPad changes MAC address, can we still tell whose it is?*
+
+The designed answer was yes. [Columbo](/operations/device-identity/) — the haus identity resolver — pins `person → device → MAC` from what devices broadcast about themselves, and the [screen-time engine](/operations/screen-time-enforcement/) unions those live pins into a child's enforce set precisely so curfew follows a rotating Private Wi-Fi Address without anyone editing a config file. The wiring was correct and had been for months.
+
+The pins were empty. Not stale — **empty, and always had been**:
+
+```
+albert_iphone        NEVER SEEN
+albert_ipad          NEVER SEEN
+bert_iphone          NEVER SEEN
+andreanne_iphone     NEVER SEEN
+```
+
+That string appears 9,722 times in the log. Columbo had never successfully identified a single phone in the entire life of the feature.
+
+The reason was structural. It listened for Apple's `_companion-link` mDNS advertisement during a fourteen-second browse — and iOS only advertises that while a device is awake and unlocked. A live probe from the hub returned twenty-eight instances: every Mac, every Apple TV, every speaker in the house. Not one iPhone. Not one iPad.
+
+So Albert's curfew had been resting on static MAC addresses that had long since rotated away. His enrolled `phone_mac` was eight days stale. His enrolled iPad MAC did not exist in the Firewalla's host table at all. And the only thing still catching his devices when they rotated was the substring bug — the one that had just been fixed.
+
+<Aside type="caution" title="Ask what the bug was holding up">
+A buggy fallback can be load-bearing. The substring match was wrong about *whose* device it was, but it was the last mechanism still pulling rotated phones into a child's curfew. Fixing the misattribution removed the enforcement with it, and the suite stayed green through both — because nothing tested the thing that had never worked. Before deleting a wrong mechanism, find out what it was accidentally doing right.
+</Aside>
+
+## A house full of impostors
+
+The Firewalla sits on the gateway and sniffs Bonjour and DHCP around the clock. It already had the names columbo's brief browse kept missing. Columbo was already SSH-ing into that same redis for an unrelated purpose — it simply never used the name fields to pin. That was the fix: pin from the always-on view instead of the lucky one.
+
+Which surfaced the second problem. Ask this house which device is Albert's iPhone and four of them put a hand up:
+
+| Device | What it broadcasts |
+|---|---|
+| Basement Apple TV | `dhcpName` **and** `bonjourName` = `Alberts-iPhone` |
+| Kitchen 5 (an ESP sensor) | `bonjourName` = `Albert's iPhone`, `dhcpName` = `ESP_5A5E60` |
+| Lutron lighting bridge | Firewalla `name` = `Albert's iPhone` |
+| The actual iPhone | `dhcpName` = `iPhone`, `bonjourName` = `Alberts-iPhone` |
+
+The first live run of the new pass pinned **Kitchen 5** as Albert's iPhone. It was not merely a match — it was the *freshest* match, so most-recently-active handed it the pin over the real phone. Albert's curfew was active at the time. The next enforcement tick would have MAC-paused a kitchen speaker.
+
+It was caught before that tick fired, reverted, and the rule that prevents it is the house doctrine stated properly for the first time: `dhcpName` **overrules** `bonjourName` when the two disagree. They had been treated as interchangeable alternatives — try one, fall back to the other. They are not alternatives. They are ranked. A device firmware sets its own DHCP name; a Bonjour name can be echoed, inherited, or left behind as a relic by a device that was renamed years ago.
+
+Two guards now stand in front of every pin: a member pin may never claim a MAC that belongs to a screen or shared device — the Basement Apple TV hosts the HomeKit hub, and pausing it at curfew would take the lights with it — and the device class must survive the dhcp-overrules-bonjour test.
+
+## What the night taught
+
+- **A mechanism that never fired looks exactly like one that works.** No alert, no error, no red test. The only tell was a log line repeating "NEVER SEEN" nine thousand times where nobody was reading.
+- **Rank your identity signals, don't alternate them.** "dhcpName, then bonjourName" read as a fallback chain for months. It was always meant to be a precedence order, and the difference only became visible when a sensor and a phone claimed the same name.
+- **The test suite was reading live machine state.** Eight tests looked hermetic purely because the phonebook had no member pins to leak. The moment identification started working, they failed on a MAC in no fixture. A test that passes because production is broken is not a passing test.
+- **A green suite proves the code you wrote does what you meant.** It says nothing about the mechanism you never wired to anything.
+
+The curfew lift took a minute. Learning that the haus had never once known which phone belonged to the kid took the rest of the night.
+
+## Related
+
+- [The Green Lie](/operations/2026-08-08-the-green-lie/) — the other silent failure: a health endpoint reporting fine through a 25-hour enforcement freeze
+- [The Ruler Was Broken, Not the Model](/operations/2026-07-26-the-ruler-was-broken/) — when the measuring instrument is the defect
+- [The Probe That Could Not Tell on Itself](/operations/2026-07-26-the-probe-that-could-not-tell-on-itself/) — why a witness outside the process counts double
+- [Screen-time enforcement](/operations/screen-time-enforcement/) — the curfew engine these pins feed

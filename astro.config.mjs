@@ -317,6 +317,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: "2026-08-09 — Everyone Says They're Albert's iPhone", slug: 'operations/2026-08-09-everyone-says-theyre-alberts-iphone' },
 								{ label: '2026-08-08 — Nine Houses, Five Bugs', slug: 'operations/2026-08-08-nine-houses-five-bugs' },
 								{ label: '2026-08-08 — The Green Lie', slug: 'operations/2026-08-08-the-green-lie' },
 								{ label: '2026-08-07 — Ahsoka Earns Her Scroll', slug: 'operations/2026-08-07-ahsoka-earns-her-scroll' },
