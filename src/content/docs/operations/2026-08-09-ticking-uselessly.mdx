@@ -1,0 +1,84 @@
+---
+title: "2026-08-09: Ticking, Uselessly"
+description: "One routine restart disarmed the haus for ten and a half hours. Every probe said healthy, every log line said success, and thirteen devices sat blocked all day behind a permission bit."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch: an Abyssinian cat in a night-watchman's cap dutifully punching a time clock on the wall, one paw on the lever, eyes on the dial — while behind him the front gate stands wide open in a warm amber glow and small household gadgets tiptoe out through it unnoticed](./images/hero-2026-08-09-ticking-uselessly.png)
+
+At 03:11 I asked Bert to run one command:
+
+```
+sudo launchctl kickstart -k system/com.sanctum.force-flow
+```
+
+It was housekeeping — restart the enforcer so it would pick up an unrelated fix. The service came back in under two seconds and answered every health check correctly. Ten and a half hours later Bert asked why the Den Room Apple TV had no internet, and the answer was that nothing in the haus had been enforceable since that command.
+
+## What the restart actually did
+
+Force Flow runs as the `sanctum` service user. Its Firewalla bridge token lives at `~/.sanctum/secrets/firewalla-bridge-token`, mode `0640`, owned `bert:sanctum` — group-readable, deliberately, so the service can read it.
+
+The **directory** was `0700`.
+
+Without the group execute bit there is no traverse into that directory, so the group-read on the file inside is unreachable. The service asked for its token and the filesystem said the file was not there — not *denied*, which would have been a loud and obvious thing, but *absent*.
+
+```
+03:11:22  Force Flow starting on port 4077
+03:11:25  ERROR: No FIREWALLA_BRIDGE_TOKEN — enforcement disabled
+```
+
+That line then repeated once a minute for ten and a half hours.
+
+The permissions had been that way since July. What made a restart the trigger is that **nothing re-reads a secret while it is running**: the process had held the token in memory since a boot that predated the tightening. It was a delayed-action mine, and the routine maintenance command was the tripwire. My command.
+
+## Three lies, stacked
+
+A single silent failure is bad luck. This one survived a full working day because three separate mechanisms each reported something untrue.
+
+**The probe measured the wrong thing.** `/screen/liveness` exists precisely so an off-box pager can catch a silently-stopped curfew, and it was green the entire time — because it only ever asked whether the enforcement loop was *ticking*. It was. Faithfully, every thirty seconds, doing nothing.
+
+**The log recorded intent as outcome.** When the bridge call failed, the code fell into the Parachute — the sovereign fallback for a vendor-cloud outage — which returned `{success: True, verified: True}`. So the 10:00 wake wrote thirteen successful unblocks to the enforcement ledger while the box removed nothing. The condition that reached that branch could not distinguish "the vendor SDK is down" from "I have no credentials to ask with," because a token-less health probe answers `200 OK` with the `sdkReady` field simply missing.
+
+**The logs I checked were the wrong file.** `~/.sanctum/logs/force-flow.stderr.log` had not been written since 2026-08-07, which looks exactly like broken logging. It was not broken. The wave-1 service extraction moved the real logs into the service user's own home, and the old path froze at the moment of the move. I reported "logging is broken" to Bert before discovering I was reading a headstone.
+
+<Aside type="danger" title="A ticking loop that cannot act is not liveness">
+The heartbeat answered "am I running?" — a question the failure had no opinion about. The question worth asking is **"can I act?"** A process that is up, ticking, and structurally incapable of doing its job is the most expensive kind of healthy, because every instrument agrees with it.
+</Aside>
+
+## The asymmetry that made it permanent
+
+The wake ran twice — 09:00 for the child's personal devices, 10:00 for the screens — and the two paths disagreed about the same event.
+
+The personal-devices path checked its results and logged `6 MAC(s) still paused — keeping blocked flag, will retry next tick`. Correct: it stayed flagged, so every subsequent tick tried again.
+
+The screens path discarded the return value entirely, then cleared the blocked flag, released the hold and wrote a success. From the next tick onward it saw *not blocked, curfew off* and had no reason to do anything ever again. That is the difference between a fourteen-hour outage and a thirty-second one: not the failure, but which path bothered to look.
+
+## What the box actually said
+
+`/screen/status` reported the Den Room Apple TV as `blocked: false`, with no hold. The Firewalla's own policy list, asked directly, held thirteen live MAC blocks — with hit counters climbing all day. The Playroom TCL TV had been refused 545,651 times.
+
+The engine's belief and the box's behaviour had diverged completely, and only one of them was reachable from a dashboard.
+
+## Fixes
+
+- `chmod 0710` on the secrets directory: owner `rwx`, group traverse-only, world nothing. Group **`--x`**, not group-write — that was a different scar, and this does not reopen it. Because a `chmod` lives in no repo and dies with the disk, it is now a checked-in, idempotent guard that also refuses world access and group-write.
+- The heartbeat and the probe carry one new boolean, `enforcement_ready`. The pager gained a **DISARMED** state: fresh heartbeat, no ability to act, page anyway. It defaults to *not ready* when absent, so an older build reads as unproven rather than inheriting a cheerful default.
+- Missing credentials are now a configuration fault, never an outage. The Parachute cannot claim success for an unblock that never reached the box, and a genuine vendor outage reports *unverified* instead of *lifted*.
+- Both wake paths now share one definition of "lifted," so they cannot drift apart again.
+- The test suite was reaching the real Firewalla. It had already created genuine block policies for its own fixture MACs. Every outbound actuator is now pinned somewhere that cannot answer.
+
+## What it cost, and what it taught
+
+Thirteen devices, roughly fourteen hours, on a Saturday. No child was harmed by an over-enforcement; the failure ran the other way, and that night's curfew would not have fired at all had nobody noticed.
+
+The lesson is not "be careful with restarts." It is that this haus had built three separate instruments to catch exactly this class of failure — a liveness probe, an enforcement ledger, an off-box pager — and all three were measuring liveness rather than capability. They were honest about the wrong question.
+
+The [previous silent freeze](/operations/2026-08-08-the-green-lie/) taught us that a health endpoint can lie. This one taught us something narrower and worse: an endpoint can be perfectly truthful and still tell you nothing, if it answers a question the failure does not care about.
+
+## Related
+
+- [The Green Lie](/operations/2026-08-08-the-green-lie/) — the previous enforcement freeze, same service, different lie
+- [Everyone Says They're Albert's iPhone](/operations/2026-08-09-everyone-says-theyre-alberts-iphone/) — the identity work whose deploy was the tripwire
+- [Device identity](/operations/device-identity/) — how the haus decides whose device is whose
+- [Screen-time enforcement](/operations/screen-time-enforcement/) — the curfew engine that went quiet
