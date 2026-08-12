@@ -9,7 +9,9 @@ import { Aside } from '@astrojs/starlight/components';
 
 The alert had been arriving every fifteen minutes since Thursday afternoon: **HA Green UNREACHABLE for 370 consecutive cycles (~92h). Needs a human.** The ARP table still showed the appliance sitting exactly where it belonged, so nothing had drifted. The guardian had correctly refused to heal. It just wanted a human.
 
-The first thing a human did was curl the appliance. It answered `200`. Its frontend served. Its supervisor observer served. A second, entirely independent monitor had it listed as `healthy — port 8123 open`. Home Assistant had never gone anywhere.
+Bert brought it over with the detail that turned out to be the whole story: the guardian *had* refused to heal, correctly, and was still insisting someone come look.
+
+So someone curled the appliance. It answered `200`. Its frontend served. Its supervisor observer served. `sanctumd`, an entirely independent monitor watching the same box, had it listed as `healthy — port 8123 open`. Home Assistant had never gone anywhere.
 
 ## The key it could not read
 
@@ -19,33 +21,37 @@ The guardian's health verdict is an `AND`: the appliance must answer a ping **an
 hag_token: REFUSING — ha-token is group/world-readable (mode 640); run: chmod 600
 ```
 
-The token file's mtime was five weeks old, but its **ctime** was `13:00:04` on the day the alerts began. Not a rewrite — a permission change. That morning's boot had run the service-user installer, which walks the secrets directory and applies `chmod g+r` so the `sanctum` principal can read its own API keys. The comment in that script is explicit about the intent: *group-readable, not world.*
+The token file's mtime was five weeks old, but its **ctime** was `13:00:04` on the day the alerts began. Not a rewrite — a permission change. That morning's boot had run the installer from [service principal wave-1](/operations/2026-08-07-service-principal-wave-1/), which walks the secrets directory and applies `chmod g+r` so the `sanctum` principal can read its own API keys. The comment in that script is explicit about the intent: *group-readable, not world.*
+
+That migration keeps producing incidents, and never by being wrong. What breaks is code predating it that still assumes one human owns everything: [The Green Lie](/operations/2026-08-08-the-green-lie/) was a service that could not write its own database. This is a monitor refusing to read a file it is entitled to read.
 
 The token gate had been written to refuse `0044` — group-read **and** world-read, in one mask. World-read is a leak. Group-read, in a directory whose whole purpose is a shared service principal, is the design. The boot re-applied the design; the gate called it a breach; the bearer went empty; the guardian reported the house.
 
 Timestamps closed it in one line. Last healthy cycle `12:49:38`. First failure `13:04:42`. Same day, one boot apart.
 
+R2D2 did notice something. On the 8th it filed the guardian under `reload-stuck-launchd-service` — the healer's read was *restart it*, and a restart relaunches the identical refusal fifteen minutes later.
+
 ## The advice was worse than the bug
 
-The refusal printed a remedy, and following it would have been the real outage. `chmod 600` on that token breaks every consumer running as the service principal — the HA bridge, the reporting job, the whole lighting toolset — and the next boot would have re-applied `g+r` and re-broken the guardian anyway. A monitor confidently instructing an operator to sever six working services is worse than a monitor that simply lies.
+The refusal printed a remedy, and following it would have been the real outage. `chmod 600` breaks every consumer running as the service principal — the HA bridge, the reporting job, the lighting toolset — and the next boot re-applies `g+r`, re-breaking the guardian anyway. A monitor that confidently tells you to sever six working services is worse than one that merely lies.
 
-So the gate now refuses what is actually a leak — world-read, and group-or-world **write** — and accepts group-read when the group is the service group. Five cases pinned in a matrix: `600` and `640:sanctum` allowed; `640:staff`, `644`, `660` refused.
+The gate now refuses actual leaks — world-read, and group-or-world **write** — and accepts group-read when the group is the service group. Five cases pinned: `600` and `640:sanctum` allowed; `640:staff`, `644`, `660` refused.
 
 That is the shallow fix. The deep one is that **a credential failure was reported as a network outage.** The guardian already had a guard for exactly this shape — if it cannot reach its own gateway, it declares the appliance's status *unverifiable* and suppresses the alert rather than blaming the appliance. The token deserved the same treatment and never got it. It resolves once, up front, and an unreadable token now exits with a credential alert: no offline cycle counted, no heal attempted, no outage claimed.
 
 <Aside type="caution" title="A monitor's own blind spot is not evidence">
-Every health check has inputs it needs before it can judge anything — a credential, a route, a clock. When one of those is missing the honest verdict is *unverifiable*, not *broken*. A check that cannot tell the difference will eventually spend four days describing its own configuration as a fact about the world.
+Every health check needs inputs before it can judge anything — a credential, a route, a clock. When one is missing, the honest verdict is *unverifiable*, not *broken*. A check that cannot tell the difference will spend four days describing its own configuration as a fact about the world.
 </Aside>
 
 ## Meanwhile, the house was locking itself out
 
-Chasing the guardian surfaced a second alert in a neighbouring log, running quietly since at least the 8th. Every night at 23:00, the child-curfew stranger sweep was pausing **25 devices**. Not a stranger among them: both wireless access points and the router, all four wall panels, the HVAC controller, the lighting bridge, the sprinkler timer, the dishwasher, two air purifiers, the battery, the AV receiver, the room speaker fleet, and the Home Assistant appliance itself. One of those speakers is the HomeKit hub — the house was cutting off the thing that automates the house.
+Chasing the guardian surfaced a second alert in a neighbouring log, quiet since at least the 8th. Every night at 23:00, Force Flow's child-curfew stranger sweep was pausing **25 devices**. Not a stranger among them: both access points and the router, four wall panels, the HVAC controller, the lighting bridge, the dishwasher, the AV receiver, the room speaker fleet, and the Home Assistant appliance itself. One of those speakers is the HomeKit hub — the house was cutting off the thing that automates the house.
 
-The pairing in the log is a `23:00` pause and an `09:00` release, and that reads like a ten-hour blackout. It wasn't, and assuming it was got written into this page's first draft before anyone checked. A **ledger orphan sweep** — an unrelated safety net that releases any block no active state claims — caught every one of them within seconds: the appliance after 14, a wall panel after 34, the hub host after 40. Eighty-seven such releases sit in the log. The `09:00` line is bookkeeping, closing a ledger entry whose block was already gone; one of them says so outright, *bridge reports no block target*.
+The log pairs a `23:00` pause with an `09:00` release, which reads like a ten-hour blackout. It wasn't — and that assumption reached this page's first draft before anyone checked. A **ledger orphan sweep**, an unrelated safety net that releases any block no active state claims, caught every one within seconds: the appliance after 14, a wall panel after 34, the hub host after 40. Eighty-seven such releases sit in the log, and the `09:00` line is bookkeeping on a block already gone — one entry says so outright, *bridge reports no block target*.
 
-So the real cost was tens of seconds of dropped connectivity per device per night, not ten hours — worth fixing for the spurious blocks and the parent alert each one fired, and worth fixing so the house does not depend on a safety net catching a mistake nightly, but not the outage the log's shape suggests.
+Real cost: tens of seconds of dropped connectivity per device per night, plus a parent alert each time, plus a house depending on a safety net to undo a nightly mistake. Worth fixing. Not the outage the log's shape suggests.
 
-The sweep is a good feature with a real scar behind it: a renamed, spoofed console once parked itself online before curfew and slept through the join-time rule. It quarantines devices whose category is `unknown`. Infrastructure is supposed to be excluded by an OUI list in config.
+The sweep is a good feature with a real scar behind it: a renamed, spoofed console once parked itself online before curfew and slept through the join-time rule — the same `unknown` category that [the Quest wore](/operations/2026-08-04-quest-that-wore-unknown/) to get around bedtime. It quarantines devices whose category is `unknown`. Infrastructure is supposed to be excluded by an OUI list in config.
 
 The list was right. It simply never reached these devices, because a device's category is computed **once, at first discovery**, and then persisted. Every one of them had been stamped `unknown` months ago. Adding their vendor prefixes would have changed nothing at all — the config knob only ever worked on hardware bought after the entry landed. So the sweep now re-derives the classification from current config before it quarantines anything, which is what makes the config a control surface instead of a suggestion.
 
@@ -57,36 +63,36 @@ A control case saved it. The classifier applies hostname hints, and a device's n
 
 It now re-derives from the MAC alone — hardware-rooted, and a rename cannot move it — and only ever rescues to `infrastructure`, never to `gaming` or `tv` or `streaming`, which have their own enforcement paths. Verified both directions: all 25 exempt, and `"Living Room TV"`, `"brother printer"` and `"appletv-basement"` on an unknown MAC all stay eligible.
 
-Identity got probed rather than assumed, too. The room-named speakers looked like an obvious brand from their names; the port they should have answered on was closed, and the appliance's matching port returned a 404 that would have mislabelled it. AirPlay reported the real models — a HomePod and a Mac — and those went in as exact-MAC pins instead of blanket vendor prefixes, because a vendor prefix that catches a console is a hole.
+Identity got probed rather than assumed, too — the discipline [the iPhone roll-call](/operations/2026-08-09-everyone-says-theyre-alberts-iphone/) earned the hard way. The room-named speakers looked like an obvious brand from their names; the port they should have answered on was closed, and the appliance's matching port returned a 404 that would have mislabelled it. AirPlay reported the real models — a HomePod and a Mac — and those went in as exact-MAC pins instead of blanket vendor prefixes, because a vendor prefix that catches a console is a hole.
 
 ## The first night caught one anyway
 
 The fix went in before curfew and the sweep ran at 23:00. It paused one device: **the Brother printer** — blocked at `23:00:20`, released by the orphan sweep at `23:00:23`. Three seconds, and still a miss.
 
-The reason is a plain methodology error. To build the exemption list, the at-risk set was enumerated from the live device view — and that query filtered on `online`. Printers sleep. So did the smart bulbs, a room speaker's second radio, the AV receiver's other NIC, and a handful of sensors: a whole class of *intermittent* infrastructure that is invisible precisely when you go looking for it, and eligible again the moment it wakes inside the curfew window. Twenty-five devices were fixed; the real set was seventy-two.
+A plain methodology error. The at-risk set was enumerated from the live device view, and that query filtered on `online`. Printers sleep — so do the bulbs, a speaker's second radio, the receiver's other NIC, and a handful of sensors. A whole class of *intermittent* infrastructure, invisible precisely when you go looking for it and eligible again the moment it wakes inside the window. Twenty-five devices fixed; the real set was seventy-two.
 
-Recomputing from the **stored registry** — the same table the sweep reads, offline records included — found the rest. There is a second lesson underneath: the live endpoint classifies with the device's name, so the printer *displayed* as `printer` in every view an operator would check, while the sweep, reading a stored `unknown`, still saw a stranger. The dashboard and the enforcement path disagreed, and only one of them was armed.
+Recomputing from the **stored registry**, the same table the sweep reads, found the rest. A second lesson sits underneath: the live endpoint classifies using the device's name, so the printer *displayed* as `printer` in every view an operator would check while the sweep, reading a stored `unknown`, still saw a stranger. Dashboard and enforcement path disagreed, and only one was armed.
 
-It also priced the MAC-only decision honestly. Refusing to trust device-supplied names is what closes the rename hole — and it means a printer can never be rescued by *looking* like a printer. Anything whose category comes from its name has to be carried in config, by MAC. That is the trade, and the printer is what it costs.
+It also priced the MAC-only decision. Refusing device-supplied names closes the rename hole, and means a printer can never be rescued by *looking* like one: anything categorised by name must be carried in config, by MAC. The printer is what that costs.
 
 | | Before | After 08-11 | After 08-12 |
 |---|---|---|---|
 | Sweep-eligible records | 72 | 60 | **59, none of them infrastructure** |
 | Paused at 23:00 | 25 | 1 | 0 expected |
 
-What remains eligible is what should be: thirty-odd rotating-MAC watches, sixteen unnamed private MACs, a few personal laptops and phones. Randomized MACs cannot be pinned — they rotate — so whether a parent's watch belongs in a child's curfew sweep is a policy question, and it stays open rather than getting quietly answered by an exemption list.
+What remains eligible is what should be: thirty-odd rotating-MAC watches, sixteen unnamed private MACs, a few personal laptops. Randomized MACs cannot be pinned, so whether a parent's watch belongs in a child's curfew sweep stays an open question for Bert rather than one quietly answered by an exemption list.
 
 ## What it cost
 
-Ninety-two hours of a false outage. Four days of an operator being told to run a destructive command. Some unknown number of nights where the house briefly cut off its own hub, dishwasher and thermostat, fired a parent alert about each one, and was quietly rescued each time by a safety net nobody knew was carrying it — every event reported, accurately and uselessly, as *unreviewed device(s) paused*.
+Ninety-two hours of a false outage. Four days of Bert being told to run a destructive command. An unknown number of nights where the house briefly cut off its own hub and thermostat, alerted him each time, and was rescued by a safety net nobody knew was carrying it — every event reported, accurately and uselessly, as *unreviewed device(s) paused*.
 
-Three claims in this story arrived confident and wrong, and every one of them died to the same question: *what does the disk actually say?* The guardian's "unreachable" died to one curl. The exemption list's "twenty-five devices" died to a registry query that counted the sleeping ones. And the ten-hour blackout — written here first, in this page — died to reading four more lines of the log, where the release was sitting fourteen seconds after the pause the whole time.
+Three claims here arrived confident and wrong, and each died to the same question: *what does the disk actually say?* The guardian's "unreachable" died to one curl. The exemption list's "twenty-five devices" died to a registry query that counted the sleeping ones. The ten-hour blackout — written first on this page — died to four more lines of log, where the release had been sitting fourteen seconds after the pause the whole time.
 
 A monitor that cannot tell its own blind spot from a fault will invent an outage. So will an engineer.
 
 | Gate | Evidence |
 |---|---|
-| Everything E2E Tested | Token gate pinned by a 5-case permission matrix; guardian run live to `exit 0 — healthy, API up, end0 static`, all-clear broadcast, offline counter 374 → 0. Curfew eligibility called directly against the real registry, offline records included: infrastructure exempt, rename-evasion and random-MAC controls still eligible. **The 23:00 run is the honest test and it caught one device** — printer, now pinned; 72 → 59 eligible, none of them infrastructure. Both SSH paths and the repaired terminal add-on verified with host keys corroborated over two networks |
+| Everything E2E Tested | Screen-time suite **882 passed, 0 failed**. Token gate pinned by a 5-case permission matrix; the new credential branch executed for real — leaked-mode tokens each yield `exit 4` and leave the offline counter at 0. Guardian live: counter 374 → 0, all-clear broadcast. Curfew eligibility called against the real registry, offline records included, rename-evasion and random-MAC controls held eligible. **The 23:00 run caught one device** — printer, now pinned; 72 → 59 eligible, none infrastructure. SSH paths and the repaired add-on verified, host keys corroborated over two networks |
 | in Sanctum-docs | This field note + sidebar entry |
 | Merged | `openclaw-skills` `19fdd40`; `sanctum-screen-time` `d3d2517`, `7fd4b69`; `sanctum-config` `c8272d8`, `05862ae` — all on `origin/main` |
 | And Deployed | Guardian healthy on its own schedule; enforcement service restarted twice behind the secrets-perms guard and verified armed both times; terminal add-ons started with supervisor watchdogs now enabled on both |
