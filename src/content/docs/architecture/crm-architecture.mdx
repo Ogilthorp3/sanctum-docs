@@ -46,7 +46,13 @@ ingest (hourly) ──▶ workspace.duckdb ──▶ v_timeline          (you)
 | You | Archives **`:3346`** | `~/.openclaw/workspace/workspace.duckdb` |
 | Partners | Archives **`:3347`** (`CRM_SESSION=work`) | Prefer **`workspace-work.duckdb`** — personal rows never copied |
 
-The partner export is physical isolation, not a filter you hope nobody bypasses. Raw channel tables, the full timeline, and Angel & LP are simply not in that file.
+Both ports require a token. Each session mints its own 0600 file on first start — `~/.sanctum/secrets/jocasta-crm-personal.token` for `:3346`, `…-work.token` for `:3347` — and they are not interchangeable: the work token on the personal port is a 401, and so is the reverse. A request without one gets a 401 carrying `WWW-Authenticate: Basic`, so a browser prompts and you paste the token as the password with an empty username.
+
+Both ports also bind the tailnet, which is deliberate — the archive is reachable from the MBP. It is only safe because of the paragraph above. It was not always: until 2026-08-11 `:3346` answered `/api/angel` with the full Angel & LP ledger to anything that could reach the port, and `:3347` had never started, so the *only* surface answering was the personal one. Auth landed first, then the partner port was turned on; the other order would have published a second open door.
+
+The partner export is physical isolation, not a filter you hope nobody bypasses. Raw channel tables, the full timeline, and Angel & LP are simply not in that file — `/api/angel` on `:3347` is a 403 even with a valid work token.
+
+One correction worth carrying, because it is the more common shape of this mistake: the export's row filter was never the leak. Its `contacts` table was built with `SELECT *` over a 30-column view, so business rows arrived carrying home addresses, birthdays and personal notes. Rows were right; columns were not. It now ships a six-column allowlist — name, email, company, title, type, Affinity ID — and `sanctum-crm doctor` fails critical if a future `SELECT *` widens it again.
 
 ## CLI that matters
 
@@ -88,15 +94,26 @@ Affinity sync re-seeds the work graph automatically on success. Family identity 
 Unified view: **`v_timeline`**. Partner view: **`v_timeline_work`**. Cross-channel “ball in your court”: **`v_needs_reply`** / **`v_needs_reply_work`**.
 
 <Aside type="caution" title="Single-writer DuckDB">
-`workspace.duckdb` allows one writer at a time. Ingest holds the lock for **seconds**, not minutes — fetch first, then one short transaction. A failure pages Force Flow; empty results are never a silent success.
+`workspace.duckdb` allows one writer at a time, and the mutex has a name: `lib.acquire_flock()`, an advisory `fcntl` lock every writer takes, which also snapshots the database once per run before the first write.
+
+The ordering is the whole discipline: **fetch first with no connection open, then take the lock, then connect, then one short transaction.** DuckDB takes its file lock at *connect*, not at `begin` — so a writer that connects before it fetches holds the archive hostage for the length of a network call. Moving `begin` later does nothing; moving `connect` is the fix.
+
+A failure pages Force Flow. So does silence: each ingest script counts consecutive runs that *read* nothing and pages on a streak, and an hourly sentinel checks every channel against its own freshness SLA.
+</Aside>
+
+<Aside type="caution" title="Timestamps are UTC instants, rendered local">
+Storage is always true-UTC `TIMESTAMPTZ`; the views render in `America/Toronto` so a human reads "you texted at 4pm". Every writer pins its session to UTC, because DuckDB interprets a naive timestamp string in the *session* zone — on a non-UTC host, an unpinned write lands as the wrong instant. The repair migration for that class of bug is guarded by a primary key in `crm_meta` inside the same transaction, so it can apply exactly once; a second pass would shift a quarter-million rows by four hours.
 </Aside>
 
 ## Partner session checklist
 
 1. `sanctum-crm doctor` — all critical checks green  
 2. `sanctum-crm work-export` — fresh partner DB  
-3. Open **`:3347`** or hand partners **only** `workspace-work.duckdb`  
-4. Never share `workspace.duckdb` or the personal Archives on `:3346`
+3. `curl -sf -u ":$(cat ~/.sanctum/secrets/jocasta-crm-work.token)" http://127.0.0.1:3347/` — confirm the partner surface answers 200 before you seat anyone in front of it. It runs under `KeepAlive`, so it should already be up; if it is not, `launchctl kickstart -k gui/$(id -u)/com.sanctum.jocasta-crm-work`.
+4. Hand partners the `:3347` token, or **only** `workspace-work.duckdb`  
+5. Never share `workspace.duckdb`, the personal Archives on `:3346`, or the `:3346` token
+
+Both ports listen on the tailnet as well as loopback, so "it is only on my machine" is not one of the guarantees. The token is.
 
 Work access is audited at `~/.openclaw/logs/crm-work-access.log`.
 

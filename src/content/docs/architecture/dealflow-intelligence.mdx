@@ -9,22 +9,25 @@ import { Aside } from '@astrojs/starlight/components';
 
 A venture fund's memory lives in its CRM. Miss one thing and the memory is now wrong. A meeting you took last week never made it into Affinity; a deal sits at "Term Sheet" in your head but "3rd Meeting" in the database. So the Monday dealflow review runs on fiction, and the fund makes decisions on a pipeline that quietly disagrees with reality.
 
-Dealflow Intelligence keeps that disagreement from happening. It runs in three stages: it pulls the deal list out of Affinity, enriches each active deal with its real meeting history, and hands [Mundi](/architecture/agents/) — the financial-intelligence Jedi — a short brief of what actually needs a human. In the end, it is a machine for making sure the most expensive meetings of the week left a trace.
+Dealflow Intelligence keeps that disagreement from happening. It pulls the deal list out of Affinity, enriches each active deal with its real meeting history, hands [Mundi](/architecture/agents/) — the financial-intelligence Jedi — a short brief of what actually needs a human, and pushes proven work contacts back into Affinity so the next sync finds them. In the end, it is a machine for making sure the most expensive meetings of the week left a trace.
 
 ## The pipeline
 
-Three scripts live under `~/.openclaw/scripts/`, each owning one boundary:
+The scripts live in `sanctum-crm` under `intel/`, reachable through symlinks in `~/.openclaw/scripts/`, each owning one boundary:
 
 ```
 Affinity ─▶ v_deal ─▶ prep ─▶ Mundi ─▶ Signal
-  v2 REST    DuckDB   v1 API   4h    Force Flow
+  v2 REST  │ DuckDB   v1 API  30 min  Force Flow
+           └──────── push ────────▶ Affinity
+                    v1 API, daily
 ```
 
 | Stage | Script | What it does |
 |---|---|---|
-| Sync | `affinity-sync.py` | Pulls the deal lists from the Affinity **v2** REST API into `workspace.duckdb` (the `v_deal` view). Daily, `com.sanctum.affinity-sync`. On success, re-seeds the [work graph](/architecture/crm-architecture/) so partner sessions stay current. |
+| Sync | `affinity-sync.py` | Pulls the deal lists from the Affinity **v2** REST API into `workspace.duckdb` (the `v_deal` view). Daily, `com.sanctum.affinity-sync`. On success, re-seeds the [work graph](/architecture/crm-architecture/) so partner sessions stay current. It fetches both lists into memory *before* it takes the write lock — an earlier version connected first and held the whole archive through two paginated API calls. |
 | Enrich | `dealflow-meeting-prep.py` | Reads the **active** pipeline from `v_deal`, fetches each deal's real meeting/email recency, and buckets it. |
-| Brief | `mundi-briefing.py` | Every four hours (`com.mundi.briefing`), folds the enrichment into a terse brief and pages it through [Force Flow](/architecture/force-flow/) to Signal. |
+| Brief | `mundi-watch.py` | Every 30 minutes under `com.sanctum.mundi-briefing`, event-driven: it fires only on a deal-related email or a due Affinity reminder, folds the enrichment into a terse brief, and pages it through [Force Flow](/architecture/force-flow/) to Signal. |
+| Push | `affinity-push.py` | Daily under `com.sanctum.crm.linkedin-sync`, the one path that **writes** to the fund's system of record — see below. |
 
 The active pipeline is roughly 60 deals in a decision status: *Meeting Pending, To be Reviewed, 2nd/3rd Meeting, Due Diligence, Term Sheet, Refer to LP*. It is not the nine thousand discarded first-screens. And it is not the standing "Weekly Review" list that fills with deals nobody has touched since 2022.
 
@@ -65,21 +68,42 @@ The knobs, for when you need them:
 
 ```yaml
 # Cadence (launchd)
-com.sanctum.affinity-sync:  daily            # Affinity -> v_deal
-com.mundi.briefing:         every 4 hours    # enrich -> Force Flow -> Signal
+com.sanctum.affinity-sync:      daily 06:30      # Affinity -> v_deal
+com.sanctum.mundi-briefing:     every 30 min     # mundi-watch.py, event-driven
+com.sanctum.crm.linkedin-sync:  daily 08:40      # harvest, then affinity-push
+com.sanctum.crm-freshness:      hourly           # every channel vs its SLA
 
 # Tunables (in-script constants)
 ACTIVE_STATUSES:  decision-stage statuses only
 cold-days:        21        # quiet-deal threshold
 STALE_HOURS:      30        # sync-freshness alert (daily sync + grace)
-cache:            ~20h      # meeting-intel cache, so the 4h run sweeps once/day
+cache:            ~20h      # meeting-intel cache, so the sweep runs once/day
+MAX_CREATES_PER_RUN:              25   # affinity-push cap; remainder is logged
+MAX_CONSECUTIVE_ENRICH_FAILURES:  3    # affinity-push session breaker
 ```
 
 ```bash
 # See the active pipeline on demand
-~/.openclaw/scripts/dealflow-meeting-prep.py            # human-readable
-~/.openclaw/scripts/dealflow-meeting-prep.py --json     # for the briefing
+~/Projects/sanctum-crm/intel/dealflow-meeting-prep.py            # human-readable
+~/Projects/sanctum-crm/intel/dealflow-meeting-prep.py --json     # for the briefing
 ```
+
+## Pushing back to Affinity
+
+Everything above reads. One path writes, and it writes into the fund's system of record, so it is built to refuse rather than guess.
+
+`affinity-push.py` walks recent LinkedIn conversations, and for each unknown counterparty it fetches the person's real profile, checks the companies on it against the engaged deals in `v_deal`, and creates the contact **only** if a company matches a deal. Not a domain resemblance, not a name that looks familiar — a company-to-deal match. Everything else is logged for review and left alone. No enrichment means not provably work, which means not created.
+
+Two guards matter more than the gate:
+
+- **A session breaker.** Enrichment rides a real logged-in browser session. When that session expires every fetch fails, so the run stops after a streak of failures rather than paying the timeout once per candidate. A streak, not a total: one unfetchable profile among healthy ones is normal.
+- **The watermark does not move on an aborted run.** It is a `max(date_ts)`, so committing it after a partial pass would skip the unexamined candidates *permanently*. An abort pages, exits non-zero, and leaves them for the next run.
+
+That second guard is the interesting one, because the failure it prevents is invisible. A run that examined nothing and advanced the watermark looks exactly like a quiet day.
+
+<Aside type="tip" title="When the push pages you">
+"enrichment aborted … the li-clean browser session has almost certainly expired" means re-authenticate LinkedIn in that browser profile. Nothing was lost; the candidates are still behind the watermark.
+</Aside>
 
 ## Tested end to end
 
