@@ -1,0 +1,73 @@
+---
+title: "2026-08-11: The archive that said nothing"
+description: "An audit of the CRM's DuckDB store found 47 defects, but the one that mattered was a silence. For nine days the email ingest read an empty mailbox, inserted nothing, and exited zero — and every health check agreed the house was fine. This is the pass that taught the archive to say I could not read."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![HERO PENDING — see drafts/README-hero.md](./images/hero-archive-that-said-nothing.png)
+
+Jocasta Nu, Chief Librarian of the Jedi Archives, is remembered for one line: *"If an item does not appear in our records, it does not exist."* She says it to Obi-Wan while standing in front of a shelf with a planet deliberately erased from it. The line is not a boast about the archive. It is the moment the archive fails, delivered in the voice of total confidence.
+
+The CRM that carries her name spent nine days making the same mistake.
+
+## The shape of the silence
+
+Email ingest runs hourly. Every hour it printed its watermark, reported `Total inserted (deduped): 0`, and exited zero. It did that 223 times. The last real email it stored arrived on 2 August at 17:54. The audit that found it ran on 11 August.
+
+Nothing was broken in the sense that anything reported broken. There was no traceback, no failed job, no red light. The dashboard was green because the only freshness number anyone watched read `FROM v_deal` — the Affinity deal view — and a different job refreshes that every morning at 06:30. So the one metric on the wall stayed healthy the entire time, measuring a part of the system that was fine.
+
+The cause was three lines long:
+
+```python
+hits = sorted(glob.glob(os.path.expanduser("~/Library/Mail/V*/MailData/Envelope Index")))
+return hits[0] if hits else None
+```
+
+macOS had withdrawn Full Disk Access from the interpreter launchd runs. And `glob.glob()`, handed a directory it is not allowed to read, does not raise. It returns an empty list — byte-for-byte identical to what it returns when Mail was never set up on the machine. From there the fall is short and quiet: no path, so no messages; no messages, so nothing to insert; nothing to insert, so nothing to report; and `main()` returns normally, which means exit zero, which means launchd is satisfied and the alerting path at the bottom of the file is never reached.
+
+The first audit of this incident concluded that a `PermissionError` had been swallowed. That was wrong, and the correction matters more than the diagnosis: there was no exception to swallow. Had anyone "fixed" it by wrapping the glob in `except PermissionError`, the handler would never have fired, the tests would have passed, and the outage would have continued with a fix in the changelog.
+
+<Aside type="caution" title="The distinction the code now makes">
+`os.stat` still succeeds on a directory you may not read — the refusal is on listing its contents. So `stat`, then `os.access(R_OK)`, then `os.listdir` separates the two cases cleanly: *this machine has no mail* versus *this machine refused me*. The first returns nothing and that is the truth. The second raises, pages, and exits non-zero.
+</Aside>
+
+## Why nothing caught it
+
+Because everything that could have caught it was watching the wrong thing.
+
+The ingest scripts alerted on exceptions. There were none. The freshness guard read a view a different job keeps warm. The test suite covered the writers — thoroughly, as it turned out — but nothing tested the *reader*, because the reader talks to macOS and a test that talks to macOS is measuring the test runner's permissions rather than the job's.
+
+That last point deserves care, because it is the trap in the obvious fix. "Just run the ingest against a snapshot in CI" measures whether the *runner* has Full Disk Access. On this machine it does not, so that test would be red forever, get muted within a week, and take the real signal with it.
+
+The check that works is duller. Count consecutive runs that **read** nothing, and page on a streak. Not rows *inserted* — 1,283 of 1,836 healthy historical runs inserted zero rows after dedup, because a quiet hour genuinely has nothing new. Rows *read* from the source. A healthy read of a 36-hour window always returns something. Three empty reads in a row is an outage; one is a Tuesday.
+
+## Three ways a freshness check goes blind
+
+Building the sentinel that should have existed turned out to be a lesson in how such things fail silently:
+
+**The key is not the name.** The script is `mail-to-duckdb.py`. The channel in the timeline is `email`. A sentinel that iterates a roster of script names and looks up `mail` finds nothing, and finding nothing looks like finding no problem.
+
+**A zero-row channel has a NULL age.** `max(ts)` over an empty table is null, and `if age > sla` is false for null. So the channel with *no data at all* — the worst case — passes the check that exists to catch it. Zero rows has to be its own branch, and it has to be a breach.
+
+**Calendar runs backwards.** It stores *upcoming* events, so its newest row is in the future and its age is negative. Right now it reads −290 hours. Any recency test passes it forever, and the day the calendar feed dies its newest row drifts toward now and *still* passes until it goes positive. Forward coverage is the question for a calendar, not recency.
+
+And one more found only by running the finished sentinel against the real house: it immediately flagged iMessage as stale at 18.8 hours. It was not stale. Signal and WhatsApp — read by the *same script*, in the same run — were fresh to the minute. Bert simply had not received an iMessage overnight. A per-channel SLA on channels that share one reader manufactures false alarms, and a sentinel that cries wolf gets muted, which returns the house to exactly where it started. Channels that share a reader are now judged as a group: if any is fresh, the reader is alive and the quiet ones are quiet.
+
+## The rest of the pass
+
+The mail outage was the finding that mattered, but it was not the only one, and two of the others rhyme with it.
+
+The partner export built its contacts table with `SELECT *` over a thirty-column view. Every row in it was correctly a *work* row — the filter was right. The columns were not: home addresses, birthdays and private notes rode along on business contacts. It now ships a six-column allowlist, and the health check fails critical if that ever widens again. The lesson is that "did I select the right rows" and "did I select the right columns" are two questions, and only the first one gets asked out loud.
+
+The other was a phone-matching rule that compared any digit run of seven or more characters on one side against *any* digits found anywhere in the other. For an email-shaped or multi-recipient handle, that is any digit that happens to be in the string, and a one- or two-digit coincidence is near-certain. Thirteen percent of the partner surface was admitted that way. What makes it worth recording is that the obvious repair is worse than the defect: raise the floor on one side, drop the per-part loop, and a handle containing both a colleague and a family member resolves to the *last* number in the blob — turning a correctly-blocked personal contact into a work one. The fix has to be symmetric, and the test has to pin the multi-recipient case, or the next person to read the code will simplify it straight back into a leak.
+
+## What the archive says now
+
+An empty result is no longer a statement about the world. It is a statement about a query, and the two are only the same when the read succeeded.
+
+So a refused read raises. A standing refusal pages once and then daily, because a permission wall is a condition and not an hourly incident, and the house's alert budget is ten pages an hour. A run that read nothing three times running pages regardless of whether anything threw. An hourly sentinel checks every channel against its own SLA, knows that calendars face forward, knows that zero rows is the loudest number in the table, and knows which channels share a reader.
+
+Nine days of email came back in a single run — 377 messages, through the slower fallback reader, because the fast one is still behind a permission Bert has to grant by hand. That is the honest state of it: the archive is reading again, and it is reading the long way round, and it will now say so out loud instead of reporting a quiet week.
+
+Jocasta was not lying to Obi-Wan. She was reporting her records accurately. The failure was believing that her records and the galaxy were the same thing.
