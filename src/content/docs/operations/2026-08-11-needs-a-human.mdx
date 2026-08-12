@@ -55,15 +55,32 @@ It now re-derives from the MAC alone — hardware-rooted, and a rename cannot mo
 
 Identity got probed rather than assumed, too. The room-named speakers looked like an obvious brand from their names; the port they should have answered on was closed, and the appliance's matching port returned a 404 that would have mislabelled it. AirPlay reported the real models — a HomePod and a Mac — and those went in as exact-MAC pins instead of blanket vendor prefixes, because a vendor prefix that catches a console is a hole.
 
+## The first night caught one anyway
+
+The fix went in before curfew and the sweep ran at 23:00. It paused one device: **the Brother printer.**
+
+The reason is a plain methodology error. To build the exemption list, the at-risk set was enumerated from the live device view — and that query filtered on `online`. Printers sleep. So did the smart bulbs, a room speaker's second radio, the AV receiver's other NIC, and a handful of sensors: a whole class of *intermittent* infrastructure that is invisible precisely when you go looking for it, and eligible again the moment it wakes inside the curfew window. Twenty-five devices were fixed; the real set was seventy-two.
+
+Recomputing from the **stored registry** — the same table the sweep reads, offline records included — found the rest. There is a second lesson underneath: the live endpoint classifies with the device's name, so the printer *displayed* as `printer` in every view an operator would check, while the sweep, reading a stored `unknown`, still saw a stranger. The dashboard and the enforcement path disagreed, and only one of them was armed.
+
+It also priced the MAC-only decision honestly. Refusing to trust device-supplied names is what closes the rename hole — and it means a printer can never be rescued by *looking* like a printer. Anything whose category comes from its name has to be carried in config, by MAC. That is the trade, and the printer is what it costs.
+
+| | Before | After 08-11 | After 08-12 |
+|---|---|---|---|
+| Sweep-eligible records | 72 | 60 | **59, none of them infrastructure** |
+| Paused at 23:00 | 25 | 1 | 0 expected |
+
+What remains eligible is what should be: thirty-odd rotating-MAC watches, sixteen unnamed private MACs, a few personal laptops and phones. Randomized MACs cannot be pinned — they rotate — so whether a parent's watch belongs in a child's curfew sweep is a policy question, and it stays open rather than getting quietly answered by an exemption list.
+
 ## What it cost
 
 Ninety-two hours of a false outage, four days of an operator being told to run a destructive command, and an unknown number of nights where the house quietly severed its own hub, dishwasher and thermostat between 23:00 and 09:00 — every one of them reported, accurately and uselessly, as *unreviewed device(s) paused*.
 
-Both bugs were four days of noise that a single question would have ended: *is the thing it is complaining about actually broken?* One curl answered it.
+Both bugs were four days of noise that a single question would have ended: *is the thing it is complaining about actually broken?* One curl answered it. And the fix needed the same question asked back at it — which is why the printer got caught: the verification measured what was awake instead of what was enrolled, and a claim of zero only became true after the night that disproved it.
 
 | Gate | Evidence |
 |---|---|
-| Everything E2E Tested | Token gate pinned by a 5-case permission matrix; guardian run live to `exit 0 — healthy, API up, end0 static`, all-clear broadcast, offline counter 374 → 0. Curfew eligibility called directly against real config: 25/25 exempt, rename-evasion and random-MAC controls still eligible; live service re-queried after restart — 25/25 `infrastructure`, **0 sweep candidates**. Both SSH paths and the repaired terminal add-on verified with host keys corroborated over two networks |
+| Everything E2E Tested | Token gate pinned by a 5-case permission matrix; guardian run live to `exit 0 — healthy, API up, end0 static`, all-clear broadcast, offline counter 374 → 0. Curfew eligibility called directly against the real registry, offline records included: infrastructure exempt, rename-evasion and random-MAC controls still eligible. **The 23:00 run is the honest test and it caught one device** — printer, now pinned; 72 → 59 eligible, none of them infrastructure. Both SSH paths and the repaired terminal add-on verified with host keys corroborated over two networks |
 | in Sanctum-docs | This field note + sidebar entry |
 | Merged | `openclaw-skills` `19fdd40`; `sanctum-screen-time` `d3d2517`, `7fd4b69`; `sanctum-config` `c8272d8`, `05862ae` — all on `origin/main` |
 | And Deployed | Guardian healthy on its own schedule; enforcement service restarted twice behind the secrets-perms guard and verified armed both times; terminal add-ons started with supervisor watchdogs now enabled on both |
