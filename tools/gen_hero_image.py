@@ -544,7 +544,22 @@ def main() -> None:
         gen_local(a)
         return
 
-    # auto / remote: try the render host first.
+    # auto / remote: if this IS the render host, render HERE. Delegating would ssh
+    # the box to itself, fail rc=255, and fall through to the METERED path — which is
+    # what happened on 2026-08-11: two heroes generated ON the render host silently
+    # billed Imagen while the free local path was never attempted. CONTRIBUTING calls
+    # the paid backend "deliberate opt-in only", and an ssh-to-self is not a decision
+    # to spend. The alias check already existed for --backend local; the auto path
+    # simply never consulted it.
+    #
+    # gen_local() fails LOUDLY (SystemExit) if the venv or weights are missing, and
+    # that is the intended contract — the tool must never silently reach for the paid
+    # API. On this box that surfaces the real problem (the Flux weights are gone from
+    # the render host) instead of quietly charging for it.
+    if _is_render_host():
+        gen_local(a)
+        return
+
     ok, detail = remote_capacity()
     if ok:
         try:
