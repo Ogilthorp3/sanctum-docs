@@ -39,7 +39,11 @@ Every health check has inputs it needs before it can judge anything — a creden
 
 ## Meanwhile, the house was locking itself out
 
-Chasing the guardian surfaced a second alert in a neighbouring log, running quietly since at least the 8th. Every night at 23:00, the child-curfew stranger sweep was pausing **25 devices** and releasing them at 09:00. The list was not a stranger among them: both wireless access points and the router, all four wall panels, the HVAC controller, the lighting bridge, the sprinkler timer, the dishwasher, two air purifiers, the battery, the AV receiver, the room speaker fleet, and the Home Assistant appliance itself. One of those speakers is the HomeKit hub — so the automation that runs the house was being unplugged nightly, by the house.
+Chasing the guardian surfaced a second alert in a neighbouring log, running quietly since at least the 8th. Every night at 23:00, the child-curfew stranger sweep was pausing **25 devices**. Not a stranger among them: both wireless access points and the router, all four wall panels, the HVAC controller, the lighting bridge, the sprinkler timer, the dishwasher, two air purifiers, the battery, the AV receiver, the room speaker fleet, and the Home Assistant appliance itself. One of those speakers is the HomeKit hub — the house was cutting off the thing that automates the house.
+
+The pairing in the log is a `23:00` pause and an `09:00` release, and that reads like a ten-hour blackout. It wasn't, and assuming it was got written into this page's first draft before anyone checked. A **ledger orphan sweep** — an unrelated safety net that releases any block no active state claims — caught every one of them within seconds: the appliance after 14, a wall panel after 34, the hub host after 40. Eighty-seven such releases sit in the log. The `09:00` line is bookkeeping, closing a ledger entry whose block was already gone; one of them says so outright, *bridge reports no block target*.
+
+So the real cost was tens of seconds of dropped connectivity per device per night, not ten hours — worth fixing for the spurious blocks and the parent alert each one fired, and worth fixing so the house does not depend on a safety net catching a mistake nightly, but not the outage the log's shape suggests.
 
 The sweep is a good feature with a real scar behind it: a renamed, spoofed console once parked itself online before curfew and slept through the join-time rule. It quarantines devices whose category is `unknown`. Infrastructure is supposed to be excluded by an OUI list in config.
 
@@ -57,7 +61,7 @@ Identity got probed rather than assumed, too. The room-named speakers looked lik
 
 ## The first night caught one anyway
 
-The fix went in before curfew and the sweep ran at 23:00. It paused one device: **the Brother printer.**
+The fix went in before curfew and the sweep ran at 23:00. It paused one device: **the Brother printer** — blocked at `23:00:20`, released by the orphan sweep at `23:00:23`. Three seconds, and still a miss.
 
 The reason is a plain methodology error. To build the exemption list, the at-risk set was enumerated from the live device view — and that query filtered on `online`. Printers sleep. So did the smart bulbs, a room speaker's second radio, the AV receiver's other NIC, and a handful of sensors: a whole class of *intermittent* infrastructure that is invisible precisely when you go looking for it, and eligible again the moment it wakes inside the curfew window. Twenty-five devices were fixed; the real set was seventy-two.
 
@@ -74,9 +78,11 @@ What remains eligible is what should be: thirty-odd rotating-MAC watches, sixtee
 
 ## What it cost
 
-Ninety-two hours of a false outage, four days of an operator being told to run a destructive command, and an unknown number of nights where the house quietly severed its own hub, dishwasher and thermostat between 23:00 and 09:00 — every one of them reported, accurately and uselessly, as *unreviewed device(s) paused*.
+Ninety-two hours of a false outage. Four days of an operator being told to run a destructive command. Some unknown number of nights where the house briefly cut off its own hub, dishwasher and thermostat, fired a parent alert about each one, and was quietly rescued each time by a safety net nobody knew was carrying it — every event reported, accurately and uselessly, as *unreviewed device(s) paused*.
 
-Both bugs were four days of noise that a single question would have ended: *is the thing it is complaining about actually broken?* One curl answered it. And the fix needed the same question asked back at it — which is why the printer got caught: the verification measured what was awake instead of what was enrolled, and a claim of zero only became true after the night that disproved it.
+Three claims in this story arrived confident and wrong, and every one of them died to the same question: *what does the disk actually say?* The guardian's "unreachable" died to one curl. The exemption list's "twenty-five devices" died to a registry query that counted the sleeping ones. And the ten-hour blackout — written here first, in this page — died to reading four more lines of the log, where the release was sitting fourteen seconds after the pause the whole time.
+
+A monitor that cannot tell its own blind spot from a fault will invent an outage. So will an engineer.
 
 | Gate | Evidence |
 |---|---|
