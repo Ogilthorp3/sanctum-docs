@@ -1,0 +1,57 @@
+---
+title: "2026-08-13: The Nights the Dream Forgot"
+description: The 05:25 dream wrote three files in July, then failed every morning for two weeks. The catch-up writes the missing nights from the same 24h window the job would have seen — and refuses to overwrite a night that already landed.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A long oak shelf of dated night journals in a dark study. Three volumes stand complete in warm amber. A gap of empty spines runs the length of the shelf, each labeled with a date, while a small brass clockwork scribe sits at a desk filling the missing books one by one under a single teal lamp.](./images/hero-2026-08-13-the-nights-the-dream-forgot.png)
+
+The job is honest when it works. At 05:25 it gathers the last day, asks a local seat to compress it, and writes one markdown file. When it fails it logs `dream FAILED` and goes back to sleep. For two weeks that was the whole story.
+
+On disk, before the catch-up, the dreams directory held four files: `2026-07-27`, `2026-07-28`, `2026-07-30`, and a same-day restore on `2026-08-13`. The log showed a cycle every morning from 16 July through 13 August. Twenty-five of those mornings left nothing behind.
+
+## What failed, and what did not
+
+The gather always ran. The seat call did not. From 1 August the error was the same every night: proxyd asked `council-local-think` and came back `ALL SEATS FAILED` / `error sending`, or curl sat 300 seconds and received zero bytes. A tiny "reply OK" through the same proxy could succeed. A 20 KB day bundle could not.
+
+That is a transport and contention problem on the 27B, not a missing job. The LaunchAgent was loaded. The kill switch was absent. The posture was conserving, not fever. The cycle did exactly what it was told: try twice, then leave the date empty.
+
+The council verdict from 16 July still holds. The dream is observational. Its only write path is `~/.sanctum/memory/dreams/`. Catch-up is the same write path, aimed at a date that never got a file.
+
+## How a missed night is written
+
+`dream_gather` used to treat "now" as wall-clock. A backfill run this afternoon would have gathered *today's* 24 hours and labeled it yesterday. That is a forged dream.
+
+So the gather now has an as-of clock:
+
+| Env | Effect |
+|---|---|
+| `DREAM_DATE=YYYY-MM-DD` | Gather the 24 hours ending 05:25 that morning. Write that day's file. |
+| `DREAM_AS_OF=` ISO or unix | Same window, explicit instant. |
+| `DREAM_OVERWRITE=1` | Replace a file that already exists. Default is skip. |
+
+`python3 dreams/backfill_missing.py` lists every date from the first logged cycle (`2026-07-16`) through yesterday that has no markdown. `--run` calls `dream_cycle.py` once per gap. Existing nights are not touched. The three July successes stay the July successes.
+
+Inference still goes through proxyd. The catch-up seat for this restore was `council-code` with a 2.5 KB bundle cap, because the 27B still hangs on a full-size prompt. Set `DREAM_SEAT=council-local-think` when that seat can finish a night again.
+
+```bash
+DREAM_DATE=2026-08-04 \
+DREAM_SEAT=council-code \
+DREAM_TOTAL_CAP=2500 \
+python3 dreams/dream_cycle.py
+```
+
+<Aside type="caution" title="A catch-up is not a time machine">
+The window is the files and logs that still have that mtime. A vault note rewritten last week will not appear in a 16 July dream. The file is labeled for the night; the evidence is whatever the disk still remembers about that night.
+</Aside>
+
+## Why the empty shelf mattered
+
+Dreams are how the haus consolidates. Thalamus is the waking workspace — last five broadcasts, gone when the process dies. A dream is the night's compression, dated, sitting in the vault. Fourteen mornings of `FAILED` means fourteen days the swarm reacted and never wrote what it saw.
+
+The catch-up does not invent those days. It reads the same five sources the 05:25 job would have read, clipped to that morning, and writes the file the job failed to write. After the run, `backfill_missing.py` with no flags should print `no missing dream dates`. That is the test. Not a status word. A directory listing.
+
+<Aside type="tip">
+If a future night fails, do not wait two weeks. `backfill_missing.py --run` is the same cycle, aimed at the holes. The nightly job stays 05:25. Catch-up is for the nights it missed.
+</Aside>
