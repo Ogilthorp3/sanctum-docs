@@ -6,8 +6,13 @@ wide format, white/off-white background, Tommy the Abyssinian cat observing,
 one subtle localized color halo (teal or amber). Pass the full prompt in.
 
 Two backends, ONE entry point:
-  --backend auto   (default)  Try Flux on the render host; fall back to the
-                              metered API if it cannot run. See the WARNING.
+  --backend auto   (default)  ONLINE -> Imagen (metered). OFFLINE -> Flux.
+                              Bert's call 2026-08-12: "only use Flux if there is
+                              no internet." Flux is the outage path, not the
+                              preferred one — it costs ~13 min per image against
+                              Imagen's ~10 s, and the operator's 13 minutes are
+                              worth more than $0.134. Budget accordingly: heroes
+                              now cost money by design, not by accident.
   --backend remote            Force Flux on the render host. Exits 1 rather than
                               spending if it cannot delegate (verified 2026-08-09).
   --backend local             Flux.1-dev on THIS box via flux_backend.py — offline,
@@ -19,11 +24,12 @@ Two backends, ONE entry point:
                               generate_content (added 2026-08-09). Run with the
                               cli-venv python that has google-genai.
 
-WARNING (2026-08-09): the free path is currently DEAD. The render host has no
-FLUX.1-dev snapshot cached — its HuggingFace hub cache is 0 B — so `auto` no
-longer means "free if possible", it means metered every time. `remote` exits 1
-instead of spending, which is the honest choice when you want free-or-nothing.
-Restore the free path by re-downloading the Flux weights to the render host.
+WARNING (2026-08-09, still true): the render host has no FLUX.1-dev snapshot
+cached — its HuggingFace hub cache is 0 B. Under the 2026-08-12 policy that no
+longer changes the common case (online = Imagen anyway), but it does mean the
+OFFLINE path is currently broken: lose the internet and hero generation stops
+until the weights are restored to the render host. `remote` still exits 1 rather
+than spending, which is the honest choice when you want free-or-nothing.
 
 Usage:
   # metered (the only working path today) — note the cli-venv python:
@@ -166,6 +172,24 @@ def _local_names():
         if n:
             out.add(n)
     return out
+
+
+def _internet_up(host=None, port=443, timeout=4.0):
+    """Can we reach the Imagen API host? Decides auto's backend.
+
+    Probes the host the paid call actually needs — not 1.1.1.1 and not a ping.
+    A captive portal, a DNS failure, or a blocked egress rule all pass a generic
+    reachability check and then fail the real request, which would strand the
+    caller on the paid path with no image. TCP connect only; no request is sent,
+    so this costs nothing.
+    """
+    import socket
+    host = host or os.environ.get("SANCTUM_IMAGEN_HOST", "generativelanguage.googleapis.com")
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
 
 
 def _is_render_host():
@@ -390,6 +414,16 @@ def _budget_gate() -> None:
 
 def gen_imagen(a) -> None:
     """Render with Google Imagen 4 — METERED. Deliberate opt-in only."""
+    if getattr(a, "dry_run", False):
+        # A dry run must never spend. This guard was missing entirely: every other
+        # backend honoured --dry-run, this one went straight to the paid API and
+        # wrote a real image. It was survivable while `auto` tried Flux first and
+        # dry-run exited at "would have fallen back to Imagen" — but the 2026-08-12
+        # policy routes `auto` here whenever the box is online, so the very first
+        # --dry-run after that change bought an image. A dry run that costs $0.134
+        # is not a dry run.
+        print(f"dry-run: would call {a.model} (METERED) -> {a.out}", file=sys.stderr)
+        return
     _budget_gate()
     try:
         from google import genai
@@ -481,7 +515,7 @@ def main() -> None:
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
     ap.add_argument("--backend", default="auto",
                     choices=["auto", "remote", "local", "imagen"],
-                    help="auto=Flux on the render host, else Imagen (default); "
+                    help="auto=Imagen when online, Flux only when offline (default); "
                          "remote=force Flux on the render host; "
                          "local=Flux HERE (needs --force-local off the MBP); "
                          "imagen=Google (paid)")
@@ -544,18 +578,34 @@ def main() -> None:
         gen_local(a)
         return
 
-    # auto / remote: if this IS the render host, render HERE. Delegating would ssh
-    # the box to itself, fail rc=255, and fall through to the METERED path — which is
-    # what happened on 2026-08-11: two heroes generated ON the render host silently
-    # billed Imagen while the free local path was never attempted. CONTRIBUTING calls
-    # the paid backend "deliberate opt-in only", and an ssh-to-self is not a decision
-    # to spend. The alias check already existed for --backend local; the auto path
-    # simply never consulted it.
+    # --- auto: ONLINE => Imagen. OFFLINE => Flux. ---------------------------------
+    # Bert's call, 2026-08-12: "only use Flux if there is no internet." This inverts
+    # the old default. The prior logic optimised for $0 and treated the metered API as
+    # the reluctant fallback; in practice Flux costs ~13 min per image against Imagen's
+    # ~10 s, and 13 minutes of an operator's attention is worth more than $0.134. Flux
+    # is now the OUTAGE path — the thing that keeps hero generation working when the
+    # haus is off the internet — not the preferred one.
     #
-    # gen_local() fails LOUDLY (SystemExit) if the venv or weights are missing, and
-    # that is the intended contract — the tool must never silently reach for the paid
-    # API. On this box that surfaces the real problem (the Flux weights are gone from
-    # the render host) instead of quietly charging for it.
+    # Reachability is probed against the API host actually required, not a generic
+    # ping: a captive portal or a DNS-only outage would pass "can I reach 1.1.1.1" and
+    # still fail the real call.
+    # `remote` is exempt on purpose: its whole contract is "Flux or nothing, never
+    # spend". Routing it through the online shortcut would have made --backend remote
+    # bill Imagen, which is the exact opposite of what it exists for.
+    offline = not _internet_up()
+    if a.backend == "auto" and not offline:
+        gen_imagen(a)
+        return
+
+    if offline:
+        print("[render] no internet — Flux is the offline path", file=sys.stderr)
+
+    # Offline: if this IS the render host, render HERE. Delegating would ssh the box to
+    # itself and fail rc=255 (that bug silently billed two heroes to Imagen on
+    # 2026-08-11, back when a failed delegation fell through to the paid path).
+    # gen_local() fails LOUDLY if the venv or weights are missing — and the weights are
+    # currently gone from the render host, so offline hero generation is not actually
+    # available until they are restored. Failing loudly is how that stays visible.
     if _is_render_host():
         gen_local(a)
         return
@@ -573,6 +623,17 @@ def main() -> None:
         print(f"[render] not delegating: {detail}", file=sys.stderr)
         if a.backend == "remote":
             sys.exit(1)
+
+    # Offline with no working Flux path = no image. Falling back to Imagen here would
+    # be incoherent: the reason we are on this branch is that the API is unreachable.
+    # Say so plainly instead of dialling a number that cannot connect.
+    if offline:
+        sys.exit(
+            f"no internet and no working Flux path ({detail}).\n"
+            f"  Offline hero generation needs the FLUX.1-dev weights restored to the\n"
+            f"  render host ({RENDER_HOST}) — its HuggingFace cache is empty.\n"
+            f"  Online, this would have used Imagen and cost ~$0.134."
+        )
 
     if a.dry_run:
         sys.exit(f"dry-run: would have fallen back to Imagen ({detail})")
