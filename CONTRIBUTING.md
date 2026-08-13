@@ -217,22 +217,27 @@ Everything outside the architecture sidebar (guides, operations, reference, agen
 
 We use a single canonical tool **in this repo** (`sanctum-docs/tools/gen_hero_image.py`) to generate heroes. It is the only hero generator in the haus — there is deliberately no copy in the parent Claude_Code repo. It has two backends behind one entry point:
 
-- **`--backend local` (default)** — Flux.1-dev on-device via `flux_backend.py`. Offline, **$0, no API key**. This is the default so nobody accidentally spends on the API.
-- **`--backend imagen`** — Google Imagen 4 (metered, costs money). Deliberate opt-in only.
+- **`--backend auto` (default)** — **online → Imagen (metered). Offline → Flux.** Policy set 2026-08-12: *only use Flux if there is no internet.* Flux is ~13 minutes per image against Imagen's ~10 seconds, and an operator's 13 minutes are worth more than $0.134. Flux is the outage path, not the preferred one.
+- **`--backend imagen`** — force the metered Google API (`gemini-3-pro-image`, **$0.134/image**).
+- **`--backend local` / `--backend remote`** — force Flux here / on the render host. `remote` exits 1 rather than spending; it is the right choice when you want free-or-nothing.
 
 ```bash
-# From the sanctum-docs repo root — LOCAL Flux (free, default):
-~/Projects/comfy-lab/.venv-flux/bin/python tools/gen_hero_image.py \
+# Normal path — the cli-venv has google-genai, and auto picks Imagen when online:
+~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py \
   --prompt "Your detailed prompt here..." \
   --out src/content/docs/[path]/images/hero-name.png
   # optional: --aspect 16:9  --steps 40
 
-# Deliberately paid (Google Imagen) — run with the cli-venv that has google-genai:
-~/.sanctum/cli-venv/bin/python tools/gen_hero_image.py --backend imagen \
+# Free-or-nothing (no spend, ever) — Flux on the render host:
+python3 tools/gen_hero_image.py --backend remote \
   --prompt "..." --out src/content/docs/[path]/images/hero-name.png
 ```
 
-The local backend renders from the locally-cached Flux.1-dev on Apple MPS and writes the PNG. If the local venv/model is missing it **fails loudly** — it never silently falls back to the paid API. Set `SANCTUM_FLUX_VENV` to point at the torch/diffusers venv if it lives elsewhere.
+**Heroes cost money now, by design.** Budget ~$0.13 each, and note that a rejected hero (see the uniqueness gate below) costs another one.
+
+`--dry-run` is safe on every backend: it never calls the paid API and never writes a file. That was not true before 2026-08-12 — `gen_imagen()` ignored the flag entirely and a "dry" run bought a real image.
+
+**The offline path is currently broken.** The render host's HuggingFace cache is empty (no FLUX.1-dev snapshot), so with no internet there is no working generator at all — the tool now says exactly that instead of pretending it can fall back. Restoring those weights to the render host is what fixes it. Never render Flux on the Mini: one render peaks ~36 GiB. Set `SANCTUM_FLUX_VENV` if the torch/diffusers venv lives elsewhere.
 
 **Never use Rube/Composio for image generation.** Rube is deprecated. All external service access uses direct APIs or native MCP integrations — no intermediary platforms.
 
