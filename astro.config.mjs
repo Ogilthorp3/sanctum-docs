@@ -317,7 +317,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
-								{ label: '2026-08-11 — Needs a Human', slug: 'operations/2026-08-11-needs-a-human' },
+								{ label: '2026-08-11 — The Archive That Said Nothing', slug: 'operations/2026-08-11-the-archive-that-said-nothing' },
+									{ label: '2026-08-11 — Needs a Human', slug: 'operations/2026-08-11-needs-a-human' },
 								{ label: '2026-08-09 — Ten Hauses, Zero Kings', slug: 'operations/2026-08-09-ten-hauses-zero-kings' },
 								{ label: '2026-08-09 — Ticking, Uselessly', slug: 'operations/2026-08-09-ticking-uselessly' },
 								{ label: "2026-08-09 — Everyone Says They're Albert's iPhone", slug: 'operations/2026-08-09-everyone-says-theyre-alberts-iphone' },
