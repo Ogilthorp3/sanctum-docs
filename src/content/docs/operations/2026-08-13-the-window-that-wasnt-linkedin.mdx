@@ -1,0 +1,84 @@
+---
+title: "2026-08-13: The Window That Wasn't LinkedIn"
+description: A headed Chrome popup was Google's CAPTCHA, not a profile. Jocasta now asks Exa and keeps only https://www.linkedin.com/in/<slug>.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A shut study window at night. Outside, a faint browser floats in the rain. Inside, a teal lamp lights one brass card-catalog drawer and a single cream index card on the blotter.](./images/hero-2026-08-13-the-window-that-wasnt-linkedin.png)
+
+The tab looked like a phishing site. The host was `xn--` plus a percent-encoded space plus `https`. The path was a Google search glued to `/sorry`. Someone who has spent a year teaching agents not to open random windows is allowed a second of genuine alarm.
+
+It was Jocasta. She was looking for a founder photo. She is not allowed to do that any more.
+
+## What the desktop saw
+
+`com.triptyq.jocastacouncil` is a KeepAlive LaunchAgent on the satellite. Every six hours it asks Exa for gaming and spatial-computing funding news, sends each headline to the local 27B through proxyd, and if the score clears seventy it writes a note to Affinity. She is not the [Jocasta MCP](/architecture/jocasta-mcp/) that reads local SQLite. This job hunts new names.
+
+The photo step was a later idea. Google for `{founder} {studio} site:linkedin.com/in/`. Parse a profile URL out of the results. Open LinkedIn headed, "to bypass bot detection," on the Default profile. Save a JPEG that DuckDB never stored.
+
+Google answered with `/sorry`. The eval output was two lines: the original search, a space, the CAPTCHA URL. Both lines still contained the substring `linkedin.com/in/`, because that string lived in the query. The agent treated the whole blob as a profile and called `agent-browser --headed open` on it. Chromium parsed a leading space plus `https://` as a punycode host. The window that landed on the desk was Chrome for Testing, not Safari, not the LinkedIn extension.
+
+Same lesion, same day, more than once. The log is a metronome: search, sorry, headed open, Affinity sync anyway.
+
+## What failed, and what did not
+
+The deal score was fine. Exa news search was fine. Affinity create still ran. The LinkedIn extension did not open anything.
+
+Three checks were missing, and they are the whole bug.
+
+| Check | What the old code did | What it needed |
+|---|---|---|
+| Is this a URL we asked for? | `"linkedin.com/in/" in text` | `urlparse`, host in `{linkedin.com, www.linkedin.com}`, first path segment `in`, a slug |
+| Did Google actually answer? | Two-second wait, take stdout | A 200 search page is not a `/sorry` page |
+| Does a background job get a window? | `--headed` on Default | Never |
+
+A substring test against a query you yourself wrote is not a parser. It is a mirror.
+
+<Aside type="caution" title="The query poisons the result">
+If the search string contains `site:linkedin.com/in/`, every error page, CAPTCHA, and agent-browser status line will also contain `site:linkedin.com/in/`. The containment check will pass. Then you will open whatever Google handed you, headed, on the human's desk.
+</Aside>
+
+## The Apple path
+
+Background work is invisible. If you cannot see the founder without stealing the screen, you do not see the founder.
+
+`portco_sync.py` already knew this. Company pages go through Exa with `includeDomains: ["linkedin.com"]`. No Google. No window. Dealflow now uses the same door for people.
+
+```python
+parse_linkedin_profile_url(raw)  # https://www.linkedin.com/in/<slug> or None
+find_founder_linkedin(name, company)  # Exa, then parse
+```
+
+`parse_linkedin_profile_url` fails closed on spaces, `xn--`, any host that is not LinkedIn, and any path that is not `/in/<slug>`. The sorry-page string from this incident is a unit test. It returns `None`.
+
+A live Exa call for the founder who triggered the popup returned `https://www.linkedin.com/in/<slug>` with no browser. That URL is what Affinity gets as `linkedin_url`. If Exa misses, the person is still created. There is no second try through Chrome.
+
+The JPEG path is gone. The photo was never in the CRM row.
+
+## How to operate it
+
+| Piece | Value |
+|---|---|
+| Code | `~/Projects/jocasta-council/dealflow_agent.py` |
+| Agent | `com.triptyq.jocastacouncil` |
+| Cadence | six hours, `KeepAlive` |
+| LinkedIn lookup | Exa `includeDomains=["linkedin.com"]` |
+| Allowlist | `https://www.linkedin.com/in/<slug>` only |
+| Browser | none |
+
+```bash
+python3 ~/Projects/jocasta-council/test_linkedin_url.py
+launchctl print gui/$(id -u)/com.triptyq.jocastacouncil
+pgrep -lf agent-browser   # must be empty while she scans
+```
+
+<Aside type="tip">
+A window during a scan is a bug, not a login prompt. Close it with `agent-browser close`, then read the err log. The next line after "HIGH POTENTIAL DEAL" should be an Exa URL or `No LinkedIn profile`, never `Running agent-browser`.
+</Aside>
+
+## What is still honest
+
+The 27B seat times out some headlines. DuckDB used to reject `ON CONFLICT` because `interactions` had no unique key — that index now exists. Affinity still `POST`s a new organization every scan instead of find-or-create, so a bounce can duplicate a name. Those are separate holes. They do not get to reopen a window.
+
+Jocasta can keep reading the news. She does not get the glass.
