@@ -1,6 +1,6 @@
 ---
 title: "2026-08-13: The Nights the Dream Forgot"
-description: The 05:25 dream wrote three files in July, then failed every morning for two weeks. The catch-up writes the missing nights from the same 24h window the job would have seen — and refuses to overwrite a night that already landed.
+description: Two weeks of empty 05:25 files were a non-stream TTFB miss, not a missing job. The shelf is full; the nightly seat streams now.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -13,9 +13,13 @@ On disk, before the catch-up, the dreams directory held four files: `2026-07-27`
 
 ## What failed, and what did not
 
-The gather always ran. The seat call did not. From 1 August the error was the same every night: proxyd asked `council-local-think` and came back `ALL SEATS FAILED` / `error sending`, or curl sat 300 seconds and received zero bytes. A tiny "reply OK" through the same proxy could succeed. A 20 KB day bundle could not.
+The gather always ran. The seat call did not. From 1 August the error was the same every night: proxyd asked `council-local-think` and came back `ALL SEATS FAILED` / `error sending`, or curl sat 300 seconds and received **zero bytes**. A tiny "reply OK" through the same proxy could succeed. A day bundle could not.
 
-That is a transport and contention problem on the 27B, not a missing job. The LaunchAgent was loaded. The kill switch was absent. The posture was conserving, not fever. The cycle did exactly what it was told: try twice, then leave the date empty.
+That was not a missing job. The LaunchAgent was loaded. The kill switch was off. The posture was conserving. The cycle did exactly what it was told: try twice, then leave the date empty.
+
+The real lesion was **non-streaming TTFB**. The 27B was asked for 4000 completion tokens and only sent HTTP headers when generation finished. At ~9 tok/s that is ~7 minutes of silence. Proxyd's TTFB budget is 180s. Curl died with an empty body. Tiny prompts finished inside the window; the night never did.
+
+The fix is to **stream**. TTFB is the first token. `dream_cycle.py` POSTs `stream: true`, assembles SSE deltas, and if curl hits max-time (`rc=28`) after bytes have already arrived, it **keeps the partial markdown** instead of throwing the night away. Live prove 13 August 19:54: 182s, four sections, seat `council-local-think`, scratch path `/tmp/dream-stream-prove/`.
 
 The council verdict from 16 July still holds. The dream is observational. Its only write path is `~/.sanctum/memory/dreams/`. Catch-up is the same write path, aimed at a date that never got a file.
 
@@ -33,14 +37,22 @@ So the gather now has an as-of clock:
 
 `python3 dreams/backfill_missing.py` lists every date from the first logged cycle (`2026-07-16`) through yesterday that has no markdown. `--run` calls `dream_cycle.py` once per gap. Existing nights are not touched. The three July successes stay the July successes.
 
-Inference still goes through proxyd. The catch-up seat for this restore was `council-code` with a 2.5 KB bundle cap, because the 27B still hangs on a full-size prompt. Set `DREAM_SEAT=council-local-think` when that seat can finish a night again.
+The catch-up that refilled 16 July–12 August used `council-code` and a 2.5 KB cap so the shelf would fill while the 27B path was still non-stream. That is history. **05:25 now runs the designed seat.**
+
+| Nightly env | Value |
+|---|---|
+| `DREAM_SEAT` | `council-local-think` (27B via proxyd `:4040`) |
+| `stream` | on (in `dream_cycle.py`, not optional) |
+| `DREAM_ENABLE_THINKING` | `0` |
+| `DREAM_MAX_TOKENS` | `2000` |
+| `DREAM_TOTAL_CAP` | `12000` |
+| `DREAM_CALL_TIMEOUT` | `300` |
 
 ```bash
-DREAM_DATE=2026-08-04 \
-DREAM_SEAT=council-code \
-DREAM_TOTAL_CAP=2500 \
-python3 dreams/dream_cycle.py
+DREAM_DATE=2026-08-04 python3 dreams/dream_cycle.py
 ```
+
+After a catch-up, `backfill_missing.py` with no flags must print `no missing dream dates`. On 13 August it did: 29 files, `2026-07-16` through `2026-08-13`. The three original July successes (`council-local-think`, morning mtimes) were not overwritten. The 100 July-17 retroactive stubs under `~/.sanctum/dreams/` were moved to `~/.sanctum/dreams-retroactive-stubs-20260717` — they are not the observational cycle.
 
 <Aside type="caution" title="A catch-up is not a time machine">
 The window is the files and logs that still have that mtime. A vault note rewritten last week will not appear in a 16 July dream. The file is labeled for the night; the evidence is whatever the disk still remembers about that night.
