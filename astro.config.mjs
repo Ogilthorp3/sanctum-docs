@@ -317,6 +317,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: "2026-08-13 — The Window That Wasn't LinkedIn", slug: 'operations/2026-08-13-the-window-that-wasnt-linkedin' },
 								{ label: '2026-08-13 — The Nights the Dream Forgot', slug: 'operations/2026-08-13-the-nights-the-dream-forgot' },
 								{ label: '2026-08-11 — The Archive That Said Nothing', slug: 'operations/2026-08-11-the-archive-that-said-nothing' },
 								{ label: '2026-08-11 — Needs a Human', slug: 'operations/2026-08-11-needs-a-human' },
