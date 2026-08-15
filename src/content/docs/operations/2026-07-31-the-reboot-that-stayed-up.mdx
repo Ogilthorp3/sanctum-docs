@@ -80,6 +80,29 @@ rg -n 'STRIP --ablation|ablation ARMED|FAIL-CLOSED' ~/.openclaw/logs/sanctum-mlx
 
 **Pristine means:** boot-ready true, core ports up, PQC all hops, mlx `runs` low (not a crash-loop), Ark mounted, Albert holiday curfew 23:00, no pqc/cathedral/free-sub CRITICAL in the boot window.
 
+## 2026-08-13 receipt — unexpected reboot (the missing cold-boot E2E)
+
+Hard reset / power loss at **16:56:28** (utmpx reboot with no preceding shutdown). Core eventually came up. Post-boot did not.
+
+| Clock | What happened |
+|-------|----------------|
+| 16:56 | unexpected reboot |
+| 16:58 | `com.sanctum.post-boot` starts |
+| 17:04 | core-listener wait (240s) TIMEOUTs: `4040 8123 8199 8765 4077` |
+| 17:06 | Phase 4+settle: **33/41**, 6 fail, **1 heal** (HA docker). Signal sent. exit 6 |
+| 17:10 | `sanctum-boot-ready` READY (proxyd actually bound) |
+| 19:50 | `apple-services --json --mac` **35/35 healthy** |
+
+The six "failures" were still starting. Three independent bugs made that look like an outage:
+
+1. **`port_bound` used bert `lsof` only.** proxyd listens as the `sanctum` user. `netstat` showed `127.0.0.1:4040 LISTEN`; bert `lsof` was empty. `sanctum-boot-ready` already had the kernel fallback; post-boot did not.
+2. **Firewalla heal skipped.** Rule `requires: firewalla` — `sanctum_enabled firewalla` is **no**. Live key is `firewalla_bridge`.
+3. **No remediations** for `mac/yoda-orchestrator`, `mac/ha-gateway`, `mac/sanctum-proxy` / `mac/proxyd`. `com.sanctum.ha-gateway` and `com.sanctum.firewalla` plists live under `~/.sanctum/launchagents/live/`, not `~/Library/LaunchAgents`.
+
+Same boot dropped WhatsApp `ChatStorage.sqlite` (container rebuilt at 16:59, `drestore.mark`). Desktop kept running. CRM `whatsapp_history` last row: 2026-08-12 23:00.
+
+Shipped against that receipt: kernel `port_bound` fallback, 600s core wait + 180s settle-confirm, remediations for the six names, WhatsApp ChatStorage warn on `apple-boot-check`.
+
 ## Doctrine, one line
 
 When something that worked breaks after reboot, ask what **changed** between boots — and never let an optional seat (Heretic, a color-temp "guard," a pre-VM SSH) take down the required one.
