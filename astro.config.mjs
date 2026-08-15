@@ -154,6 +154,7 @@ export default defineConfig({
 						{ label: 'The Holocron Bridge (Yoda Chat)', slug: 'architecture/yoda-chat' },
 						{ label: 'Holocron GUI', slug: 'architecture/holocron-gui' },
 						{ label: 'Sanctum CRM', slug: 'architecture/crm-architecture' },
+						{ label: 'Affinity filing', slug: 'architecture/affinity-filing' },
 						{ label: 'Dealflow Intelligence', slug: 'architecture/dealflow-intelligence' },
 						{ label: 'Screen Time', slug: 'architecture/screen-time' },
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
@@ -317,6 +318,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-15 — The venv that ran main', slug: 'operations/2026-08-15-the-venv-that-ran-main' },
 								{ label: "2026-08-13 — The Window That Wasn't LinkedIn", slug: 'operations/2026-08-13-the-window-that-wasnt-linkedin' },
 								{ label: '2026-08-13 — The Nights the Dream Forgot', slug: 'operations/2026-08-13-the-nights-the-dream-forgot' },
 								{ label: '2026-08-11 — The Archive That Said Nothing', slug: 'operations/2026-08-11-the-archive-that-said-nothing' },
