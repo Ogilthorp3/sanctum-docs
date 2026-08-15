@@ -1,0 +1,54 @@
+---
+title: "2026-08-15: The venv that ran main"
+description: Thirteen LaunchAgent cycles, no --all, no file-notes. The shared editable .pth was aimed at another worktree.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Two identical workbenches; the brass key hangs from the left lock but fits the right.](./images/hero-2026-08-15-the-venv-that-ran-main.jpg)
+
+The agent was loaded. The wrapper was a symlink. The tests were green. For thirteen cycles starting 21:46 on 14 August, `com.triptyq.file-mail` exited 1 with:
+
+```
+Error: No such option: --all
+Error: No such command 'file-notes'
+```
+
+The commands existed. They existed in a different checkout.
+
+## What the disk said
+
+`~/Projects/triptyq-cli/.venv` is the one venv. `triptyq-cli-wt-main/.venv` is a symlink to it. `uv pip install -e .` from the main worktree rewrote `_editable_impl_triptyq.pth` to:
+
+```
+/Users/bert/Projects/triptyq-cli-wt-main/src
+```
+
+The LaunchAgent always called `$HOME/Projects/triptyq-cli/.venv/bin/tq`. That binary imported **main**. Main had an older `file-mail` (required `--quarter`, no `--all`) and no `file-notes`.
+
+Interactive filing the afternoon before had used the same path while the `.pth` still pointed at the feature tree — or while `PYTHONPATH` happened to be kind. Overnight, another session reinstalled editable from `wt-main`. The clock kept the promise. The code did not.
+
+<Aside type="caution" title="Do not steal the pointer back">
+Rewriting the shared `.pth` to the feature tree would make `tq` on `main`'s worktree lie the other way. The SoT is the checkout the wrapper claims, not whoever last ran `uv pip install -e .`.
+</Aside>
+
+## The Apple path
+
+`launchd/tq-repo.sh` exports `PYTHONPATH=$REPO/src` and `tq_assert_this_repo` refuses to run if `import triptyq` is not that src. Both `file-mail` and `weekly-brief` source it. A named smoke, `launchd/test-file-mail`, checks the pin and that `--all` / `file-notes` exist — no network.
+
+Verified through the live symlink at 17:41 on 15 August: exit 0, nothing new to file, 0 notes. The first scheduled fire after the pin is the unattended receipt.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `launchd/test-file-mail`; local CI 913 + QA fence; live wrapper exit 0 |
+| in Sanctum-docs | This field note + [Affinity filing](/architecture/affinity-filing/) + sidebar |
+| Merged | `triptyq-cli` `9842790` on `origin/main`; this note on `sanctum-docs` `main` |
+| And Deployed | Repo symlinks; `PYTHONPATH` pin; consumer is `~/.triptyq/bin/file-mail` |
+
+## Related
+
+- [Affinity filing](/architecture/affinity-filing/) — the standing operator page
+- [Engineering Discipline](/architecture/engineering-discipline/) — EETISMAD
+- [gitsync](/architecture/gitsync/) — pathspec land, no `git add -A`
