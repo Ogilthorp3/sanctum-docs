@@ -217,9 +217,10 @@ Everything outside the architecture sidebar (guides, operations, reference, agen
 
 We use a single canonical tool **in this repo** (`sanctum-docs/tools/gen_hero_image.py`) to generate heroes. It is the only hero generator in the haus — there is deliberately no copy in the parent Claude_Code repo. It has two backends behind one entry point:
 
-- **`--backend auto` (default)** — **online → Imagen (metered). Offline → Flux.** Policy set 2026-08-12: *only use Flux if there is no internet.* Flux is ~13 minutes per image against Imagen's ~10 seconds, and an operator's 13 minutes are worth more than $0.134. Flux is the outage path, not the preferred one.
-- **`--backend imagen`** — force the metered Google API (`gemini-3-pro-image`, **$0.134/image**).
-- **`--backend local` / `--backend remote`** — force Flux here / on the render host. `remote` exits 1 rather than spending; it is the right choice when you want free-or-nothing.
+- **`--backend auto` (default)** — try **MiniMax H3** in `~/Projects/comfy-lab` first (short T2V, harvest a mid-frame). If Comfy/H3 is down and the internet is up, Imagen (metered). If offline, Flux. H3 is the 2026-08 house still path.
+- **`--backend h3`** — force MiniMax H3. Needs ComfyUI + the H3 cold pack.
+- **`--backend imagen`** — force the metered Google API.
+- **`--backend local` / `--backend remote`** — force Flux here / on the render host. Outage path, not the preferred one.
 
 ```bash
 # Normal path — the cli-venv has google-genai, and auto picks Imagen when online:

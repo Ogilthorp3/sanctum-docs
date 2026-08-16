@@ -319,6 +319,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-15 — The Brain Under a Headset', slug: 'operations/2026-08-15-the-brain-under-a-headset' },
 								{ label: '2026-08-15 — The venv that ran main', slug: 'operations/2026-08-15-the-venv-that-ran-main' },
 								{ label: "2026-08-13 — The Window That Wasn't LinkedIn", slug: 'operations/2026-08-13-the-window-that-wasnt-linkedin' },
 								{ label: '2026-08-13 — The Nights the Dream Forgot', slug: 'operations/2026-08-13-the-nights-the-dream-forgot' },
