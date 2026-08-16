@@ -1,0 +1,44 @@
+---
+title: "2026-08-15: The Ceiling, Not the Code"
+description: "Muse-Glimmer passed every test it was given — clean build, matched forward pass, signed weights on the Mini — and Qui-Gon's seat still serves Devstral. The thing between a proven port and a live one was never the code. It was the memory ceiling."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: a finished architectural manuscript lies open and glowing amber on a drafting table, every line drawn in; beside it a low stone doorway whose ceiling beam presses down, and a tall hooded figure that cannot straighten under it, one teal halo tracing the beam that stops it](./images/hero-2026-08-15-the-ceiling-not-the-code.png)
+
+Muse-Glimmer passed every test it was given. The port compiled clean on the first release build, matched its reference forward pass, parsed all 35 channel tokens, and cleared roughly ninety unit tests. The cathedral binary that runs it is built and signed. The weights sit staged on the Mini. And Qui-Gon's seat on `:3301` still answers as Devstral, exactly as it did yesterday. The thing standing between a proven port and a live one was never the code. It was the ceiling.
+
+## What Glimmer is
+
+Muse-Glimmer-30B is a vision-language model with a Gemma-shaped text tower. We brought the text tower across first — call it P1 — as its own module, `muse_glimmer`, inside the cathedral's `mlx-lm` vendor tree, rather than bending it onto an existing arch. That instinct was right: the tower is not plain Gemma. Five hidden logit behaviours (a final-logit softcap at 20.0, per-layer rope thetas with periodic local layers, and a windowed-mask off-by-one among them) had to be found and implemented before the numbers agreed. The vision tower is deliberately dropped at load; Glimmer serves text-only in P1, and the binary says so out loud — `muse_glimmer is loaded TEXT-ONLY in P1 (vision tower dropped at load)`.
+
+## The parity scare that wasn't
+
+The logit-parity harness failed on its first honest run, and a failed parity check is the kind of thing that sends you spelunking through your own attention math for a day. This one resolved the boring way, which is the good way: the mismatch was a kernel skew between mlx 0.30.6 and 0.32.0, atol 0.02 — below the bf16 unit-in-last-place, so noise, not error. On argmax the Rust forward and the reference agreed 10 out of 10. The port is correct; the reference kernel had simply moved under it. Diff the versions before you fortify a theory about your own code.
+
+## Two stages, one seat
+
+P2 wired the serving layer. A `PromptDialect` enum replaced the old boolean template cascade — the pre-P2 hazard was that Glimmer fell through to ChatML by accident — and on top of it came Glimmer channel-token registration and a recipient-channel parser that separates the model's `to=user` answer from its `to=self` reasoning. The serving work proved every existing dialect byte-identical, which is the whole reason the merged code is inert for non-Glimmer seats: Devstral and the Qwen3.8 council behave exactly the same whether or not Glimmer rode into `main`. That is what made the merge safe to land ahead of any deploy.
+
+## The isolated seat
+
+`:3301` is Qui-Gon's council-devstral seat: a separate `sanctum-mlx` process from the `:1337` council (Qwen3.8) and the `:6669` heretic, same binary, different port, its own singleton lock via `SANCTUM_MLX_LABEL=devstral`. Swapping the model on `:3301` cannot reach the other two. The deploy is a small, legible edit — point `--model` at `Muse-Glimmer-30B-4bit`, point `--manifest` at the freshly signed Glimmer manifest, keep the TLS, port, and `--temp 0.4` arguments, then `bootout` and `bootstrap`. The binary path needs no change: the plist already points at the cathedral's `target/release/sanctum-mlx`, so the rebuild is picked up for free.
+
+## The ceiling
+
+Here is where the code stopped mattering. The Mini is a 64GB box already holding two minds: the Qwen3.8 council (`:1337`, a 26000MB Metal ceiling) and Devstral (`:3301`, 22528MB). With both resident it already leans on roughly 9.5GB of swap with under 2GB of memory free. Glimmer is the heavier tenant — about 19GB of weights against Devstral's 13GB — and a 30B wants a higher ceiling than 22528MB, not a lower one. Co-residing the full Glimmer with the full council would push swap toward 14-15GB and reopen the swap-thrash scar that once turned a warm cathedral turn from about one second into over two minutes. It does not fit nicely. So the last step is a memory-budget decision, and the memory budget is Bert's call, not an autonomous one.
+
+<Aside type="caution" title="Bootstrap, never kickstart">
+`launchctl kickstart` re-launches a service against the **cached** launchd config; the new `--model` and `--manifest` arguments are only read on a fresh load. A model swap on `:3301` is `bootout` then `bootstrap`, or the seat comes back serving the old Devstral against a plist that says Glimmer.
+</Aside>
+
+## What landed anyway
+
+Everything that does not touch live memory is done and reversible: the merge into `main`, the signed manifest, the weights staged over the Thunderbolt link, and this note. The seat stays Devstral. The deploy is a packet, not a fait accompli — a plist diff, a ceiling recommendation, a `bootout`/`bootstrap`, and a rollback — waiting on one decision about what a 64GB box should be asked to hold at once. The rollback, conveniently, is the current state: we never left Devstral, and the `.bak` of its plist plus the Devstral weights is the one-command return if a future deploy misbehaves.
+
+## Landing
+
+The port did the hard thing. It stood up correct on the first live build, and the parity fright turned out to be a version number, not a bug. What it cannot do is make a full 30B model and a full council share a room whose ceiling is already scraping swap. The code is ready; the ceiling is the open question — and unlike a kernel skew, you cannot close it with a rebuild.
+
+This seat has a long memory: the cathedral learned to hold [three seats at once](/operations/2026-06-20-the-three-seat-cathedral/), then what it costs to make one box [hold two minds](/operations/2026-07-06-the-cathedral-holds-two-minds/) at the same time. The engine underneath is [sanctum-mlx](/architecture/sanctum-mlx/). Glimmer is the next tenant — once the room is measured for it.
