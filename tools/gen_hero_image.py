@@ -368,6 +368,76 @@ def gen_local(a) -> None:
     raise SystemExit(subprocess.call(cmd))
 
 
+def load_xai_key() -> str:
+    """xAI API key (metered api.x.ai). env -> bare secret file -> login keychain
+    (GUI session only, same discipline as load_key). This is the KEYED api.x.ai
+    path, NOT the X-subscription's free in-app image generator — that one is
+    app-only and its web-scrape path was anti-bot-retired 2026-07-11."""
+    k = os.environ.get("XAI_API_KEY")
+    if k:
+        return k.strip()
+    p = pathlib.Path.home() / ".sanctum" / "secrets" / "xai-api-key"
+    if p.exists():
+        return p.read_text().strip()
+    try:
+        r = subprocess.run(
+            ["security", "find-generic-password", "-a", "sanctum",
+             "-s", "xai-api-key", "-w"],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    sys.exit(
+        "no XAI_API_KEY here.\n"
+        "  Looked in: $XAI_API_KEY, ~/.sanctum/secrets/xai-api-key, and the login\n"
+        "  keychain (service 'xai-api-key', account 'sanctum'). GUI session only —\n"
+        "  a cold SSH cannot unlock the login keychain. On the render host pass it\n"
+        "  for one command: XAI_API_KEY=... python3 tools/gen_hero_image.py --backend grok ...")
+
+
+def gen_grok(a) -> None:
+    """Grok image (xAI grok-2-image / Aurora) via the official metered API — the
+    FIRST choice in `auto`. Pay-per-image on the api.x.ai key (NOT the free
+    with-X-sub in-app generator, which is not scriptable). grok emits its own
+    size; we crop-fit to --aspect."""
+    key = load_xai_key()
+    import json, base64, io, urllib.request, urllib.error
+    body = json.dumps({"model": "grok-2-image", "prompt": a.prompt,
+                       "n": 1, "response_format": "b64_json"}).encode()
+    req = urllib.request.Request(
+        "https://api.x.ai/v1/images/generations", data=body,
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            d = json.load(r)
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"--backend grok: xAI image API {e.code}: "
+                         f"{e.read()[:300].decode(errors='replace')}")
+    item = (d.get("data") or [{}])[0]
+    if item.get("b64_json"):
+        raw = base64.b64decode(item["b64_json"])
+    elif item.get("url"):
+        raw = urllib.request.urlopen(item["url"], timeout=60).read()
+    else:
+        raise SystemExit(f"--backend grok: no image in response: {json.dumps(d)[:200]}")
+    out = pathlib.Path(a.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(raw)).convert("RGB")
+        tw, th = ASPECT_DIMS.get(a.aspect, ASPECT_DIMS["16:9"])
+        w, h = img.size
+        s = max(tw / w, th / h)
+        img = img.resize((round(w * s), round(h * s)), Image.LANCZOS)
+        w, h = img.size
+        L, T = (w - tw) // 2, (h - th) // 2
+        img.crop((L, T, L + tw, T + th)).save(str(out))
+    except Exception:
+        out.write_bytes(raw)
+    print(f"OK {out} ({out.stat().st_size} bytes) — grok-2-image (xAI, metered)")
+
+
 def _budget_gate() -> None:
     """Refuse to start a metered render when the month is already over budget.
 
@@ -515,8 +585,9 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
     ap.add_argument("--backend", default="auto",
-                    choices=["auto", "h3", "remote", "local", "imagen"],
-                    help="auto=H3 then Imagen (online) or Flux (offline); "
+                    choices=["auto", "grok", "h3", "remote", "local", "imagen"],
+                    help="auto=grok then H3 then Imagen (online) or Flux (offline); "
+                         "grok=xAI grok-2-image (metered api.x.ai key); "
                          "h3=MiniMax H3 T2V→frame (comfy-lab); "
                          "remote=force Flux on the render host; "
                          "local=Flux HERE (needs --force-local); "
@@ -559,6 +630,10 @@ def main() -> None:
     if a.wizard:
         a.prompt = a.prompt.rstrip(". ") + WIZARD_CAMEO
 
+    if a.backend == "grok":
+        gen_grok(a)
+        return
+
     if a.backend == "imagen":
         gen_imagen(a)
         return
@@ -584,8 +659,16 @@ def main() -> None:
         gen_local(a)
         return
 
-    # auto: H3 first. Then Imagen if online. Flux only when offline.
+    # auto: grok (xAI) FIRST — fast, and it's the model the haus already keys.
+    # Then H3, then Imagen if online, Flux only when offline.
     if a.backend == "auto":
+        try:
+            gen_grok(a)
+            return
+        except SystemExit as e:
+            print(f"[render] grok unavailable: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[render] grok failed: {e}", file=sys.stderr)
         try:
             gen_h3(a)
             return
