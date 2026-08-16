@@ -134,6 +134,7 @@ export default defineConfig({
 						{ label: 'Turboquant KV Compression', slug: 'architecture/turboquant-kv-compression' },
 						{ label: 'Turboquant Slice 4 Scoping', slug: 'architecture/turboquant-slice-4-scoping' },
 						{ label: 'The Carmack Optimization', slug: 'architecture/carmack-optimization' },
+						{ label: 'Great Hauses Chess Engine', slug: 'architecture/great-hauses' },
 						{ label: 'Eval Harness', slug: 'architecture/eval-harness' },
 						{ label: 'The Champion Gate', slug: 'architecture/champion-gate' },
 						{ label: 'Sanctum Olympics', slug: 'architecture/sanctum-olympics' },
