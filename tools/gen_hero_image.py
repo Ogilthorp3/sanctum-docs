@@ -5,31 +5,13 @@ House style (see HERO_ROADMAP.md): black-and-white pencil sketch, hand-drawn,
 wide format, white/off-white background, Tommy the Abyssinian cat observing,
 one subtle localized color halo (teal or amber). Pass the full prompt in.
 
-Two backends, ONE entry point:
-  --backend auto   (default)  ONLINE -> Imagen (metered). OFFLINE -> Flux.
-                              Bert's call 2026-08-12: "only use Flux if there is
-                              no internet." Flux is the outage path, not the
-                              preferred one — it costs ~13 min per image against
-                              Imagen's ~10 s, and the operator's 13 minutes are
-                              worth more than $0.134. Budget accordingly: heroes
-                              now cost money by design, not by accident.
-  --backend remote            Force Flux on the render host. Exits 1 rather than
-                              spending if it cannot delegate (verified 2026-08-09).
-  --backend local             Flux.1-dev on THIS box via flux_backend.py — offline,
-                              $0, no API key. Needs the torch/diffusers venv
-                              (SANCTUM_FLUX_VENV, default ~/Projects/comfy-lab/.venv-flux)
-                              and the locally-cached model.
-  --backend imagen            The metered Google API. Covers BOTH surfaces:
-                              imagen-* via generate_images and gemini-*-image via
-                              generate_content (added 2026-08-09). Run with the
-                              cli-venv python that has google-genai.
-
-WARNING (2026-08-09, still true): the render host has no FLUX.1-dev snapshot
-cached — its HuggingFace hub cache is 0 B. Under the 2026-08-12 policy that no
-longer changes the common case (online = Imagen anyway), but it does mean the
-OFFLINE path is currently broken: lose the internet and hero generation stops
-until the weights are restored to the render host. `remote` still exits 1 rather
-than spending, which is the honest choice when you want free-or-nothing.
+Backends, ONE entry point:
+  --backend auto   (default)  H3 in comfy-lab first; if that is down and the
+                              internet is up, Imagen (metered); if offline, Flux.
+  --backend h3                MiniMax H3 T2V → mid-frame (comfy-lab). Preferred local.
+  --backend remote            Force Flux on the render host. Exits 1 rather than spending.
+  --backend local             Flux.1-dev on THIS box. Outage path.
+  --backend imagen            Metered Google API. Deliberate opt-in.
 
 Usage:
   # metered (the only working path today) — note the cli-venv python:
@@ -412,6 +394,25 @@ def _budget_gate() -> None:
         pass  # fail open
 
 
+def gen_h3(a) -> None:
+    """MiniMax H3 T2V in comfy-lab → harvest a still. Free, local, video-first."""
+    script = pathlib.Path.home() / "Projects/comfy-lab/scripts/gen-hero-h3.py"
+    if not script.exists():
+        raise SystemExit(f"missing {script}")
+    w, h = ASPECT_DIMS.get(a.aspect, (1344, 768))
+    cmd = [
+        sys.executable, str(script),
+        "--prompt", a.prompt,
+        "--out", a.out,
+        "--width", str(w),
+        "--height", str(h),
+        "--seed", str(a.seed),
+    ]
+    if a.dry_run:
+        cmd.append("--dry-run")
+    raise SystemExit(subprocess.call(cmd))
+
+
 def gen_imagen(a) -> None:
     """Render with Google Imagen 4 — METERED. Deliberate opt-in only."""
     if getattr(a, "dry_run", False):
@@ -514,10 +515,11 @@ def main() -> None:
     ap.add_argument("--out", required=True)
     ap.add_argument("--aspect", default="16:9", choices=list(ASPECT_DIMS))
     ap.add_argument("--backend", default="auto",
-                    choices=["auto", "remote", "local", "imagen"],
-                    help="auto=Imagen when online, Flux only when offline (default); "
+                    choices=["auto", "h3", "remote", "local", "imagen"],
+                    help="auto=H3 then Imagen (online) or Flux (offline); "
+                         "h3=MiniMax H3 T2V→frame (comfy-lab); "
                          "remote=force Flux on the render host; "
-                         "local=Flux HERE (needs --force-local off the MBP); "
+                         "local=Flux HERE (needs --force-local); "
                          "imagen=Google (paid)")
     ap.add_argument("--force-local", action="store_true",
                     help="permit --backend local on a host that is not the render "
@@ -561,6 +563,10 @@ def main() -> None:
         gen_imagen(a)
         return
 
+    if a.backend == "h3":
+        gen_h3(a)
+        return
+
     if a.backend == "local":
         # Flux here, on whatever box "here" is. Allowed without ceremony only on
         # the designated render host; anywhere else it needs --force-local,
@@ -578,38 +584,25 @@ def main() -> None:
         gen_local(a)
         return
 
-    # --- auto: ONLINE => Imagen. OFFLINE => Flux. ---------------------------------
-    # Bert's call, 2026-08-12: "only use Flux if there is no internet." This inverts
-    # the old default. The prior logic optimised for $0 and treated the metered API as
-    # the reluctant fallback; in practice Flux costs ~13 min per image against Imagen's
-    # ~10 s, and 13 minutes of an operator's attention is worth more than $0.134. Flux
-    # is now the OUTAGE path — the thing that keeps hero generation working when the
-    # haus is off the internet — not the preferred one.
-    #
-    # Reachability is probed against the API host actually required, not a generic
-    # ping: a captive portal or a DNS-only outage would pass "can I reach 1.1.1.1" and
-    # still fail the real call.
-    # `remote` is exempt on purpose: its whole contract is "Flux or nothing, never
-    # spend". Routing it through the online shortcut would have made --backend remote
-    # bill Imagen, which is the exact opposite of what it exists for.
-    offline = not _internet_up()
-    if a.backend == "auto" and not offline:
-        gen_imagen(a)
-        return
-
-    if offline:
+    # auto: H3 first. Then Imagen if online. Flux only when offline.
+    if a.backend == "auto":
+        try:
+            gen_h3(a)
+            return
+        except SystemExit as e:
+            print(f"[render] H3 unavailable: {e}", file=sys.stderr)
+        except Exception as e:
+            print(f"[render] H3 failed: {e}", file=sys.stderr)
+        offline = not _internet_up()
+        if not offline:
+            gen_imagen(a)
+            return
         print("[render] no internet — Flux is the offline path", file=sys.stderr)
+        if _is_render_host():
+            gen_local(a)
+            return
 
-    # Offline: if this IS the render host, render HERE. Delegating would ssh the box to
-    # itself and fail rc=255 (that bug silently billed two heroes to Imagen on
-    # 2026-08-11, back when a failed delegation fell through to the paid path).
-    # gen_local() fails LOUDLY if the venv or weights are missing — and the weights are
-    # currently gone from the render host, so offline hero generation is not actually
-    # available until they are restored. Failing loudly is how that stays visible.
-    if _is_render_host():
-        gen_local(a)
-        return
-
+    # remote / leftover auto: try the Flux render host.
     ok, detail = remote_capacity()
     if ok:
         try:
