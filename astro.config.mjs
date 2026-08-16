@@ -110,6 +110,7 @@ export default defineConfig({
 						{ label: 'The Living Force', slug: 'architecture/living-force' },
 						{ label: 'Kickstart Is Not a Heal', slug: 'architecture/kickstart-is-not-a-heal' },
 						{ label: 'Emergence & Φ', slug: 'architecture/emergence-and-phi' },
+						{ label: 'The World Model', slug: 'architecture/world-model' },
 						{ label: '(Neuro)diversity is Paramount', slug: 'architecture/neurodiversity-doctrine' },
 						{ label: 'Chitti — The Fascial Layer', slug: 'architecture/chitti' },
 						{ label: 'Force Flow', slug: 'architecture/force-flow' },
