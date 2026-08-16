@@ -1,0 +1,81 @@
+---
+title: The World Model
+description: The haus predictor — HA Green history the recorder cannot be trusted for, z-score surprises into Thalamus, top-3 into Tommy preflight. Predicts. Does not heal.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A Quebec manor at dusk with a constellation of teal sensor readings above the roof and one gold spike in an otherwise calm field.](./images/hero-world-model.jpg)
+
+The haus has a body. Home Assistant Green is the nerves. For two weeks in July 2026 a local script tried to be the *model* of that body — then the script vanished, the LaunchAgent kept firing at a missing path, and [Emergence & Φ](/architecture/emergence-and-phi/) kept telling the story anyway.
+
+This page is the thing that page was describing. **Date:** 2026-08-16 · **Status:** Active · **Host:** manoir
+
+The World Model is a statistical picture of Manoir Nepveu, not of the swarm. Every 15 minutes it reads HA Green, updates a rolling history the recorder horizon cannot be trusted to keep, and tells [Thalamus](/architecture/emergence-and-phi/#the-thalamus-global-workspace) when the haus is unlike itself.
+
+It predicts. It does not heal.
+
+## What You Run
+
+```bash
+world-model                 # one cycle (also the LaunchAgent)
+world-model --dry-run       # compute, write nothing, post nothing
+world-model --status        # last-run age; exit 1 if stale
+test-world-model            # named E2E smoke
+```
+
+| Knob | Value |
+|---|---|
+| Label | `com.sanctum.world-model` |
+| Cadence | interval 900s, RunAtLoad |
+| Code | `~/Projects/sanctum-emergence/world_model/world_model.py` |
+| Kill switch | `~/.sanctum/state/world-model-disabled` (present = OFF) |
+| History | `~/.sanctum/world-model/history.json` (14-day horizon) |
+| Tommy | `~/.sanctum/state/tommy_preflight.json` (top-3 only) |
+| Thalamus source | `world-model` |
+
+The live path *is* the repo path. There is no copy under `~/.sanctum/scripts/`. That copy is how the July script died.
+
+## What it watches
+
+HA `sensor.*` with `device_class` in `{temperature, humidity, pressure}`. Yearly energy counters and remaining-% gauges stay out — a monotonic kWh total is not a surprise, it is a calendar.
+
+On manoir that is eight entities: outdoor + three indoor temps, three humidities, static pressure. The URL comes from `~/.sanctum/endpoints.json` `services.ha_internal.url`. No baked LAN address.
+
+## Refuse to guess
+
+The [Carrier 401](/reference/service-inventory/) taught the haus that a frozen sensor still serves a plausible number. So:
+
+- Carrier clock (`sensor.manoir_rdc_updated_all_data_at`) older than 6h → Review everything, **do not record**. A two-day outage must not become a fake heatwave in the mean.
+- Unavailable / unknown → Review.
+- Thin history → Review, unless a week of “always 24°C” is already on file (thermostats that sit still barely emit HA history).
+- First run seeds seven days of HA history, one day at a time, always passing `end_time` (HA’s 1-day default is a trap).
+
+`|z| ≥ 2.5` is a surprise. Indoor ≤10°C or ≥32°C is critical. At most three Thalamus posts per cycle, four-hour cooldown per entity.
+
+<Aside type="caution">
+The opposite force is `ha-self-healer` plus `ha-freshness-sentinel`. They notice a *dead* feed or repair a device. This job notices a *live* feed saying something the haus has not said. Both must run. This job never calls a heal API.
+</Aside>
+
+## Tommy
+
+Top-3 surprises land in Tommy’s preflight **data** only. Cron, model, and type are untouched — his [page](/agents/tommy/) is explicit. Dawn still talks about stone and wind. The sidecar is there when a briefing wants the haus.
+
+## EETISMAD
+
+| Letter | For this job |
+|---|---|
+| **E**verything **E**2E **T**ested | `test-world-model` — unit suite + plist-is-repo + live HA dry-run + fresh last-run. Wired in `~/.sanctum/tests/run-all.sh`. |
+| **i**n **S**anctum-**d**ocs | This chapter + sidebar entry + unique hero. Inventory row on the [service inventory](/reference/service-inventory/). |
+| **M**erged | `sanctum-emergence`, `sanctum-docs`, `sanctum-config` via `gitsync`. |
+| **A**nd **D**eployed | Launchd `ProgramArguments` is the repo file. `world-model` and `test-world-model` are PATH symlinks into that repo. |
+
+If any letter fails, it is not done. A clever script that is not in the repo is how this job already died once.
+
+## Related
+
+- [Emergence & Φ](/architecture/emergence-and-phi/) — Thalamus, dreams, the Φ ablation
+- [Home Assistant](/guides/home-assistant/) — the nerves
+- [Tommy](/agents/tommy/) — dawn/dusk, data only
+- [Engineering Discipline](/architecture/engineering-discipline/) — the shipping bar
+- Runbook: `sanctum-emergence/docs/runbooks/world-model.md`
