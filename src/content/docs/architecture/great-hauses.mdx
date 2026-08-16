@@ -5,102 +5,115 @@ description: How we built a military-grade 3D chess engine in Godot 4 & visionOS
 
 import { Aside } from '@astrojs/starlight/components';
 
-![Great Hauses — Medieval Chess Battlefield in the Great Hall with flying dragon and charred skeletons](./images/hero-great-hauses.jpg)
+![Great Hauses — a tactical 3D battlefield in the grand torch-lit cathedral hall where medieval knights clash under the watchful gaze of the hall dragon.](./images/hero-great-hauses.jpg)
 
-**Great Hauses** is Sanctum's flagship tactical battlefield engine — a 3D dark-fantasy medieval chess game built in Godot 4 for macOS desktop and Apple Vision Pro spatial computing (`visionOS`). It pairs classical tournament chess mechanics with real-time cinematics: dynamic camera direction, house heraldry banners, dragon spectators, and a 3-tier VFX moments system.
+Every home server cluster needs a hobby. Ours plays chess. When the Mac Mini finishes balancing the heat pump logs and routing the [Council Router](/architecture/council-router/), it runs **Great Hauses** — a 3D dark-fantasy medieval chess engine engineered in Godot 4 for macOS desktop and Apple Vision Pro spatial computing (`visionOS`).
+
+It pairs classical FIDE tournament chess mechanics with real-time cinematics. Dynamic camera direction tracks every clash. Banners flutter along the stone hall. A giant dragon spectates from the rafters. Above all, a 3-tier VFX moments system treats a Queen sacrifice with the reverence it deserves.
 
 **Date:** 2026-08-15  
 **Status:** Shipped (macOS Desktop & visionOS Immersive Space)  
 **Repository:** `great-hauses-core`  
 
----
-
 ## 1. Architectural Foundation: Headless Core & Presentation Split
 
-To ensure absolute determinism, cross-platform portability, and headless automated testing, Great Hauses enforces a strict separation between chess logic and 3D presentation:
+Determinism comes first. To guarantee cross-platform portability between Metal 4.0 desktop builds and visionOS spatial immersion, Great Hauses enforces a strict separation between chess logic and 3D presentation:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    3D Presentation Layer                    │
-│  BoardView │ PieceView │ DuelDirector │ DragonSpectator      │
-├─────────────────────────────────────────────────────────────┤
-│                    Cinematics & VFX Engine                  │
-│  MomentGovernor │ MomentScore │ MomentContext │ Ledger      │
-├─────────────────────────────────────────────────────────────┤
-│                     Deterministic Engine                    │
-│    ChessState    │      ChessMove     │       ChessAI       │
-└─────────────────────────────────────────────────────────────┘
-```
+| Layer | Primary Modules | Responsibilities |
+|---|---|---|
+| **3D Presentation Layer** | `BoardView`, `PieceView`, `DuelDirector`, `DragonSpectator` | Camera choreography, spatial lighting, banner multi-meshes, audio stingers |
+| **Cinematics & VFX Engine** | `MomentGovernor`, `MomentScore`, `MomentContext`, `CaptureLedger` | Situational scoring, time-scale slow-mo curves, camera swoops |
+| **Deterministic Engine** | `ChessState`, `ChessMove`, `ChessAI` | Pure `RefCounted` FEN parsing, pseudo-legal moves, minimax evaluation |
 
-1. **Deterministic Core:** Pure `RefCounted` GDScript modules (`ChessState`, `ChessMove`, `ChessAI`) managing FEN parsing, pseudo-legal move generation, bitboard-style board state, and minimax evaluation with zero scene tree dependencies.
-2. **Headless Testability:** The entire chess rule engine, AI difficulty curves, and cinematic timing gates run headlessly in CI without allocating GPU contexts.
-
----
+The deterministic core operates completely free of scene tree dependencies. The entire chess rule engine, AI difficulty curves, and cinematic timing gates run headlessly in continuous integration without allocating GPU contexts. It runs fast. It runs everywhere.
 
 ## 2. Military-Grade 3-Tier VFX Moments System
 
-To deliver high-impact kill animations without degrading tactical flow or pacing, we designed a situational scoring and reservoir governor architecture:
+Kill animations in tactical games usually fail in one of two directions. Either every capture triggers an exhausting five-second cutscene, or nothing happens and pieces quietly slide off the board like disappointed ghosts. We wanted drama. We did not want boredom.
+
+We designed a situational scoring and reservoir governor architecture to strike the exact middle:
 
 ### The Scoring Hierarchy
+
 Every piece capture is evaluated in real-time across multiple tactical dimensions:
 - **Material Delta:** Queen sacrifices, piece exchanges, and pawn promotions.
-- **King Proximity & Pressure:** Attacks within the opponent's castled perimeter.
-- **Blunder & Turning-Point Swings:** Eval swings probed via background depth probes.
-- **Grudge & Revenge Multipliers:** Tracking historical piece interactions across the match.
+- **King Proximity & Pressure:** Attacks launched directly inside the opponent's castled perimeter.
+- **Blunder & Turning-Point Swings:** Evaluation swings probed via background depth probes.
+- **Grudge & Revenge Multipliers:** Tracking historical piece rivalries across the match.
 
-```gdscript
-# Moment Scoring Matrix
-Tier 2 (Showstopper, 5-8%): Queen sacrifices, dramatic checkmates, massive eval swings
-Tier 1 (Flourish, 15-20%):  Tactical forks, rook roars, bishop sniper bolts
-Tier 0 (Standard, 75-80%):  Clean, fast strikes with zero gameplay delay
-```
+| Tier | Name | Target Cadence | Presentation |
+|---|---|---|---|
+| **Tier 2** | Showstopper | 5-8% of captures | Deep time dilation (`Engine.time_scale` to 0.15), dynamic low-angle camera swoop, audio stinger |
+| **Tier 1** | Flourish | 15-20% of captures | Tactical slow-mo (0.32), close-up profile cut, spark bursts |
+| **Tier 0** | Standard | 75-80% of captures | Clean, fast strikes with zero gameplay delay |
 
 ### The Reservoir Governor
-The `MomentGovernor` regulates cinematic cadence. It prevents "VFX fatigue" by tracking recent capture density, ensuring showstopper slow-mo curves (`Engine.time_scale` dipping to `0.15`) are reserved for genuine turning points.
 
----
+The `MomentGovernor` regulates cinematic cadence. It prevents visual fatigue by tracking recent capture density. Showstopper slow-mo curves are reserved for genuine match-defining moments.
+
+```gdscript
+# Moment scoring evaluation
+var score := MomentScore.evaluate(context, ledger)
+var tier := governor.allocate_tier(score)
+director.play_duel(attacker, victim, {"tier": tier}, strike_callback)
+```
+
+<Aside type="tip">
+The governor uses a reservoir token model. If two tactical fireworks happen on consecutive moves — such as a Queen sacrifice followed immediately by a retaliatory back-rank mate — the governor grants the second event a showstopper pass regardless of cooldown.
+</Aside>
 
 ## 3. The Carmack Optimization: 60/120 FPS Skeletal Animation
 
-During early testing of the dragon's ashfall sweep, skeletal animation exhibited micro-stutters and choppy bone playback when manipulating the playhead:
+During early testing of the dragon's ashfall sweep, skeletal animation stuttered. Bone playback chopped whenever the camera tracked the playhead.
 
 ### The Bottleneck
-Godot's `AnimationPlayer.seek(t, true)` forced synchronous skeletal re-evaluation and bone cache flushes on every frame. When combined with large skinned meshes (such as the giant dragon model), this stalled the CPU-GPU pipeline.
+
+Godot's `AnimationPlayer.seek(t, true)` forced synchronous skeletal re-evaluation on every frame. Large skinned meshes with dozens of bones flushed the vertex cache repeatedly. The CPU-GPU pipeline choked.
 
 ### The Solution
+
+We applied the principle documented in [The Carmack Optimization](/architecture/carmack-optimization/): understand what the silicon actually wants.
+
 ```gdscript
 # Carmack Optimization in dragon_rig.gd
 anim.seek(maxf(t, 0.0), false) # update: false lets Godot's bone interpolation cache run smoothly
 ```
-Switching to asynchronous bone interpolation eliminated pipeline stalls, delivering locked **60 FPS** on desktop Metal and **120 FPS** on Apple Vision Pro.
 
----
+Switching to asynchronous bone interpolation eliminated pipeline stalls. The frame rate locked. Desktop Metal runs at solid **60 FPS**; Apple Vision Pro glides at **120 FPS**.
+
+<Aside type="note">
+Never force the renderer to flush transform caches when interpolation can compute the delta asynchronously. The hardware knows how to blend. Let it blend.
+</Aside>
 
 ## 4. Zelda-Grade Aesthetics & Terminator 2 Charred Remains
 
-When the defeated army falls to the dragon's incendiary breath, we implemented a persistent scorched bone aesthetic inspired by *The Legend of Zelda: Breath of the Wild* and *Terminator 2*:
+When the dragon incinerates the fallen army, we refused to let the pieces simply fade away. Drawing inspiration from *The Legend of Zelda: Breath of the Wild* and *Terminator 2*, the battlefield keeps its scars:
 
 1. **Weathered Calcified Bone PBR Materials:**
    - **Albedo:** Natural aged ivory with charcoal soot gradients (`Color(0.22, 0.20, 0.19)`).
-   - **Roughness:** Chalky `0.92` matte calcified surface (non-metallic).
-   - **Internal Warmth:** Faint, grounded amber ember traces in bone fissures (`Color(0.85, 0.35, 0.08) * 0.04`), completely avoiding artificial neon glows.
+   - **Roughness:** Chalky `0.92` matte calcified surface.
+   - **Internal Warmth:** Faint, grounded amber ember traces in bone fissures (`Color(0.85, 0.35, 0.08) * 0.04`), avoiding cheap neon glows.
 2. **Persistent Battlefield Monuments:**
-   - Rather than sinking through the floor and despawning, the defeated army's charred skeletons remain collapsed on their tiles throughout the endgame, leaving a grim and majestic battlefield tableau.
-
----
+   - Rather than sinking through the floor and despawning, the defeated army's charred skeletons remain collapsed on their tiles throughout the endgame. The board becomes a grim and majestic graveyard.
 
 ## 5. 1-2-3 Punch-Out Zelda Easter Egg Suite
 
 Integrated directly into the engine is a procedural Easter egg suite with zero external asset dependencies:
 
 - **16-bit PCM Procedural Audio Synthesis:** Mathematically synthesized harmonic audio streams for the 8-note Zelda Secret Sound (`G5, F#5, D#5, A4, G#4, E5, G#5, C6`), Item Fanfare, and 8-bit Cucco clucks.
-- **Secret Codes & Haus Hyrule Unlock:** Typing `"zelda"` or entering the Konami Code (`↑ ↑ ↓ ↓ ← → ← → B A`) unlocks the **Haus of Courage** (Emerald `#10782b` & Hylian Gold `#f2c94c`).
-- **Master Sword Drop:** Triple-clicking the King summons a glowing 3D Master Blade falling into the center of the board with the retro proclamation: *"IT'S DANGEROUS TO GO ALONE! TAKE THIS. 🗡️"*
+- **Secret Codes & Haus Hyrule Unlock:** Typing `zelda` or entering the Konami Code (`Up Up Down Down Left Right Left Right B A`) unlocks the **Haus of Courage** (Emerald `#10782b` & Hylian Gold `#f2c94c`).
+- **Master Sword Drop:** Triple-clicking the King summons a glowing 3D Master Blade falling into the center of the board with the retro proclamation: *"IT'S DANGEROUS TO GO ALONE! TAKE THIS."*
 - **Cucco Swarm:** Rapid rage-clicking (7 consecutive clicks) triggers an angry Cucco squawk with a drifting flurry of 32 golden and white feathers.
 
----
+<Aside type="caution">
+The audio streams are generated entirely via math in GDScript byte arrays (`PackedByteArray`). Do not attempt to load external WAV files for procedural stingers; pure mathematical synthesis keeps the binary lightweight and portable across all platforms.
+</Aside>
 
-## 6. Verification & Automated Test Gates
+## 6. AI Integration & ds4-oracle
+
+The game connects directly to Sanctum's local intelligence infrastructure. When playing against the **Oracle**, the match interfaces with [ds4max](/architecture/ds4max/) and [ds4-agent](/agents/ds4-agent/) via local sockets. The opponent reasons about the board state, delivers in-character tactical banter, and explains its grandmaster blunders with complete philosophical composure.
+
+## 7. Verification & Automated Test Gates
 
 The Great Hauses engine is backed by a 100% green automated test pyramid:
 
@@ -113,3 +126,5 @@ tests/test_cinematics.gd     ── PASS (95/95 checks)
 tests/test_house_packs.gd    ── PASS (405/405 checks)
 E2E Boot & Move Scenarios    ── PASS (25/25 steps)
 ```
+
+The game is packaged for macOS desktop and Apple Vision Pro. Whether you play on a 4K studio display or an immersive spatial headset, the king falls with dignity, the dragon roars on cue, and the house stands unbroken.
