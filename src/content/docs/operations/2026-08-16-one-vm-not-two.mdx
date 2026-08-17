@@ -1,0 +1,38 @@
+---
+title: "2026-08-16: One VM, Not Two"
+description: "OrbStack looked like a gigabyte of waste on the cathedral Mini — a fat container runtime to trim so a bigger model could fit. It wasn't waste. It was quietly hosting the haus wiki and a private Matrix server, efficiently. The clean win was never a leaner runtime. It was refusing to run two Linux VMs when the haus already paid for one."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: two identical stone cottages stand side by side, each with its own lit hearth and chimney smoke; a thin figure carries a single crate from the right cottage into the left one, whose door glows amber, while the emptied right cottage dims to a teal outline about to be struck from the drawing](./images/hero-2026-08-16-one-vm-not-two.png)
+
+OrbStack showed 1.1 GB of resident memory on the cathedral Mini, and the first instinct was to treat it as bloat. The Mini runs at its ceiling — a 27B council brain plus a second frontier model is already more than 64 GB wants to hold — so every gigabyte on that box is a gigabyte a bigger model can't have. A container runtime sitting at a full gigabyte looked like an easy trim.
+
+It was the wrong read, and one `docker ps` corrected it. OrbStack wasn't idling. It was hosting six containers: a self-hosted **Outline** wiki (the app, plus its Postgres, Redis, and MinIO), and **dragonpit** — a private **Matrix Conduit** homeserver. That gigabyte was mostly the containers themselves, which need roughly a gigabyte on any runtime. OrbStack, for six containers, was actually the efficient thing in the room.
+
+## The real waste was architectural
+
+The Mini was running **two** Linux VMs. One was Lima's `sanctum-vm`, which the haus already pays for — it hosts openclaw and the council's sandboxed agents. The other was OrbStack's own VM, spun up solely to run those six containers. Two VMs means two Linux kernels, two sets of OS overhead, two of everything the haus only needs once.
+
+So the move was never "find a leaner runtime." Swapping OrbStack for colima would have relocated the container gigabyte, not deleted it. The move was to stop running a second VM: fold Outline and Matrix into the Docker that `sanctum-vm` already runs, and take OrbStack out entirely.
+
+## Diffing the airgap before trusting it
+
+`sanctum-vm` is deliberately airgapped — an `nftables` egress filter that permits LAN and tailnet traffic and drops the public internet on purpose. That is a feature until you move an internet-shaped service into it, at which point it is a way to silently break things. Matrix federation reaches out to other homeservers; a wiki can reach out for SSO, mail, or avatars. Move either into an airgapped box without checking and you have "migrated" a service into quiet failure.
+
+So we checked before we moved. Matrix Conduit read `allow_federation = false` — a private homeserver that never dials out. Outline's config pointed its storage at the *internal* MinIO and carried no SMTP, no OIDC, no external anything. Neither service needed the public internet, and the airgap already allows everything on the LAN and the tailnet. Nothing to lose. The image pulls, of course, *did* need the internet the airgap blocks — so the container images were side-loaded from OrbStack with `docker save | docker load` rather than pulled. The airgap held; the migration routed around it.
+
+## The tunnels never learned about it
+
+The two services face the world through machinery that had no reason to change: **Cloudflare** fronts `sanctum.haus` through a dashboard-managed tunnel, and a Tailscale-serve rule fronts Matrix on the tailnet. Both terminate at `127.0.0.1` on the Mini. Rather than re-point either — one of them isn't even locally editable — two `socat` forwards took over those loopback ports and pushed them to the VM's static bridge. The tunnel keeps dialing the same local address; the address now answers from inside the VM.
+
+<Aside type="tip" title="Verify before you decommission">
+Both copies ran in parallel until the VM's copy was proven through the real public and tailnet paths — `sanctum.haus` returning its own title, the Matrix version list answering on the tailnet — with OrbStack still live as an instant rollback. Only then did OrbStack come out: the app, its three autostart LaunchAgents, and 6.5 GB of container data. The wiki's database and the homeserver's state were snapshotted to a backup first; the source was empty of documents anyway, which the migration faithfully reproduced.
+</Aside>
+
+## The receipt the haus keeps
+
+Landing the two forward LaunchAgents in the config repo hit the pre-commit hook, because each `socat` rule names the VM's bridge as a literal address. The hook is right to object — a hardcoded infra address is exactly what it exists to catch — and it refused the commit until the pin carried an inline `ip-allow` marker with a reason. The bridge address is a deliberate stable anchor, so the marker is the honest resolution, not `--no-verify`. The commit landed with the receipt attached.
+
+The Mini now runs one VM, one Docker, and one place to look. OrbStack was never the problem, and a leaner container runtime was never the answer. The answer was to stop paying for a second haus next door when the first one had a spare room.
