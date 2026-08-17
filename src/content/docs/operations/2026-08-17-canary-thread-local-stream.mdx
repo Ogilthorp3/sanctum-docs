@@ -1,0 +1,36 @@
+---
+title: "2026-08-17: The Canary and the Thread-Local Stream"
+description: "The mlx 0.32 bump built clean and matched the old engine argmax for argmax, so it looked done. Then the least-critical seat restarted first, and every warmup generation died on a stream that no longer existed in its thread. The parity gate had measured the math; only a sacrificial seat could measure the deploy."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: a small canary glows amber in an open wire cage at the mouth of a mine gallery, alert and mid-song, while behind it a loom of taut threads converges into one cold teal channel that disappears toward heavier, unlit machines — the least-critical seat going in first so the bigger ones never have to](./images/hero-2026-08-17-canary-thread-local-stream.png)
+
+The mlx bump passed every gate the cathedral had. The vendored mlx-c core moved from 0.30.6 to 0.32.0, the build came back clean, and the single-pass logits parity gate — argmax-exact at 512, 2048, and 4000 tokens — matched the old engine answer for answer. On paper, done. All that remained was to restart the seats on the new binary.
+
+## The canary sang
+
+Seats restart in order of how much the haus would miss them, so Devstral on `:3301` went first. Every warmup generation failed. Not degraded — failed, all of them, with the same line out of mlx's `transforms.cpp:73`: `There is no Stream(gpu, 0) in current thread`. The counterfactual is the whole reason the order exists: had the 27B council brain restarted first, the entire council would have gone down on one binary. Instead the least-critical seat took the hit, the rollout stopped at one, and no one upstream ever saw a failed request.
+
+## Thread-local by design
+
+The answer was in the diff, not in a theory about the present. Between mlx 0.30.6 and 0.32.0, Metal command encoders became thread-local: in `backend/metal/eval.cpp`, `new_stream` now registers its stream in a `static thread_local` map, and a new API — `new_thread_unsafe_stream` — registers in a global map instead. A stream created on one thread stops existing, as far as eval is concerned, on every other thread.
+
+The cathedral is exactly the wrong shape for that. It loads weights on one thread, runs inference on a dedicated executor thread, and lets the scheduler eval on per-stream worker threads. Cross-thread eval is not an accident of the design; it is the design. Version 0.32 turned that architecture into the error message above.
+
+## Two fixes that deserved to fail
+
+The first plausible fix set the core default stream on the executor thread at startup. Seven warmups, seven failures. The second made a thread-unsafe stream the default. Seven for seven again. Both died for the same reason: the arrays already existed. Weights loaded on the load thread are lazy arrays bound to that thread's index-0 stream, and changing a *default* only changes what new work gets — it cannot rebind arrays that already carry the old stream. The canary falsified each theory in about a minute, which is what a canary is for — [falsify before you fortify](/operations/2026-07-03-verify-before-you-fortify/).
+
+The real fix is one line: route all gpu stream creation through `new_thread_unsafe_stream`, so every encoder lands in the global map and every thread can see it. It ships as a `FetchContent` `PATCH_COMMAND` committed in the vendored mlx-c `CMakeLists.txt` (`58c8d14`), so the patch is part of the build, not a memory of it — a fresh clone of mlx v0.32.0 re-applies it without being asked, and that was tested rather than assumed. And "thread-unsafe" is a name here, not a hazard: the cathedral serializes all GPU work behind one dispatch lock, so no two threads ever encode at once.
+
+<Aside type="caution" title="A copy is not the binary you signed">
+Mid-validation, `cp`-ing the ad-hoc-signed release binary into place quietly invalidated its signature, and launchd killed every start before a single log line — `launchctl print` named the reason, `OS_REASON_CODESIGNING`, once someone thought to ask it. The rule the haus keeps now: `codesign --force --sign -` after every copy of an ad-hoc binary. Every copy, no exceptions.
+</Aside>
+
+## The flat A/B and the real lever
+
+With the council back on 0.32, the obvious question was what the encoder drama had bought. An A/B on the same seat, same model, same prompt, greedy decode, scored by the cathedral's own `tokens_per_sec`, answered: nothing. Raw decode is memory-bandwidth-bound, and 0.32 sits flat against 0.30.6 within noise. The lever worth pulling is elsewhere — native-MTP speculative decode measured 2.15x at depth 1 on the M4 Max via `mtplx tune`, and that port is now in flight.
+
+The parity gate stays, and so does its new humility. Argmax-exact logits prove the math survived the upgrade; they say nothing about threads, encoders, or the order a process creates them in. So the deploy gate is now a real generation on a sacrificial seat, run before any seat that matters restarts. The canary does not measure anything. It just goes first.
