@@ -74,9 +74,26 @@ def test_render_host_aliases_cover_both_names():
     assert "mbp" in aliases and "berts" in aliases
 
 
-def test_remote_backend_is_free_or_nothing():
-    """`remote` must never reach the paid path — that is its entire contract."""
-    src = (TOOLS / "gen_hero_image.py").read_text()
-    # The online shortcut has to be scoped to auto; if it ever loses that guard,
-    # --backend remote starts billing.
-    assert 'a.backend == "auto" and not offline' in src
+def test_remote_backend_is_free_or_nothing(monkeypatch, tmp_path):
+    """`remote` must never reach the paid path — that is its entire contract.
+
+    This used to string-match the inline guard `a.backend == "auto" and not
+    offline`; the 2026-08-16 grok refactor moved the online→Imagen shortcut
+    inside the `auto` branch and retired that spelling, which broke the test
+    while the contract itself held. Pin the behavior instead: with the render
+    host down, a `--backend remote` run must exit 1 — never fall through to
+    the metered path. Hermetic — remote_capacity is stubbed, so no ssh.
+    """
+    monkeypatch.setattr(g, "remote_capacity",
+                        lambda host=g.RENDER_HOST: (False, "test: host down"))
+
+    def _paid(_a):
+        raise AssertionError("--backend remote reached the paid path")
+
+    monkeypatch.setattr(g, "gen_imagen", _paid)
+    monkeypatch.setattr(sys, "argv",
+                        ["gen_hero_image.py", "--backend", "remote",
+                         "--prompt", "x", "--out", str(tmp_path / "h.png")])
+    with pytest.raises(SystemExit) as e:
+        g.main()
+    assert e.value.code == 1
