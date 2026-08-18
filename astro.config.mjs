@@ -321,6 +321,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-17 — The Two-Fifteen That Wasn\'t', slug: 'operations/2026-08-17-the-two-fifteen-that-wasnt' },
 								{ label: '2026-08-17 — The Canary and the Thread-Local Stream', slug: 'operations/2026-08-17-canary-thread-local-stream' },
 								{ label: '2026-08-16 — One VM, Not Two', slug: 'operations/2026-08-16-one-vm-not-two' },
 								{ label: '2026-08-15 — The Brain Under a Headset', slug: 'operations/2026-08-15-the-brain-under-a-headset' },
