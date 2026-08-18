@@ -1,0 +1,50 @@
+---
+title: "2026-08-17: The Two-Fifteen That Wasn't"
+description: "mtplx tune promised 2.15x from native-MTP speculative decode on the 27B council brain. The port arrived with perfect token fidelity and measured 0.96x — and the post-mortem turned the miss into a map: a residual-stream tax we levied on ourselves, kernels that disagree by one ulp, and a multiplier that belonged to somebody else's stack."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: a heavy workshop dynamometer whose solid needle droops below the halfway mark while a faint amber ghost of the same needle hovers at the top of the arc — the speedup the bench promised, still glowing exactly where the measurement never went](./images/hero-2026-08-17-the-two-fifteen-that-wasnt.png)
+
+The bench said 2.15x. On the M4 Max, `mtplx tune` measured the Qwen3.8-27B council brain at 20.4 tokens per second serial and 43.9 with native-MTP self-speculative decode at depth 1. More than double, from draft weights the model already carries. The [canary note](/operations/2026-08-17-canary-thread-local-stream/) from the same morning closed by calling this port the lever worth pulling. By afternoon the port was underway: three phases in an isolated worktree, each behind a temp-0 token-fidelity gate. The gate breaks the build the moment the speculative path and the serial path disagree on a single token.
+
+This is the story of how the program ended parked — and why parked is the gates working, not failing.
+
+## Three phases, each behind the gate
+
+Phase 0 built the part nobody advertises: a sound rollback for GatedDeltaNet layers, so a partially-accepted draft can rewind the cache without lying about history. The gate earned its keep before the MTP head existed. It caught `cache.first()` reading a linear-attention layer's pinned offset-0 KV slot, which meant a partial-accept rollback truncated the entire prompt. It caught the fused GDN kernel emitting bf16 where the reference path keeps f32 — a rounding gap that 44 layers of accumulation amplified until temp-0 argmaxes flipped. Two real bugs. Both invisible to a casual read of the output, both fatal to speculation.
+
+Phase 1 loaded the 15-tensor MTP head and taught it to speak: 89 percent depth-1 agreement with the base model. It also surfaced one discovery worth the price of admission. Qwen3.8's attention is gated — `q_proj` carries interleaved query and gate channels that must be split before anything downstream makes sense.
+
+Phase 2 closed the loop. Draft, verify, accept, roll back, resume — ten out of ten held-out prompts came back token-identical to serial decode, with real rejects along the way. Fidelity: perfect.
+
+## Perfect, and slower
+
+Then the other gate spoke. End to end, the port measured 0.96x. A slowdown. The loop that produced flawless tokens produced them slower than not existing. A fidelity gate alone would have blessed the deploy, and the haus would have shipped a beautifully correct regression to its most important seat. The perf gate is the one that said no.
+
+## The tax we levied on ourselves
+
+The verify step was the suspect. Scoring two queued tokens at `T_q=2` cost 1.49x a serial step, on a memory-bound model where scoring two should cost barely more than scoring one. The cause was our own Phase 0 fix. The f32 kernel output — correct, gate-approved — was never cast back down. One f32 tensor at the bottom of every GDN block promoted the entire 64-layer residual stream to f32. Twice the activation bytes, everywhere, on a model whose speed is its memory traffic. One cast fixed it. The verify ratio fell to 1.14x, which is the ideal, and serial decode itself jumped from 15.4 to 21.7 tokens per second in the worktree. Production never had the leak; the fix that caused it lived only on the branch being measured.
+
+## The stream that was load-bearing
+
+Casting the leak away exposed why it had survived every fidelity run: the f32 stream was doing silent structural work. mlx dispatches different Metal kernels by batch height — `qmv` at M=1, `qmv_wide` at M≥2 — and their outputs differ by one or two bf16 ulps. That is nothing. Until a temp-0 argmax sits exactly on the boundary. The wide f32 stream had been absorbing the disagreement. The fast bf16 stream lets it through, at a measured 2.7 benign flips per thousand tokens — word-order and hyphenation class, not meaning. So the haus wrote down a distinction it had been getting for free: exact speculation and fast speculation are different configurations, and you pick one on purpose.
+
+## The squeeze
+
+With the leak gone, the depth sweep. Depth 1 yields 1.15 to 1.20x. Depths 2 and 3 fall away in order, and depth 4 lands at 0.85 to 0.97x — a regression. The acceptance chain is not the culprit; it barely decays down the positions: 0.831, 0.786, 0.771, 0.758. The limiter is position-1 pairing quality: 0.83 here, against the 0.979 the mtplx reference achieves. Every deeper draft spends verify compute on tokens the first position already doomed.
+
+<Aside type="caution" title="One process, one truth">
+The first depth comparison ran one process per depth, and it ranked depth 3 first. Fiction. The serial baseline had drifted from 12 to 24 tokens per second between processes — ambient load on a shared box does that. The within-process interleaved sweep, serial and speculative alternating in the same run, inverted the ranking decisively. A comparison across processes on a contended machine is a comparison of the machine's moods.
+</Aside>
+
+## The law, third form
+
+So where did the 2.15x go? Mostly, it was never ours to lose. mtplx pays Python per-step overhead on every serial token, and self-speculation amortizes that overhead beautifully. The cathedral's Rust stack never paid it in the first place. The haus already holds that cross-environment deltas are fiction — an mlx version bump once moved a greedy baseline all by itself. This is the law's third form. Cross-stack multipliers are fiction too: a speedup measured on someone else's stack is a fact about their overhead, not about your ceiling. Only your own stack's interleaved measurement counts — the same discipline as [falsify before you fortify](/operations/2026-07-03-verify-before-you-fortify/), holding a stopwatch.
+
+## Parked, on purpose
+
+The final numbers: roughly 1.15 to 1.20x on a quiet box, closer to 1.06x under council load. The price: 850 MB of resident MTP head, plus the exact-versus-fast determinism choice above, on a contended 64 GB machine that already runs a council. Parked. Not deleted — banked, on the branch: the sound GDN rollback, the head loader, the depth-k loop, ten measurement bins, and the ulp characterization. Any future speculation work here starts on day one with all of it.
+
+The gates did precisely what they were built for. Fidelity caught two real bugs before the head ever spoke. The perf gate turned a would-be bad deploy into a map of levers, each with its price now written down: a cheaper batched verify buys back the tax, better position-1 pairing buys depth, a bigger box buys headroom. When one of those levers moves, the branch is waiting. The needle never reached two-fifteen; the haus now knows, to the decimal, what it would cost to get there.
