@@ -1,0 +1,71 @@
+---
+title: "2026-08-18: The Prewarm That Ate Its Own Tail"
+description: "Qui-Gon returned HTTP 413 to every real turn for eighteen days while its health endpoint answered 200 and every canary passed. The seat's own cold-start remedy had been quoting its failures back into its own prompt until two thirds of a 52,887-token request was a transcript of the seat failing."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: one long ribbon of tractor-feed printout, sprocket holes down both edges and rows of illegible marks across its panels, curves into a closed loop and ends in a serpent's head whose open jaws bite down on its own tail — a small teal halo glowing at exactly the point where the record swallows itself](./images/hero-2026-08-18-the-prewarm-that-ate-its-own-tail.png)
+
+For eighteen days the code seat answered every real question with a refusal, and nobody heard it. Qui-Gon — OpenClaw's coding brain, routed through proxyd's `council-code` alias into cathedral-Devstral on `:3301` — returned HTTP 413 to roughly fifteen hundred turns a day, from 2026-08-01 to 2026-08-18. Its `/health` endpoint returned 200 the entire time. Every canary passed. The canaries send 544-token prompts, and only large prompts were failing, so the seat looked immaculate from every angle anyone had thought to look.
+
+## Two medians, one log file
+
+The outage was not found. It surfaced sideways, while someone was measuring whether a quantized-KV cache deploy would pay off on that seat — the same stopwatch discipline that had [parked the native-MTP port](/operations/2026-08-17-the-two-fifteen-that-wasnt/) the day before.
+
+Two views of the same log disagreed, badly. Filtering for `request completed` lines gave a median prompt of 322 tokens: small, healthy, boring. Grepping the raw `prompt_tokens=` field gave about 49,684. The gap between those two numbers was 21,389 lines that had never completed anything, because they were rejections. A filter is a claim about which lines mean what you think they mean. That one had quietly excluded every line that mattered.
+
+## The remedy that became the disease
+
+`devstral-prewarm-sentinel.sh` was not a blunder. It existed to solve a genuinely nasty problem: Qui-Gon's roughly 19,000-token system prompt cold-prefills for three to four minutes, and OpenClaw's idle watchdog gives up at a hard 120 seconds. The arithmetic is merciless. The first turn after any restart could never succeed.
+
+So the sentinel fires a sacrificial turn on a timer — one turn whose failure is expected, discarded, and useful only for the warm cache it leaves behind. Its own header calls that turn throwaway.
+
+Its arguments said otherwise. The script passed `--session-id devstral-prewarm`, and a named session in OpenClaw is persistent and resumed, not thrown away. Every fire therefore appended about 1.3 KB of `[assistant turn failed before producing content]` to a transcript that the next fire would faithfully re-send as its prompt.
+
+## The ratchet
+
+From there the shape draws itself. A dead seat serves nothing, so it sits idle. Idle for twenty-five minutes is precisely the sentinel's trigger, so it fires. The fire fails, appends its failure, and the prompt grows. A larger prompt fails harder and keeps the seat idle, which guarantees the next trigger.
+
+`compactionSummary` went from 2,141 bytes to 16,907 in under four hours. The session file reached 28 MB; its trajectory, 10 MB.
+
+## What 52,887 tokens actually were
+
+Nobody had to guess at the composition. It was measurable, so it was measured.
+
+| Component | Tokens |
+|---|---|
+| Accumulated failure transcript | 34,300 |
+| System prompt | 12,826 |
+| Tool schemas | 5,761 |
+| **Total** | **52,887** |
+
+Two thirds of the request — 34,300 tokens, 64.9 percent — was the seat's own failure transcript.
+
+That arithmetic killed two comfortable theories on the spot. Skills were not accumulating: progressive disclosure keeps SKILL.md bodies out of the prompt entirely, which is the whole point of it. Tool schemas had not bloated either — they shrank. Across twenty-four days the fixed part of the prompt got 145 tokens *smaller*. Every byte of growth came from one place, and that place was the seat quoting its own failures back to itself.
+
+The curve is a straight line into a wall. On 07-25 the prompt measured 20,069 tokens. On 08-01 it hit 33,377 and crossed the 32,768 cap. By 08-11 it stood at 52,970, and there it plateaued, because a request that is already refused has no room left to grow.
+
+<Aside type="caution" title="The first report was wrong twice">
+Version one said the outage was six days old. The log had simply never rotated, and six days was the age of the oldest line anyone had bothered to read; the true onset was 08-01, eighteen days. The second correction was the dangerous one, because it arrived dressed as evidence. "Maximum completed prompt: 4,011 tokens" looked like proof the seat had never served a large turn in its life. It was a filtering artifact — `request completed` is emitted only by the non-streaming path, so every streaming turn was invisible to it. Measured properly, the seat had been serving real work at 19,000 to 23,000 tokens, around a hundred turns a day, until 08-04, when it collapsed. The rejections had begun three days before that, on 08-01, the day the prompt first crossed the cap. Same verdict, sounder evidence, and a precise date of death in place of a vague one.
+</Aside>
+
+## The fix, and the seatbelt already in the drawer
+
+The repair costs nothing and takes no memory: purge the session files before each fire. The prewarm then sends exactly the 18,600-token system prompt it exists to warm, and nothing else. Verified live on the running seat: the prompt fell from 52,887 tokens to 18,588, and the 1,775 rejections logged earlier that day became zero after. No GiB spent, no restart, no cap raised.
+
+The second half of the fix had already been invented and never fitted. `council-code` and `council-devstral` carried no `max_prompt_tokens` at all, while `council-heartbeat` has carried one since its own oversized-caller incident — with a comment in the config describing this exact bug class, in advance, in writing. A seatbelt bolted into one seat and left out of the others. `max_prompt_tokens: 32000` now sits on the code seats too.
+
+One more rule went in that should never have needed writing down. A 413 is deterministic: the same prompt is too large forever, and retrying it is not resilience, it is noise. proxyd was retrying about seventeen times per real turn, amplifying a refusal into a load. Commit `cd0ef69` in sanctum-config carries all of it.
+
+## Why the cap was the wrong lever
+
+The tempting fix is always the cap, and the arithmetic is what refuses it. Lifting the ceiling to 53k costs an extra 6.25 GiB of KV pool on a Mini with 3.10 GiB free. Even in a world where that memory existed, what it buys is the privilege of prefilling 34,300 tokens of failure text on every single turn — paying full price, at full speed, to read the seat its own obituary.
+
+## Alive is not the same as serving
+
+Every probe pointed at that seat asked one question: is it up? `/health` answered honestly. The process was running, the weights were loaded, the socket accepted. Not one probe asked whether it was *serving* anybody — the haus has walked into this exact room before, the day [Force Flow's health endpoint said OK for twenty-five hours](/operations/2026-08-08-the-green-lie/) over a dead enforcement loop.
+
+A rejection-rate gate would have fired on 08-01, seventeen days before a human noticed. A prompt-growth tripwire would have fired around 07-28, before the first rejection existed to be counted. That sentinel is being built, and it is the only part of this episode that is new work rather than restored work.
+
+Because the fix does not make Qui-Gon healthy. It makes it July again. The cold start underneath is exactly as real as it ever was: nineteen thousand tokens still take three to four minutes to prefill, the watchdog still quits at 120 seconds, and the haus still needs a sacrificial turn to bridge the two. What changed is that its failures finally have somewhere to go. A remedy designed to fail needs a place to put the failing — otherwise it finds one on its own, and the place it finds is the prompt.
