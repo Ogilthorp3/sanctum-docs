@@ -7,12 +7,12 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Great Hauses — a tactical 3D battlefield in the grand torch-lit cathedral hall where medieval knights clash under the watchful gaze of the hall dragon.](./images/hero-great-hauses.jpg)
 
-Every home server cluster needs a hobby. Ours plays chess. When the Mac Mini finishes balancing the heat pump logs and routing the [Council Router](/architecture/council-router/), it runs **Great Hauses** — a 3D dark-fantasy medieval chess engine engineered in Godot 4 for macOS desktop, Windows, and Apple Vision Pro spatial computing (`visionOS`).
+Every home server cluster needs a hobby. Ours plays chess. When the Mac Mini finishes balancing the heat pump logs and routing the [Council Router](/architecture/council-router/), it runs **Great Hauses** — a 3D dark-fantasy medieval chess engine engineered in Godot 4 for macOS desktop, Windows, iPad, and Apple Vision Pro spatial computing (`visionOS`).
 
 It pairs classical FIDE tournament chess mechanics with real-time cinematics. Dynamic camera direction tracks every clash. Banners flutter along the stone hall. A giant dragon spectates from the rafters. Above all, a 3-tier VFX moments system treats a Queen sacrifice with the reverence it deserves.
 
 **Date:** 2026-08-15  
-**Status:** Shipped (macOS Desktop, Windows & visionOS Immersive Space)  
+**Status:** Shipped (macOS Desktop, Windows, iPad via TestFlight & visionOS Immersive Space)  
 **Repository:** `great-hauses-core`  
 
 ## 1. Architectural Foundation: Headless Core & Presentation Split
@@ -166,21 +166,79 @@ The flagship DLC expansion introduces **Haus Vinterdread**, an army forged in No
 
 The game connects directly to Sanctum's local intelligence infrastructure. When playing against the **Oracle**, the match interfaces with [ds4max](/architecture/ds4max/) and [ds4-agent](/agents/ds4-agent/) via local sockets. The opponent reasons about the board state, delivers in-character tactical banter, and explains its grandmaster blunders with complete philosophical composure.
 
-## 10. Verification & Automated Test Gates
+## 10. The Tablet Port: What a Touchscreen Takes Away
 
-The Great Hauses engine is backed by a 100% green automated test pyramid:
+The first iPad build reached a nine-year-old play-tester, who won his game at
+1700 and then filed three bugs. Every one of them was a thing a desktop had
+quietly been providing all along.
+
+**There was no sound.** Godot's default iOS audio session category is `Ambient`
+— correct for an app that should duck to the user's music and respect the
+silent switch, wrong for a game whose score and dragon roar *are* the product.
+The fix is one integer (`3`, Playback). The lesson is that a default chosen for
+apps in general is not a default chosen for yours.
+
+**The camera could not be moved.** A finger has no right button and no scroll
+wheel, and the first attempt reached for `InputEventPanGesture` /
+`InputEventMagnifyGesture` — which are *trackpad* events. Godot 4.7 has no
+`enable_pan_and_scale_gestures` property at all, so on iOS those events are
+never generated: the handler was dead code that read like a feature. Raw
+touches are the honest primitive — two fingers, centroid to orbit, spread to
+zoom.
+
+**And that fix created a worse bug than it cured.** `emulate_mouse_from_touch`
+turns the first finger into a left click, and the board acted on *press* — so
+putting two fingers down to look around could select a piece, or on a legal
+destination square, commit a move. Taps now commit on *release* and are
+cancelled by a second finger or by travel. Losing a game to a camera gesture is
+not an acceptable price for a camera gesture.
+
+A fourth defect never reached the tablet at all but belongs here, because it is
+the same shape: adding the iPad's `window/handheld/orientation` key created a
+second `[display]` section in `project.godot`. Godot's own parser merges
+duplicate sections happily, so it looked fine in the editor, fine in game, and
+fine in the build that shipped — and then took the entire visionOS export down,
+because the preset assertion reads that file with Python's `configparser`,
+which raises `DuplicateSectionError`. **The engine's tolerance is not the
+contract; the strictest reader is.**
+
+## 11. Verification & Automated Test Gates
+
+The engine is backed by a headless test pyramid that runs on every platform's
+source before any of them is exported. Measured 2026-08-18, not remembered:
 
 ```bash
 # Automated Test Suite Verification
-tests/test_vfx_moments.gd    ── PASS (3/3 checks)
-tests/test_easter_eggs.gd    ── PASS (22/22 checks)
-tests/test_holochess.gd       ── PASS (20/20 checks)
-tests/test_coach_engine.gd   ── PASS (13/13 checks)
-tests/test_leela_bridge.gd   ── PASS (6/6 checks)
-tests/test_dragon.gd         ── PASS (225/225 checks)
-tests/test_cinematics.gd     ── PASS (95/95 checks)
-tests/test_house_packs.gd    ── PASS (407/407 checks)
-E2E Boot & Move Scenarios    ── PASS (25/25 steps)
+tests/test_house_packs.gd          ── PASS (405/405 checks)
+tests/test_kill_styles.gd          ── PASS (207/207 checks)
+tests/test_cinematics.gd           ── PASS (114/114 checks)
+tests/test_music.gd                ── PASS (104/104 checks)
+tests/test_duel_facing.gd          ── PASS  (77/77 checks)
+tests/test_cathedral_and_dragon.gd ── PASS  (26/26 checks)
+tests/test_platform_degradation.gd ── PASS  (24/24 checks)
+tests/test_easter_eggs.gd          ── PASS  (22/22 checks)
+tests/test_holochess.gd            ── PASS  (20/20 checks)
+tests/test_coach_engine.gd         ── PASS  (13/13 checks)
+tests/test_touch_input.gd          ── PASS   (7/7 checks)
+tests/test_leela_bridge.gd         ── PASS   (6/6 checks)
+tests/test_vfx_moments.gd          ── PASS   (3/3 checks)
+tests/test_dragon.gd               ── 239/245 · 6 KNOWN RED
+E2E boot · duel · dragon-live · kills ── PASS
 ```
 
-The game is packaged for macOS desktop, Windows, and Apple Vision Pro. Whether you play on a 4K studio display or an immersive spatial headset, the king falls with dignity, the dragon roars on cue, and the house stands unbroken.
+Those six reds are real and are named rather than rounded away: they are
+geometry assertions left by a dragon re-export on 2026-08-16, they predate the
+work above, and a suite that reports 245 checks with six failures is more
+useful than one that reports a clean number nobody re-measured. **A green
+badge is a claim, and a claim needs an observation behind it.**
+
+Each new behaviour is gated by a test that was *falsified before it was
+trusted* — disabled the fix, watched the gate go red, restored it. That caught
+a bad one: the first occlusion test passed with the fix switched off, because
+its ring of eight blockers left metre-wide gaps and nothing was ever actually
+in the shot. It now stands a king in the exact angle the camera picks.
+
+The game is packaged for macOS desktop, Windows, iPad, and Apple Vision Pro.
+Whether you play on a 4K studio display, a tablet on a kitchen table, or an
+immersive spatial headset, the king falls with dignity, the dragon roars on
+cue, and the house stands unbroken.
