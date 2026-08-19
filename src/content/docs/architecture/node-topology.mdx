@@ -131,11 +131,11 @@ These services only run on the hub and are not deployed to satellites:
 
 ## Hub Network — The Bridge
 
-The Mac Mini hub runs one virtual machine — the Ubuntu agent VM on Lima `vmType=vz` — plus an OrbStack container runtime for the few persistent containers (Outline; Home Assistant now lives on its dedicated Green box at `10.0.0.3`). The bridge from the Mac host to the VM is `bridge100` on a private `/24`: the Mac is `10.10.10.1`, the VM is `10.10.10.10`. OrbStack runs on its own private network and does not contest `bridge100`.
+The Mac Mini hub runs one virtual machine — the Ubuntu agent VM on Lima `vmType=vz`. Outline and Matrix live inside that guest; Home Assistant lives on the dedicated Green box at `10.0.0.3`. The bridge from the Mac host to the VM is `bridge100` on a private `/24`: the Mac is `10.10.10.1`, the VM is `10.10.10.10`. OrbStack was uninstalled 2026-08-19 and no longer contests anything.
 
 ### One bridge, one VM
 
-The agent VM was migrated from QEMU/HVF to Lima `vmType=vz` on 2026-05-10 to end the 370% idle-spin the QEMU/HVF bind was burning ([field note](/operations/2026-05-10-the-vision-probe-lied/)). The container runtime was migrated from Colima to OrbStack on 2026-04-27 ([Colima→OrbStack field note](/operations/2026-04-27-colima-to-orbstack/)) — OrbStack uses native networking with no vmnet contention, so the dual-bridge race that haunted the QEMU+Colima era is structurally impossible now. The Colima LaunchAgent was retired in the same cleanup on 2026-05-16.
+The agent VM was migrated from QEMU/HVF to Lima `vmType=vz` on 2026-05-10 to end the 370% idle-spin the QEMU/HVF bind was burning ([field note](/operations/2026-05-10-the-vision-probe-lied/)). Colima died 2026-04-27; OrbStack died 2026-08-19 ([The Engine That Wasn't There](/operations/2026-08-19-the-engine-that-wasnt-there/)). Guest docker is Lima's; the host has no container engine.
 
 <Aside type="note">
 Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `socket_vmnet` and bridge order mattered. The whole class of bug is gone now. If you find a doc or script still referencing `~/.colima/default/colima.yaml`, file an issue — it's stale.
@@ -145,7 +145,7 @@ Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `s
 
 The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of system LaunchDaemons in `/Library/LaunchDaemons/` and the usual user LaunchAgents:
 
-1. **Phase 1: Containers** — OrbStack starts headlessly via its hidden-autostart LaunchAgent, Docker socket ready, Outline container up.
+1. **Phase 1: Guest containers** — Lima VM docker brings Outline/Matrix up inside `sanctum-vm`; host socat forwards `:3100` / `:6167`.
 2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.6-35B-A3B-4bit) and `sanctum-mlx-devstral` (`:3301`, Devstral-Small-2-24B-Instruct-2512-4bit, the coder seat since the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8900` come up to front them. Both MLX seats load as **user** LaunchAgents (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`), not system daemons.
 3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; the host IP is pinned to `10.10.10.1`; the boot path waits for VM SSH before declaring success.
 4. **Phase 4: SSH + bridges** — `apple-post-boot.sh` loads SSH keys from Keychain via `ssh-add --apple-load-keychain`; socat proxies stitch VM-side requests to Mac-side services (Firewalla, MLX coder, SanctumBridge).
@@ -180,7 +180,7 @@ Think of it as a field office. It can operate independently, make local decision
 1. Install macOS on the satellite Mac and join it to Tailscale.
 2. Copy the install bundle (synced via iCloud) and run the setup scripts.
 3. Set the `.node_id` file to the satellite's name (e.g., `satellite`).
-4. Install OrbStack and deploy Home Assistant.
+4. Home Assistant is the Green appliance at `10.0.0.3`, not a Mini container.
 5. Install a local model the satellite hardware can hold — the chalet's M1 16 GB fits a ~10 GB 4-bit model for the on-site agent (`ahsoka`, reserved, not yet deployed). Or route to the hub's `:3301` Devstral coder seat when the link is reliable.
 6. Configure on-site integrations (cameras, sensors, smart devices).
 7. Update the satellite's `host` field in `instance.yaml` on the hub.
