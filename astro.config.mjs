@@ -321,6 +321,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-20 — The Bridge Was Fine', slug: 'operations/2026-08-20-the-bridge-was-fine' },
 								{ label: '2026-08-20 — The Offset That Cried Wolf', slug: 'operations/2026-08-20-the-offset-that-cried-wolf' },
 								{ label: "2026-08-19 — The Engine That Wasn't There", slug: 'operations/2026-08-19-the-engine-that-wasnt-there' },
 								{ label: '2026-08-18 — The Prewarm That Ate Its Own Tail', slug: 'operations/2026-08-18-the-prewarm-that-ate-its-own-tail' },
