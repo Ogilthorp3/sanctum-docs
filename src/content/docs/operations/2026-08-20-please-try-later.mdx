@@ -1,0 +1,71 @@
+---
+title: "2026-08-20: Please Try Later"
+description: "The Firewalla box said it was initializing. Force Flow paged that curfew was down. The local bridge had answered every call."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch of an Abyssinian cat on a workbench covering a brass wall-telephone clapper so it cannot ring, a small gold home-router brick beside her with one calm teal lamp and a wisp of warm steam.](./images/hero-2026-08-20-please-try-later.png)
+
+The box's own words were six of them: *Initializing Firewalla Device, please try later.* Force Flow's words, delivered to Signal as CRITICAL, were that the Firewalla bridge was unreachable or rejecting auth, that kids' curfew was not being applied, and that someone should check the token and whether anything was shadowing loopback `:1984`.
+
+The token was fine. Nothing was shadowing `:1984`. The Node process on the Mini had returned HTTP 500 because the Gold Pro behind it was busy. Three of those 500s opened the enforcement breaker for five minutes. That is how a warm box becomes a missing one.
+
+## Two clocks, one gong
+
+[The Bridge Was Fine](/operations/2026-08-20-the-bridge-was-fine/) shipped in the morning. It taught the producer to *name* the failure: per-host `POST /host/{mac}/rules` 500 no longer opened the breaker, and the parent page stopped calling a 500 "unreachable." That was the honesty fix. It was not enough.
+
+Nightly 22:30 winddown still posted DNS rules across the screens. The first hosts that hit a box still initializing 500'd. Under the old process that was three 500s and a CRITICAL. After the honesty fix those per-host 500s would have been silent — and the next morning they were not the ones that paged.
+
+At 09:23 the path to the box's encipher port went `ENETUNREACH`. `GET /hosts` is a global read. The honesty table still treated a global 5xx as "we cannot see the world," opened the breaker, and paged. Two per-host `GET /host/{mac}` 500s rode along. Title: enforcement DOWN. Body: the old mash, because Force Flow PID 889 had not been replaced yet. Five minutes later the box was reachable again and the restore claimed a resurrection.
+
+The Node log is the receipt: *Initializing Firewalla Device, please try later* on the winddown writes, then connect timeout / `ENETUNREACH` on the morning inventory. `:1984` answered. The Gold Pro asked for a moment.
+
+## What the honesty table still got wrong
+
+A 500 from the local bridge means the local bridge is alive. The Firewalla SDK throws "please try later" when FireMain is restarting. It throws `ECONNRESET` / `ETIMEDOUT` / `ENETUNREACH` when the encipher path to the box blips. The outer handler turned every one of those into HTTP 500.
+
+Counting those toward the *enforcement* breaker pauses every curfew write for 300 seconds because we could not list hosts. Presence can skip a tick. Writes should keep trying. Opening the breaker is how a 5-minute box flap becomes a 5-minute enforcement holiday.
+
+## What shipped
+
+The Node bridge retries those box errors (three tries, backoff). `GET /hosts` keeps a last-good inventory and serves it with `stale: true` instead of 500 when the retries exhaust. `POST /host/{mac}/rules` stays HTTP 200 after retries exhaust; failed domains are listed, not thrown.
+
+The enforcer breaker no longer opens on any HTTP 5xx, nor on timeouts and connection resets. Parents get a CRITICAL only when we cannot establish TCP to loopback `:1984`, when the token is rejected after a refresh, or when the token file is missing. A warm box is not a missing bridge.
+
+| Kind | Breaker | Parent page |
+|---|---|---|
+| connect refused to `:1984` | open | enforcement DOWN, unreachable |
+| 401 after token refresh | open | enforcement DOWN, rejecting auth |
+| no token | open | enforcement DISABLED, config fault |
+| HTTP 5xx (any path) | stay closed | none — log only |
+| timeout / reset / `ENETUNREACH` via `:1984` | stay closed | none — log only |
+| per-host write failure | stay closed | none — already the honesty rule |
+
+<Aside type="caution" title="Please try later is not a missing box">
+If loopback `:1984` is actually gone, the connect-refused kind still pages loud, still forces Signal on restore, still waits out boot grace. The change is that FireMain asking for a moment no longer takes curfew offline with it.
+</Aside>
+
+## Deploy path
+
+`sanctum-screen-time` on the Mini is the live engine (symlink into Force Flow). The Node bridge is the one file still copied: `deployed/firewalla-bridge.js` → `~/.openclaw/firewalla-bridge.js`. Both processes were replaced after the tree landed. `/health` `sdkReady`. `/screen/liveness` `enforcement_ready=true`, last tick after the new PIDs.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | Node contract 35/35 (Initializing retry, stale `/hosts`, `/rules` stays 200). `test_bridge_resilience.py` 18/18 (global 5xx does not page; connect-refused still does). Hermetic pytest 891 passed, 4 skipped, 1 xfailed |
+| in Sanctum-docs | This field note + sidebar entry |
+| Merged | `sanctum-screen-time` on `origin/main` |
+| And Deployed | Live Node and Force Flow PIDs started after the file mtimes. `/health` `sdkReady`. `/screen/liveness` `enforcement_ready=true` |
+
+[The Bridge Was Fine](/operations/2026-08-20-the-bridge-was-fine/) stopped the gong from lying about *which* failure it was. This one stops the gong from ringing because the box asked us to wait. It can still say please try later. We just stop taking that as a missing bridge.
+
+## Related
+
+- [The Bridge Was Fine](/operations/2026-08-20-the-bridge-was-fine/) — per-host 500 is not an outage; the copy still has to be true
+- [The Restore That Never Rang](/operations/2026-08-05-the-restore-that-never-rang/) — Signal must hear a critical self-heal
+- [Screen Time Enforcement](/operations/screen-time-enforcement/) — the runbook the breaker protects
+- [Force Flow](/architecture/force-flow/) — notify routing; the body is delivered verbatim
+- [Engineering Discipline](/architecture/engineering-discipline/) — EETISMAD
+- Repo: `~/Projects/sanctum-screen-time/`
