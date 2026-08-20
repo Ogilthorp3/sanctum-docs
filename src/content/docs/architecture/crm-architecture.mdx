@@ -103,6 +103,8 @@ A failure pages Force Flow. So does silence: each ingest script counts consecuti
 
 <Aside type="caution" title="Timestamps are UTC instants, rendered local">
 Storage is always true-UTC `TIMESTAMPTZ`; the views render in `America/Toronto` so a human reads "you texted at 4pm". Every writer pins its session to UTC, because DuckDB interprets a naive timestamp string in the *session* zone — on a non-UTC host, an unpinned write lands as the wrong instant. The repair migration for that class of bug is guarded by a primary key in `crm_meta` inside the same transaction, so it can apply exactly once; a second pass would shift a quarter-million rows by four hours.
+
+The hourly freshness sentinel reads `v_timeline.ts` (already local wall-clock) and **must** compare it to `now() AT TIME ZONE 'America/Toronto'`. Comparing to UTC `now()` adds the EDT/EST offset to every channel's age. On 2026-08-20 that turned a 2.7h quiet stretch into a 6.7h CRITICAL while mail ingest was still inserting — see [The Offset That Cried Wolf](/operations/2026-08-20-the-offset-that-cried-wolf/). R2D2 will kickstart the matching ingest job only when the *source table* is past SLA on the UTC clock; a Toronto-offset false page is refused.
 </Aside>
 
 ## Partner session checklist
