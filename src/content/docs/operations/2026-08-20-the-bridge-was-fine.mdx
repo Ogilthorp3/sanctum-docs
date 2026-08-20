@@ -53,17 +53,9 @@ Qui-Gon still gets kicked when a *classified* DOWN is critical. He should not be
 
 `sanctum-screen-time` on the Mini is the live engine (symlink into Force Flow). Landing on `main` is not enough. Force Flow PID 889 started 2026-08-19 16:27 and holds the old module in memory until the process that owns `:4077` is actually replaced. `launchctl kickstart` without `-k` is a no-op when `/health` is green — the launch wrapper exits 0 on purpose, to avoid EADDRINUSE storms.
 
-The reload is `sudo /bin/launchctl kickstart -k system/haus.sanctum.force-flow`. That exact command is what `sudoers-sanctum-kickstart` is supposed to grant NOPASSWD. On 2026-08-19 the repo file was renamed to `haus.sanctum.*`; `/etc/sudoers.d/sanctum-kickstart` was not reinstalled. Live sudoers still matches `system/com.sanctum.force-flow`. That kickstart returns 113 — service not found — and PID 889 does not move. Failsafe healers are a silent no-op until Bert reinstalls the file:
+The reload is `sudo /bin/launchctl kickstart -k system/haus.sanctum.force-flow`. That exact command is what `sudoers-sanctum-kickstart` grants NOPASSWD. On 2026-08-19 the repo file was renamed to `haus.sanctum.*`; live sudoers still matched `com.sanctum.force-flow`, so kickstart returned 113 (service not found) and PID 889 did not move.
 
-```bash
-sudo visudo -cf ~/.sanctum/scripts/service-user/sudoers-sanctum-kickstart \
-  && sudo install -m 440 -o root -g wheel \
-       ~/.sanctum/scripts/service-user/sudoers-sanctum-kickstart \
-       /etc/sudoers.d/sanctum-kickstart
-sudo /bin/launchctl kickstart -k system/haus.sanctum.force-flow
-```
-
-Then confirm the new PID's start time is after the file mtime, `/screen/liveness` still `enforcement_ready=true`, and enrolled screens still blocked if curfew is on.
+Bert reinstalled the file at 09:57 (`visudo -cf` parsed OK, install 440 root:wheel, size 1210 matches the repo). Then `-k` replaced the listener. New PID 53632 started 2026-08-20 09:57:31 — after the tree mtime 07:21:48. `/screen/liveness` `enforcement_ready=true`, last tick 8s after start. Thirteen enrolled screens still blocked (holiday wake 10:00). Albert already off curfew (wake 09:00), personal unpaused. Bridge sentinel HEALTHY.
 
 ## What EETISMAD looks like here
 
@@ -72,7 +64,7 @@ Then confirm the new PID's start time is after the file mtime, `/screen/liveness
 | Everything E2E Tested | `test_bridge_resilience.py` including per-host 5xx, no-token config-fault copy, global-5xx warn, auth restore without "reachable again"; full hermetic suite 890 passed, 4 skipped |
 | in Sanctum-docs | This field note + sidebar entry |
 | Merged | `sanctum-screen-time` `259d779` on `origin/main` |
-| And Deployed | **Not yet.** Symlink is the repo file (`259d779`). Live PID 889 started 2026-08-19 16:27. Kickstart of `haus.sanctum.force-flow` needs a password because `/etc/sudoers.d/sanctum-kickstart` still lists `com.sanctum.force-flow` (exit 113). Reinstall the sudoers file, then `-k` the daemon. |
+| And Deployed | Force Flow PID 53632 started 2026-08-20 09:57:31 (file mtime 07:21:48). `/screen/liveness` `enforcement_ready=true`. 13/13 enrolled screens still blocked. Sentinel HEALTHY. Sudoers reinstalled `haus.sanctum.*` 09:57 |
 
 The August 5 note closed the loop so a real outage's recovery could be heard. This one stops the haus from hearing an outage that did not happen. The gong can still ring. It has to mean something.
 
