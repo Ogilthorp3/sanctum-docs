@@ -321,6 +321,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-21 — The Meeting That Was Already There', slug: 'operations/2026-08-21-the-meeting-that-was-already-there' },
 								{ label: '2026-08-20 — Three Nodes, One Inbox', slug: 'operations/2026-08-20-three-nodes-one-inbox' },
 								{ label: '2026-08-20 — Please Try Later', slug: 'operations/2026-08-20-please-try-later' },
 								{ label: '2026-08-20 — The Bridge Was Fine', slug: 'operations/2026-08-20-the-bridge-was-fine' },
