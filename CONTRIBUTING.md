@@ -120,7 +120,7 @@ Docs ship to a public repo. Assume a hostile reader. The following never appear 
 - **WORK-LANE SYSTEMS** — the firm's *name* is not a secret; its *systems map*
   is. Never publish where work secrets live (`triptyq.1password.com`), what
   they are called (`TRIPTYQ_*`, `triptyq-affinity-api-key`), which private work
-  repos exist (`Triptyq-Capital/*`), work launchd labels (`com.triptyq.*`), or
+  repos exist (`Triptyq-Capital/*`), work launchd labels (`com.triptyq.*`, `vc.triptyq.*`), or
   verbatim paths into fund documents (`/sites/…`, `02_… I SEC/`). Two-lane
   doctrine cuts both ways: haus infrastructure must not hold work secrets, and
   public haus docs must not map work systems. **This clause was added
@@ -150,7 +150,7 @@ Canonical placeholder registry:
 | Work 1Password | `work.1password.com` | |
 | Work repo | `work-cli`, `work-skills`, `<work-org>/work-*` | |
 | Work credential | `WORK_*`, `work-affinity-api-key` | |
-| Work launchd label | `com.work.*` | |
+| Work launchd label | `vc.work.*` | |
 | Work SharePoint | `/sites/<work-site>`, `02_<Fund>/` | |
 
 **Before you commit**, grep your diff. If you wrote an IP that isn't in the 10.0.0.0/24, 192.0.2.0/24, or 100.0.0.0/24 blocks, you wrote a real one. Fix it. The CI check runs `scripts/contrib-check.py` which flags these patterns; treat a failure as a security incident, not a style nit.

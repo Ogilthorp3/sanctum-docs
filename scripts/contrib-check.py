@@ -112,7 +112,10 @@ LEAK_WORKLANE_RES = [
     (re.compile(r"\b[a-z0-9-]*triptyq[a-z0-9-]*\.1password\.com\b", re.I), "work 1Password tenant — use work.1password.com"),
     (re.compile(r"\bTRIPTYQ_[A-Z0-9_]+"), "work credential env var — use WORK_*"),
     (re.compile(r"\btriptyq-(cli|skills|affinity[a-z0-9-]*)\b", re.I), "work repo/credential name — use work-*"),
-    (re.compile(r"\bcom\.triptyq\.[a-z0-9.-]*", re.I), "work launchd label — use com.work.*"),
+    # Both the legacy `com.triptyq.*` and the reverse-DNS `vc.triptyq.*` that
+    # replaced it (migration 2026-08-24). Matching only the old prefix would
+    # have let every renamed label leak the day the migration landed.
+    (re.compile(r"\b(com|vc)\.triptyq\.[a-z0-9.-]*", re.I), "work launchd label — use vc.work.*"),
     (re.compile(r"\bTriptyq-Capital/[A-Za-z0-9._-]+"), "private work GitHub path — use <work-org>/work-*"),
     (re.compile(r"/sites/Triptyq[A-Za-z0-9]*", re.I), "work SharePoint site — use /sites/<work-site>"),
     (re.compile(r"\b\d{2}_Triptyq[A-Za-z0-9 ]*", re.I), "verbatim fund document path — use 02_<Fund>"),
