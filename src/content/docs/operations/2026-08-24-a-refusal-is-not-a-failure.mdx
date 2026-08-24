@@ -1,0 +1,80 @@
+---
+title: "2026-08-24: A Refusal Is Not A Failure"
+description: "DFlash2 made the brain seat twice as fast on code and cost nothing in quality. Then it spent eleven hours handing the haus's private traffic to a hosted model, because it was right to refuse a request and wrong about how to say so. The port is now trunk; this is what it taught."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: a wall of brass pneumatic message tubes seen head-on, most of their shutters standing open with letters dropping through into the building, while one shutter is closed and the letters queued at it are being quietly swept sideways into an outbound chute leaving the frame — a small teal halo resting on the one closed shutter](./images/hero-2026-08-24-a-refusal-is-not-a-failure.png)
+
+The brain seat got faster, and 232 of its next 344 answers contained no tokens at all. Every one carried a well-formed envelope, a correct-looking finish reason, and nothing anywhere in it that disagreed. Bert found it the way these are always found: by noticing that a seat he had just made faster was answering in a voice that was not its own.
+
+What had gone in was DFlash2 — a trained drafter that proposes a block of tokens for the resident 27B to verify in one pass instead of one at a time. It works, and the numbers are the reason the port exists:
+
+| Measurement | Result |
+|---|---|
+| Decode-only speedup, interleaved A/B | 2.07x |
+| End-to-end on code | 2.02x |
+| End-to-end on reasoning prose | 1.45x |
+| Quality cost, 164-problem HumanEval | none — 152 solved with, 150 without |
+| Best drafter precision | 4-bit: smallest *and* fastest at 1.544x |
+| Block size | 4 to 5; block 8 is slower than block 5 |
+
+That fifth row is the pleasant surprise. Quantising the drafter is free — the 4-bit drafter is both the smallest and the fastest, and acceptance does not move. The sixth is the unpleasant one: a bigger block loses, because at block 8 the head dimension reaches 256 and falls off the fused attention kernel entirely. There is a cliff, and it is not where intuition puts it.
+
+## The eleven hours
+
+Speculative decoding needs the drafter and the target to agree on what "the next token" means, and at a non-zero temperature they are sampling from different distributions. DFlash2 knows this. Asked for `temperature > 0`, it correctly refused.
+
+It refused by failing. The dispatch fed it those requests anyway, the refusal surfaced as HTTP 503, and proxyd — reading a 503 exactly as it should — concluded the seat was dead and moved down the ladder. The next rung was a hosted model.
+
+The asymmetry is visible in the latency alone. A `temperature: 0` request returned 200 in 0.71 seconds. A `temperature: 0.4` request returned 503 in **0.010 seconds** — too fast to be work, which is the signature of a decision rather than an attempt.
+
+| What was measured | Value |
+|---|---|
+| Brain-seat requests returning zero output | 232 of 344 |
+| Requests proxyd sends at `temperature > 0` | effectively all of them |
+| Where those answers came from | a hosted model, off-box |
+
+That is the whole cost, and it is not the speedup. Declining a request costs you the acceleration on that request. *Failing* one costs correctness — and on a seat that exists so that private material never leaves the building, it silently costs privacy. The haus asked a local brain a question and a rented one answered, and every response looked like a success to its caller.
+
+<Aside type="caution" title="Never assert on the model name in the reply">
+The tell that was not there: `response.model` names the seat that was *asked*, not the one that answered. A fallback returns `finish_reason: stop` with fluent, correct content under the original name. The only honest instrument is the target seat's own request counter — did the thing you meant to ask actually serve a request? Everything else is narration. This is the same instrument problem that let [a code seat return 413 for eighteen days behind a green health endpoint](/operations/2026-08-18-the-prewarm-that-ate-its-own-tail/).
+</Aside>
+
+## The rule it earned
+
+**An acceleration path may decline a request. It must never fail one.**
+
+DFlash2 now declines: it falls back to ordinary autoregressive decoding for anything it cannot draft, and the caller gets a slightly slower correct answer instead of a fast 503. That is the whole fix, and it is one commit. Bert's standing rule for the accelerated paths is what it implements — use every unit of silicon in the box, official or not, and never let an optimisation be able to answer wrongly.
+
+The rest of the doctrine around it is the same shape — feature-detect the private interface rather than assuming it, keep a kill switch that needs no rebuild (`SANCTUM_MLX_DFLASH2=0`), pin the OS build the path was validated against, and prove numeric parity before caring about speed. Sanctum runs on consumer hardware and is judged on tokens delivered, so using an undocumented interface to wake up idle silicon is a legitimate trade. Using one that can *fail* a request is not.
+
+## What the port taught, besides that
+
+The Rust drafter is bitwise identical to the Python reference — maximum absolute difference of zero across 1.74 million logits, on the real codebooks. That sounds like the end of the parity story and it is the middle of it, because **our target is not Python's target**. Our own fused QKV and gate-up projections shift the hidden state by about four units in the last place, which is enough to flip a proposed token, which means every acceptance rate measured against Python is a hypothesis here and not a forecast.
+
+Three traps sat in the checkpoint itself, and none of them crash:
+
+- The config's `model_type` says `qwen3`. The weights are a DFlash2 drafter. A loader that trusts that field builds the wrong model and reports success.
+- `is_causal` is `false`. Applying a causal mask inside the proposed block is the obvious thing to do and it roughly halves acceptance, silently.
+- The convolution's two accumulations have to stay separate. Merging them is arithmetically tempting and wrong.
+- The drafter carries no embedding and no output head at all — it borrows the target's.
+
+<Aside type="note" title="A sequential A/B measured the machine, not the change">
+One early run reported DFlash2 at 0.92x — slower than plain decoding. It was measured sequentially: the autoregressive arm ran at load average 12.9 and the DFlash arm at 31.4. Interleaving the arms on the same box in the same minute turned the same comparison into 2.07x. On a shared machine a sequential A/B is not an A/B, it is two measurements of the weather.
+</Aside>
+
+## Faster is not the same as identical
+
+DFlash2's output is not bit-identical to autoregressive output on this model. Drift appears in the 48 of 64 layers that are gated-delta recurrent, and it grows with length. That could be alarming and the measurement says it is not: 152 problems solved against 150, the same tier of answer reached by a slightly different route. Lateral, not degrading.
+
+Which is a claim that needed a real yardstick, and HumanEval is a poor one — it is saturated, so the honest reading of local-4-bit-plus-DFlash at 92.68 percent against Opus at 98.17 percent is that the gap is a *floor*, not a measurement. Nine problems separate them. The portfolio-brief evaluation the haus uses instead exists because of exactly that.
+
+## Trunk, at last
+
+This is also the day the cathedral's trunk caught up with what it has been serving. `main` had been 42 commits behind the branch running in production — the quantized-KV work, the async-eval pipeline, the Glimmer fusions, and this port. Promoting it turned up two tests that had never been able to do their job: one demanded a 27-billion-parameter checkpoint that exists on no machine here in order to test an error path, and one pinned the default compute device to CPU and never put it back, which quietly broke six unrelated tests further down the alphabet.
+
+Both were invisible for the same reason the eleven hours were. `--test-threads=1` serializes tests; it does not put them on one thread, and a compute stream registered on a thread that has since exited is not there when the next test looks for it. The suite reported the symptom six tests away from the cause, and the repository's own CI could not have caught either one: it filters both modules out, and its workflow asks for a self-hosted runner that this repository does not have.
+
+482 tests now pass where 474 did. The trunk and the deployed branch are finally the same tree.
