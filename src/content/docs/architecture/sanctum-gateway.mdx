@@ -205,7 +205,7 @@ layer survive?
   is a separate, out-of-scope problem).
 - Claude itself being prompt-injected into a malicious upload — mitigated
   at the skill layer with the explicit-list allowlist
-  (`triptyq-skills/sharepoint-structure.yaml`), the hard-coded
+  (`work-skills/sharepoint-structure.yaml`), the hard-coded
   `@triptyq.vc` suffix on `m365` reads, and — once Slack is live —
   per-channel webhook scoping.
 
@@ -222,15 +222,15 @@ app `SharePoint MCP Server`. Scopes: `Sites.ReadWrite.All`,
 
 The site ID and a specific drive ID both live in `secrets.yaml`. Triptyq
 has multi-library sites (`Documents` and `Documents Triptyq` on one
-`/sites/TriptyqCapital` URL), so the gateway honors the configured drive
+`/sites/<work-site>` URL), so the gateway honors the configured drive
 explicitly rather than calling `/sites/{id}/drive` blindly.
 
 Allowed write roots come from
-[`triptyq-skills/sharepoint-structure.yaml`](https://github.com/Triptyq-Capital/triptyq-skills/blob/main/sharepoint-structure.yaml),
+`work-skills/sharepoint-structure.yaml` (private work repo),
 fetched at startup and refreshed hourly. The parser preserves
-multi-segment roots verbatim (`03_Occasions Invest/02_Deal Flow`), and
+multi-segment roots verbatim (`03_Pipeline/02_Deal Flow`), and
 boundary matching uses `path == root or path.startswith(root + "/")` so
-`01_GestionEvilLookalike` can't pass off as `01_Gestion Triptyq`.
+`01_Fund AdminEvilLookalike` can't pass off as `01_Fund Admin`.
 
 Upload behavior:
 
@@ -273,7 +273,7 @@ Code-complete but unconfigured: with no `hmac.slack` in `secrets.yaml`,
 up, the model is per-channel incoming webhooks — Council ruled these over
 a forever-valid bot token: the webhook URL *is* the destination, so a leak
 can only spam its own channel. The belt-and-suspenders allowlist at
-`triptyq-skills/slack-allowed-channels.yaml` isn't provisioned yet —
+`work-skills/slack-allowed-channels.yaml` isn't provisioned yet —
 create it before going live.
 
 ## Endpoints
@@ -286,7 +286,7 @@ the "auth" below is really CF JWT *plus* the inner gate named.
 |------------------|---------------|--------------------------------------------------|
 | `/_health`       | none          | Public liveness — `ok`, `version`, `commit`, `started_at`, `modules`, `allowlist_count`. CF Access still gates the public URL. |
 | `/_diagnostic`   | CF JWT + HMAC | Everything in `/_health` plus rotator status, request count, full allowlist roots, JWT enabled flag. |
-| `/_manifest`     | CF JWT + HMAC | Module + action listing with JSONSchema for every request/response model. Powers `triptyq-skills/scripts/sync-bridge-manifest.py`. |
+| `/_manifest`     | CF JWT + HMAC | Module + action listing with JSONSchema for every request/response model. Powers `work-skills/scripts/sync-bridge-manifest.py`. |
 | `/_metrics`      | none; localhost-bound | Prometheus exposition format. No route-level IP guard — it's private only because the whole server binds `127.0.0.1`. |
 | `/mcp/`          | CF JWT + HMAC | FastMCP `streamable_http_app`. v0.1 has no MCP-side session auth, so this rides the same HMAC as everything else; the previous "skip /mcp" path was a silent bypass. |
 | `/<module>/<action>` | CF JWT + HMAC | Module-defined: `/sharepoint/upload`, `/sharepoint/folder`, `/m365/search`, `/tearsheets/render` today. |
@@ -315,12 +315,12 @@ Three user agents back it:
   deletes the old. A verify failure rolls back — new token deleted, policy
   reset to old-only, alarm logged — and the next daily run retries.
 - `com.sanctum.bridge-canary` — every 6 h. Writes a tiny payload via
-  the public bridge into `01_Gestion Triptyq/_canary/canary-<host>.txt`
+  the public bridge into `01_Fund Admin/_canary/canary-<host>.txt`
   with `if_exists=version`; SP's native versioning then gives a
   monotonically-climbing count per success, and a stuck count means the
   path broke.
 - `com.sanctum.bridge-manifest-sync` — daily 06:30 local; runs
-  `triptyq-skills/scripts/sync-bridge-manifest.py`. Idempotent unless the
+  `work-skills/scripts/sync-bridge-manifest.py`. Idempotent unless the
   manifest drifted, when it regenerates the helper's `<!-- AUTO -->` block.
 
 Status one-liners land at `~/.sanctum/state/bridge-rotate.status` and
@@ -340,7 +340,7 @@ Status one-liners land at `~/.sanctum/state/bridge-rotate.status` and
 
 The restic SOURCES (`~/Backups/sanctum-backup.sh`) include
 `/opt/sanctum` (the encrypted `secrets.yaml`, the bridge code, the keys
-directory) and `~/Projects/triptyq-skills` (allowlist SoT + the manifest
+directory) and `~/Projects/work-skills` (allowlist SoT + the manifest
 sync script). The age master key is *also* in 1Password as a Secure
 Note — losing the SSD plus the 1P entry plus restic is the only recovery
 floor.
@@ -356,7 +356,7 @@ first red row is what to fix.
 ## Repos
 
 - [`Ogilthorp3/sanctum-gateway`](https://github.com/Ogilthorp3/sanctum-gateway) — gateway code, secrets.yaml (encrypted), launchd plists, newsyslog conf.
-- [`Triptyq-Capital/triptyq-skills`](https://github.com/Triptyq-Capital/triptyq-skills) — skill helpers, sharepoint-structure.yaml, sync-bridge-manifest.py.
+- `work-skills` (private work repo) — skill helpers, sharepoint-structure.yaml, sync-bridge-manifest.py.
 - [`Ogilthorp3/sanctum-cli`](https://github.com/Ogilthorp3/sanctum-cli) — `sanctum bridge {health,whoami,manifest,folder,upload,doctor}`.
 - [`Ogilthorp3/sanctum-backup-config`](https://github.com/Ogilthorp3/sanctum-backup-config) — restic + canary scripts on manoir.
 
@@ -365,7 +365,7 @@ first red row is what to fix.
 1. **Scopes — read AND write.** `Sites.ReadWrite.All` +
    `Files.ReadWrite.All`, reusing the existing `SharePoint MCP Server`
    app registration rather than a separate one — operator's call, 2026-04-28.
-2. **Allowlist SoT — `triptyq-skills/sharepoint-structure.yaml`.** A stale
+2. **Allowlist SoT — `work-skills/sharepoint-structure.yaml`.** A stale
    cache falls back to last-known-good; a new root is a skills-repo PR.
 3. **Versioning — hybrid.** `if_exists: "version"` (default) uses native
    versioning; `if_exists: "rename"` for signed final docs where siblings
@@ -375,7 +375,7 @@ first red row is what to fix.
 5. **Slack auth — per-channel incoming webhooks + channel-ID allowlist.**
    Council 2026-04-29: rotation cadence and the prompt-injection model
    both point here.
-6. **Bridge canary — `01_Gestion Triptyq/_canary` with
+6. **Bridge canary — `01_Fund Admin/_canary` with
    `if_exists=version`.** Version count = success count.
 7. **CF Access rotation — local launchd, not remote agent.** The remote
    path has no Keychain or 1P; `com.sanctum.bridge-rotate` on manoir runs

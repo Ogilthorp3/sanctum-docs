@@ -117,6 +117,16 @@ Docs ship to a public repo. Assume a hostile reader. The following never appear 
 - **Tokens, API keys, bearer secrets** — the file *path* to a secret is fine; the *value* is never. Not even revoked values — they correlate with other logs.
 - **UUIDs tied to real accounts** — Apple notarization IDs, App Store Connect IDs, hardware UUIDs, anything that could be cross-referenced with a leak elsewhere.
 - **Email addresses** — use `<owner@haus>`.
+- **WORK-LANE SYSTEMS** — the firm's *name* is not a secret; its *systems map*
+  is. Never publish where work secrets live (`triptyq.1password.com`), what
+  they are called (`TRIPTYQ_*`, `triptyq-affinity-api-key`), which private work
+  repos exist (`Triptyq-Capital/*`), work launchd labels (`com.triptyq.*`), or
+  verbatim paths into fund documents (`/sites/…`, `02_… I SEC/`). Two-lane
+  doctrine cuts both ways: haus infrastructure must not hold work secrets, and
+  public haus docs must not map work systems. **This clause was added
+  2026-08-24 after 36 such mentions were found live on sanctum.run** — the rule
+  above covered haus identifiers exhaustively and had never contemplated the
+  work lane. All seven patterns are now enforced by `contrib-check.py`.
 
 Canonical placeholder registry:
 
@@ -135,6 +145,13 @@ Canonical placeholder registry:
 | Phone number | `+15555550100` | 555-0100 through 555-0199 is the fictional-use block. |
 | Signal account | `+15555550100` | Same block. |
 | API token | `sk-placeholder-do-not-use` | Token *paths* are fine (`~/.sanctum/secrets/X.token`); token *values* never. |
+| Tailnet MagicDNS | `<host>.tailnet.ts.net` | The real tailnet stem names the tailnet itself. Never publish it — not in prose, not in a diagram. |
+| GUID / UUID | `00000000-0000-0000-0000-0000000000XX` | Sequential suffix for distinct objects, like the MAC block. |
+| Work 1Password | `work.1password.com` | |
+| Work repo | `work-cli`, `work-skills`, `<work-org>/work-*` | |
+| Work credential | `WORK_*`, `work-affinity-api-key` | |
+| Work launchd label | `com.work.*` | |
+| Work SharePoint | `/sites/<work-site>`, `02_<Fund>/` | |
 
 **Before you commit**, grep your diff. If you wrote an IP that isn't in the 10.0.0.0/24, 192.0.2.0/24, or 100.0.0.0/24 blocks, you wrote a real one. Fix it. The CI check runs `scripts/contrib-check.py` which flags these patterns; treat a failure as a security incident, not a style nit.
 
