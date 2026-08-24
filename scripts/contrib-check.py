@@ -94,6 +94,46 @@ LEAK_HOSTNAME_RES = [
 ]
 ALLOWED_LOCAL_HOSTS = {"haus.local", "satellite.local", "yoda.local"}
 
+# Tailnet MagicDNS names. The rule already forbids "real hostnames ... that
+# actually resolve on the owner's tailnet", and a MagicDNS name is exactly
+# that — it names the tailnet itself. Six of them were live in public docs on
+# 2026-08-24, one baked into the network-topology SVG. The placeholder stem is
+# literally `tailnet`, which cannot match (only 3 chars follow "tail").
+LEAK_TAILNET_DNS_RE = re.compile(r"\b[a-z0-9-]*tail[0-9a-z]{6,}\.ts\.net\b", re.IGNORECASE)
+
+# WORK-LANE identifiers. The firm's NAME is not a secret — Bert's employer is
+# public. Its SYSTEMS MAP is: where its secrets live, what they are called,
+# which private repos exist, and verbatim paths into fund documents. The
+# No-Leak Rule covered haus identifiers exhaustively and never contemplated
+# the work lane, which is the gap 36 live mentions fell through on 2026-08-24.
+# Two-lane doctrine cuts both ways: haus infra must not hold work secrets, and
+# public haus docs must not map work systems.
+LEAK_WORKLANE_RES = [
+    (re.compile(r"\b[a-z0-9-]*triptyq[a-z0-9-]*\.1password\.com\b", re.I), "work 1Password tenant — use work.1password.com"),
+    (re.compile(r"\bTRIPTYQ_[A-Z0-9_]+"), "work credential env var — use WORK_*"),
+    (re.compile(r"\btriptyq-(cli|skills|affinity[a-z0-9-]*)\b", re.I), "work repo/credential name — use work-*"),
+    (re.compile(r"\bcom\.triptyq\.[a-z0-9.-]*", re.I), "work launchd label — use com.work.*"),
+    (re.compile(r"\bTriptyq-Capital/[A-Za-z0-9._-]+"), "private work GitHub path — use <work-org>/work-*"),
+    (re.compile(r"/sites/Triptyq[A-Za-z0-9]*", re.I), "work SharePoint site — use /sites/<work-site>"),
+    (re.compile(r"\b\d{2}_Triptyq[A-Za-z0-9 ]*", re.I), "verbatim fund document path — use 02_<Fund>"),
+    # Fund taxonomy cannot be detected generically — "is this folder name real?"
+    # is not machine-decidable — so the two real document roots are pinned by
+    # name. Keep examples generic (01_Fund Admin, 03_Pipeline) and this stays
+    # quiet; paste the real library structure back and it fires.
+    (re.compile(r"\b\d{2}_(Gestion|Occasions)\b", re.I), "real fund document root — keep taxonomy generic"),
+]
+
+# UUIDs tied to real accounts (the rule names them). A SharePoint list GUID is
+# a direct object handle in the firm's tenant; one was live on 2026-08-24.
+LEAK_GUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
+# The docs already use a SEQUENTIAL placeholder family (...0001, ...0002, ...),
+# mirroring the registry's `:01/:02/:03` MAC convention, so allow the whole
+# thirty-zero family rather than only all-zeros. Thirty leading zeros is
+# provably not a real GUID; my first cut allowed only ...0000 and flagged five
+# existing placeholders as leaks.
+ALLOWED_GUID_RE = re.compile(r"0{8}-0{4}-0{4}-0{4}-0{10}[0-9a-f]{2}", re.I)
+ALLOWED_GUID = "00000000-0000-0000-0000-0000000000XX"
+
 # Pages allowed to use emojis (the "Holocron portal" exemption).
 # Only the landing pages are exempt — these carry the semantic brand
 # glyphs (fleur-de-lis, black bear) that mark the QC identity of the
@@ -253,6 +293,26 @@ def check_no_leak(path, rel, body, body_line_offset, report):
                 rel, i, "no-leak",
                 f"real username in path '{m.group(0)}' — use /Users/neo/ or ~/",
             )
+
+        for m in LEAK_TAILNET_DNS_RE.finditer(line):
+            report.err(
+                rel, i, "no-leak",
+                f"real tailnet MagicDNS name '{m.group(0)}' — use <host>.tailnet.ts.net",
+            )
+
+        for rx, hint in LEAK_WORKLANE_RES:
+            for m in rx.finditer(line):
+                report.err(
+                    rel, i, "no-leak",
+                    f"work-lane identifier '{m.group(0)}' — {hint}",
+                )
+
+        for m in LEAK_GUID_RE.finditer(line):
+            if not ALLOWED_GUID_RE.fullmatch(m.group(0)):
+                report.err(
+                    rel, i, "no-leak",
+                    f"real GUID '{m.group(0)}' — use {ALLOWED_GUID}",
+                )
 
         for m in PERSONAL_HANDLE_AT_HOST_RE.finditer(line):
             report.err(
