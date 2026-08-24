@@ -454,23 +454,22 @@ was wrong, and no reader could tell.
 
 | Set | Count | Who | Source of truth |
 |-----|------:|-----|-----------------|
-| **Named characters** | 11 | Yoda, Windu, Qui-Gon, Mundi, Cilghal, Jocasta, Mothma, Ahsoka, Tommy, Oracle, Wizard | one `.mdx` each in `agents/` |
-| **Council seats** | 7 | the above minus Ahsoka (satellite), Tommy (force-ghost), Oracle (ds4 offload) and Wizard (human) | `/architecture/agents/` |
+| **Named characters** | 10 | Yoda, Windu, Qui-Gon, Mundi, Cilghal, Jocasta, Mothma, Ahsoka, Tommy, Wizard | one `.mdx` each in `agents/` |
+| **Council seats** | 7 | the above minus Ahsoka (satellite), Tommy (force-ghost) and Wizard (human) | `/architecture/agents/` |
 | **Routed seats** | 5 | Yoda, Mundi, Qui-Gon, Windu, Cilghal | `src/data/council-roster.json` — the only file that knows |
 | **Non-routed** | 2 | Jocasta (records), Mothma (ops) — real seats, no model assignment of their own | `/architecture/agents/` |
 
 Rules:
 
 1. **Never write a bare cast number.** Not "five agents" but "the five routed
-   seats"; not "eleven seats" (there are seven) but "eleven named characters".
+   seats"; not "ten seats" (there are seven) but "ten named characters".
 2. **Tommy is not a seat.** He is a `force-ghost`: no tools, no permissions, no
    model. Counting him among working agents is a category error he would enjoy
    pointing out.
 3. **Ahsoka is not on the council.** She is the chalet satellite.
 3b. **The Wizard is not a seat either.** He is the haus's one `human` agent —
    the actuator of last resort. Counting him among the models is flattering
-   to the models. Oracle likewise sits outside the council: a ds4 offload
-   engine, not a robe.
+   to the models.
 4. **Routed counts come from the JSON, never from memory** — same doctrine as
    [The Single-Roster Rule](#the-single-roster-rule). `tests/test_story_check.py`
    asserts the doctrine page's routed-seat count still matches
