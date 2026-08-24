@@ -1,0 +1,125 @@
+---
+title: "2026-08-24: The Switching Was Weird From Time To Time"
+description: "One sentence of bug report, no stack trace, nothing failing. Underneath it were six defects in the proxy that fronts every model in the haus — a collapsed paid tier, a finance agent that had quietly stopped being Grok, a privacy filter that could not be tuned, a filter gate built from prose when production is built from code, a spend cap that was never a field, and eleven days of token accounting written to a file nobody could write to."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: a railway switching yard seen from above, a dozen tracks curving and crossing through banks of points, a row of signal lamps along the bottom edge with every one of them showing clear — while a single set of blades in the right-hand bank glows teal, the only colour in the drawing, at the crossing nobody was watching](./images/hero-2026-08-24-the-switching-was-weird.png)
+
+"The switching is weird from time to time." That was the entire bug report. No stack trace, no failing request, no error anyone could point at — just an operator's sense, after a week of using the Claude CLI through the haus proxy, that the thing occasionally answered in a voice that was not the one he had asked for.
+
+Underneath that sentence were six separate defects. Five returned HTTP 200 with a well-formed body and left nothing in the response to contradict it. The sixth returned nothing at all, and logged one line about it eleven days earlier.
+
+## Sixteen models wearing one name
+
+proxyd routes each model family down a ladder of seats: local first, then the subscriptions already paid for, then metered rungs on OpenRouter. When a rung fails in a way that looks like an exhausted account, proxyd marks that *backend* spent for the rest of the request and skips every remaining rung sharing it. The intent is sound. If the Anthropic account is out of money, do not ask it four more times in the same breath.
+
+The backend key is derived from the provider and its `api_base`. No OpenRouter seat sets an `api_base`, so all sixteen of them — glm-5.3, Kimi K3, Grok 4.6, Qwen3.6-plus, DeepSeek v3 and the rest — collapse to a single key: `provider:openrouter`.
+
+The other half of the trap sat in the predicate. `is_backend_quota_exhausted` treated any HTTP 429 whose body mentioned a limit as account exhaustion. Every OpenRouter 429 says `rate limit exceeded`.
+
+So one busy model, for one second, retired the entire paid tier of the haus, and the request fell through to a 4-bit local model. Caught live in the routing log: `ROUTE deepseek-v3 → council-mlx`, with DeepSeek answering normally again seconds later.
+
+The heuristic was never wrong, exactly. It was Anthropic-shaped: a Max organisation out of spend really does answer 429 with a sentence about limits. Behind a provider that multiplexes sixteen models on one endpoint, that same sentence means only "try again shortly".
+
+## Mundi had quietly stopped being Grok
+
+Mundi is the council's finance seat, and Mundi runs on Grok. With the Grok subscription out of credit, the ladder was supposed to land on Grok's metered twin at OpenRouter. It did not.
+
+| Asked for | Answered by, before | Cost | Answered by, after | Cost |
+|---|---|---|---|---|
+| `council-finance` | `council-brain` | $0.00 | `grok-46-metered` | $0.00169 |
+| `grok-best` | `gemini-best-pro` | $0.00 | `grok-46-metered` | $0.00155 |
+
+Adding a Grok rung changed nothing at first: three cross-family subscription rungs sat in front of it, all healthy. The ladder was ordered by price. Free before paid, always, everywhere.
+
+The missing rule is **closest model first**: a same-family metered seat outranks a different-family subscription seat. Fidelity outranks cost in that comparison, because overspend is bounded by a cap and a substituted brain is bounded by nothing. Mundi answering in Gemini's voice costs $0.00 and looks exactly like success.
+
+## The filter that could not be tuned
+
+Everything bound for a hosted model passes through Presidio first, and that filter had been quietly mangling technical prose for weeks. `DeepSeek v3.2` left the haus as ``DeepSeek `<US_DRIVER_LICENSE>`.2``. `273 GB/s` left as ``273 `<LOCATION>`/s``.
+
+The obvious repair is to raise the confidence threshold. The measured scores refuse it:
+
+| Span | Detected as | Score |
+|---|---|---|
+| `queue+prefill` | PERSON | 0.85 |
+| `Windu`, `Firewalla` | PERSON | 0.85 |
+| `GB` | LOCATION | 0.85 |
+| a real phone number | PHONE_NUMBER | 0.40 |
+| `v3`, `M4` | various | 0.30 |
+
+One knob, pinned from both sides. Any threshold high enough to drop `queue+prefill` at 0.85 also drops every real phone number at 0.40. There was never a value that worked, which is why weeks of tuning had not found one.
+
+What works is per-entity thresholds plus guards that suppress a span only when it *provably* cannot be personal data: it carries a digit, or an identifier character no name carries, or every token is haus vocabulary. Four entity types went out entirely — `DATE_TIME`, `US_DRIVER_LICENSE`, `US_PASSPORT`, `NRP` — having never once fired on a person here.
+
+False positives went from 15 to 0 on that corpus, with recall holding at 17 of 17. Which fixed the corpus and did not fix production.
+
+## A precision gate made of prose
+
+The way to find out is to run the filter across real runbooks and real source files and print every span it *keeps*. On five such documents it kept 129, and 107 of those were the URL recognizer — nearly all of them matching the middle of a longer token, because almost every two-letter suffix on earth is a country TLD.
+
+| Redacted span | Because | Inside |
+|---|---|---|
+| `urllib.re` | `.re` is Reunion | `urllib.request.Request` |
+| `time.sl` | `.sl` is Sierra Leone | `time.sleep` |
+| `a.se` | `.se` is Sweden | `a.settings` |
+| `haus.sanctum.pro` | `.pro` is a TLD | `haus.sanctum.proxyd` |
+| `4-5-20251001` | reads as a phone number | `claude-haiku-4-5-20251001` |
+
+So `urllib.request.Request` left the haus as ``&lt;URL&gt;quest``, and every launchd label, script filename and sysctl key went with it. The corpus that had just scored 15 to 0 contained no launchd label, no filename and no attribute access — it was built from prose, and agent prompts are built from code. A precision gate is only ever as good as the text it is made of.
+
+Four guards later — an address must carry a scheme or a path, a hit flanked by token characters is a fragment, places get the identifier-character guard names already had, a span crossing a newline is neither — the same five documents kept 10 instead of 129. All ten were read by hand: eight correct, including the operator's own name and the tailnet hostname. Two are deliberate residuals, `MoE` because Moe is a plausible given name and suppressing it would cost a real person their redaction, and one macOS bundle name documented as a bounded trade.
+
+<Aside type="caution" title="The recall gate caught the author, not the code">
+One guard delegated to Python's `ipaddress.is_private`, which reads as obviously safe and is not: Python 3.14 folded the RFC 5737 documentation ranges into it, so a public documentation address stopped being redacted. Nothing in the diff looked wrong; the recall corpus failed, and that is the only reason it was caught. In a privacy filter the asymmetry is total — a false positive costs an answer, a false negative leaks a person — so the ranges are enumerated now.
+</Aside>
+
+## The cap that was never a field
+
+The config said `sanctum.daily_cap_usd: 5.0`. The process used $1.00, hardcoded.
+
+`daily_cap_usd` and `on_exhaustion` were never fields on the sanctum policy struct — only on the Claude CLI one — and with no `deny_unknown_fields`, serde discarded both without a murmur. The file had been declaring a limit into empty air.
+
+Two things go in behind that. The field exists now, and the effective cap is printed at load and at every hot reload, because a key that serde drops is otherwise perfectly invisible: the file can say one number while the process uses another and no log line anywhere disagrees. Prices went in too — glm-5.2 was being billed at $0.50 against a live $0.97, so the cap had been admitting roughly twice its own setting.
+
+## Empty answers, HTTP 200
+
+The reasoning seats spend the caller's token budget on hidden thinking before emitting any visible text, and proxyd has no handling for reasoning content anywhere. At a modest budget the caller gets a flawless envelope around nothing at all.
+
+| Seat, `max_tokens: 200` | Finish reason | Output tokens billed | Characters returned |
+|---|---|---|---|
+| `qwen36-plus`, before | `length` | 202 | 0 |
+| `qwen36-plus`, after | `stop` | 477 | 76 |
+
+Same box, same seat, same prompt, one variable. `min_max_tokens` is an opt-in per-seat floor that only ever raises the caller's number, and raising it is free — the tokens were generated and billed either way. The only difference is whether an answer comes back.
+
+It mattered most for the seat just made the landing spot for an exhausted Opus subscription: any caller with a small budget would have received silence, politely.
+
+## Eleven days of accounting written to a locked drawer
+
+The new cap log line came up on the first restart. Three lines below it sat something nobody was looking for:
+
+```
+ERROR budget: cannot open usage log path=~/.sanctum/metrics/token-usage.jsonl
+  error=Permission denied (os error 13)
+```
+
+proxyd runs as its own service user. A setup script grants that user's group write access to a list of directories under the config root, and `metrics` had never been on the list — so every append to the token ledger failed. The last entry was dated eleven days earlier.
+
+The shape of it is what makes it worth writing down. proxyd opens that log exactly once, at startup, and gives up permanently if the open fails. The entire observable symptom is one ERROR line at boot, and then silence that looks precisely like an idle machine. Restoring the permission is not enough on its own either — the process has to be restarted before it will try the file again.
+
+`metrics` is on the list now, and the wave-1 test suite grew a gate that reads the mode bits and then reads the running process's own log for that exact error. The first version of that gate scanned the whole day and stayed red for hours after the fix, which is how a gate teaches people to ignore it; it reads only from the last startup banner onward.
+
+<Aside type="note" title="One thing left standing">
+`state_dir` is logged at startup and never read or written anywhere in the codebase. The spend accumulator lives in memory with a calendar-day rollover, so the caps are per day but forgotten on restart. That is now the oldest known gap in the budget system, and it is the next thing to close.
+</Aside>
+
+## What ties six bugs together
+
+None of these were found by reading code. Every one surfaced through an end-to-end harness that asks a remote model to echo specific technical tokens back and then reads proxyd's own audit record rather than the `model` field in the reply — a fallback fills that field with the name of the seat that was *asked*, not the one that answered. A seat can look immaculate from every angle anyone thought to check, which is what the code seat demonstrated across [eighteen days of returning 413 behind a green health endpoint](/operations/2026-08-18-the-prewarm-that-ate-its-own-tail/).
+
+The through-line is not that the haus had six bugs. It is that five of them produced a correct-looking HTTP 200 and the sixth produced silence, and the haus has stood in this room before — the day [Force Flow's health endpoint said OK for twenty-five hours](/operations/2026-08-08-the-green-lie/) over an enforcement loop that had stopped enforcing. A failure that returns an error gets fixed the same afternoon. A failure that returns a plausible answer waits for somebody to notice that the voice is wrong.
+
+Which is what happened here. The switching was weird *from time to time* because it took a busy second on one of sixteen models to trigger. That sentence was the whole diagnosis. It just needed [Mundi](/agents/mundi/) asked, on the record, what it had been all week.
