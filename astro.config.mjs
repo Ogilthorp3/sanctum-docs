@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-25 — The Weight of Names: Pure Rust Presidio', slug: 'operations/2026-08-25-the-weight-of-names-pure-rust-presidio' },
 								{ label: '2026-08-25 — The Haus That Healed Its Senses', slug: 'operations/2026-08-25-the-haus-that-healed-its-senses' },
 								{ label: '2026-08-24 — A Refusal Is Not A Failure', slug: 'operations/2026-08-24-a-refusal-is-not-a-failure' },
 								{ label: '2026-08-24 — The Switching Was Weird From Time To Time', slug: 'operations/2026-08-24-the-switching-was-weird' },
