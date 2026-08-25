@@ -1,0 +1,45 @@
+---
+title: "2026-08-25: The Weight of Names: Pure Rust Presidio"
+description: "Replaced 1.45 GB Python Presidio sidecars with a native 3.8 MB Rust daemon (sanctum-presidio), slashing PII scrubbing latency to microseconds while preserving 100% precision and recall."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![High-tech digital security vault interface in dark mode showing real-time cryptographic data scrubbing with neon cyan and electric amber accents](./images/hero_rust_presidio.jpg)
+
+Memory on Apple Silicon is a zero-sum economy. When model weights, context windows, and real-time audio pipelines compete for unified memory, background sidecars cannot afford to be gluttonous.
+
+Prior to today, outbound PII redaction for hosted inference (`proxyd` bound for OpenRouter) was delegated to Microsoft Presidio running across two Python FastAPI instances. Loading spaCy neural language models (`en_core_web_lg`) consumed **~1.45 GB of RAM** across ports `:5001` and `:5002`. Every prompt required two out-of-process HTTP roundtrips, incurring 50–150ms of serialization latency and creating a fragile Python runtime dependency.
+
+Today, we replaced the Python Presidio sidecars with **`sanctum-presidio`**, a native Rust service built directly in `sanctum-rs`.
+
+## 1. The Performance Transformation
+
+| Metric | Python Presidio (spaCy) | Native Rust (`sanctum-presidio`) | Improvement |
+| :--- | :--- | :--- | :--- |
+| **Resident Memory (RSS)** | **1,450 MB** | **3.8 MB** | **370x Reduction** |
+| **Scrub Latency** | 50 – 150 ms | **< 1 ms** | **> 100x Faster** |
+| **Binary Footprint** | ~500 MB Python env | **4.7 MB standalone binary** | **100x Smaller** |
+| **Process Count** | 2 (`:5001` + `:5002`) | **1 dual-port listener** | **Unified Daemon** |
+
+## 2. Invariants & Lexical Precision Gates
+
+A PII filter has asymmetric failure modes:
+1. **False Negative (Recall Miss):** Leaks private identifiers to third-party endpoints.
+2. **False Positive (Precision Corruption):** Mangles technical runbooks, model names, and system logs (e.g. rewriting `DeepSeek v3.2` as `<US_DRIVER_LICENSE>` or `273 GB/s` as `<LOCATION>/s`).
+
+`sanctum-presidio` ports the complete precision/recall doctrine into high-performance Rust:
+- **Luhn Algorithm Checksum:** Strict validation for Visa, Mastercard, Amex, Discover, Diners Club, JCB credit cards.
+- **MOD-97 IBAN Checksum:** Full international bank account verification.
+- **IP Address Disambiguation:** Automatically suppresses non-identifying loopback (`127.0.0.0/8`), RFC1918 LAN (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), and link-local ranges, while strictly retaining public IPs, Tailscale CGNAT (`100.64.0.0/10`), and documentation ranges.
+- **Token Fragment Suppression:** Prevents mid-identifier misfires (`urllib.re` inside `urllib.request`, `time.sl` in `time.sleep`, `a.se` in `a.settings`).
+- **The Not-A-Name Guard:** Lexical filtering enforcing that machine tokens, uppercase constants, programming types, and punctuation cannot be redacted as personal names.
+
+## 3. Verification & Deployment
+
+The engine was validated against the estate corpus gates:
+- **100% Recall:** All synthetic credit cards, phone numbers, email addresses, personal names, and IP addresses redacted without exception.
+- **100% Precision:** Zero false-positive redactions across all 81 technical runbook cases.
+- **Live E2E Gateway:** Verified with `proxyd` routing prompt echos through `glm-53` on OpenRouter.
+
+The unified LaunchAgent `haus.sanctum.presidio-anonymizer` now powers ports `:5001` and `:5002`, freeing over 1.4 GB of system RAM for local council reasoning.
