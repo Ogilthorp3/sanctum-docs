@@ -1,0 +1,59 @@
+---
+title: "2026-08-25: The Drafter That Never Fired"
+description: "The seat said its drafter was loaded, and the new counters said it had never once been used. One question about full speed turned into four discoveries about the gap between a capability that is armed and one that fires — and two instruments that killed a feature and a benchmark before either could waste a week."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark ground: the interior of a railway signal box, four tall polished levers in a row under a low lamp, three of their control rods visibly disconnected beneath the floor grating while only one runs true out to a distant signal; a small teal halo rests on the coupling where a second rod is being bolted back on](./images/hero-2026-08-25-the-drafter-that-never-fired.png)
+
+The counter read zero. Not zero as in idle — the brain seat had served all morning — but `accelerated=0 declined=0`, the exact reading a seat gives before its first request. The startup log, two lines above, said the opposite: `DFlash2: drafter loaded and QUANTIZED in memory`. Four bits per weight. Resident. Armed. The counters were added precisely because [the last incident](/operations/2026-08-24-a-refusal-is-not-a-failure/) taught the haus that a speculative drafter fails silently, and here they were, one day old, reporting a silence nobody had suspected.
+
+Bert had asked a simple question — is the cathedral at full speed? — and the honest answer took a day to earn. It was no, four different ways.
+
+## One lane out of four
+
+The cathedral serves requests down four distinct decode lanes: synchronous or streaming, fp16 KV or 8-bit quantized KV. The audit put one number next to each.
+
+| Lane | DFlash2 | Why |
+|---|---|---|
+| sync + fp16 | armed | the only arm in the codebase |
+| sync + q8 | never | the q8 path had no speculation arm at all |
+| streaming + fp16 | never | the streaming handler is a separate decode chain — zero references |
+| streaming + q8 | never | both reasons at once |
+
+Measured traffic split roughly evenly between streaming and sync, and the brain had been moved to the q8 lane that morning for its 1.88x KV compression. Which meant the seat holding a drafter in memory could not reach it on *any* request — and the coder, on the one armed lane, was declining most of what it saw anyway, because block speculation was greedy-only and both seats run at temperature 0.4. The counters said it plainly: 4 accelerated, 15 declined. The fastest decode path in the building was firing on roughly one request in five, on one seat, on one lane.
+
+## Serving the temperature the caller asked for
+
+The greedy-only restriction was principled — at non-zero temperature the drafter and the target sample from different distributions, and pretending otherwise preserves a distribution the caller never asked for. The principled fix is rejection sampling: accept a drafted token with probability `min(1, p(x)/q(x))`, and on rejection draw from the normalised residual `max(0, p - q)`. The theorem says the output is distributed exactly as the target, whatever the drafter proposes.
+
+The implementation had existed, fully tested, for a day — nine unit tests, a 400,000-trial adversarial check, a sabotage control. What it had never been was *wired in*. Wiring it exposed the bug the unit tests could not reach: the drafter's candidate array is a strided view, and reading it with a contiguous slice returned the first row correctly and then, for every later row, the continuation of the first row's memory. Three of four proposals looked like tokens the drafter had never proposed. It failed safe — the sampler rejects any token its own distribution disowns — so the only symptom would have been acceptance quietly collapsing to nothing. No crash, no log line, the whole speedup gone.
+
+The gate that caught it ran the real weights and put a chi-square statistic on the emitted distribution: 29.80 against a critical value of 61.10 once fixed, at every temperature tried. The gate itself needed two corrections along the way — the first version held the drafted token fixed across trials and indicted a correct sampler at chi-square 122,000, and the first sabotage control replaced the drafter's distribution with the target's own, which is not a sabotage at all: acceptance goes to one and the output is still correctly distributed. A control the system passes proves only that the control was wrong. The real sabotage — pairing a proposal against another position's distribution — fails at chi-square 309,227, which is a gate worth trusting.
+
+## Two lanes become four
+
+The streaming handler got the same arm the sync path had, in the same position — above the weaker speculation options, below an explicitly configured draft model. The block loop only ever emits committed tokens, so a streaming client can never watch a rejected draft get retracted.
+
+The q8 lane's exclusion turned out to be the most instructive of the four. The code said *structurally excluded*, and the folklore said quantized caches and speculative rollback do not mix. The truth was a type signature: the decode loop was written against the fp16 cache type, the q8 lane runs a different one, and the arm could not be spelled. Rollback on the quantized cache is not merely tolerable — quantization groups run along the feature axis, never the token axis, so truncating to a partial accept is bit-exact, and the regression bin had proved it months earlier with an unaligned mid-step rewind. One small trait later, the same decode loop serves both cache types, and the brain keeps its KV compression *and* its drafter. The choice it had been forced into that morning — memory or speed — was never real. It was a typo with a doctrine attached.
+
+Every arming carried the same fidelity bar: streaming output must equal sync output, byte for byte, on real prompts. It held. Three for three, on both seats — including the hybrid brain, whose recurrent state is the hard case.
+
+<Aside type="note" title="Speculative greedy is not non-speculative greedy">
+The one gate that must *not* be used: comparing speculative output against non-speculative output at temperature 0. A drafted block is verified in one batched forward, a plain decode in many single-token forwards, and the two reduce in different orders — a near-tie argmax flips, and the flip cascades. The divergence is real, expected, and identical on lanes that have run speculation in production for months. The invariant that means something is streaming equals sync. A fidelity gate aimed at the wrong invariant reads red forever and teaches you to ignore gates.
+</Aside>
+
+## The seat that was saying no
+
+The same audit read the request log and found the cap doing quiet damage: the brain was returning HTTP 413 on real traffic — fifty-nine times that day, median prompt just over 18,500 tokens against a 16,384 cap. The seat has no truncation branch; a 413 is deterministic, so each one was a conversation that simply did not happen. The cap moved to 65,536 — not a round number pulled from the air, but the exact boundary above which the prompt cache stops saving slots at all. Past that line, a bigger window makes every long request permanently cold, which on this traffic is strictly worse. The proxy caps moved with it, keeping their tokenizer margin, so no layer of the stack now truncates what another layer would serve. The coder stayed where it was: its prefill path is unchunked, and the one recorded observation of numerically broken logits sits under 2,400 tokens above its current cap. You do not raise a limit toward your only bad data point.
+
+## Counters before code
+
+The day ended with two features *not* built, which is the part worth writing down.
+
+The first was recurrent-state checkpointing. The brain reuses its prompt cache on 17 percent of requests; the coder manages 96. The obvious suspect was the hybrid cache gate, which demands an exact-length match before resuming recurrent state. Instead of building the fix, the morning shipped a counter: how many tokens does that gate actually discard? Ninety minutes of live traffic answered. Forty-five requests. Zero reuses. Four discards, every one a single-token overlap — **four tokens**, total. The gate had never once thrown away a reusable prefix, because the traffic never shared one. The feature would have recovered nothing, and the instrument cost an afternoon instead of a week.
+
+The second was the Neural Engine. A merged upstream experiment offloads part of prefill to the ANE and reports a 32.6 percent gain — measured on an M1 Max, on this very model. The borrowed number survived exactly one local measurement: this box's GPU already prefills at 111.5 tokens per second *without* the ANE, which is the reference machine's speed *with* it. The framework is reachable, the probe harness is committed, and the port is real work that stays parked until a one-layer parity test produces a gain measured on this silicon rather than someone else's. A borrowed benchmark is a hypothesis, not a forecast — the same lesson [the prewarm sentinel taught](/operations/2026-08-18-the-prewarm-that-ate-its-own-tail/), wearing faster clothes.
+
+By evening the counters told a different story: accelerated incrementing on both seats, both lanes, at every temperature, declines at zero. The levers in the signal box all reach the track now. What made the difference was never the pulling — it was noticing which rods had quietly been cut, and refusing to trust any lever that could not prove it had moved a signal.
