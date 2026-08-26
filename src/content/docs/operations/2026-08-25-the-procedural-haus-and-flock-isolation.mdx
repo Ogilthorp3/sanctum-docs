@@ -7,44 +7,39 @@ import { Aside } from '@astrojs/starlight/components';
 
 ![Pencil sketch of an Abyssinian cat overlooking a holographic architectural blueprint of a house with glowing green kyber crystals and smart device nodes.](./images/hero-2026-08-25-the-procedural-haus-and-flock-isolation.png)
 
-A lock collision in `message-to-duckdb.py` surfaced when ingestion held an exclusive file lock (`flock`) across slow external process fetches. Under concurrent writes from Telegram and Slack ingest pipelines, DuckDB threw an `IOException: Could not set lock on file workspace.duckdb`.
+A lock collided. The mailbox jammed.
 
-At the same time, The Holocron received a complete architectural upgrade: replacing static device cards with a **100% procedural, adaptive whole-haus control and diagnostics surface** synchronized bidirectionally with Home Assistant Green and Apple Home.
+When background message ingestion holds an exclusive database lock across slow external process fetches, concurrent writers queue until the whole pipeline trips. An unhandled `IOException: Could not set lock on file workspace.duckdb` surfaced in `message-to-duckdb.py` when Apple Mail extraction held `flock` for multiple seconds while Telegram and Slack sync workers fought for the database. As recorded in [The Haus That Healed Its Senses](/operations/2026-08-25-the-haus-that-healed-its-senses/), a single contending lock can stall telemetry across the estate.
 
-## 1. DuckDB Lock Isolation & Micro-Transactions
+The fix separated slow external I/O from atomic commits, while The Holocron received a major frontend upgrade: a completely procedural command surface for the whole estate in the [Operational History](/operations/operational-history/).
 
-The previous ingestion pattern wrapped the entire pipeline execution—watermark discovery, subprocess fetch, and database writes—inside a single broad lock. Slow Apple Mail extraction and network I/O held the lock for multiple seconds, starving concurrent writers.
+## 1. DuckDB Lock Isolation and Micro-Transactions
 
-The pipeline was refactored into distinct micro-transaction phases:
+The previous ingestion pattern wrapped the entire pipeline lifecycle—watermark checks, subprocess spawning, and table writes—inside one broad lock. When Jocasta reached across Mail.app and network pipes, the lock remained held.
 
-1. **Phase 1 (Watermark Read):** Acquire lock briefly, read watermark timestamps, immediately release lock.
-2. **Phase 2 (Fetch & Transform):** Fetch mail, Telegram messages, and Slack histories completely unlocked.
-3. **Phase 3 (Batch Insert):** Acquire lock, commit new rows inside a clean atomic block, release lock.
-4. **Resilience Layer:** Increased retry limit (`DB_CONNECT_RETRIES = 12`) and added randomized jitter to prevent lock contention spikes.
+We refactored the pipeline into three clean phases:
 
-All 272 CRM unit and trigger tests pass cleanly with zero lock hold across subprocesses.
+1. **Phase 1 (Watermark Read):** Acquire the lock briefly, capture the latest message timestamp, and release the lock immediately.
+2. **Phase 2 (Fetch & Transform):** Fetch external emails, Telegram channels, and Slack threads with zero lock contention.
+3. **Phase 3 (Batch Insert):** Re-acquire the lock exclusively, commit new rows inside a single atomic transaction, and release.
 
-## 2. Procedural Haus Control & Diagnostic Surface
+We also increased `DB_CONNECT_RETRIES` to 12 with exponential jitter. All 272 CRM regression tests now pass without lock collision.
 
-The new `HausControlPanel` in The Holocron dynamically discovers and groups devices directly from Home Assistant's area registry template (`_HA_AREA_TMPL`):
+## 2. Procedural Whole-Haus Diagnostics and Apple Home Sync
 
-- **Adaptive Zone Discovery:** Auto-groups lights, climate controls, switches, motorized blinds, media players, and sensors by area without any hardcoded identifiers.
-- **Global Actions & HUD:** One-touch *"All Lights Off"*, *"Secure All Locks"*, and real-time averages across all temperature zones.
-- **Apple Home & HomeKit Integration:** Leverages the native `Yoda Bridge :21063` and mDNS discovery so state changes in Apple Home or Siri reflect instantly in Holocron, and vice versa.
-- **"Fix Everything" Diagnostic Center:** Auto-detects unreachable entities, offline nodes, and low-battery sensors with dedicated probe and re-poll actions.
+The Holocron previously relied on static card templates for device controls. When new smart plugs or sensors joined the network, the dashboard remained blind until manually modified.
 
-## 3. Daemon Telemetry & Alert Normalization
+We replaced static layouts with a procedural generator reading Home Assistant's area registry template:
 
-`apple-services.sh` and Force Flow (`:4077`) were updated with non-interactive daemon fallbacks using `GUI_UID` (501) and TCP port liveness, resolving false warnings for system service accounts. Alert states across Holocron now properly honor dismissal flags, keeping the dashboard calm and pristine.
+- **Dynamic Area Grouping:** Auto-discovers lights, climate zones, smart plugs, motorized shades, and media nodes without hardcoded identifiers.
+- **Whole-Haus HUD:** Global controls for all lights and security locks with live temperature averages.
+- **Bidirectional HomeKit Synchronization:** Bridges all discovered nodes directly into Apple Home and Siri via `Yoda Bridge :21063`.
+- **Diagnostic Center:** Automatically filters unavailable devices and low-battery nodes with one-click re-poll actions.
 
-## 4. Cathedral Supervision Debouncing & Self-Heal Grace
+## 3. Cathedral Supervision Debouncing and Corridor Comfort Default
 
-During hot-reloads of Cathedral MLX engine seats (e.g. speculation updates), launchd transitions through a brief `SIGTERMed` state. `cathedral-supervision-check.sh` previously alerted on a single tick during this 1-second window.
+During hot-reloads of the Cathedral MLX inference engine, launchd momentarily transitions through `SIGTERMed`. The supervision checker previously fired a false critical page on a single sample.
 
-A **2-tick consecutive failure confirmation gate (`SUPERVISION_STREAK_THRESHOLD = 2`)** was implemented. Single-tick transitions that immediately recover are recorded under `supervision-streak-grace` without alerting the operator. Planned deploy/restart detection was also expanded across all vault inbox mailboxes.
+We introduced a two-tick confirmation gate (`SUPERVISION_STREAK_THRESHOLD = 2`). Transient reloads that recover within seconds are recorded quietly in JSONL logs under `supervision-streak-grace`, while true outages still escalate to Force Flow as detailed in [Screen Time Enforcement](/operations/screen-time-enforcement/).
 
-## 5. Corridor & Kitchen Comfort Lighting Synchronization
-
-The corridor group was aligned with the kitchen comfort mood (Warm Tungsten: `hs_color: [29.0, 93.0]`, `brightness: 255`, `rgb_color: [255, 132, 18]`).
-
-`ha-green-bridge` was updated to classify corridor cloud and LocalTuya entities under `WORK_LIGHTS`, enforcing write-then-read-back verification on power-on/reconnect cycles to make the tungsten comfort mood the permanent default.
+Finally, the corridor lighting group was aligned with the kitchen tungsten comfort mood (`hs_color: [29.0, 93.0]`, brightness 255). The `ha-green-bridge` daemon now enforces this warm setting on every reconnect, keeping the haus calm and consistent.
