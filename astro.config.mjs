@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-08-26 — Ninety-One Thousand Nothings', slug: 'operations/2026-08-26-ninety-one-thousand-nothings' },
 								{ label: '2026-08-26 — The Sanctioned Path', slug: 'operations/2026-08-26-the-sanctioned-path' },
 								{ label: '2026-08-25 — The Procedural Haus and Flock Isolation', slug: 'operations/2026-08-25-the-procedural-haus-and-flock-isolation' },
 								{ label: '2026-08-25 — The Weight of Names: Pure Rust Presidio', slug: 'operations/2026-08-25-the-weight-of-names-pure-rust-presidio' },
