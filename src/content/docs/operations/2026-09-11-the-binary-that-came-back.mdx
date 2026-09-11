@@ -1,0 +1,42 @@
+---
+title: "2026-09-11: The Binary That Came Back"
+description: "Every Fable turn from Claude Code was quietly answered by a rented model for a dollar an hour. The proxy was healthy. The proxy was also seventeen days older than anyone thought."
+---
+
+![Pencil sketch of an Abyssinian cat watching a ghostly hand swap an old brass gear back into a humming night-shift machine, while a small inspection lamp lights the serial number stamped on the part and an open ledger waits on the bench.](./images/hero-2026-09-11-the-binary-that-came-back.png)
+
+The line arrived at the top of a Claude Code reply like a customs stamp: `ROUTE claude-fable-5-1 → glm-53 (openrouter · z-ai/glm-5.3)`. Bert had asked for Fable, the long-context seat on the subscription he already pays for, and the haus had answered with a rented model from Beijing, thirty-one cents a turn, with four thousand seven hundred scrubbed names and numbers going out the door on every request. Five turns cost a dollar fifty-six. The proxy's health page said green. It had said green for seventeen days.
+
+## What the log admitted
+
+`proxyd` keeps an honest diary, and the entry for each turn was the same. *Skipping seat: host-tools seat cannot honor client tools (Agent, Artifact, DesignSync, EndConversation, EnterWorktree, ListAgents, LSP, Monitor, ReportFindings, ScheduleWakeup, Workflow…)*. Twenty-one tool names, all of them Claude Code's own, all refused by the seat that exists to run Claude Code's tools.
+
+The refusal itself is a feature with a scar behind it. The Max bridge on `:3456` executes tools inside the CLI, and when a foreign harness once sent it an `ipython` tool, Max returned a cheerful 200 with a fabricated result and never fell through. So the proxy learned to skip that seat whenever a caller declares tools the bridge cannot run. On 2026-08-05 it did that with a frozen list of tool names. On 2026-08-06 the list bit us — Claude Code shipped `TaskCreate`, every Fable turn fell to Grok — and the list was replaced with a shape rule: a PascalCase name or an `mcp__` prefix is Claude Code's, anything else diverts. The source has carried that rule for five weeks. The binary in production had never heard of it.
+
+## The gearbox
+
+We diffed the working twin. The live `proxyd` had a modification time of 2026-08-25 and a checksum identical, byte for byte, to a backup file named `proxyd.bak-20260806-183838` — the build from the evening of 08-05, twenty-three hours before the shape rule was committed. Three newer builds had been deployed on 08-24, each with its own backup. None of them was the file that was running.
+
+The mechanism was ordinary, which is what made it invisible. `bin/proxyd` was a *tracked file* in the machine's config repo, last committed on 08-05 alongside that day's deploy. The 08-24 deploys swapped the file on disk and never committed it. Then at noon on 08-25 a routine git operation rewrote dozens of tracked files in that repo — the kind of rebase-with-autostash that lands work safely every day — and restored the committed blob over the newer one. The next daemon respawn picked it up. A fresh mtime, an old gearbox, a green health page, and nothing anywhere that could say *which commit is serving*.
+
+This is the [Durability Doctrine](/operations/2026-08-26-the-sanctioned-path/) running in reverse. The doctrine says the repo file *is* the live file, so that nothing lives only on a disk. It is right for config. For a deployed binary it is a rollback bomb: git will faithfully put back whatever it last saw, and it last saw August.
+
+## Five bolts
+
+The fix for the symptom took one deploy from the current source. The fix for the class took the afternoon.
+
+**The binary names its commit.** A build script now stamps the git sha, branch, commit date and build time into `proxyd`. `proxyd --version` prints it, the first log line of every start prints it, and `/health` carries it under `build`. A rolled-back binary can now be caught by reading rather than by symptom.
+
+**One writer, and it writes it down.** `bin/proxyd` is untracked and ignored. `deploy-proxyd.sh` is its only writer: it refuses a binary that cannot report a sha, refuses one built from a dirty tree, restarts the daemon, checks that `/health.build.git_sha` matches what it just installed, and only then writes `bin/proxyd.manifest.json` — the tracked record of what *should* be live. A second deploy script that had been sitting in `bin/` with a stale daemon label was retired. It would have failed anyway: the daemon labels were renamed on 08-19 and the heal script's allow-list had not followed, so the sanctioned deploy path would have refused every restart until today.
+
+**A sentinel that compares intent to reality.** `haus.sanctum.proxyd-sentinel` runs every five minutes and pages Force Flow when the file on disk stops matching the manifest, when the running process reports a different commit than the manifest, or when the log shows the exact signature of this incident — a host-tools seat refusing a tool list made entirely of Claude-Code-shaped names. Before it was installed it was falsified against a wrong-sha manifest and against the real 21:52 log line, with the pager pointed at a dead port. Both detectors fired. A sentinel that has never been seen to fire is a hope, not a control.
+
+**The probe that sends what Claude Code sends.** The routing harness had eleven cases and every one of them sent a bare prompt. None could see this, because only a caller with thirty tools trips the rule. There is now a `claude-code` group that sends the observed 2.1.269 tool surface — the exact list from the log — through `claude-fable-5-1` and `claude-opus-5`, and the sentinel runs it every six hours. A "cannot honor client tools" banner in the reply is a failure before cost is even read. The unit test in the proxy carries the same list, verbatim.
+
+**Fable gets its own seat.** A quieter defect surfaced on the way through. `claude-fable-5-1` had no seat, so the `claude-*` catch-all sent it to the Opus bridge seat, whose upstream model name is `claude-opus-4` — and the bridge maps anything that doesn't say "fable" to `opus`. Even with a correct binary, a Fable caller would have been served Opus and told it was Fable. There is now a `claude-fable-*` alias to a real `claude-fable-5-1` seat with the 1M-context ladder, and the bridge passes any exact `claude-fable-<digits>` id through to the CLI. The probe confirmed the round trip at $0.00.
+
+## Landing
+
+Tommy, who has watched a great many things get quietly swapped in this haus, would point out that the file said August the whole time — the checksum was on disk, the backup was named after the day it was made, and the binary's own health page simply never thought to mention its birthday. We asked the proxy whether it was healthy. We never asked it who it was.
+
+Now we do, every five minutes, and it has to answer with a commit.
