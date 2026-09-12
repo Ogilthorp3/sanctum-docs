@@ -1,0 +1,60 @@
+---
+title: "2026-09-12: The Tags Nobody Changed"
+description: "A reboot scorecard said three things were waiting. None of them were. The night that followed found a marker that could only ever latch shut, a check that had paged 821 times about a file the machine never read, and a fleet of healers restarting jobs by names that stopped existing in August."
+---
+
+![Pencil sketch of a night-shift technician holding a small blank brass tag beside a row of identical humming machines, each still wearing an older tarnished tag; one inspection lamp lights a gauge whose needle is stuck against the pin, a neat stack of blank alarm slips piles up beneath it, and an Abyssinian cat watches from a crate](./images/hero-2026-09-12-the-tags-nobody-changed.png)
+
+The post-reboot scorecard ran two hours after the planned reboot, on the night of [The Binary That Came Back](/operations/2026-09-11-the-binary-that-came-back/). It reported `0 FAIL, 3 WAIT`, and its header read `booted 29809192 min ago`. Fifty-six years. The box was fine. Every line of that verdict was wrong in a different way, and pulling on the three WAITs unravelled a month of quiet rot that no page had ever described correctly.
+
+## Three probes, one second
+
+The first WAIT said the boot-ready marker was not set. The marker file said `ready: false, missing: [4040]`, written at 23:16:15. At 23:16:15 `proxyd` was listening on 4040, serving its health page, and writing normal traffic to its log thirteen seconds later. The scorecard's own call to `sanctum-boot-ready --check` had re-probed the ports, missed once, and rewritten the marker.
+
+The second WAIT said the Firewalla bridge on `:1984` did not answer. Three probes at 23:19 answered in under three milliseconds. The third said the pre-reboot snapshot diff had "1 hard failure group" while the same script, run alone a minute later, said `PRISTINE`. The scorecard had kept only the last six lines of that section, so which group had failed was gone.
+
+Three single-sample probes, all taken inside the same second, all wrong. My first story was memory pressure: `vm_stat` showed 4,544 free pages, the kernel log showed idle-exit kills, and a code indexer was sitting at 1.9 GB and 99 % CPU. It was a good story with a fan club of one. The adversarial review that ran overnight refuted it from the kernel's own accounting: the memory pressure level was *normal* at 23:16, available pages sat near sixteen gigabytes, and every jetsam line was routine idle reaping. The stressor at that instant was a fork storm from other sessions' remote checks, seventy-four `ssh` spawns in thirty seconds, load between eight and eleven. And a race I had "falsified" with 120 trials turned out to be real: `netstat | grep -q` under `pipefail` takes SIGPIPE whenever the matching line is early in netstat's output. My trials had all used ports that appear late. Ports on lines eight and nine failed 13 of 40 times.
+
+The transient did not matter. What mattered was the latch.
+
+## The marker that could only close
+
+`sanctum-boot-ready --check` had one direction. If the marker was ready, it re-probed the three core ports and, on any miss, wrote `ready: false`. If the marker was already false, it exited 1 without probing at all. One bad sample and the marker stayed false until a human ran `--mark-now`. The log showed the 2026-08-19 boot latched false at 20:40 and staying that way for seventy-one hours, until the next reboot.
+
+While the marker is false, `pqc-sentinel.sh` suppresses every connect-fail alert; its grace clause carries an `|| true` that makes the suppression unconditional. A latched marker is a muzzled sentinel for the rest of the boot.
+
+The first fix I wrote treated a probe that returned nothing as "up." The review reproduced the consequence in one second: with `netstat` shimmed to print nothing, the boot-time wait loop wrote `READY — the Wizard may enter` in zero seconds with no port bound. An unknown probe had become a green light. The rule that landed instead is tri-state. A probe answers *up*, *down*, or *unknown*. Unknown may fail open on an exit code, so callers that page keep paging, but it never writes the marker. Only an all-up probe writes ready. Only a miss present on two probes three seconds apart, intersected, writes false. A latched marker self-heals when the ports come back and logs `RECOVERED`. The boot's first `ready_at` is preserved across the cycle, because `force-flow` re-enters a 180-second parent-page mute whenever that timestamp moves, and a recovery must not look like a fresh boot.
+
+`tests/test-sanctum-boot-ready.sh` spawns its own listeners, shadows `lsof` so the kernel-table path is what gets tested, and shims `netstat` to be empty, transient, disjoint, or missing. Eighteen assertions; eleven go red against the old script.
+
+## Eight hundred and twenty-one identical pages
+
+The phone had been receiving `council integrity FAIL (1)` every thirty minutes since August 25. Forty-eight a day for seventeen days, twenty-eight of them audible on the night of the reboot alone. The failing item was always the same: `metallib missing: target/release/mlx.metallib`. The check wanted the Metal shader library colocated beside the `sanctum-mlx` binary.
+
+The binary from August 26 does not use that path. `strings` on it prints the path it embeds, deep in the cargo build directory, and `lsof` on both running seats shows exactly that file mapped. Both seats had respawned cleanly after the reboot. The check was lying about a file the machine had never read, and the cooldown made 821 lies look like a slow drip.
+
+The check now reads the path out of the binary, accepts the colocated copy as a fallback, and fails only when neither exists, which a `cargo clean` can still cause, so the check stays meaningful. `tests/test-council-integrity-metallib.sh` runs a copy with paging neutered and proves green on the real binary, red with the embedded path hidden.
+
+A page that repeats identically every thirty minutes for days is a broken check, not a broken system. Nobody had said that out loud, so nobody had looked.
+
+## The rename that reached the plists and stopped
+
+On August 19 every launchd label in the haus moved from `com.sanctum.*` to `haus.sanctum.*`. The plists moved. The heal wrapper for the three system daemons moved. Three consumers did not.
+
+**Qui-Gon's hourly doctor** still healed `com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`, and eleven other names. `launchctl kickstart` said "could not find," the fallback bootstrapped a plist that did not exist, and eight seconds later the doctor concluded "did NOT converge after heal," consulted the council, and paged. That is the message Bert received at 21:22: *Devstral :3301 did NOT converge*, about a seat that has served Glimmer since the eleventh and was still cold-loading a 30B model nine minutes after boot. Every heal for three weeks had been a no-op, and every page it produced had been guaranteed by the label. The doctor now names the live jobs, and a heavy seat whose launchd job is alive while the boot is under twenty minutes old is *warming*, not failed. `tests/test_quigon_doctor_labels.py` asserts that every label the doctor names has a plist on this box.
+
+**The runtime-manifest renderer** and its catalog still generated `com.sanctum.*` names. The live manifests in `~/.sanctum/services` were right; the sources that render them were wrong, so `render_runtime_services.py --check` reported 23 files drifted and one missing on every ten-minute R2D2 cycle. 3,202 detections, each an escalation. The recipe correctly refuses to re-render, because a helpful re-render is how Force Flow lost its heal command on August 6. The fix went the other way: the sources were brought up to the live truth, two override keys the hand-edited `documenso` manifest already used were taught to the renderer, and the one missing manifest for `world-model` was written from an in-memory render after asserting nothing else differed. The check exits 0.
+
+**The Tommy heal** in `tools/heal_tommy.sh`, the restart command the watchdog would run if Tommy's supervisor died, still bootstrapped `com.sanctum.tommy`. It would have written a second plist and started a second supervisor beside the live one.
+
+## The e2e leg is where the last bug lives
+
+Running that heal once, end to end, as the shipping bar demands, took Tommy down. `launchctl bootout` succeeded and `launchctl bootstrap` failed with `5: Input/output error`. The reason is small and permanent: launchd refuses to bootstrap a plist handed to it by its symlink path, and under the [Durability Doctrine](/operations/2026-08-26-the-sanctioned-path/) every live plist in this haus is a symlink into the config repo. Tommy came back through the real path in a minute. The heal resolves the symlink now. Nothing else would have found that.
+
+Two smaller ones fell out of the same day. The Gemini free-sub proxy's `/health` awaited a model enumeration whenever its five-minute cache had expired, so a sentinel probe landing on a stale cache blocked for as long as the CLI took, timed out, and kickstarted the proxy: twenty restarts in sixteen hours, each killing whatever Gemini turn was in flight. Health now answers from the cache and refreshes in the background. And the config repo had been permanently dirty because the context tool rewrites a timestamp into a tracked file every morning. A git clean filter fixed that, once I learned that the filter must *normalise* the line rather than delete it: git trusts a change in file size without re-hashing, so a deleted line left every fresh clone dirty after the tool's first write.
+
+## Landing
+
+Tommy, who was briefly not running while all this was being proven, would observe that every one of these was visible in a log for weeks. The marker said `false`. The integrity check said the same words 821 times. The doctor's audit said "could not find" every hour. The renderer said `DIFF` every ten minutes. We had built the instruments and then stopped reading the ones that repeated themselves.
+
+The lesson is not about probes. A check that fails identically for days is measuring itself. An unknown is not a down and it is certainly not an up. And a rename is not done when the plists are renamed; it is done when `grep` finds nothing left that would call the old name.
