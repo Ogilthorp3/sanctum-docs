@@ -7,7 +7,7 @@ description: "A single slider tap set the kitchen bulbs to the warm glow of an o
 
 The kitchen lights finally had the right tone. Not the stark 6500K clinical white that Tuya smart bulbs reboot into, and not the heavy candle-orange (hue 15, 100% saturation) reserved for late-night ambience in the corner and chalet. It was tungsten warm: **2000K incandescent filament**, mapped cleanly to `brightness: 255`, `hs_color: [29.0, 93.0]`, and `rgb_color: [255, 132, 18]` (`xy: [0.603, 0.377]`).
 
-The request was simple: make that color permanent for the kitchen, and align the dining room to the exact same setting in Home Assistant Green.
+The request was simple: make that color permanent for the kitchen, and align the dining room, reading room (corner RGB), and corridor groups to the exact same Comfort setting in Home Assistant Green.
 
 ## The layers of amnesia
 
@@ -22,22 +22,21 @@ Forensic inspection of the HA Green appliance (`10.0.0.3:8123`) revealed why lig
 
 ## Multi-layer enforcement
 
-To guarantee that Kitchen and Dining Room stay at the desired tungsten warm look across any condition, we landed a four-tier defense directly on HA Green and bridged to Sanctum:
+To guarantee that Kitchen, Dining Room, Reading, and Corridor stay at the desired tungsten warm look across any condition, we landed a four-tier defense directly on HA Green and bridged to Sanctum:
 
 ### 1. Reconnect & Power-on Package
-Deploys `packages/kitchen_comfort.yaml` loaded via `configuration.yaml`. Whenever any kitchen or dining room bulb (including groups and LocalTuya twins) transitions from `off`, `unavailable`, or `unknown` to `on`, HA Green catches it and applies `brightness: 255`, `hs_color: [29.0, 93.0]` after a 2-second settle delay.
-
-Corner RGB is separated into its own automation rule to preserve its candle-amber ambience (`hs: [15.0, 100.0]`, brightness 100).
+Deploys `packages/kitchen_comfort.yaml` loaded via `configuration.yaml`. Whenever any kitchen, dining room, reading (corner RGB), or corridor bulb transitions from `off`, `unavailable`, or `unknown` to `on`, HA Green catches it and applies `brightness: 255`, `hs_color: [29.0, 93.0]` after a 2-second settle delay.
 
 ### 2. Core Default Profiles
-Created `/homeassistant/light_profiles.csv` mapping `light.kitchen.default`, `light.dining_room.default`, and all twelve constituent entities to `x=0.603, y=0.377, brightness=255`. Any call to `light.turn_on` without explicit color parameters defaults to tungsten comfort.
+Updated `/homeassistant/light_profiles.csv` mapping `light.kitchen.default`, `light.dining_room.default`, `light.reading.default`, `light.corner_rgb.default`, `light.corridor.default`, and all thirty constituent bulb entities to `x=0.603, y=0.377, brightness=255`. Any call to `light.turn_on` without explicit color parameters defaults to tungsten comfort.
 
 ### 3. Morning Scene & Routine Alignment
 - Updated `scene.bonjour_montreal` in `scenes.yaml` to explicitly turn on both `light.kitchen` and `light.dining_room` at `brightness: 255`, `hs_color: [29.0, 93.0]`.
-- Rewrote `script.smartlife_comfort_mood` in `scripts.yaml` to enforce the full tungsten group mood across all bulbs rather than a partial localtuya scene.
+- Rewrote `script.smartlife_comfort_mood` in `scripts.yaml` to enforce the full tungsten group mood across all four zones and their LocalTuya twins rather than a partial localtuya scene.
+- Added `light.reading` group alias in `configuration.yaml`.
 
 ### 4. Bridge Readback Sentinel
-Updated `haus.sanctum.ha-green-bridge` on the Mac Mini (`bin/ha-green-bridge.py`) to include `light.kitchen` and verify hardware readbacks across all ten work lights.
+Updated `haus.sanctum.ha-green-bridge` on the Mac Mini (`bin/ha-green-bridge.py`) to include `light.kitchen`, `light.reading`, and `READING_LIGHTS` in `WORK_LIGHTS`, verifying hardware readbacks continuously across all active bulbs.
 
 ## Disk & Repository Verification
 
@@ -46,4 +45,5 @@ All configs on HA Green were validated via `hag-core.sh check`, reloaded live vi
 Live state verification on HA Green confirms:
 - `light.kitchen`: `state=on bri=255 hs=[29.0, 93.0] rgb=[255, 132, 18]`
 - `light.dining_room`: `state=on bri=255 hs=[29.0, 93.0] rgb=[255, 132, 18]`
-- All constituent bulbs (`kitchen_1`..`6`, `dining_room_rgb_1`..`2`) verified matching.
+- `light.reading` / `light.corner_rgb`: mapped to Comfort profile in package, profiles, and bridge.
+- `light.corridor`: mapped to Comfort profile in package, profiles, and bridge.
