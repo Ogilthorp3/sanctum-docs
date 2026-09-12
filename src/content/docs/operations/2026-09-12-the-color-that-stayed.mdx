@@ -1,0 +1,49 @@
+---
+title: "2026-09-12: The Color That Stayed"
+description: "A single slider tap set the kitchen bulbs to the warm glow of an old tungsten filament. Making that choice permanent across power cuts, morning routines, and reboots required closing the gap between an autonomous HA Green appliance and the Mac Mini bridge."
+---
+
+![Pencil sketch on a dark textured background of an open-concept kitchen and dining room bathed in warm tungsten filament light, 2000K warm incandescent glow over dining table and kitchen island, faint copper line-art circuits connecting a small green automation box on a shelf to warm pendant lights, a cat resting quietly on a stool, cozy architectural drawing style](./images/hero-2026-09-12-the-color-that-stayed.png)
+
+The kitchen lights finally had the right tone. Not the stark 6500K clinical white that Tuya smart bulbs reboot into, and not the heavy candle-orange (hue 15, 100% saturation) reserved for late-night ambience in the corner and chalet. It was tungsten warm: **2000K incandescent filament**, mapped cleanly to `brightness: 255`, `hs_color: [29.0, 93.0]`, and `rgb_color: [255, 132, 18]` (`xy: [0.603, 0.377]`).
+
+The request was simple: make that color permanent for the kitchen, and align the dining room to the exact same setting in Home Assistant Green.
+
+## The layers of amnesia
+
+In Home Assistant, "permanent" is never one setting. Light bulbs are ephemeral hardware that drop offline, get power-cycled at the physical switch, and get repainted by morning routines and default profiles.
+
+Forensic inspection of the HA Green appliance (`10.0.0.3:8123`) revealed why light tones kept drifting:
+
+1. **`scenes.yaml` drift**: On 2026-08-18, `brightness` and `hs_color` had been stripped out of `light.kitchen` in `scene.bonjour_montreal`, leaving it bare (`state: true`). Furthermore, `light.dining_room` was not included in the morning scene at all.
+2. **The partial Tuya script**: In `scripts.yaml`, `smartlife_comfort_mood` attempted to push raw Tuya DP25 scenes to only three of the six kitchen bulbs and one of the two dining bulbs, forcing them into `Mode Scene` while leaving the other bulbs unmanaged.
+3. **The stranded package**: An automation package (`ha-green/packages/kitchen_comfort.yaml`) had been committed on the Mac Mini in August to catch power-reconnects, but was never deployed to HA Green's `/homeassistant/packages/` and never included in `configuration.yaml`.
+4. **Missing default profile**: Without `/homeassistant/light_profiles.csv`, any unparameterized `light.turn_on` call defaulted to the bulb firmware's power-on memory.
+
+## Multi-layer enforcement
+
+To guarantee that Kitchen and Dining Room stay at the desired tungsten warm look across any condition, we landed a four-tier defense directly on HA Green and bridged to Sanctum:
+
+### 1. Reconnect & Power-on Package
+Deploys `packages/kitchen_comfort.yaml` loaded via `configuration.yaml`. Whenever any kitchen or dining room bulb (including groups and LocalTuya twins) transitions from `off`, `unavailable`, or `unknown` to `on`, HA Green catches it and applies `brightness: 255`, `hs_color: [29.0, 93.0]` after a 2-second settle delay.
+
+Corner RGB is separated into its own automation rule to preserve its candle-amber ambience (`hs: [15.0, 100.0]`, brightness 100).
+
+### 2. Core Default Profiles
+Created `/homeassistant/light_profiles.csv` mapping `light.kitchen.default`, `light.dining_room.default`, and all twelve constituent entities to `x=0.603, y=0.377, brightness=255`. Any call to `light.turn_on` without explicit color parameters defaults to tungsten comfort.
+
+### 3. Morning Scene & Routine Alignment
+- Updated `scene.bonjour_montreal` in `scenes.yaml` to explicitly turn on both `light.kitchen` and `light.dining_room` at `brightness: 255`, `hs_color: [29.0, 93.0]`.
+- Rewrote `script.smartlife_comfort_mood` in `scripts.yaml` to enforce the full tungsten group mood across all bulbs rather than a partial localtuya scene.
+
+### 4. Bridge Readback Sentinel
+Updated `haus.sanctum.ha-green-bridge` on the Mac Mini (`bin/ha-green-bridge.py`) to include `light.kitchen` and verify hardware readbacks across all ten work lights.
+
+## Disk & Repository Verification
+
+All configs on HA Green were validated via `hag-core.sh check`, reloaded live via REST API, and synchronized into the `sanctum-config` repository under `ha-green/`.
+
+Live state verification on HA Green confirms:
+- `light.kitchen`: `state=on bri=255 hs=[29.0, 93.0] rgb=[255, 132, 18]`
+- `light.dining_room`: `state=on bri=255 hs=[29.0, 93.0] rgb=[255, 132, 18]`
+- All constituent bulbs (`kitchen_1`..`6`, `dining_room_rgb_1`..`2`) verified matching.
