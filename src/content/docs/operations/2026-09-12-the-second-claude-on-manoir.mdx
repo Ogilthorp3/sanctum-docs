@@ -1,0 +1,54 @@
+---
+title: "2026-09-12: The Second Claude on Manoir"
+description: "A Claude Code session on the laptop timed out through the proxy, then started answering as if it lived on the hub. It did. Behind one complaint sat a two-minute silence budget, a bridge that ran the caller's tools on the wrong machine, and a spend counter that died with the process."
+---
+
+![Pencil sketch of two identical switchboard operators sitting back to back in a small stone room, one wearing a headset whose long cord runs out a window toward a distant lit farmhouse on a hill; between them a wall clock with its second hand stopped at two minutes, a coin meter on the wall spinning coins into an overflowing bucket, and an Abyssinian cat sitting on the cable spool watching the meter](./images/hero-2026-09-12-the-second-claude-on-manoir.png)
+
+Bert's message on the eleventh was one line: the proxy gives a timeout with the Claude CLI. It was the same evening as [The Binary That Came Back](/operations/2026-09-11-the-binary-that-came-back/), and it turned out to be the next chapter of it. For seventeen days a stale proxy build had sent every Claude Code turn to a hosted model. The redeploy that afternoon sent them where the config had always said they should go, and for the first time anyone could see what that path actually did.
+
+## Two minutes of silence
+
+The audit ledger had two rows that looked alike. A `claude-fable-5-1` turn at 03:13:30 UTC, 39 tokens, 120,063 ms. A `claude-fable-5` turn at 03:22:12, 48 tokens, 120,127 ms. Not about two minutes. Exactly two minutes, measured from the moment the upstream sent its headers. Every other seat without a per-seat timeout, the local council brains included, showed the same number in its failures: 120,0xx.
+
+The number is `proxyd`'s shared HTTP client. It is built with a 120-second `read_timeout`, and in the library it uses that is an inactivity timer: it resets on every frame received and fires after two minutes without one. The two Fable seats had no per-seat override, so they borrowed it. Nobody had meant them to.
+
+## One flush, then nothing
+
+The seat behind them is the Claude Max bridge on `:3456`, a small Node service that spawns a real `claude --print` for every request. The bridge holds the response headers until the inner CLI has produced 150 characters of text, flushes that first sentence, and then forwards only text. When the inner CLI starts running tools, the bridge has nothing to forward, so it forwards nothing. A 39-token opening sentence is about 156 bytes: one flush. Then silence. Then the cut.
+
+What happened at the cut is the part I had not understood. The translator that turns the bridge's stream into Anthropic events forwarded the transport error as an error item, and the HTTP layer treats a body error as an abort. No `error` event, no `message_stop`, not even a chunked terminator. Claude Code saw a dead socket, classified it as a connection error, and re-sent the entire 162,000-token turn 0.6 seconds later. On the hub, the bridge saw its client hang up and sent SIGTERM to the inner CLI, mid-tool. The bridge log shows the inner CLI opening four times with nearly the same sentence, and exiting with code 143 four times. The session that asked the question never received an answer and was killed by hand at 23:15.
+
+Short turns finished inside two minutes, so the health page stayed green and the route probe passed. Trivial prompts worked and real ones never did, which reads as "the model is broken" rather than "the transport gave up". That sentence already existed in the config, written in July about a local seat. The same cut had been fixed twice before, seat by seat, and nobody had looked at the bridge seats because nothing had reached them.
+
+## The first fix
+
+The first fix was config: 600 seconds to first byte and 900 seconds of inactivity on all eleven bridge seats, hot-reloaded. No restart. A probe whose inner CLI blocked for 150 seconds in the foreground came back with `SLEPT_OK` at 169.9 seconds. Three independent reviews later confirmed the mechanism from the library source down to the byte counts.
+
+## The hook now says I'm on manoir
+
+The next afternoon Bert said the session on the laptop was behaving strangely, not processing correctly. The bridge log had the session's own words. The last thing it had said before being killed at the bridge's five-minute cap was: *the hook now says I'm on manoir, not the MBP where the campaign ran, so before I draft anything public I'm...*
+
+That was true. The laptop session had a 594,000-token conversation. The proxy flattened it into a single prompt, passed it to the bridge, and the bridge spawned a second Claude Code on the hub to answer it. That second Claude ran the hub's hooks, read the hub's disk, executed tools on the hub, and reported back as text. The laptop never saw a tool call; it saw prose about work done on another machine. Wrong disk. Wrong hooks. The flattening also kept only text blocks, so every tool call and every tool result in the history was gone. The second Claude was answering a conversation with the evidence removed, from the wrong computer, and it noticed before we did.
+
+## The wrong seat, since July
+
+This was not a bug in the bridge. The bridge exists for the council: Yoda, Mothma, and Windu have no tools of their own and want the subscription, and for them a CLI on the hub that runs the tools is the point. It was the wrong seat for Claude Code, and it had been the configured seat since July. The rollback build had hidden that too, by never letting a Claude Code turn reach it.
+
+The proxy already had the right mechanism. Any `claude-*` name with no explicit seat falls to an Anthropic-native passthrough, and that path preserves the caller's own OAuth bearer and beta headers. Two aliases stood in the way, catching every Claude Code model name and pointing it at the bridge. Bert chose native for all of them. The aliases went, the two Fable seats became `provider: anthropic`, and a probe carrying a Claude Code bearer got a real `tool_use` block back in 1.6 seconds at no metered cost. The laptop session's next three turns ran natively at 603,000 to 611,000 tokens of context, on its own login, running its own tools.
+
+One trap fell out of that switch. The proxy injects a global default effort into every Anthropic-native request, and the injection overwrote whatever the caller had set. No live seat had been native before, so the knob had never bitten. It would have turned every session's chosen effort into `medium` silently. It went off in config that minute and the code now only fills an empty field.
+
+## The counter that died with the process
+
+At about 16:00 the Max account reached its session limit. From 16:06 every laptop turn was answered by Anthropic with a rate-limit status and diverted to kimi-k3 on OpenRouter, which is what the ladder is for. At 600,000 tokens of context that is about 45 cents a turn, and a tool loop makes ten turns a minute. The daily cap of fifty dollars was reached at 16:28 and the session moved to the free Grok seat, exactly as designed. The proxy log said nothing about any of it; an expected quota divert is logged at debug level.
+
+At 16:38 I deployed the code fixes. The deploy is careful: backup, atomic rename, restart, health from a new pid, manifest. The daily spend counter lives in the process's memory. The restart set it to zero. The cap opened. Kimi-k3 resumed at five dollars a minute until I read the ledger three minutes later and closed the cap by hand. Bert chose to pay through to the reset at 20:20 rather than work on a truncated local model, and the cap went back to fifty. About sixty dollars was metered today; nine of it was mine.
+
+The deployed build closes the message loudly when an upstream dies mid-stream, `error` first, then the terminal sequence with `stop_reason: error`, and ends the body cleanly. A severed stream now logs as `stream SEVERED` at warn instead of `stream completed` at info, which is the line under which the two-minute cuts had been hiding. Both are pinned by tests that drive the translator with a synthetic transport error and check that no error item ever reaches the HTTP layer.
+
+## Landing
+
+Tommy would point out that the config file had described this failure in its own comments since July, in the entry for a local seat, and that "same cut, same numbers" appeared twice more before anyone applied it to the seats Claude Code used. He would also point out that the bridge told us it was on the wrong machine, in the log, in plain English.
+
+Three rules came out of it. A proxy that answers on a caller's behalf must return the caller's tool calls, not run them; the moment it runs them, it has become a second agent with its own idea of where it lives. An inactivity timeout is a promise about how often the upstream will speak, and a bridge that stays silent while its inner process works cannot keep it. And a limit that lives in a process's memory is a rule that dies with the process; before restarting anything that enforces a budget, read the ledger and lower the cap first.
