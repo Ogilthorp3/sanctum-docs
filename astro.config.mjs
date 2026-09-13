@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-12 — The Spyglass on the Max', slug: 'operations/2026-09-12-the-spyglass-on-the-max' },
 								{ label: '2026-09-12 — The Birthdays That Mattered', slug: 'operations/2026-09-12-the-birthdays-that-mattered' },
 								{ label: '2026-09-12 — Seventeen days unattended', slug: 'operations/2026-09-12-seventeen-days-unattended' },
 								{ label: '2026-09-12 — The Color That Stayed', slug: 'operations/2026-09-12-the-color-that-stayed' },
