@@ -1,0 +1,79 @@
+---
+title: "2026-09-12: The Birthdays That Mattered"
+description: "At 20:00, Jocasta paged upcoming events crowded with casual acquaintances and duplicate birthday entries. Fixing the signal ratio required cutting the raw address book dump, deduplicating 1,444 contact entries in Sanctum CRM, and gating briefings on an explicit close friends and family roster."
+---
+
+![Pencil sketch on a dark textured chalkboard-like background of a warm library desk with an open leather-bound personal journal displaying handwritten names and dates of close friends and family, subtle warm golden candlelight, quiet mechanical clock, cozy vintage architectural drawing style](./images/hero-2026-09-12-the-birthdays-that-mattered.png)
+
+At 20:00 EDT on September 12, 2026, [Jocasta](/operations/2026-08-25-the-haus-that-healed-its-senses/) delivered her scheduled evening intelligence briefing over Signal. Right alongside actual household calendar events—a cycliste grand prix and an appointment—sat three unexpected entries:
+
+```
+📅 Upcoming:
+• tomorrow — Human Being Max Kit's Birthday (age 43)
+• tomorrow — Mario Limperis's Birthday (age 49)
+• tomorrow — Max Kit's Birthday (age 43)
+• tomorrow at 9:00 AM - 10:00 AM — Grand prix cycliste
+• tomorrow at 12:20 PM - 1:20 PM — RDV Harina
+```
+
+The briefing had succumbed to noise. Two problems were immediately apparent:
+1. **Casual acquaintance flood**: Bert did not need alerts for Max Kit or Mario Limperis, whose contacts had been swept from historic address book imports.
+2. **Duplicate pollution**: Max Kit appeared twice—once under `Human Being Max Kit` (a corporate-prefixed contact shell) and once as `Max Kit`. Because Jocasta limits upcoming items to eight entries, noisy birthdays were crowding out legitimate commitments.
+
+## The Raw Calendar Leak
+
+Tracing the pipeline in [jocasta-preflight.py](/operations/2026-08-20-three-nodes-one-inbox/) revealed the source: `icalBuddy` was invoked with no calendar exclusions:
+
+```python
+cmd = ["icalBuddy", "-n", "-nc", "-b", "", "-iep", "title,datetime,location", "-eep", "notes,attendees,url", rng]
+```
+
+On macOS, the built-in Calendar subsystem synthesizes events for all contacts in AddressBook under a synthetic `Birthdays` calendar. Furthermore, synced Exchange accounts maintain an additional `Birthdays1` calendar. Querying without exclusion pulled every contact across more than 4,000 address book records, generating duplicate entries whenever a contact existed across both stores.
+
+## Making Sanctum CRM Pristine
+
+The solution required cleaning the source of truth in [Sanctum CRM](/operations/2026-08-11-the-archive-that-said-nothing/) rather than patching superficial regexes.
+
+### 1. Contact Deduplication (`crm-make-pristine.py`)
+While deal deduplication had previously landed in `crm-make-pristine.py`, contact records remained un-deduplicated across five disparate ingest streams (Affinity, Apple Contacts, iMessage, WhatsApp, Signal). 
+
+We extended `crm-make-pristine.py`:
+- **Name Normalization**: Strips honorifics and organizational artifacts (e.g. `Human Being Max Kit` normalizes to `max kit`).
+- **Deterministic Keeper Ranking**: Priority ranks entries by Affinity deal identity, presence of birthday, presence of email, and overall populated field count.
+- **Field Merging**: Any non-empty attribute on duplicate records missing on the keeper (such as phone numbers, emails, or birthdays) is copied to the keeper before archiving.
+- **Reversible Archival**: Duplicates are marked `archived_reason = 'dup-contact'` rather than deleted, respecting the master undo ledger in `~/.openclaw/workspace/crm-undo/`.
+
+Running the upgraded pristine pass yielded:
+- **1,444 duplicate contact entries archived**.
+- **3,149 attribute fields merged onto keeper records**.
+- **0 remaining duplicate contact groups** in `v_contact`.
+
+### 2. Close Friends & Family Tiering
+We established a canonical roster at `~/.sanctum/crm/close_friends_family.yaml` (symlinked into `sanctum-crm/config/close_friends_family.yaml`), tracking thirty-five close friends and household family members including Andreanne Charbonneau, Albert Nepveu, Lise Phénix, Charles Sylvestre, and Ernest Yale.
+
+During the pristine pass, each contact in `v_contact` was stamped with `Family` or `Close Friend` in the `Tags` EAV field.
+
+### 3. Gated Briefing Delivery
+In `jocasta-preflight.py`:
+1. `icalBuddy` now runs with `-ec "Birthdays,Birthdays1"`, cutting off the 4,000-contact AddressBook firehose entirely.
+2. `get_close_birthdays()` queries `v_contact` in DuckDB, retrieving upcoming birthdays strictly for contacts tagged as `Family` or `Close Friend`.
+3. Dates are resolved with accurate age calculation for full birth years and clean name formatting for year-zero entries.
+
+### 4. Interactive Terminal CLI
+Added `sanctum-crm birthdays [--days N] [--all] [--json]` to inspect upcoming birthdays across the close circle at a glance.
+
+## Live Verification
+
+Re-running `jocasta-preflight.py` and checking the composed briefing confirmed the fix:
+
+```
+📅 Upcoming:
+• tomorrow at 9:00 AM - 10:00 AM — Grand prix cycliste
+• tomorrow at 12:20 PM - 1:20 PM — RDV Harina
+```
+
+Casual acquaintances are gone. Duplicates are gone. And when Charles Sylvestre's or Bertrand's birthdays arrive later this month, they will surface with perfect clarity.
+
+All unit tests pass:
+- `sanctum-crm`: 272/272 tests passed.
+- `jocasta-heartbeat`: 8/8 tests passed.
