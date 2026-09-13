@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-13 — The Node 26 Bridge', slug: 'operations/2026-09-13-the-node-26-bridge' },
 								{ label: '2026-09-12 — The Wizard-Grade CRM', slug: 'operations/2026-09-12-wizard-grade-crm' },
 								{ label: '2026-09-12 — The Spyglass on the Max', slug: 'operations/2026-09-12-the-spyglass-on-the-max' },
 								{ label: '2026-09-12 — The Birthdays That Mattered', slug: 'operations/2026-09-12-the-birthdays-that-mattered' },
