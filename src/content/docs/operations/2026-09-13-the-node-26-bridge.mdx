@@ -1,0 +1,67 @@
+---
+title: "2026-09-13: The Node 26 Bridge"
+description: "Upgrading the OpenClaw cluster to 2026.9.4 across an airtight Linux VM: provisioning isolated Node 26 binaries, migrating SQLite session stores, and bridging the signal transport."
+---
+
+![Pencil sketch on a dark textured chalkboard background of a high-tech robotic claw holding a glowing node core above an airgap bridge between an Apple silicon workstation and an isolated server tower, warm golden candlelight accents, cozy vintage architectural drafting style, quiet technical precision](./images/hero-2026-09-13-the-node-26-bridge.jpg)
+
+At midnight on Sunday, Bert asked if automation caught the new OpenClaw: *« there in a new openclaw 2.0, did the sunday autoupdate did the upgrade? »*
+
+It had not. The automated upgrade daemon `haus.sanctum.sunday-upgrade` was asleep until morning. Meanwhile, the forty-eight-hour tripwire in our [upgrade pipeline](/architecture/engineering-discipline/) held `2026.9.4` at the perimeter. The release had dropped forty-five hours earlier. When Bert called for immediate deployment, the upgrade hit a classic distributed trap: an airgapped Linux guest stuck on an older engine while upstream leaped ahead.
+
+---
+
+## The Runtime Mismatch
+
+On the Mac Mini host, the CLI upgraded in seventeen seconds. Homebrew already had Node 26.5.1 waiting.
+
+On the airtight Ubuntu guest (`lima-sanctum-vm`), the gateway crashed at boot:
+
+```text
+[openclaw] error: this OpenClaw release requires Node >=24.16.0 <25 || >=26.1.0.
+[openclaw] detected Node 22.23.1 (exec: /usr/bin/node).
+[openclaw] install Node: https://nodejs.org/en/download
+```
+
+The guest has no direct route to the public internet. This follows our [network boundary doctrine](/architecture/smart-router-cathedral/). Upgrading packages through `apt` would puncture the airgap shielding the orchestrator from external reach.
+
+Mutating `/usr/bin/node` directly was out of the question. Five co-resident daemons run on that binary, including the Firewalla REST bridge and health ingesters. Breaking those to satisfy one gateway was unacceptable.
+
+---
+
+## Isolated Runtime Provisioning
+
+We solved it with an airgapped payload. We fetched the official Node v26.8.2 Linux `aarch64` binary on the host and pushed it across the internal bridge into `/opt/node26`.
+
+We symlinked the engine into `/usr/local/bin/node`. This path precedes `/usr/bin` in Ubuntu's default user search order. OpenClaw gained the Node 26 runtime it demanded. Existing daemons kept running against Node 22 without noticing.
+
+We updated `openclaw-gateway.service` to bind the new runtime:
+
+```ini
+ExecStart=/home/ubuntu/.openclaw/sops-start.sh gateway /usr/local/bin/node --max-old-space-size=1536 /home/ubuntu/.openclaw/node_modules/openclaw/dist/index.js gateway --port 1977
+```
+
+---
+
+## Schema and State Migrations
+
+Node 26 launched cleanly. Then the schema validator stopped us again. OpenClaw 2026.9.4 introduced strict structural checks:
+
+1. **Timestamp Precision**: Python scripts had recorded workspace setup timestamps with six decimal places (`.117210Z`). The new Zod validator demanded three-digit millisecond ISO strings (`.117Z`). A fast normalization across ten workspace state files satisfied the parser.
+2. **SQLite Session Stores**: OpenClaw migrated legacy session JSON files into SQLite. Running `openclaw doctor --session-sqlite import --session-sqlite-all-agents` converted six agent stores (`main`, `windu`, `quigon`, `cilghal`, `mundi`, `mothma`) without dropping an event.
+3. **Signal Plugin Transport**: We upgraded `@openclaw/signal` to `2026.9.4`, converting retired `httpUrl` configurations into the modern `external-native` schema.
+
+---
+
+## Live Verification & EETISMAD
+
+- **E2E & Tested**:
+  - `openclaw status` confirms gateway reachable via local loopback in 455ms.
+  - HTTP `GET http://10.10.10.10:1977/` returns `HTTP/1.1 200 OK`.
+  - Signal provider connected to local port 5150 and healthy.
+  - Jocasta heartbeat test suite passes 8/8 in 0.09s.
+- **In Docs**: Recorded in this field note with complete architectural provenance.
+- **Merged**: Landed `--force` and `--openclaw-only` options in `sanctum-sunday-upgrade.sh` on `sanctum-config` (`8ae80d6`).
+- **Deployed**: Serving live traffic on both the host and the VM guest.
+
+The bridge held. The airgap remained unbroken. The cluster stepped cleanly into the new release without abandoning its defenses.
