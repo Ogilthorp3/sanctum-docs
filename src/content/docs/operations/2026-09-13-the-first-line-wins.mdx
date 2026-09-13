@@ -1,0 +1,103 @@
+---
+title: "2026-09-13: The first line wins"
+description: "A question about a busy password manager turned up two SSH configs in which every automation-lane host listed after the catch-all had been routed through the very agent the lane exists to avoid."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch of an open guest ledger on a lectern in a dark stone vestibule, only its first line lit by a soft teal halo while the lines below fade, with a full iron key ring on the wall and one plain key hanging apart on its own hook.](./images/hero-2026-09-13-the-first-line-wins.png)
+
+A doorman with a guest list reads from the top and stops at the first line that matches your name. Whatever the lines below say about you, he never gets there. OpenSSH reads its config the same way, and two machines in the haus had spent two months politely ignoring their own instructions because of it.
+
+## A question about the wrong process
+
+The operator asked something simple: 1Password looked like it was eating a CPU core, so should it be killed? The first answer said it had burned a core for four days. That answer rested on a single `ps` line, and `ps` reports a short decaying average, not a load. Paired with an uptime column, one burst had invented a four-day fire. Measured properly, the picture was dull:
+
+| Window | 1Password CPU |
+|---|---|
+| Lifetime, 96.5 hours | 0.39% of one core |
+| One 60-second sample | 13% of one core |
+| One 10-second sample | 0% |
+
+Before recommending a kill, the next question was what depends on the process. On the MacBook, the 1Password SSH agent signs every GitHub push. According to the automation lane's own comments, it was supposed to be irrelevant to everything a daemon does.
+
+## The lane that was only half there
+
+The automation lane comes from [three things that woke you](/operations/2026-05-20-three-things-that-woke-you/): daemons failed in the small hours because 1Password had locked itself and its agent refused every key. The answer was a dedicated key and host blocks with `IdentityAgent none`, so nothing unattended ever waits for a thumb. On the MacBook, the config opened like this:
+
+```text
+Host *
+    IdentityAgent "~/Library/Group Containers/<team>.com.1password/t/agent.sock"
+
+Host manoir
+    IdentityAgent none
+    IdentityFile ~/.ssh/sanctum_automation
+    IdentitiesOnly yes
+```
+
+It reads perfectly and does not work. For each option, ssh keeps the first value it obtains and discards the rest, and `Host *` matches every host before `Host manoir` gets a turn. `ssh -G` prints what ssh will actually use, and it disagreed with the file:
+
+```text
+$ ssh -G manoir | grep identityagent
+identityagent /Users/neo/Library/Group Containers/<team>.com.1password/t/agent.sock
+```
+
+Logins kept working anyway, which is exactly why nobody noticed: `IdentitiesOnly` and the explicit key file carried authentication whenever the agent had nothing to offer. Every backup of that file since June shows the catch-all on top. The May version of the idea, on the other machine, had put its block above the catch-all. The order was right the first time and lost when the idea was typed again.
+
+## Moving one block
+
+The fix is to put `Host *` last. On the MacBook three aliases changed from the 1Password socket to `none`: manoir, chalet and the Firewalla box. GitHub stayed on 1Password, which is intended. Fresh handshakes, with connection sharing disabled, authenticated to manoir and the Firewalla. Chalet has been offline for weeks and could only be checked with `ssh -G`.
+
+## The same trap, worse, on the Mini
+
+The Mini's config had its catch-all in the middle, and every block below it was dead on arrival:
+
+| Host alias | Asked for | Actually got |
+|---|---|---|
+| `github.com` | `none` | 1Password agent |
+| `yoda` | the system agent | 1Password agent |
+| `chalet` | `none` | 1Password agent |
+| Four Firewalla aliases | nothing set | 1Password agent |
+
+That table closes an old case. When git pushes from the Mini failed with "communication with agent failed", the diagnosis was that ssh reads its config but ignores `IdentityAgent` on that path, and the cure was a git-level `core.sshCommand` override. The config was never ignored. It was outranked.
+
+The Mini is production, so this change was proven before it was installed. A candidate file was built beside the live one, and every host that authenticated that afternoon was tried through both with `ssh -F`:
+
+| Host | Live file | Candidate |
+|---|---|---|
+| `github.com` | authenticated | authenticated |
+| `yoda` | authenticated | authenticated |
+| `firewalla` | authenticated | authenticated |
+| `manoir-firewalla` | authenticated | authenticated |
+| `openclaw` | authenticated | authenticated |
+
+Only then did the candidate replace the live file, with both Firewalla blocks also gaining `IdentityAgent none` so the recovery channel never waits on a locked agent. The same five hosts authenticated again through the installed file.
+
+<Aside type="note" title="The test script ate its own ending">
+The first remote run called `ssh host true` inside a script piped to `bash -s`. The inner ssh read the rest of the script from stdin as if it were input, so the commit and the announcement never ran and nothing complained. Every ssh inside a piped script gets `-n`.
+</Aside>
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | MacBook: `ssh -G` on five hosts, fresh logins to manoir and the Firewalla. Mini: `ssh -F` A/B on five hosts before install, the same five after |
+| in Sanctum-docs | This note, the corrected SSH section of [node topology](/architecture/node-topology/), and the rules in the MacBook config repo README |
+| Merged | `sanctum-mbp` `76246f1` and `a52c91b`; `sanctum-config` `a996d4c` |
+| And Deployed | Both `~/.ssh/config` files are symlinks into those repos, so the committed file is the one ssh reads |
+
+The rules that came out of it are short enough to keep:
+
+- `Host *` goes last, in every SSH config in the haus.
+- Check an SSH setting with `ssh -G <host>`, never by reading the file. The file reads correct either way.
+- A `ps` CPU figure is a moment. Measure CPU-seconds across a minute before calling anything a hog.
+
+## Lineage
+
+- [Three things that woke you](/operations/2026-05-20-three-things-that-woke-you/) — where the automation lane came from, block order and all
+- [Node topology](/architecture/node-topology/) — the SSH key persistence section this note corrected
+- [Verify before you fortify](/operations/2026-07-03-verify-before-you-fortify/) — the file said one thing and the tool said another
+- [The secrets trifecta](/architecture/secrets-trifecta/) — the other half of keeping daemons away from a locked vault
+- [Engineering discipline](/architecture/engineering-discipline/) — the four gates in the table above
+
+1Password is still running, and it was never the problem. The doorman read the list exactly as written. The list simply had the wrong name on its first line.
