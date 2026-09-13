@@ -1,0 +1,89 @@
+---
+title: "2026-09-12: The Wizard-Grade CRM"
+description: "Resolving the 1:1 chat blindspot in Sanctum CRM: bridging 29,818 normalized phone and email handles into an O(1) hash index, restoring thousands of invisible interactions on timeline cards, and purging carrier 2FA bots from triage views."
+---
+
+![Pencil sketch on a dark textured chalkboard-like background of a sophisticated high-tech wizard study desk with an illuminated glowing glass interface displaying connected human relationship nodes, clear communication timelines, warm golden candlelight accents, cozy vintage architectural drafting style, quiet technical precision](./images/hero-2026-09-12-wizard-grade-crm.jpg)
+
+At 23:11 EDT on September 12, 2026, Bert posed a quintessential question: *« CRM is the best it can be for a Wizard like me? »*
+
+An architectural audit against [Sanctum CRM](/operations/2026-08-11-the-archive-that-said-nothing/) and the 458,674 unified interactions in `workspace.duckdb` revealed two glaring blindspots separating our pipeline from true wizard-grade intelligence:
+
+1. **The 1:1 Chat Identity Blindspot**: In `v_timeline`, 1-on-1 iMessage, SMS, and WhatsApp conversations failed to resolve counterparties to human names because macOS stores chat names only for named group chats (`chat_name IS NULL` on 1:1 threads). The view fell back to raw E.164 strings (`+15555550101`, `+15555550102`). As a result:
+   - `sanctum-crm who "Andréanne Charbonneau"` showed only 91 interactions across email, calendar, and LinkedIn—completely missing **4,731 iMessages**.
+   - `sanctum-crm who "Bruno Goulet"` showed 8 interactions, completely missing **10 iMessages**.
+   - `sanctum-crm needs-reply` listed raw phone strings for closest family and partners.
+2. **Carrier Shortcode & Robocall Noise**: Automated 2FA verification shortcodes (`24528`, `75137`, `622258`), carrier notification senders (`456`, `FIZZ`), and 1-844 toll-free robocalls were treated as unanswered 1:1 conversations awaiting executive reply.
+
+---
+
+## Root Cause: Format Skew and Missing Joins
+
+The schema had previously defined `v_imessage_summary` with a `LEFT JOIN imessage_contacts ic ON ic.handle = im.handle_id`, but `v_timeline` itself never performed this join.
+
+Worse, format skew existed between how contacts were recorded and how carriers reported handles:
+- Apple Contacts frequently recorded `5555550102` (10-digit local).
+- iMessage and SMS payloads arrived as `+15555550102` (E.164 international).
+- Direct string equality on `handle` failed silently, causing queries to fall back to the raw handle.
+
+Attempting to normalize numbers dynamically inside `v_timeline` using regex expressions like `RIGHT(REGEXP_REPLACE(...), 10)` caused DuckDB query latency to surge from 10 milliseconds to over 10 seconds across 187,000 messages.
+
+---
+
+## The Apple Way: O(1) Precomputed Hash Index
+
+To achieve military-grade responsiveness without sacrificing precision, we implemented a two-part architectural upgrade:
+
+### 1. Dual-Variant Handle Indexing (`sanctum_crm.db`)
+
+In `sanctum_crm/db.py`, we implemented `sync_imessage_contacts(con)`. On every migration or pristine run, the system:
+- Generates symmetric `+1` and 10-digit variants for every telephone number in `imessage_contacts`.
+- Expands all 5,908 telephone numbers and 18,000 email addresses from `v_contact` into exact E.164 and clean numeric entries.
+- Indexes **29,818 unique handle-to-name mappings** in DuckDB.
+
+Because exact strings are indexed, the join in `v_timeline` remains a pure column-to-column hash join executing in **4.8 milliseconds** across 187,304 messages.
+
+```sql
+UNION ALL
+SELECT CASE WHEN im.handle_service IN ('SMS', 'RCS') THEN 'sms' ELSE 'imessage' END,
+       im.date_ts AT TIME ZONE 'America/Toronto',
+       CASE WHEN im.is_from_me THEN 'out' ELSE 'in' END,
+       COALESCE(NULLIF(im.chat_name, ''), ic.contact_name, im.handle_id),
+       LOWER(im.handle_id),
+       COALESCE(im.text, ''),
+       COALESCE(im.is_group_chat, FALSE)
+FROM imessage_history im
+LEFT JOIN imessage_contacts ic ON ic.handle = im.handle_id
+WHERE im.date_ts IS NOT NULL
+```
+
+### 2. Algorithmic Bot Suppression in `v_needs_reply`
+
+In both `v_needs_reply` (full personal triage) and `v_needs_reply_work` (partner-safe work triage), we introduced deterministic exclusion gates:
+
+```sql
+  -- Exclude regulated shortcodes (3 to 6 digits)
+  AND NOT regexp_matches(counterparty, '^[0-9]{3,6}$')
+  -- Exclude carrier alert headers
+  AND UPPER(counterparty) NOT IN ('FIZZ', 'FIDO', 'ROGERS', 'BELL', 'TELUS')
+  -- Exclude toll-free automated numbers with zero outbound replies
+  AND NOT (last_out IS NULL AND regexp_matches(counterparty, '^\+?1(800|888|877|866|855|844|833)[0-9]{7}$'))
+  -- Exclude WhatsApp broadcast and system status hashes
+  AND counterparty NOT LIKE 'CNew/%'
+  AND counterparty NOT LIKE '%@broadcast'
+```
+
+---
+
+## Live Verification & EETISMAD
+
+- **E2E & Tested**: 
+  - `sanctum-crm who "Andréanne Charbonneau"` instantly surfaces **4,843 interactions across 5 channels** (4,731 iMessages, 87 emails, 21 SMS, 2 LinkedIn, 2 Calendar).
+  - `sanctum-crm who "Bruno Goulet"` surfaces **18 interactions across 4 channels** (including all 10 iMessages).
+  - `sanctum-crm needs-reply` reduced 12 noisy shortcodes down to pure human threads (Albert Nepveu, Andréanne, Bruno Goulet, Mathieu Baril, Nakita Rao, John Baker, Christopher Olimpo).
+  - `sanctum-crm doctor` confirms all 9 privacy hard checks remain green; 0 personal leaks on the work surface.
+  - Regression suite passes 274 tests (plus 1 skipped) in 2.6s; Jocasta heartbeat suite passes 8/8.
+- **Merged**: Landed on `main` in `sanctum-crm` (`377b563`).
+- **Deployed**: Active in production on `workspace.duckdb`.
+
+The pipeline now answers with zero hesitation and zero noise. When the wizard queries his haus, the CRM reflects reality exactly as it was lived.
