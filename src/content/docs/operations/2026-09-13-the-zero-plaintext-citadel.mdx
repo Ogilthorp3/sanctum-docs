@@ -1,0 +1,65 @@
+---
+title: "2026-09-13: The zero-plaintext citadel"
+description: "Retiring plaintext duplicate ports, binding internal IPC to POSIX domain sockets fronted by post-quantum TLS, closing wildcard network binds, and resolving the 64-layer LoRA hold on Apple Silicon."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch of an ancient stone citadel gateway fortified with glowing teal runes and interlocking obsidian locks, with zero visible seams, dark background, teal and amber accent.](./images/hero-2026-09-13-the-zero-plaintext-citadel.png)
+
+When an architecture tolerates plaintext simply because a socket stays on loopback, it leaves a quiet back door open beside every vault. Neo asked a blunt question during evening rounds. Why run duplicate plaintext ports in parallel with encrypted terminators when our haus could enforce zero-plaintext internal IPC? Plaintext had to go. The answer was to strip the duplicate ports, bind Node backends to POSIX UNIX domain sockets, close every wildcard bind across the estate, and resolve the training hold on the MacBook Pro. Tommy watched the perimeter.
+
+## The duplicate port legacy
+
+The estate had accumulated dual-port pairings across several services. Because Node backends originally lacked native post-quantum hybrid TLS, operators had spawned `sanctum-pq-terminator` proxies on secondary ports while leaving the underlying Node listeners on loopback TCP:
+
+| Service | Legacy Backend Port | Terminator Port | Duplicate State |
+|---|---|---|---|
+| Command Center | `127.0.0.1:1701` | `:1111` | Plaintext loopback TCP exposed on host |
+| Health Center | `127.0.0.1:2223` | `:2222` | Mismatched `.2223` plist naming, duplicate TCP |
+| Smart Router | `127.0.0.1:8900` | `:8055` (BOSS) | Redundant legacy router port |
+
+The fix was clean. We eliminated loopback TCP binds entirely for internal Node services and bound them to POSIX domain sockets with restrictive permissions (`0600`, owned by `neo:sanctum`). No plaintext sockets remained.
+
+`sanctum-pq-terminator` on `:1111` now proxies directly into `unix://~/.sanctum/run/command-center.sock`. On `:2222`, the LaunchAgent was renamed from `.2223` to `haus.sanctum.pq-terminator.2222` and proxies into `unix://~/.sanctum/run/health-center.sock`. The Smart Router (`sanctum-server`) moved to `:8055`, documented in the [port summary](/architecture/port-summary/) and [smart router guide](/architecture/smart-router-cathedral/), while ports `:1701`, `:2223`, and `:8900` were closed. The council approved the migration.
+
+## The military-grade prepper alert bus
+
+Force Flow is the emergency paging bus of the haus, documented in [agents](/architecture/agents/). Over 170 operational scripts, watchdog daemons, and `tailscale serve` target `127.0.0.1:4077`. Severing TCP `4077` would have broken third-party and remote alarms. We needed both.
+
+Instead, Force Flow was upgraded to a dual-site listener in `force_flow.py`:
+1. **TCP Loopback (`127.0.0.1:4077`)**: Preserved for existing caller scripts and Tailscale HTTPS ingress.
+2. **POSIX UNIX Domain Socket (`~/.sanctum/run/force-flow.sock`)**: Provisioned with permissions `0666` for zero-plaintext local IPC.
+3. **Prepper Flight Recorder Spool**: An asynchronous spool drainer watches `~/.sanctum/force-flow/spool/*.json` every 5 seconds. If Force Flow restarts or experiences a panic, alerts spooled directly to disk are guaranteed to be processed upon recovery.
+
+To unify alert generation, the `sanctum-notify` CLI was deployed to `~/.sanctum/bin/sanctum-notify`, delivering through a 3-tier fallback ladder: domain socket first, HTTP loopback second, and atomic JSON spool third. In `force_flow.py` and `screen_time.py`, peer recognition was updated so that kernel `socket.AF_UNIX` callers are recognized as authentic local callers without tripping loopback guards. Alerts never drop. The pipe stays open.
+
+## Closing the wildcard binds
+
+Following the SSH config discovery in [The first line wins](/operations/2026-09-13-the-first-line-wins/), a white-box security sweep of all active listening sockets across the Mac Mini revealed three unauthenticated services binding to `0.0.0.0`:
+
+* **Chi Sentinel (`:7777`)**: Hardcoded `addrs = ["0.0.0.0"]` in `chi-sentinel.py` leaked system RAM metrics and telemetry over the physical LAN. It now binds strictly to `127.0.0.1`.
+* **LiveKit Token Minter (`:7337`)**: Bound to `0.0.0.0` in its launch wrapper, allowing unauthenticated LAN callers to mint LiveKit room tokens. It now binds dynamically to the host Tailscale interface.
+* **Home Assistant Bridge (`:8123`)**: Socat was listening on `0.0.0.0:8123`. It now binds with `bind=10.10.10.1` in `sanctum-bootstrap.sh`, restricting proxy access exclusively to the internal virtual machine bridge.
+
+The exposure was real. Our engineers patched each listener immediately.
+
+Simultaneously, `cargo audit` in the `sanctum-rs` workspace identified `RUSTSEC-2026-0189` (a CVSS 8.8 DNS rebinding vulnerability) in `rmcp v0.8.5` within `services/memory-vault-mcp`. The dependency was upgraded to `rmcp 1.8.0` and migrated to the non-exhaustive `ServerInfo` builder API. The advisory vanished.
+
+## Resolving the 64-layer LoRA hold on Apple Silicon
+
+On 2026-07-12, the MacBook Pro training virtualenv had been held at `mlx 0.32.0.dev` because upgrading to `0.32.0` stable caused full-depth 64-layer LoRA training runs on `Qwen3.8-27B-4bit` to hang indefinitely before Iteration 1. Qui-Gon kept base models active while our council awaited an upstream resolution. Training had stalled.
+
+Investigation of recent upstream pull requests revealed that multiple padding and attention bugs had since been merged:
+* In `ml-explore/mlx`: `PR #4441` (Fix Pad vjp with axes subset), `PR #4364` (Fix pad negative axes), and `PR #4258` (Fix int32 overflow in conv padded input).
+* In `ml-explore/mlx-lm`: `PR #1467` (Fix broadcast crash in quantized SDPA with GQA and batched padding mask) and `PR #1824` (Read BatchKVCache left padding without reduction kernel).
+
+A sandbox environment was provisioned on the MBP with `mlx==0.32.2`, `mlx-metal==0.32.2`, and `mlx-lm==0.32.0` (commit `dcbcf78`). A full forward and backward gradient step on all 64 layers of `Qwen3.8-27B-4bit` (58,363,904 trainable parameters) evaluated in **9.77 seconds**. An end-to-end `mlx_lm.lora` 2-iteration run completed in **3.55 seconds/step** with clean validation passes and adapter saves. Nothing hung. The gradients flowed cleanly. The verified stack was promoted into live production `.venv`.
+
+<Aside type="tip">
+When an upstream library undergoes fast iteration, an apparent structural regression is often an unhandled edge case in batched padding broadcasting. Pinning with a reproducible standalone fixture lets you prove the upstream fix the day it merges.
+</Aside>
+
+## A fortified perimeter
+
+With duplicate plaintext ports extinguished, our estate runs lean. Sockets enforce kernel-level permissions, terminators require post-quantum handshakes, and the alert bus survives panics through its direct disk spool. The Mac Mini M4 Pro and MacBook Pro M4 Max now operate in lockstep harmony across verified, hardened gates. Tommy and Yoda guard the citadel. All lights are green.
