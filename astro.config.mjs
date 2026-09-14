@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-14 — The bridge that swallowed its own exec', slug: 'operations/2026-09-14-the-bridge-that-swallowed-its-own-exec' },
 								{ label: '2026-09-13 — The Buffer Outlasts the Block', slug: 'operations/2026-09-13-the-buffer-outlasts-the-block' },
 								{ label: '2026-09-13 — The zero-plaintext citadel', slug: 'operations/2026-09-13-the-zero-plaintext-citadel' },
 								{ label: '2026-09-13 — The first line wins', slug: 'operations/2026-09-13-the-first-line-wins' },

@@ -1,0 +1,53 @@
+---
+title: "2026-09-14: The bridge that swallowed its own exec"
+description: "How a quoted heredoc delimiter swallowed the Firewalla bridge exec into a silent EOF exit, cascading through auto-heal failures across R2D2, firewalla-watch, and screen-time enforcement."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch of an ancient mechanical stone bridge with clockwork gears and glowing cyan circuit conduits spanning an abyss, where an intricate parchment script scroll feeds through a brass gate, dark background, subtle cyan and amber accent lines.](./images/hero-2026-09-14-the-bridge-that-swallowed-its-own-exec.png)
+
+A silent exit is the deadliest failure mode. When a critical daemon exits zero, launchd assumes the work finished cleanly. Neo spotted the flashing amber badge during morning inspection. The Firewalla bridge on `127.0.0.1:1984` had gone dark. Force Flow could no longer enforce curfews or screen-time rules. Every self-healing guard had fired in turn and collapsed. Tommy stood watch as we traced the cascade to a single escaped quote that caused a shell script to swallow its own execution.
+
+## The silent exit zero
+
+The Firewalla bridge on the Mac Mini is wrapped by `~/.sanctum/scripts/firewalla-bridge.sh`. It runs under the system LaunchDaemon `haus.sanctum.firewalla`, detailed in [services](/architecture/services/) and the [port summary](/architecture/port-summary/). In a provenance commit intended to stamp running binary hashes before execution, an inline Python snippet was embedded:
+
+```bash
+# The offending line in scripts/firewalla-bridge.sh:
+python3 - "$BRIDGE" "~/.sanctum/state/firewalla-bridge-running.json" <<'"'"'STAMP'"'"' 2>/dev/null || true
+...
+STAMP
+
+exec /usr/local/bin/node "$BRIDGE"
+```
+
+The bug was subtle. Because the heredoc token was written as `<<'"'"'STAMP'"'"'`, bash interpreted the delimiter tag as containing literal embedded single quotes: `'STAMP'`.
+
+When the script reached the unquoted `STAMP` line, bash refused to terminate the here-document. It kept reading. It fed every subsequent line directly into Python's standard input. That swallowed both `STAMP` and `exec /usr/local/bin/node "$BRIDGE"`.
+
+Python parsed the stream and crashed on a syntax error. Because stderr was discarded with `2>/dev/null || true`, the crash was invisible. Bash reached the end of the script and exited zero. The daemon was dead, but launchd believed it had succeeded.
+
+## The cascade of failed healers
+
+Once the bridge process died, every automated guard in the haus attempted recovery and stumbled, echoing the resilience principles in [The zero-plaintext citadel](/operations/2026-09-13-the-zero-plaintext-citadel/):
+
+1. **`sanctum-firewalla-watch.sh` Unbound Variable Bug**: In its alerting branches, variable declarations ended with trailing backslashes (`MSG="..." \ curl ...`). Under `set -uo pipefail`, bash attempted command substitution before setting the variable, aborting with `MSG: unbound variable`.
+2. **`firewalla-watch` Auth Confusion**: The watcher only scanned for log lines containing `"Token refreshed"`. When the daemon died, token refreshes stopped. After 120 minutes, the watcher classified the state as `AUTH-EXPIRED`—a state where it intentionally refuses to restart the bridge. It lacked any basic check for whether the bridge process was simply dead.
+3. **`force-flow-bridge-sentinel.py` Domain Mismatch**: When the sentinel detected `BRIDGE-DOWN`, it delegated healing to `haus.sanctum.firewalla-watch` rather than restarting `system/haus.sanctum.firewalla` directly, believing user LaunchAgents lacked permission.
+4. **R2D2 Recipe Domain Mismatch**: R2D2's `heal-force-flow-bridge-down.sh`, documented in [agents](/architecture/agents/), attempted `launchctl kickstart -k "gui/$UID_NUM/haus.sanctum.firewalla"`. Because the bridge is a system daemon, launchd rejected the command. Furthermore, passing `-k` to a system domain target without root privileges resulted in `Operation not permitted`.
+
+## The multi-tier repair
+
+We resolved all layers across the stack:
+
+- **Heredoc Delimiter Fix**: Corrected `<<'"'"'STAMP'"'"'` to clean `<<'STAMP'` in `scripts/firewalla-bridge.sh`. The provenance stamp now executes cleanly and passes control directly to `exec /usr/local/bin/node "$BRIDGE"`.
+- **`sanctum-firewalla-watch.sh` Hardening**: Added explicit `BRIDGE-DOWN` process detection via `pgrep`. When the process is dead, the watcher immediately kickstarts the system daemon. The trailing backslash syntax errors on `MSG` were eliminated.
+- **R2D2 Self-Heal Repair**: Updated `heal-force-flow-bridge-down.sh` to target `system/haus.sanctum.firewalla`. It terminates the user-owned node process via `pkill -f firewalla-bridge.js` and issues `launchctl kickstart "system/$LABEL"` without `-k`, restoring clean unprivileged recovery.
+- **Sentinel Defense-in-Depth**: `force-flow-bridge-sentinel.py` now directly issues `launchctl kickstart -k system/haus.sanctum.firewalla` in parallel with delegating to the watch agent.
+
+Following the repair, `system/haus.sanctum.firewalla` resumed listening on `127.0.0.1:1984`, authenticated with Firewalla cloud, and Force Flow reported `enforcement_ready: true`. The perimeter is secure once again.
+
+<Aside type="tip" title="Heredoc Quoting Invariant">
+Never escape single quotes inside heredoc tags in shell scripts. An unexpanded heredoc is simply `<<'TAG'`. When shell scripts are generated or modified programmatically, nested escaping can turn `<<'TAG'` into `<<'"'"'TAG'"'"'`, which guarantees bash will never match an unquoted `TAG` terminator on disk.
+</Aside>
