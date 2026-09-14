@@ -107,6 +107,47 @@ Storage is always true-UTC `TIMESTAMPTZ`; the views render in `America/Toronto` 
 The hourly freshness sentinel reads `v_timeline.ts` (already local wall-clock) and **must** compare it to `now() AT TIME ZONE 'America/Toronto'`. Comparing to UTC `now()` adds the EDT/EST offset to every channel's age. On 2026-08-20 that turned a 2.7h quiet stretch into a 6.7h CRITICAL while mail ingest was still inserting — see [The Offset That Cried Wolf](/operations/2026-08-20-the-offset-that-cried-wolf/). R2D2 will kickstart the matching ingest job only when the *source table* is past SLA on the UTC clock; a Toronto-offset false page is refused.
 </Aside>
 
+## Digital twins: multi-modal communication collage
+
+Beyond simple contact retrieval, Sanctum CRM acts as a multi-modal collage of over 111,000 communications: mail (`email_history`), iMessage / SMS (`imessage_history`), Signal (`signal_history`), WhatsApp (`whatsapp_history`), Telegram (`telegram_history`), and voice notes (`is_audio_message`).
+
+[Jocasta](/agents/jocasta/) uses this archive to maintain authentic digital twins for the household:
+
+| Persona | Role | Voice &amp; Lexicon Profile | Communication Volume |
+|---|---|---|---|
+| **Bert** (`me`) | Operator / GP | Visionary, direct, bilingual (Joual/FR + Silicon Valley EN), punchy, low-friction | 104,956 interactions (18k mail, 80k imsg, 4.8k signal) |
+| **Andréanne** (`wife`) | Academic Researcher | Thoughtful, articulate, organized, warm, logistical coordination | 6,574 interactions (1.8k mail, 4.6k imsg) |
+| **Albert** (`kid`) | Student / Gamer | Casual youth Quebec French texting, ultra-concise, playful requests | 344 interactions (337 imsg, 5 mail) |
+
+### Jocasta persona drafting
+
+Jocasta can draft emails and messages in the exact voice, rhythm, and vocabulary of each persona:
+
+```bash
+# Inspect digital twin personas and communication volume
+sanctum-crm twin list
+sanctum-crm twin show bert
+sanctum-crm twin collage bert --channel email --limit 5
+
+# Draft an authentic email or message
+sanctum-crm draft --persona bert --to "Charles" "Let's review the Series A term sheet tomorrow at 10am"
+sanctum-crm draft --persona wife --to "École" "Albert sera absent jeudi pour rendez-vous médical"
+sanctum-crm draft --persona kid --to "Papa" --channel imessage "demande de temps d'écran"
+
+# Open live outgoing draft directly in Apple Mail
+sanctum-crm draft --persona bert --to "charles@triptyq.vc" --open "Follow up on term sheet milestone"
+```
+
+### Privacy doctrine: shielding the family
+
+Under Sanctum privacy doctrine, family digital twins (`wife`, `kid`) are strictly personal. When a session runs in work mode (`CRM_SESSION=work` or `:3347`):
+- Family digital twins are completely hidden from the roster and API.
+- Drafting as `wife` or `kid` returns `403 Forbidden`.
+- Bert's digital twin is dynamically restricted to work-graph communications (`@triptyq.vc`), with all family iMessages, Signal chats, and personal threads omitted from the collage.
+- `sanctum-crm doctor` enforces `digital_twin_family_shield` as a critical gate before every partner session.
+
+The Archives GUI on `:3346` features a **Digital Twins** studio where you can inspect real-time collage volume across all modalities and compose messages with one-click Apple Mail draft creation.
+
 ## Partner session checklist
 
 1. `sanctum-crm doctor` — all critical checks green  
