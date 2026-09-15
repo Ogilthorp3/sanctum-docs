@@ -43,10 +43,12 @@ We resolved all layers across the stack:
 
 - **Heredoc Delimiter Fix**: Corrected `<<'"'"'STAMP'"'"'` to clean `<<'STAMP'` in `scripts/firewalla-bridge.sh`. The provenance stamp now executes cleanly and passes control directly to `exec /usr/local/bin/node "$BRIDGE"`.
 - **`sanctum-firewalla-watch.sh` Hardening**: Added explicit `BRIDGE-DOWN` process detection via `pgrep`. When the process is dead, the watcher immediately kickstarts the system daemon. The trailing backslash syntax errors on `MSG` were eliminated.
-- **R2D2 Self-Heal Repair**: Updated `heal-force-flow-bridge-down.sh` to target `system/haus.sanctum.firewalla`. It terminates the user-owned node process via `pkill -f firewalla-bridge.js` and issues `launchctl kickstart "system/$LABEL"` without `-k`, restoring clean unprivileged recovery.
-- **Sentinel Defense-in-Depth**: `force-flow-bridge-sentinel.py` now directly issues `launchctl kickstart -k system/haus.sanctum.firewalla` in parallel with delegating to the watch agent.
+- **R2D2 Self-Heal Repair**: Updated `heal-force-flow-bridge-down.sh` to target `system/haus.sanctum.firewalla` and use passwordless kickstarts.
+- **Sentinel Defense-in-Depth**: `force-flow-bridge-sentinel.py` now directly issues `sudo -n /bin/launchctl kickstart -k system/haus.sanctum.firewalla` in parallel with delegating to the watch agent.
+- **Permanent Sudoers Envelope**: Added `bert ALL=(root) NOPASSWD: /bin/launchctl kickstart [-k] system/haus.sanctum.firewalla` and `/usr/bin/xcodebuild -license accept` to `sudoers-sanctum-kickstart` (installed to `/etc/sudoers.d/sanctum-kickstart`), closing the privilege gap permanently.
+- **Xcode License & Git Resilience**: Background macOS updates bump Xcode / Command Line Tools and break `/usr/bin/git` with `rc=69`. We installed standalone Homebrew `git` (`/opt/homebrew/bin/git`), updated `screen-time-sentinel.sh` to prefer it and auto-accept licenses on `rc=69`, and embedded auto-acceptance in both `sanctum-sunday-upgrade.sh` and `apple-post-boot.sh`.
 
-Following the repair, `system/haus.sanctum.firewalla` resumed listening on `127.0.0.1:1984`, authenticated with Firewalla cloud, and Force Flow reported `enforcement_ready: true`. The perimeter is secure once again.
+Following the repair, `system/haus.sanctum.firewalla` resumed listening on `127.0.0.1:1984`, authenticated with Firewalla cloud, and Force Flow reported `enforcement_ready: true`. All sentinels and commit validations pass cleanly.
 
 <Aside type="tip" title="Heredoc Quoting Invariant">
 Never escape single quotes inside heredoc tags in shell scripts. An unexpanded heredoc is simply `<<'TAG'`. When shell scripts are generated or modified programmatically, nested escaping can turn `<<'TAG'` into `<<'"'"'TAG'"'"'`, which guarantees bash will never match an unquoted `TAG` terminator on disk.
