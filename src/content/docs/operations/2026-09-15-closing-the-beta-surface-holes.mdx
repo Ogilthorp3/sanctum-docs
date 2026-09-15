@@ -1,0 +1,60 @@
+---
+title: "2026-09-15: Closing the Beta Surface Holes and the Zero-IP Wire"
+description: "How an audit for the first beta user eliminated 0.0.0.0 listeners, decoupled services from dynamic Tailscale IPs with loopback tailscale serve, and synchronized drifted sandbox agent identities."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical pencil sketch of a server rack connected by heavy brass armored conduits into a fortified vault with a glowing cyan biometric fingerprint lock.](./images/hero-2026-09-15-closing-the-beta-surface-holes.png)
+
+Before inviting the first stranger into the beta ring, the doctrine demands a cold appraisal of the doors: *what if the Tailscale IP changes? What if an adversary deploys a swarm of autonomous agents?*
+
+The question surfaced two distinct gaps: services binding to all interfaces (`0.0.0.0`) on the physical LAN, and brittle launch scripts attempting to detect and bind dynamic Tailscale IPs with hardcoded fallbacks.
+
+## 1. The 0.0.0.0 Surface Sweep
+
+A port scan on the host (`manoir`) revealed two administrative daemons listening on all interfaces (`0.0.0.0` / `*`):
+
+1. **Network Control (`:4007`)**: The router mutator API (reboots, Wi-Fi radio control, daisy-chain reconfiguration) was listening on `0.0.0.0:4007`. Although token-gated, exposing a router administration endpoint to physical Ethernet/Wi-Fi (`en1`) violated the Fort Knox surface doctrine.
+2. **Cilghal Coach (`:8770`)**: The uvicorn FastAPI backend was listening on `0.0.0.0:8770` due to a launchd script fallback.
+
+### The Remediation
+
+* **Network Control**: `NETCONTROL_BIND` in `~/.sanctum/bin/network-control.sh` was retargeted to `10.10.10.1` (the isolated `bridge100` VIP shared exclusively with `sanctum-vm`). The daemon now listens strictly on `10.10.10.1:4007`, completely vanished from `en1`.
+* **Cilghal Coach**: Retargeted to loopback (`127.0.0.1:8770`).
+
+## 2. Decoupling the Tailnet: The Zero-IP Wire
+
+Binding a service directly to an overlay IP (e.g. `100.107.112.118`) or probing `tailscale ip -4` inside a launch script creates two systemic failure modes:
+
+* **Boot races**: LaunchAgents trigger at system startup before `tailscaled` has established WireGuard tunnels or obtained an IP, causing daemons to crash or fall back to invalid literals.
+* **Non-portability**: A beta user running Sanctum on their own machine does not share the operator's Tailscale IP. A script hardcoding or assuming a static overlay address fails immediately on a fresh Mac.
+
+### The Tailscale Serve Pattern
+
+The canonical productized pattern decouples the daemon from the overlay:
+
+1. The service daemon binds strictly to **`127.0.0.1:$PORT`** (guaranteed to exist offline, race-condition free).
+2. Tailscale handles remote ingress dynamically via:
+   ```bash
+   tailscale serve --bg --http=8770 http://127.0.0.1:8770
+   ```
+3. Clients connect via **MagicDNS** (`http://<node-name>.<tailnet>.ts.net:8770`), never IP literals.
+
+If the node renumbers, changes keys, or switches tailnets, `tailscaled` routes the traffic internally without bouncing the application daemon.
+
+## 3. Sandbox Identity Synchronization
+
+The `sandbox-freshness-sentinel` had alerted on 6 container drift issues: while workspace identity definitions in `manoir-nepveu` had been updated, the runtime copies mounted inside the VM Docker sandboxes (`agent-main`, `agent-windu`, `agent-mundi`, `agent-quigon`, `agent-mothma`, `agent-cilghal`) carried stale hashes.
+
+The workspace `IDENTITY.md` files carrying "THE CODE" and runtime red-line boundaries were synchronized into the live sandbox paths. Re-running the sentinel confirmed:
+
+```
+2026-09-15T22:39:03Z    sandboxes=6 problems=0
+```
+
+## 4. Verification
+
+* **Network Control**: `curl -sf http://10.10.10.1:4007/health` returned `{"dns_connected":true,"orbi_configured":true,"status":"ok"}` from the VM.
+* **Cilghal Coach**: `curl -sf http://manoir.tail7c6d11.ts.net:8770/healthz` returned `{"ok":true,"service":"cilghal-coach","version":"0.2.0"}` across Tailscale.
+* **CLI Test Suite**: `sanctum-cli` test suites passed (`test_onboard.py` 51/51, `test_self_test.py` 13/13).
