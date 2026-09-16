@@ -13,7 +13,7 @@ An airgap is only as reliable as the bridge that carries its history. When the m
 
 Because `sanctum-vm` operates on an isolated host-only network (`10.10.10.10`) with zero direct internet egress, it cannot reach GitHub over HTTPS or SSH. Instead, synchronization is bridged daily by `~/.sanctum/scripts/vm-sync.sh`:
 
-1. **Pull (Step 1)**: The Mac Mini fetches `origin/main` from GitHub in `~/manoir-nepveu`, packages it as a git bundle, SCPs it across the vmnet bridge, and updates the VM's `refs/remotes/origin/main`.
+1. **Pull (Step 1)**: The Mac Mini fetches `origin/main` from GitHub in the host repository, packages it as a git bundle, SCPs it across the vmnet bridge, and updates the VM's `refs/remotes/origin/main`.
 2. **Push (Step 2)**: The VM bundles its local `main` branch, sends it to the Mac, and the Mac merges and pushes to GitHub.
 3. **Pull (Step 3)**: The newly created merge commit is pulled back to the VM's `origin/main`.
 4. **Fast-Forward (Step 4)**: The VM executes `git merge --ff-only origin/main` to advance local `main` to `origin/main`.
@@ -48,9 +48,9 @@ Because the git index tracked these ephemeral paths, `DIRTY` could never return 
 We resolved the deadlock across both sides of the bridge:
 
 1. **Purged Ephemeral Paths from Index**:
-   Ran `git rm -r --cached` on `sandboxes/`, `workspace-attestations/`, `sandbox/containers/`, `devices/pending.json`, and `state/openclaw.sqlite*` across both `~/manoir-nepveu` and `~/.openclaw` without altering the live database or disk state.
+   Ran `git rm -r --cached` on `sandboxes/`, `workspace-attestations/`, `sandbox/containers/`, `devices/pending.json`, and `state/openclaw.sqlite*` across both the host repo and `~/.openclaw` without altering the live database or disk state.
 2. **Comprehensive `.gitignore` Hardening**:
-   Updated `.gitignore` in `manoir-nepveu` to permanently ignore:
+   Updated `.gitignore` in the repository to permanently ignore:
    - `sandboxes/` and `sandboxes-*/`
    - `sandbox/` and `workspace-attestations/`
    - `*.sqlite*` across the repository (safeguarding `backup/**`)
