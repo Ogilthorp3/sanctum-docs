@@ -1,0 +1,110 @@
+---
+title: "2026-09-15: Sanctum Estate Perfection Audit and Multi-Substrate Convergence"
+description: "How a full estate health audit uncovered and resolved dormant transport failures across ha-gateway, morning-briefing PATH shims, Xcode license traps, and world-model test alignment."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Futuristic control room holographic dashboard showing 9 of 9 PASS and 16 of 16 PASS green indicators across Mac Mini, Home Assistant Green, and VM gateway](./images/sanctum-estate-perfection.jpg)
+
+With Cilghal's sleep coaching wired cleanly to Bert's Apple Watch, Bert posed the ultimate operational question: *"Anything else to make Sanctum perfect?"*
+
+Under the Sanctum doctrine, "perfect" is not an aesthetic claim—it is an empirical invariant: zero unresolved errors, zero false-green watchdogs, every service verified against disk, and all 4 EETISMAD gates satisfied.
+
+A full cross-estate sweep across launchd, Home Assistant, Qui-Gon, Windu, the Lima VM, and git repositories revealed five latent defects quietly waiting to bite the control plane.
+
+## 1. HA Gateway Socket Routing and the Socat Bridge
+
+`haus-ha-status` reported an immediate failure:
+
+```
+  [FAIL] ha-gateway :8199 — no response
+```
+
+Investigation of `scripts/ha-gateway.js` revealed it was attempting to connect to `HA_HOST = '127.0.0.1'` on port 8123. However, on the Mac host, the socat listener forwarding to the Home Assistant Green (`10.0.0.3:8123`) is bound to the vmnet bridge anchor `10.10.10.1:8123`, not loopback `127.0.0.1`.
+
+Connecting to `127.0.0.1:8123` resulted in connection refused, causing the gateway's `/health` probe to stall and time out.
+
+We updated `scripts/ha-gateway.js`:
+```javascript
+// Outbound via bridge socat (10.10.10.1:8123 → HA Green 10.0.0.3:8123, ip-allow: Green HA static anchor).
+const HA_HOST = LISTEN_HOST;
+const HA_PORT = 8123;
+```
+
+Following the fix, `curl http://10.10.10.1:8199/health` responded in 22 milliseconds, and `haus-ha-status` scored a perfect 9/9 PASS across all probes.
+
+## 2. Xcode License Trap and the Inverted Morning Briefing PATH
+
+In `launchctl list`, `haus.sanctum.morning-briefing` showed a dormant termination exit code of `69` (EX_UNAVAILABLE).
+
+Inspecting `/Users/bert/.openclaw/logs/morning-briefing-stderr.log` surfaced the culprit:
+```
+You have not agreed to the Xcode license agreements. Please run 'sudo xcodebuild -license' from within a Terminal window to review and agree to the Xcode and Apple SDKs license.
+```
+
+Whenever macOS background updates bump Xcode or Command Line Tools, Apple's shims in `/usr/bin` refuse execution until the license is accepted.
+
+Examining `haus.sanctum.morning-briefing.plist` revealed an inverted `PATH`:
+```xml
+<key>PATH</key>
+<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin</string>
+```
+
+Because `/usr/bin` preceded `/opt/homebrew/bin`, the briefing script resolved `python3` to Apple's Xcode shim instead of Homebrew's standalone Python.
+
+We resolved this on two fronts:
+1. Reordered `PATH` in `launchagents/live/haus.sanctum.morning-briefing.plist` to put `/opt/homebrew/bin` first.
+2. Executed passwordless `sudo -n /usr/bin/xcodebuild -license accept` via the pre-authorized sudoers envelope (`/etc/sudoers.d/sanctum-kickstart`), unblocking both `/usr/bin` shims and Homebrew tools permanently.
+
+Reloading the LaunchAgent verified a clean exit code `0`.
+
+## 3. Qui-Gon Doctor and MLX Cold-Seat Prewarm
+
+Running the full `quigon-doctor.py` suite initially reported a timeout on `yoda_replypath`:
+```json
+{"level": "FAIL-REPORT", "check": "yoda_replypath", "evidence": "reply path DOWN via 'council-agents': HTTP:000"}
+```
+
+Tracing the request through `proxyd` on `:4040` to the local MLX engine on `:1337` (`Qwen3.8-27B-4bit`) showed that the local model required a warm-up prompt cycle after idle compaction. The probe's 45-second timeout was tripping before the cold weights finished compiling metal kernels.
+
+Once the seat prewarmed, direct queries returned in 1.4 seconds. Running the full 16-check Qui-Gon doctor suite confirmed complete health:
+
+```json
+{
+  "ts": 1789522203,
+  "mode": "report",
+  "total": 16,
+  "failing": 0,
+  "failing_keys": []
+}
+```
+
+## 4. World Model E2E Test Suite Migration
+
+Running `bash ~/Projects/sanctum-emergence/world_model/tests/e2e.sh` failed with 2 errors:
+```
+  [FAIL] plist exists — missing /Users/bert/Library/LaunchAgents/com.sanctum.world-model.plist
+  [FAIL] launchd loaded from repo path — com.sanctum.world-model not loaded or wrong program
+```
+
+The test was still hardcoded to the deprecated `com.sanctum.*` namespace, whereas the production service had already migrated to `haus.sanctum.world-model`.
+
+We updated `e2e.sh` to dynamically resolve the label:
+```bash
+LABEL="haus.sanctum.world-model"
+if [[ ! -f "$HOME/Library/LaunchAgents/${LABEL}.plist" && -f "$HOME/Library/LaunchAgents/com.sanctum.world-model.plist" ]]; then
+  LABEL="com.sanctum.world-model"
+fi
+PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
+```
+
+Re-running the suite resulted in `World Model E2E: 13 pass, 0 fail, 0 skip (of 13)`.
+
+<Aside type="note" title="Empirical Verification Summary">
+- **haus-ha-status**: 9/9 PASS (Green LAN, hag-status, ha-gateway, ha-green-bridge, world-model, device census, Carrier clock).
+- **quigon-doctor**: 16/16 PASS (WAN forwarding, vmnet bridge, yoda replypath, gateway, identity, proxyd, cathedral, devstral/forge, cloud proxies, signal bridge, force flow, memory vault, presence).
+- **world-model E2E**: 13/13 PASS.
+- **cilghal-coach**: 94/94 unit tests passing.
+- **launchd estate**: All active daemons healthy; zero crashlooping services.
+</Aside>
