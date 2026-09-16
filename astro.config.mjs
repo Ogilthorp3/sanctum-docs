@@ -320,6 +320,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-15 — Claude Code tool surface and the quota ladder', slug: 'operations/2026-09-15-claude-code-tool-surface-and-quota-ladder' },
+								{ label: '2026-09-15 — Closing the beta surface holes', slug: 'operations/2026-09-15-closing-the-beta-surface-holes' },
 								{ label: '2026-09-14 — The bridge that swallowed its own exec', slug: 'operations/2026-09-14-the-bridge-that-swallowed-its-own-exec' },
 								{ label: '2026-09-13 — The Buffer Outlasts the Block', slug: 'operations/2026-09-13-the-buffer-outlasts-the-block' },
 								{ label: '2026-09-13 — The zero-plaintext citadel', slug: 'operations/2026-09-13-the-zero-plaintext-citadel' },

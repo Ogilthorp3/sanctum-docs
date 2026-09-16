@@ -1,0 +1,82 @@
+---
+title: "2026-09-15: Claude Code Tool Surface and the Quota Failover Ladder"
+description: "How an expired Keychain OAuth token and an upstream Anthropic spend limit exposed a missing Opus fallback rung, resolved via permissions hardening and multi-tier routing."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical pencil sketch of a mechanical routing exchange switchboard with glowing cyan and amber data circuits routing through a failover gate into a secure vault.](./images/hero-2026-09-15-claude-code-tool-surface-and-quota-ladder.png)
+
+A critical alert buzzed Bert's phone: `[Sanctum CRITICAL] proxyd e2e: Claude Code tool surface left the subscription`.
+
+To Windu and the sentinel, it looked like a repeat of the [September 11 regression](/operations/2026-09-11-the-binary-that-came-back/) where a stale binary stripped client tools against the [host-tools policy](/architecture/proxyd-host-tools/). The reality was a chain of three distinct friction points: an expired OAuth bearer in the macOS Keychain, a file mode boundary blocking the system daemon user, and a missing fallback ladder for Claude Opus 5 during an upstream account spend limit.
+
+## 1. The Keychain Bearer Expiration
+
+The `proxyd-sentinel` runs `proxy-route-e2e.py --group claude-code` every six hours, issuing real turns with the full 30-tool Claude Code surface (`CLAUDE_CODE_TOOLS`) authenticated as the CLI.
+
+At 18:24 EDT, the OAuth bearer stored in Keychain item `Claude Code-credentials` expired. Qui-Gon's automated token refresher (`sanctum-token-refresh.sh`) had backed off after encountering HTTP 429 rate limits from Anthropic's token endpoint (`https://platform.claude.com/v1/oauth/token`).
+
+Bert initiated an interactive authentication grant via `claude auth login`, approved the browser challenge, and stored a fresh access token valid for eight hours.
+
+## 2. Permission Boundary Hardening
+
+With the token renewed in the Keychain, `sanctum-token-refresh.sh` synchronized the credentials to `~/.sanctum/credentials/anthropic-token`. However, the refresher wrote the file with mode `600` owned by `bert:sanctum`.
+
+`proxyd` runs as the dedicated system daemon user `sanctum` under `/Library/LaunchDaemons/haus.sanctum.proxyd.plist`. Mode `600` meant user `sanctum` was denied read access to the token upon daemon launch.
+
+The refresher script was updated across all write paths to enforce mode `640` while keeping group ownership `sanctum`:
+
+```bash
+echo -n "$NEW_ACCESS" > "$TOKEN_FILE"
+chmod 640 "$TOKEN_FILE"
+chgrp sanctum "$TOKEN_FILE" 2>/dev/null || true
+```
+
+Both operator terminal sessions and background daemon workers now share read access without opening secrets to world permissions.
+
+## 3. Upstream Monthly Spend Limit
+
+Even with valid credentials and readable files, native Anthropic requests failed with HTTP 429:
+
+```
+You've hit your org's monthly spend limit · run /usage-credits to raise it, or visit claude.ai/admin-settings/usage · your session limit resets 10:40pm (America/Toronto)
+```
+
+The error proved that the upstream Claude Max organization account had reached its monthly spend limit, scheduled to reset at 10:40 PM EDT.
+
+Inside `sanctum-proxy`, `is_backend_quota_exhausted()` recognized the spend limit signature and marked `provider:anthropic` exhausted for the remainder of the request. This triggered the proxy's failover machinery:
+
+* **Claude Fable 5.1**: Followed its explicit ladder (`kimi-k3` -> `glm-53` -> `deepseek-v3`), diverting to Moonshot Kimi K3 on OpenRouter at $0.006/turn.
+* **Claude Opus 5**: Lacked an explicit entry under `fallbacks:` in `config.yaml`. Without a ladder, `fallback_chain()` dropped straight to `CLAUDE_OFFLINE_FALLBACK` (`council-mlx`), which was under heavy load from a concurrent 49k-token inference stream and timed out.
+
+## 4. Closing the Opus Fallback Ladder
+
+To prevent unhandled failover stalls when Anthropic's subscription or bridge hits quota, `claude-opus-5` was assigned the canonical Opus degrade ladder in `sanctum-proxy/config.yaml`:
+
+```yaml
+  claude-opus-5:
+  - claude-best-pro
+  - claude-cli-offline
+  - gemini-best-pro
+  - grok-best
+  - glm-53
+  - qwen36-plus
+  - deepseek-v3
+  - council-local-think
+  - council-mlx
+```
+
+`proxyd` hot-reloaded the configuration instantly. Re-probing `claude-opus-5` with tools confirmed the degrade sequence:
+
+1. Attempted native `claude-opus-5` (429 upstream spend limit).
+2. Attempted `:3456` subscription bridge (`claude-best-pro`, 429 upstream spend limit).
+3. Landed on `gemini-best-pro` (:6543) at $0.00000 in 29.1s with status 200.
+
+## 5. Verification
+
+* **Token Validity**: `sanctum-token-refresh.sh` confirmed `Token valid (471 min remaining)` with mode `640`.
+* **Sentinel Health**: `proxyd-sentinel.sh` ran clean with `active=none`.
+* **E2E Probe**: `cc · opus-5 + CC tools` verified `PASS` with zero metered spend.
+
+When quota expires, the switchboard does not drop the line: it routes through the next vault door until the clock strikes 10:40 PM.
