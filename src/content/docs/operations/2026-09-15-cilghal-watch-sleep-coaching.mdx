@@ -1,0 +1,77 @@
+---
+title: "2026-09-15: Cilghal Apple Watch Sleep Coaching and Dispatch Healing"
+description: "How an endpoint naming mismatch and quiet-hours suppression muted Cilghal's sleep coaching on the Apple Watch, resolved via endpoint healing and calibrated evening routines."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical architectural pencil sketch of a sleek biometric smartwatch interface displaying sleep stage cycles, heart rate variability waveforms, and evening wind-down coaching nudges, glowing cyan and warm amber data lines routing through an intelligent relay hub into Home Assistant.](./images/hero-2026-09-15-cilghal-watch-sleep-coaching.png)
+
+The operator checked their wrist. Nothing had buzzed.
+
+Cilghal's morning health briefing had been flagged as an error rather than proactive guidance. Worse, none of the proactive sleep coaching arrived on the wrist. The question was direct: could Cilghal deliver sleep coaching through the watch?
+
+The council investigated. What looked like a simple notification gap was actually a three-layer systemic disconnect spanning [Cilghal](/agents/cilghal/), Force Flow, and Apple Health. An infrastructure endpoint naming collision broke transport. A quiet-hours mute rule swallowed evening nudges. And the briefing schedule was not calibrated to real sleep data.
+
+## 1. The Broken Watch Delivery Path
+
+[Cilghal](/agents/cilghal/) delivers health advice via a strictly constrained channel in `coach/nudge.py`. It posts a four-key payload to Force Flow's local listener.
+
+Force Flow dispatches the alert to the operator's iPhone via Home Assistant's companion-app notify service. When the phone is locked, iOS mirrors the alert to the Apple Watch as a haptic wrist tap.
+
+The daemon log told a very different story. Force Flow's error log showed endless connection errors:
+
+```
+[ERROR] force-flow: iPhone push failed: Cannot connect to host 127.0.0.1:8123 [Connect call failed]
+```
+
+Every push to the phone and the watch had been failing for weeks. Home Assistant does not run on loopback. It runs on its own appliance on the home network.
+
+The root cause was a subtle endpoint naming mismatch across the discovery boundary:
+* `sanctum-endpoints` exported the Home Assistant address as `SANCTUM_URL_HA`.
+* `force_flow.py` queried `sanctum_endpoint("SANCTUM_HA_URL")`.
+
+The query returned empty. Force Flow fell back to loopback. The connection failed instantly.
+
+`sanctum-endpoints` was updated to export both keys. `force_flow.py` was hardened to check both names with a stable fallback anchor.
+
+## 2. Quiet Hours and Wrist Delivery
+
+Fixing the address was only half the battle. Force Flow had a second barrier: quiet hours.
+
+Overnight, Force Flow mutes non-critical alerts to prevent waking the household. System warnings drop straight to `["log"]`.
+
+That logic makes sense for disk sentinels and background workers. But for a personal sleep coach, it was lethal.
+
+Sleep coaching happens late in the evening, so under the legacy rules Force Flow treated Cilghal's coaching nudges as noise and dropped them into the log.
+
+Even outside quiet hours, low-tier nudges went only to Signal and the dashboard. Medium-tier nudges used `iphone_silent` with empty sound data. On watchOS, silent pushes never trigger haptic taps. The operator never felt a thing.
+
+Force Flow's routing now gives Cilghal's coaching nudges their own class, which bypasses quiet-hours suppression and routes to `iphone` with sound and haptics enabled. The watch taps the wrist.
+
+## 3. Calibrating the Sleep Schedule to Reality
+
+Cilghal reads the person's own Apple Health sleep records, finds the bedtime window that lines up with their best recovery (heart-rate variability and REM), and the point past which sleep and REM fall off. The coaching then aims at the hour before that window, because late-night screens keep sympathetic tone elevated and delay melatonin onset.
+
+<Aside type="note">
+The individual measurements, dates and personal health details behind this calibration stay on the box. This page describes the method, not the person.
+</Aside>
+
+## 4. Active Sleep Coaching via Apple Watch
+
+To operationalize sleep optimization on the wrist, three automated routines were built into `cilghal-coach`:
+
+1. **Wind-Down Nudge** (`coach/sleep_coach.py`):
+   Taps the watch about 45 minutes before the target bedtime. It prompts screen dimming and a cognitive downshift.
+2. **Bedtime Boundary Guard**:
+   Taps the wrist at the target bedtime, to protect enough sleep before the morning and avoid the drop-off past that window.
+3. **Morning Recovery Briefing** (`coach/daily_feedback.py`):
+   The morning briefing LaunchAgent was moved later, so that the watch has finished syncing overnight sleep, HRV, and resting heart rate before Cilghal speaks.
+
+## Verification & Closed Loop
+
+The new pipeline was verified under full scrutiny. All 94 unit tests in `cilghal-coach` passed. All 33 unit tests in `force-flow` passed, including new assertions for quiet-hours watch dispatch.
+
+An end-to-end dry run was executed on the live daemon. `deploy/sleep-coach.py --mode winddown --force` dispatched through Force Flow, posted to Home Assistant, and confirmed `page_success = True`.
+
+The haptic engine fired. The coaching text appeared on the watch face. Both LaunchAgents are live under launchd, completing the loop between biometric sensing and proactive coaching.

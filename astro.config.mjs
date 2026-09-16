@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-15 — Cilghal Apple Watch sleep coaching and dispatch healing', slug: 'operations/2026-09-15-cilghal-watch-sleep-coaching' },
 								{ label: '2026-09-15 — Claude Code tool surface and the quota ladder', slug: 'operations/2026-09-15-claude-code-tool-surface-and-quota-ladder' },
 								{ label: '2026-09-15 — Closing the beta surface holes', slug: 'operations/2026-09-15-closing-the-beta-surface-holes' },
 								{ label: '2026-09-14 — The bridge that swallowed its own exec', slug: 'operations/2026-09-14-the-bridge-that-swallowed-its-own-exec' },
