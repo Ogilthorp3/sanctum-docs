@@ -1,0 +1,78 @@
+---
+title: "2026-09-15: Cilghal Apple Watch Sleep Coaching and Dispatch Healing"
+description: "How a loopback routing mismatch and quiet-hours suppression muted sleep coaching on Bert's Apple Watch, resolved via endpoint healing and calibrated evening routines."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical architectural pencil sketch of a sleek biometric smartwatch interface displaying sleep stage cycles, heart rate variability waveforms, and evening wind-down coaching nudges, glowing cyan and warm amber data lines routing through an intelligent relay hub into Home Assistant.](./images/hero-2026-09-15-cilghal-watch-sleep-coaching.png)
+
+Bert checked his wrist. Nothing had buzzed.
+
+Cilghal's morning health briefing had been flagged as an error rather than proactive guidance. Worse, none of the proactive sleep coaching arrived on his wrist. Bert asked a direct question: *"Can you make sure Cilghal coach me via my watch to optimize my sleep?"*
+
+The council investigated. What looked like a simple notification gap was actually a three-layer systemic disconnect spanning [Cilghal](/agents/cilghal/), Force Flow, and Apple Health. An infrastructure endpoint naming collision broke transport. A quiet-hours mute rule swallowed evening nudges. And the briefing schedule was completely uncalibrated to Bert's real-world midnight chronotype.
+
+## 1. The Broken Watch Delivery Path
+
+[Cilghal](/agents/cilghal/) delivers health advice via a strictly constrained channel in `coach/nudge.py`. It posts a four-key payload to Force Flow's loopback listener at `http://127.0.0.1:4077/notify`.
+
+Force Flow dispatches the alert to Bert's iPhone via Home Assistant's companion service (`/api/services/notify/mobile_app_berts_iphone`). When the phone is locked, iOS immediately mirrors the alert to Bert's Apple Watch as a haptic wrist tap.
+
+The daemon log told a very different story. Examining `/Users/sanctum/logs/force-flow.stderr.log` revealed endless connection errors:
+
+```
+[ERROR] force-flow: iPhone push failed: Cannot connect to host 127.0.0.1:8123 ssl:default [Connect call failed ('127.0.0.1', 8123)]
+```
+
+Every single push to the phone and Apple Watch had been failing for weeks. Home Assistant does not run on loopback `127.0.0.1`. It lives on the Green appliance at `10.0.0.3:8123`.
+
+The root cause was a subtle endpoint naming mismatch across the discovery boundary:
+* `sanctum-endpoints` generated `SANCTUM_URL_HA=http://10.0.0.3:8123`.
+* `force_flow.py` queried `sanctum_endpoint("SANCTUM_HA_URL")`.
+
+The query returned empty. Force Flow fell back to `127.0.0.1:8123`. The connection failed instantly.
+
+`sanctum-endpoints` was updated to export both keys. `force_flow.py` was hardened to check both names with a stable fallback anchor.
+
+## 2. Quiet Hours and Wrist Delivery
+
+Fixing the address was only half the battle. Force Flow had a second barrier: quiet hours.
+
+Between 22:00 and 08:00, Force Flow mutes non-critical alerts to prevent waking the household. System warnings drop straight to `["log"]`.
+
+That logic makes sense for disk sentinels and background workers. But for a personal sleep coach, it was lethal.
+
+Sleep coaching happens when the sun is down. Wind-down begins at 23:30. Bedtime boundaries hit at 00:15. Under the legacy rules, Force Flow treated Cilghal's coaching nudges as noise and dropped them into the log.
+
+Even outside quiet hours, low-tier nudges went only to Signal and the dashboard. Medium-tier nudges used `iphone_silent` with empty sound data. On watchOS, silent pushes never trigger haptic taps. Bert never felt a thing.
+
+Force Flow's routing was updated with an explicit bypass for `source == "cilghal-coach"`. Coaching nudges now bypass quiet-hours suppression and route directly to `iphone` with sound and haptics enabled. The watch taps Bert's wrist.
+
+## 3. Calibrating the Sleep Schedule to Reality
+
+Bert made his habits clear: *"It's very rare I go to bed before midnight."*
+
+Prescribing a 22:30 bedtime was futile. We queried 66 days of Apple Health records to find the empirical sweet spot:
+* **The Midnight Sweet Spot**: Nights with bedtimes between 00:00 and 00:30 paired with 7.5 hours duration produced Bert's highest recovery scores: **HRV of 42+ ms** and **3.1h REM** (observed on `2026-07-10`).
+* **The Post-01:00 Cliff**: When bedtime slipped past 01:00 AM, sleep duration collapsed to 5.6 hours and REM crashed by 40%. On `2026-09-14`, sleeping at 02:01 crushed HRV to 31.7 ms.
+* **Genetics**: Bert's `CLOCK rs1801260` allele confirms an evening chronotype. Meanwhile, `COMT Met/Met` causes slow clearance of dopamine and stress hormones. Late-night screens keep sympathetic tone elevated, delaying natural melatonin onset.
+
+## 4. Active Sleep Coaching via Apple Watch
+
+To operationalize sleep optimization on the wrist, two new automated routines were built into `cilghal-coach`:
+
+1. **23:30 Wind-Down Nudge** (`coach/sleep_coach.py`):
+   Taps Bert's Apple Watch 45 minutes before midnight. It prompts screen dimming and cognitive downshift so dopamine clears before bed.
+2. **00:15 Bedtime Boundary Guard**:
+   Taps the wrist at the optimal bedtime midpoint. It urges Bert to sleep to secure 7.5h before 08:30 and prevent the steep post-01:00 REM cliff.
+3. **08:45 Morning Recovery Briefing** (`coach/daily_feedback.py`):
+   The morning briefing LaunchAgent was shifted from 08:00 AM to 08:45 AM. Bert wakes between 08:00 and 08:30. At 08:45, the watch has finished syncing overnight sleep, HRV, and resting heart rate before Cilghal speaks.
+
+## Verification & Closed Loop
+
+The new pipeline was verified under full scrutiny. All 94 unit tests in `cilghal-coach` passed. All 33 unit tests in `force-flow` passed, including new assertions for quiet-hours watch dispatch.
+
+An end-to-end dry run was executed on the live daemon. `deploy/sleep-coach.py --mode winddown --force` dispatched through Force Flow, posted to Home Assistant, and confirmed `page_success = True`. 
+
+The haptic engine fired. The coaching text appeared on the watch face. Both LaunchAgents are live under launchd, completing the loop between biometric sensing and proactive coaching.
