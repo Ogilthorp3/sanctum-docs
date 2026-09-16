@@ -101,10 +101,37 @@ PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 
 Re-running the suite resulted in `World Model E2E: 13 pass, 0 fail, 0 skip (of 13)`.
 
+## 5. The Columbo Pre-Quarantine Standard Practice Doctrine
+
+When Firewalla's Device Activity Profile (DAP) or Tag 18 ("Quarantine") blocks a device, the failure mode historically surfaced as raw, uninformative MAC addresses:
+```
+  [WARN] 6 device(s) blocked INDEFINITELY that are not managed screens (40:F5:20:31:F6:B5, ...)
+```
+
+Bert established the foundational doctrine: *"This should be the standard practice before a quarantine."*
+
+Never leave a quarantined device anonymous or allow infrastructure to be blindly severed. We built and codified the Columbo pre-quarantine pipeline (`bin/columbo/columbo-identify-quarantine.py`):
+1. **Multi-Source Attribution**: Queries Firewalla Redis (`host:mac:<MAC>`), DHCP hostnames, mDNS/Bonjour service advertisements, IEEE OUI vendor prefixes, Tuya keysets, and Home Assistant registries.
+2. **Infrastructure vs. Screen Classification**: Categorizes devices into managed screens vs household infrastructure (smart lighting, HVAC/thermostats, network appliances, audio).
+3. **Continuous Integration**: Integrated directly into `columbo-run.sh` to continuously resolve quarantined MACs and automatically maintain `device-canon.json`.
+4. **Enriched Escalations**: Updated `windu-doctor.py` so quarantine audits report rich human identities (`GameRoom 5 (40:F5:20:31:F6:B5)`, `VR Room Nuheat (00:23:38:3D:2E:1A)`) instead of bare hex.
+
+## 6. Automating Carrier Infinity Authentication with Safari and AppleScript
+
+Carrier recently rolled out a redesigned consumer portal (`https://my.carrier.com`), presenting a mandatory "Welcome to Your New Consumer Portal" modal that invalidated legacy tokens and caused downstream `401 Unauthorized` errors in Home Assistant.
+
+To eliminate manual browser logins, we implemented `~/.sanctum/bin/carrier-login.sh`:
+- Retrieves `bertrand@nepveu.name` and the password directly from macOS Keychain (`carrier-password`).
+- Orchestrates Safari via `osascript` to navigate to `https://my.carrier.com/login`.
+- Hooks React Native Web's internal synthetic event system (`__reactProps$...onChange`) and native input value setters to enable the submission button.
+- Submits the login form, verifies authentication into the portal dashboard, and automatically dismisses the welcome/intro modal.
+
 <Aside type="note" title="Empirical Verification Summary">
 - **haus-ha-status**: 9/9 PASS (Green LAN, hag-status, ha-gateway, ha-green-bridge, world-model, device census, Carrier clock).
 - **quigon-doctor**: 16/16 PASS (WAN forwarding, vmnet bridge, yoda replypath, gateway, identity, proxyd, cathedral, devstral/forge, cloud proxies, signal bridge, force flow, memory vault, presence).
 - **world-model E2E**: 13/13 PASS.
 - **cilghal-coach**: 94/94 unit tests passing.
+- **columbo-identify-quarantine**: Multi-source attribution active across all 32 network devices.
+- **carrier-login.sh**: Verified live; successfully authenticating into Carrier Consumer Portal.
 - **launchd estate**: All active daemons healthy; zero crashlooping services.
 </Aside>
