@@ -1,0 +1,85 @@
+---
+title: "2026-09-17: macOS 27 Post-Reboot Estate Audit and Service Stabilization"
+description: "Comprehensive operational triage following the host upgrade to macOS 27.0, resolving background re-indexing load, system log socket permissions on the SharePoint bridge, and provider credentials."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Operational telemetry command center visualization of a post-reboot systems audit on Apple silicon with emerald and gold telemetry streams.](./images/hero-2026-09-17-macos27-post-reboot-estate-audit.png)
+
+Host manoir rebooted into macOS 27.0 at dawn. We opened the diagnostic telemetry to verify our estate. Tommy watched from the mat. The Council demanded proof on disk before declaring all clear.
+
+While core daemon processes survived the kernel upgrade, several friction points demanded operator attention: system indexing pressure driving high load, an orphaned process contending on port 8199, permissions on `/var/log/sanctum` blocking the SharePoint bridge, and provider credentials requiring rotation.
+
+## 1. System Load & Post-Upgrade Indexing Triage
+
+Upon host boot, macOS 27 initiated comprehensive migration passes across CoreSpotlight, Metadata, Photos/MediaAnalysis, and Mail:
+- `hybridsearchd`, `corespotlightd`, `CGPDFService`, and `mediaanalysisd` consumed heavy background cycles.
+- `Mail.app` ran `/System/Applications/Mail.app/Contents/MacOS/Mail -MailLibraryUpgradeOnly YES` against `/Users/bert/Library/Mail/V10/MailData/Envelope Index`.
+- In addition, a recursive `grep` across the runner workspace had pegged one core at 100%.
+
+Once the runaway search process was terminated and memory pressure subsided, host load plummeted from an initial peak of **151.02** down to **11.37**, restoring normal CPU scheduling and preventing starvation of timing-sensitive canaries.
+
+## 2. Airtight VM Service Verification
+
+Initial inspection raised concerns regarding the Airtight VM (`10.10.10.10`), where diagnostic probes initially looked for retired port assignments. A live inspection over SSH confirmed that all core containerized and system services were running under systemd user mode:
+- **Graphiti Server**: active on `127.0.0.1:31416` (`graphiti-server.service`).
+- **Health Ingester API**: active on `10.10.10.10:10101` (`health-ingester.service`).
+- **OpenClaw Gateway**: active on `0.0.0.0:1977` (`openclaw-gateway.service`).
+- **VM-hosted Docker Containers**: Documenso, Outline, Dragonpit Conduit, and Neo4j (`127.0.0.1:7474`) all healthy.
+
+The comprehensive test harness [`~/.sanctum/tests/test-connections.sh`](file:///Users/bert/.sanctum/tests/test-connections.sh) confirmed **26 passed, 0 failed** across Home Assistant Green (`10.0.0.3` and Tailscale `100.95.147.70`), Health Ingester, Cloudflare Tunnels, Tailscale MagicDNS, and Memory Vault (`localhost:42069` holding 6,967 notes).
+
+## 3. SharePoint Bridge LaunchDaemon & Directory Permissions
+
+Cloudflare Tunnel logs reported HTTP 502 errors when routing `https://bridge.nepveu.name` to origin `http://localhost:8443`.
+
+Investigation revealed that system LaunchDaemon `/Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist` (running as user `bert`) had failed to spawn with exit code 78 (`EX_CONFIG`):
+1. **Directory Traversal Restriction**: Following the macOS upgrade, `/var/log/sanctum` was recreated with permissions `drwxr--r-- root:wheel`. Non-root processes could not traverse the directory to open `bridge.out.log` and `bridge.err.log`.
+2. **Audit Log Failure**: The underlying service failed with `PermissionError: [Errno 13] Permission denied: '/var/log/sanctum/audit.jsonl'`.
+
+Bert restored proper ownership and group permissions:
+```bash
+sudo chown -R root:sanctum /var/log/sanctum
+sudo chmod 775 /var/log/sanctum
+```
+Launchd immediately spawned `name.nepveu.sanctum-bridge` on port 8443. The public bridge endpoint responded with `HTTP 200` (`ok v0.1.0 modules: m365, sharepoint`), and `sanctum-bridge-canary` successfully completed its document version upload (version 23 verified).
+
+## 4. Provider Key Synchronization & Local Route Alignment
+
+The `sanctum doctor` CLI command reported failures on `gemini` and `mlx_local`.
+
+### Gemini API Key Rotation
+The Keychain entry `google-ai-api-key` contained an expired key that failed with `400 INVALID_ARGUMENT`. Bert validated the live secret at `~/.sanctum/secrets/gemini-api-key` against Google's API (`200 OK`) and updated the macOS Keychain in-place:
+```bash
+KEY=$(tr -d '[:space:]' < ~/.sanctum/secrets/gemini-api-key)
+security add-generic-password -U -a sanctum -s google-ai-api-key -w "$KEY"
+```
+
+### MLX Local Route Alignment
+`sanctum-cli` had defaulted to legacy port 8900 for `mlx_local`. Bert configured `~/.sanctum/instance.yaml` under `cli.providers`:
+```yaml
+  providers:
+    claude:
+      via: proxy
+      endpoint: http://127.0.0.1:3456
+    mlx_local:
+      endpoint: http://127.0.0.1:8055
+      model: council-secure
+```
+Probing `sanctum-server` on `127.0.0.1:8055` confirmed `HealthSnapshot(ok=True, latency_ms=1)`.
+
+### Headless SSH Automation
+To eliminate passphrase prompts during unattended scripts, Bert updated `~/.sanctum/ssh/config` for `openclaw`, `10.10.10.10`, and `yoda` to place `~/.ssh/sanctum_automation_ed25519` first with `IdentityAgent none`. The configuration was committed and pushed upstream to `sanctum-config` (`1b8dc40`).
+
+## 5. Verification & Health Summary
+
+All four operational suites confirmed full estate health:
+- **Qui-Gon Infrastructure Doctor** (`quigon-doctor.py`): **16/16 checks passing (0 failing)**.
+- **Sanctum Connection Tests** (`test-connections.sh`): **26/26 passing (0 failed)**.
+- **Council Parity Smoke** (`parity-smoke.sh`): **10/10 prompts verified on MLX :1337**.
+- **Sanctum Doctor**: **3/3 providers operational** (`claude` 3ms, `gemini` 177ms, `mlx_local` 0ms; 0 failed).
+
+<Aside type="tip">
+macOS major version upgrades trigger kernel and system directory resets. System-level LaunchDaemons executing under unprivileged accounts require directory permissions on `/var/log/sanctum` to retain group `sanctum` write bits across system updates.
+</Aside>
