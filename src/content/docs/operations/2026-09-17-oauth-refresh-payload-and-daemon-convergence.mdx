@@ -1,0 +1,107 @@
+---
+title: "2026-09-17: OAuth Refresh JSON Migration and Launchd Daemon Convergence"
+description: "How an upstream Cloudflare WAF change on Anthropic OAuth token refreshes coupled with an orphaned test process to trigger a false-recovery loop, resolved across credentials, launchers, and sentinels."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical pencil sketch of a mechanical relay switchboard with interlocking gears and routing cables converging into a secure vault terminal with Tommy observing calmly on a wooden bench.](./images/hero-2026-09-17-oauth-refresh-payload-and-daemon-convergence.png)
+
+A high-priority alert shattered the evening calm across Bert's workstation: `[Sanctum CRITICAL] proxyd e2e: Claude Code tool surface left the subscription`.
+
+The notification named both `claude-fable-5-1` and `claude-opus-5` erroring out under the full Claude Code tool surface. The error message was blunt: `OAuth access token has expired. Re-authenticate to continue.` Five minutes later, before any manual fix had landed, Windu's monitoring sentinel piped up with an informational recovery ping. Bert frowned. Down on the metal, the token had not revived itself. Tommy glanced up from the corner of the workbench as Bert dug into the audit logs. The failure untangled three intersecting failure modes: an upstream Cloudflare edge WAF shift, an orphaned manual test process holding loopback sockets, and an edge-triggered recurrence bug in the sentinel.
+
+## 1. Upstream OAuth Refresh Rejection
+
+Qui-Gon manages background runtime triage across the Mac Mini, including the token refresh LaunchAgent `haus.sanctum.token-refresh.plist`. Every ten minutes, `sanctum-token-refresh.sh` checks macOS Keychain item `Claude Code-credentials`. When fewer than five minutes remain, it contacts the Anthropic OAuth token endpoint (`https://platform.claude.com/v1/oauth/token`).
+
+At 17:03 EDT, the live token crossed the expiration threshold. Qui-Gon's refresher attempted its scheduled rotation. Instead of returning HTTP 200 with fresh credentials, the endpoint abruptly slammed the door:
+
+```json
+{
+  "error": {
+    "type": "rate_limit_error",
+    "message": "Rate limited. Please try again later."
+  }
+}
+```
+
+The script treated the HTTP 429 as a standard rate limit. It touched `/tmp/sanctum-token-refresh.backoff` and wrote the stale access token as fallback. Every subsequent attempt backed off for thirty minutes. By 18:50 EDT, when Windu's six-hour `proxy-route-e2e.py` probe ran, the access token was completely dead.
+
+Bert dissected the Claude Code 2.1.273 CLI binary (`~/.local/share/claude/versions/2.1.273`) to uncover why the endpoint balked. The discrepancy was immediately evident. `sanctum-token-refresh.sh` had been transmitting POST bodies formatted as `application/x-www-form-urlencoded` without a client user-agent. Anthropic's Cloudflare edge WAF had recently clamped down on OAuth automation, rejecting non-CLI form payloads.
+
+Claude Code itself sends JSON. It transmits `grant_type`, `refresh_token`, and `client_id` inside a JSON dictionary, accompanied by `Content-Type: application/json` and `User-Agent: claude-cli/2.1.273`. Bert tested the CLI's native JSON envelope directly:
+
+```bash
+PAYLOAD=$(python3 -c "import json, sys; print(json.dumps({'grant_type': 'refresh_token', 'refresh_token': sys.argv[1], 'client_id': sys.argv[2]}))" "$REFRESH_TOKEN" "$CLIENT_ID")
+RESPONSE=$(curl -s --max-time 15 -X POST "$TOKEN_URL" \
+    -H 'Content-Type: application/json' \
+    -H 'Accept: application/json' \
+    -H 'User-Agent: claude-cli/2.1.273' \
+    -d "$PAYLOAD" 2>&1)
+```
+
+The response was immediate: HTTP 200 OK. Anthropic rotated both keys without hesitation, issuing a new access token good for eight hours. Bert synchronized the fresh credentials back to Keychain item `Claude Code-credentials` with ACL preservation and wrote `~/.sanctum/credentials/anthropic-token` with mode `640`.
+
+## 2. The Rogue Process and Launchd Process Table Hang
+
+Even with valid credentials written to disk, kicking the system LaunchDaemon `haus.sanctum.proxyd` failed to bring the new token into live memory. Qui-Gon's triage monitors showed port 4040 still returning stale responses.
+
+A process listing exposed the bottleneck. Earlier that afternoon, Bert had run an interactive debugging check (`proxyd --help`) that remained alive as PID 69602, silently holding loopback port 4040. When `sudo launchctl kickstart -k system/haus.sanctum.proxyd` started `proxyd-launch` under daemon user `sanctum`, the wrapper detected port 4040 already busy.
+
+Worse, `proxyd-launch` attempted to determine whether the occupant was a healthy instance using `pgrep -x proxyd`. Under macOS security boundaries, non-root system daemon processes traversing foreign process tables blocked indefinitely in `pgrep`.
+
+Bert resolved the stall across three fronts:
+
+1. **Rogue Process Eviction**: PID 69602 was terminated immediately.
+2. **Non-Blocking Health Probing**: `proxyd-launch` was overhauled to eliminate `pgrep` entirely. If loopback port 4040 is closed, it returns immediately to spawn the binary. If port 4040 is open, it performs a 1-second bounded HTTP probe against `https://127.0.0.1:4040/health`.
+3. **Convergence Window**: `heal_system_daemon.sh` was extended from 8 probe iterations to 15 iterations (30 seconds) to accommodate proxyd's model initialization sequence.
+
+Bert ran the kickstart command once more. The daemon converged cleanly, with `https://127.0.0.1:4040/health` reporting status healthy.
+
+## 3. The Sentinel False-Recovery Bug
+
+The anomaly of Windu's sentinel reporting recovery five minutes after a critical alert pointed to a structural bug in `proxyd-sentinel.sh`.
+
+Checks 1 through 3 (binary sha, build stamp, log signature) execute on every 5-minute tick. Check 4 (`proxy-route-e2e.py --group claude-code`) executes only once every six hours (`e2e_every=21600`).
+
+When check 4 failed at 22:50 UTC, it recorded `e2e-claude-code` into `findings` and updated `state["active"]`. On the next tick five minutes later, `now - last_e2e` was 300 seconds, so check 4 was skipped. Because check 4 did not execute, `findings` was empty. The sentinel calculated `prev - cur`, assumed the fault had cleared on its own, and broadcasted a false recovery notice.
+
+Bert updated `proxyd-sentinel.sh` with adaptive failure cadence:
+
+```python
+# If previously failed, probe every tick (300s) until verified green; otherwise every 6 h
+e2e_failing = "e2e-claude-code" in state.get("active", []) or state.get("last_e2e_rc", 0) != 0
+e2e_interval = 300 if e2e_failing else e2e_every
+
+if health and not skip_e2e and now - last_e2e >= e2e_interval and os.path.exists(e2e):
+    # run e2e probe ...
+elif e2e_failing and "e2e-claude-code" in state.get("active", []):
+    findings["e2e-claude-code"] = ("critical",
+        "proxyd e2e: Claude Code tool surface left the subscription",
+        "Previous e2e probe failed; waiting for next probe cycle")
+```
+
+A failing e2e check now retries on every 5-minute tick until it passes with disk-backed proof. If a cycle is skipped, it holds the alert active rather than broadcasting phantom recoveries.
+
+## 4. Upstream Subscription Quota Behavior
+
+With credentials restored, Bert re-ran `proxy-route-e2e.py`. The authentication failure vanished:
+
+* **Authentication**: HTTP 200 on OAuth tokens; no 401 authentication errors.
+* **Account Status**: Direct queries against Anthropic Messages API returned HTTP 429 with header `anthropic-ratelimit-unified-7d-status: rejected` and `anthropic-ratelimit-unified-7d-utilization: 1.0` (reset in ~30.9 hours).
+* **Failover Execution**: In accordance with the [quota ladder rules](/operations/2026-09-15-claude-code-tool-surface-and-quota-ladder/), `proxyd` recognized account-level exhaustion, marked `provider:anthropic` exhausted for the request, and cleanly diverted `claude-fable-5-1` to `kimi-k3` on OpenRouter ($0.00695) with status 200.
+
+Tommy yawned from the bench, content with the steady hum of cooling fans. Bert leaned back as the dashboard counters aligned.
+
+## 5. Verification & Durability
+
+* **Token Lifecycle**: Qui-Gon verified `sanctum-token-refresh.sh` running clean with `Token valid (474 min remaining)`.
+* **Daemon State**: `curl -sk https://127.0.0.1:4040/health` verified `status=healthy`, `git_sha=f0ae9ae8518f`.
+* **Sentinel Consistency**: Windu verified `proxyd-sentinel.sh` checks 1 through 3 passing with `active=none`.
+* **Durability Commit**: Configuration, launcher, and sentinel updates landed in `sanctum-config` commit `b39ad4c`.
+
+Lineage links:
+* [Claude Code Tool Surface and Quota Ladder](/operations/2026-09-15-claude-code-tool-surface-and-quota-ladder/)
+* [The Binary That Came Back](/operations/2026-09-11-the-binary-that-came-back/)
+* [Proxyd Host-Tools Policy](/architecture/proxyd-host-tools/)

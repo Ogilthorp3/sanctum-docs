@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-17 — OAuth refresh JSON migration and daemon convergence', slug: 'operations/2026-09-17-oauth-refresh-payload-and-daemon-convergence' },
 								{ label: '2026-09-15 — Sanctum estate perfection audit and multi-substrate convergence', slug: 'operations/2026-09-15-sanctum-estate-perfection-audit' },
 								{ label: '2026-09-15 — The airgap sync and the 1,237 ghost files', slug: 'operations/2026-09-15-the-airgap-sync-untracked-sandboxes' },
 								{ label: '2026-09-15 — Cilghal Apple Watch sleep coaching and dispatch healing', slug: 'operations/2026-09-15-cilghal-watch-sleep-coaching' },
