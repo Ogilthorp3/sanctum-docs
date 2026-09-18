@@ -13,7 +13,7 @@ While investigating our screen-time enforcement pipeline, the operator uncovered
 
 ## 1. The Socket Shutdown Deadlock
 
-The Firewalla REST bridge ([`~/.openclaw/firewalla-bridge.js`](file:///Users/bert/.openclaw/firewalla-bridge.js)) binds `127.0.0.1:1984` and mediates all policy updates to the router. Following the host migration to macOS 27.0, an inbound connection terminated abruptly into `CLOSE_WAIT`.
+The Firewalla REST bridge (`~/.openclaw/firewalla-bridge.js`) binds `127.0.0.1:1984` and mediates all policy updates to the router. Following the host migration to macOS 27.0, an inbound connection terminated abruptly into `CLOSE_WAIT`.
 
 When Node’s libuv event loop called `uv__drain` to close the socket, the underlying kernel system call `shutdown(fd, SHUT_WR)` blocked indefinitely inside `libsystem_kernel.dylib`:
 
@@ -30,9 +30,9 @@ Because the single thread remained stuck in the kernel syscall, the listening so
 
 ## 2. The Silent Healer Blind Spot
 
-When the circuit broke, [`force-flow-bridge-sentinel.py`](file:///Users/bert/.sanctum/sentinels/force-flow-bridge-sentinel.py) detected that port 1984 was unresponsive and delegated recovery to the canonical healer, `haus.sanctum.firewalla-watch`.
+When the circuit broke, `force-flow-bridge-sentinel.py` detected that port 1984 was unresponsive and delegated recovery to the canonical healer, `haus.sanctum.firewalla-watch`.
 
-However, [`sanctum-firewalla-watch.sh`](file:///Users/bert/.sanctum/scripts/sanctum-firewalla-watch.sh) suffered from a fatal assumption:
+However, `sanctum-firewalla-watch.sh` suffered from a fatal assumption:
 - It classified `BRIDGE-DOWN` purely by checking `pgrep -f "firewalla-bridge.js"`.
 - It classified `API-STUCK` by counting error patterns inside `firewalla-bridge.log`.
 
@@ -40,7 +40,7 @@ Because the wedged process was technically alive, `pgrep` succeeded. Because the
 
 ## 3. Runtime Fleet Unification to Node 26.8.2
 
-Closer examination revealed that [`scripts/firewalla-bridge.sh`](file:///Users/bert/.sanctum/scripts/firewalla-bridge.sh) was executing `/usr/local/bin/node` — an unpinned Node 26.0.0 binary built four months prior for Darwin 25.
+Closer examination revealed that `scripts/firewalla-bridge.sh` was executing `/usr/local/bin/node` — an unpinned Node 26.0.0 binary built four months prior for Darwin 25.
 
 Per our [runtime architecture](/operations/2026-09-13-the-node-26-bridge/), the Sanctum cluster standard is Node `v26.8.2` (`/opt/homebrew/bin/node`), which carries critical libuv socket draining fixes for Darwin 26. We aligned the wrapper script:
 
@@ -54,8 +54,8 @@ exec "$NODE_BIN" "$BRIDGE"
 
 To ensure our number one household feature never falters, we engineered defense-in-depth across the execution wrapper, daemon runtime, and watchdog tiers:
 
-1. **Zero-Fork Startup Wrapper**: In [`scripts/firewalla-bridge.sh`](file:///Users/bert/.sanctum/scripts/firewalla-bridge.sh), eliminated external subprocess forks (`cat` and `python3`). On macOS 27, non-root daemons calling `fork()` suffered kernel latency stalls in Darwin's `__fork`. We replaced file reads with the bash builtin `read -r TOKEN < "$TOKEN_FILE"` and removed external provenance stamping scripts, transforming the wrapper into an instant (sub-2ms), fork-free launch that transitions directly via `exec` into Node.
-2. **Atomic Node-Native Provenance**: Moved provenance recording directly into [`firewalla-bridge.js`](file:///Users/bert/.openclaw/firewalla-bridge.js). On boot, Node computes the SHA-256 digest of `__filename` using built-in `crypto` and atomically writes `firewalla-bridge-running.json` via a `.tmp` rename, ensuring the running process PID and loaded disk bytes match git SoT without any runtime dependencies.
+1. **Zero-Fork Startup Wrapper**: In `scripts/firewalla-bridge.sh`, eliminated external subprocess forks (`cat` and `python3`). On macOS 27, non-root daemons calling `fork()` suffered kernel latency stalls in Darwin's `__fork`. We replaced file reads with the bash builtin `read -r TOKEN < "$TOKEN_FILE"` and removed external provenance stamping scripts, transforming the wrapper into an instant (sub-2ms), fork-free launch that transitions directly via `exec` into Node.
+2. **Atomic Node-Native Provenance**: Moved provenance recording directly into `firewalla-bridge.js`. On boot, Node computes the SHA-256 digest of `__filename` using built-in `crypto` and atomically writes `firewalla-bridge-running.json` via a `.tmp` rename, ensuring the running process PID and loaded disk bytes match git SoT without any runtime dependencies.
 3. **Bounded Network Timeouts & mDNS Fast-Path**: 
    - Dynamically patched `Networker.prototype.authPost` and `authGet` with a strict 10-second `Promise.race` timeout, guaranteeing that dropped box sockets never stall request lifecycles.
    - Reordered discovery logic so known `group.json` IP is probed via TCP *before* triggering mDNS candidate sweeps, and bounded `mdnsLookup` to an 800ms timeout per host with a 20-second rediscovery cooldown to prevent event loop starvation.
