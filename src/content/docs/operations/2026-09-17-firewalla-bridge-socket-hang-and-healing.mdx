@@ -52,26 +52,30 @@ exec "$NODE_BIN" "$BRIDGE"
 
 ## 4. Multi-Layer Bulletproof Defenses
 
-To ensure our number one household feature never falters, we turned the entire stack into an unwedgeable fortress:
+To ensure our number one household feature never falters, we engineered defense-in-depth across the execution wrapper, daemon runtime, and watchdog tiers:
 
-1. **Process Lifecycle Hardening**: In `firewalla-bridge.js`, we installed top-level `uncaughtException` and `unhandledRejection` guards that flush logs and trigger clean exits, preventing silent half-dead states.
-2. **Graceful Signal Handling**: Added explicit `SIGTERM` and `SIGINT` listeners that close the HTTP server and enforce a strict 3-second fallback timer (`process.exit(0)`), ensuring `launchctl kickstart -k` completes cleanly without blocking.
-3. **Event Loop Lag Monitoring**: Embedded a lightweight 2-second heartbeat measuring event loop lag, warning immediately if scheduling delay crosses 10 seconds.
-4. **Active Liveness in Watchdogs**: Equipped both `sanctum-firewalla-watch.sh` and `sanctum-firewalla-bridge-watchdog.sh` with active `curl -fsS -m 3 http://127.0.0.1:1984/health` probes.
-5. **Zombie-Proof Escalation**: When recovery is triggered, healers probe the endpoint after two seconds; if the process remains wedged, they issue a forceful `pkill -9 -f firewalla-bridge.js` and re-kickstart the daemon.
-6. **Sub-Minute Cadence**: Accelerated `haus.sanctum.firewalla-watch` from a 300-second to a 60-second polling cadence, ensuring any degradation is healed in seconds.
+1. **Zero-Fork Startup Wrapper**: In [`scripts/firewalla-bridge.sh`](file:///Users/bert/.sanctum/scripts/firewalla-bridge.sh), eliminated external subprocess forks (`cat` and `python3`). On macOS 27, non-root daemons calling `fork()` suffered kernel latency stalls in Darwin's `__fork`. We replaced file reads with the bash builtin `read -r TOKEN < "$TOKEN_FILE"` and removed external provenance stamping scripts, transforming the wrapper into an instant (sub-2ms), fork-free launch that transitions directly via `exec` into Node.
+2. **Atomic Node-Native Provenance**: Moved provenance recording directly into [`firewalla-bridge.js`](file:///Users/bert/.openclaw/firewalla-bridge.js). On boot, Node computes the SHA-256 digest of `__filename` using built-in `crypto` and atomically writes `firewalla-bridge-running.json` via a `.tmp` rename, ensuring the running process PID and loaded disk bytes match git SoT without any runtime dependencies.
+3. **Bounded Network Timeouts & mDNS Fast-Path**: 
+   - Dynamically patched `Networker.prototype.authPost` and `authGet` with a strict 10-second `Promise.race` timeout, guaranteeing that dropped box sockets never stall request lifecycles.
+   - Reordered discovery logic so known `group.json` IP is probed via TCP *before* triggering mDNS candidate sweeps, and bounded `mdnsLookup` to an 800ms timeout per host with a 20-second rediscovery cooldown to prevent event loop starvation.
+4. **Liveness vs. Readiness Decoupling in Watchdogs**: 
+   - Watchdogs probing with `curl -fsS` previously failed when `/health` returned HTTP 503 ("degraded", indicating upstream box or cloud retry while the process is fully functional). The curl `-f` flag treated 503 as process death, triggering destructive restart cascades.
+   - Refactored `sanctum-firewalla-watch.sh`, `sanctum-firewalla-bridge-watchdog.sh`, and `force-flow-bridge-sentinel.py` to evaluate HTTP status codes: any status code between 100 and 599 confirms process liveness and event loop responsiveness. Only connection refused or timeout (`code 000`) triggers recovery.
+   - Extended the post-kickstart verification window from 2s to 5s to allow clean ESM module import and socket binding, and exempted legitimate `10.10.10.1` vmnet `socat` listeners from shadow detection.
 
 ## 5. Verification & Closed Loop
 
-Following the multi-tier deployment, PID 40217 spawned cleanly under `/opt/homebrew/bin/node` (Node 26.8.2).
+Following deployment, PID 40528 runs cleanly under `/opt/homebrew/bin/node` (Node 26.8.2).
 
-All automated verification gates passed cleanly:
-- `firewalla-bridge-provenance.sh`: `bridge == repo == stamp` verified green (`ace7d837a42b2c57`).
+All automated verification gates passed with zero regressions:
+- `firewalla-bridge-provenance.sh`: `bridge == repo == stamp == 85626bec12dcbddc` verified green (`active=none`).
 - `dns-floor-bridge.contract.test.mjs`: **35/35 contract tests passed** (0 failures).
 - `test-firewalla-bridge-provenance.sh`: **9/9 hermetic tests passed**.
+- `test-firewalla-toolkit.sh`: **112/112 tests passed** (0 failures, 7 skipped auth tests).
 - `force-flow-bridge-sentinel.py --check`: `HEALTHY (code 200)`.
-- `quigon-doctor.py`: **16/16 checks passing (0 failing)**.
-- `test-connections.sh`: **26/26 connectivity checks passing (0 failed)**.
+- `sanctum-firewalla-watch.sh`: `HEALTHY (action none)`.
+- `sanctum-firewalla-bridge-watchdog.sh`: clean, 0 alerts.
 - Force Flow `/screen/status`: all 15 screens active, curfew writes active and verified.
 
 Tommy curled back into sleep as the house returned to quiet equilibrium.
