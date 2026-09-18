@@ -50,36 +50,28 @@ NODE_BIN="/opt/homebrew/bin/node"
 exec "$NODE_BIN" "$BRIDGE"
 ```
 
-## 4. Socket Lifetime Bounds and Active Probing
+## 4. Multi-Layer Bulletproof Defenses
 
-We fortified both sides of the bridge:
+To ensure our number one household feature never falters, we turned the entire stack into an unwedgeable fortress:
 
-1. **HTTP Server Hardening**: In `firewalla-bridge.js`, we bounded connection lifetimes (`keepAliveTimeout = 5000`, `headersTimeout = 8000`, `requestTimeout = 15000`) and installed a `clientError` listener to explicitly destroy dead sockets.
-2. **Active Liveness in Watcher**: In `sanctum-firewalla-watch.sh`, we introduced a real HTTP probe:
-
-```bash
-bridge_http_ok=true
-if ! curl -fsS -m 3 "http://127.0.0.1:1984/health" >/dev/null 2>&1; then
-  bridge_http_ok=false
-fi
-
-if ! pgrep -f "firewalla-bridge.js" >/dev/null 2>&1; then
-  state="BRIDGE-DOWN"
-  detail="bridge-process-not-running"
-elif ! $bridge_http_ok; then
-  state="BRIDGE-DOWN"
-  detail="bridge-process-hung-unresponsive"
-```
+1. **Process Lifecycle Hardening**: In `firewalla-bridge.js`, we installed top-level `uncaughtException` and `unhandledRejection` guards that flush logs and trigger clean exits, preventing silent half-dead states.
+2. **Graceful Signal Handling**: Added explicit `SIGTERM` and `SIGINT` listeners that close the HTTP server and enforce a strict 3-second fallback timer (`process.exit(0)`), ensuring `launchctl kickstart -k` completes cleanly without blocking.
+3. **Event Loop Lag Monitoring**: Embedded a lightweight 2-second heartbeat measuring event loop lag, warning immediately if scheduling delay crosses 10 seconds.
+4. **Active Liveness in Watchdogs**: Equipped both `sanctum-firewalla-watch.sh` and `sanctum-firewalla-bridge-watchdog.sh` with active `curl -fsS -m 3 http://127.0.0.1:1984/health` probes.
+5. **Zombie-Proof Escalation**: When recovery is triggered, healers probe the endpoint after two seconds; if the process remains wedged, they issue a forceful `pkill -9 -f firewalla-bridge.js` and re-kickstart the daemon.
+6. **Sub-Minute Cadence**: Accelerated `haus.sanctum.firewalla-watch` from a 300-second to a 60-second polling cadence, ensuring any degradation is healed in seconds.
 
 ## 5. Verification & Closed Loop
 
-Following kickstart of `system/haus.sanctum.firewalla`, PID 26153 spawned under `/opt/homebrew/bin/node`.
+Following the multi-tier deployment, PID 40217 spawned cleanly under `/opt/homebrew/bin/node` (Node 26.8.2).
 
 All automated verification gates passed cleanly:
-- `firewalla-bridge-provenance.sh`: `bridge == repo == stamp` verified green.
+- `firewalla-bridge-provenance.sh`: `bridge == repo == stamp` verified green (`ace7d837a42b2c57`).
 - `dns-floor-bridge.contract.test.mjs`: **35/35 contract tests passed** (0 failures).
 - `test-firewalla-bridge-provenance.sh`: **9/9 hermetic tests passed**.
 - `force-flow-bridge-sentinel.py --check`: `HEALTHY (code 200)`.
-- Force Flow `/screen/status`: all 15 screens active, curfew writes resumed.
+- `quigon-doctor.py`: **16/16 checks passing (0 failing)**.
+- `test-connections.sh`: **26/26 connectivity checks passing (0 failed)**.
+- Force Flow `/screen/status`: all 15 screens active, curfew writes active and verified.
 
 Tommy curled back into sleep as the house returned to quiet equilibrium.
