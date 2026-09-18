@@ -335,6 +335,7 @@ export default defineConfig({
 								{ label: '2026-09-19 — Estate-wide backup audit and blind spot elimination', slug: 'operations/2026-09-19-estate-wide-backup-audit' },
 								{ label: '2026-09-19 — The Digital Ark and the preserved correspondence', slug: 'operations/2026-09-19-ark-user-email-backup' },
 								{ label: '2026-09-18 — The Darwin QoS trap and the resilient scribe', slug: 'operations/2026-09-18-darwin-qos-and-crm-resilience' },
+								{ label: '2026-09-18 — The Snapshot That Counted to Zero', slug: 'operations/2026-09-18-the-snapshot-that-counted-to-zero' },
 								{ label: '2026-09-17 — The hung bridge and the silent healer', slug: 'operations/2026-09-17-firewalla-bridge-socket-hang-and-healing' },
 								{ label: '2026-09-17 — macOS 27 post-reboot estate audit and service stabilization', slug: 'operations/2026-09-17-macos27-post-reboot-estate-audit' },
 								{ label: '2026-09-17 — OAuth refresh JSON migration and daemon convergence', slug: 'operations/2026-09-17-oauth-refresh-payload-and-daemon-convergence' },

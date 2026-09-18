@@ -1,0 +1,106 @@
+---
+title: "2026-09-18: The Snapshot That Counted to Zero"
+description: "A Cloudflare deadman eye tripwire on manoir reveals a triple fault: Darwin background scheduler freeze under swap-red, an expired Google Drive OAuth token on headless drills, and an empty 4KB weekly backup on berts due to zsh unmatched globbing."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch on a dark textured chalkboard background of an antique mechanical clockwork vault and hourglass surrounded by floating magnetic tape reels and glowing zero digits, warm golden candlelight accents, cozy vintage architectural drafting style, quiet technical precision](./images/hero-2026-09-18-the-snapshot-that-counted-to-zero.jpg)
+
+At 08:09 EDT on Friday morning, the Cloudflare off-site deadman eye tripped:
+`manoir:backup-fresh: 27h old (limit 26h)`.
+
+When Bert asked to *« Make sure we fix this permanently »*, a routine investigation peeled back three independent landmines that were silently waiting across the cluster:
+1. **Darwin Scheduler Jetsam:** `manoir` was running under `swap-red` (60 GB allocated, 20 GB compressed swap). Launchd's `<key>ProcessType</key><string>Background</string>` throttled the 05:01 morning backup down to priority 4, suspending the job until a console user logged in six hours later.
+2. **The Canary Landmine:** The daily restore drill (`haus.sanctum.backup-canary`) had silently broken exit 1 on Sep 17 due to an expired Google Drive OAuth token that `rclone` failed to preflight headlessly.
+3. **The Zero-Byte Snapshot:** On `berts` (MacBook Pro), the weekly off-box backup (`backup-sanctum.sh`) was trying to glob `com.sanctum.*.plist`. Because LaunchAgents had migrated to `haus.sanctum.*`, zsh's default `NOMATCH` behavior caused the pipeline to abort before tar began, writing an empty **4 KB archive with 0 files** while reporting success.
+
+---
+
+## Part 1: The Darwin Background Freeze on Manoir
+
+Sanctum's primary Mac Mini host (`manoir`) runs two heavy resident MLX models: `Qwen3.8-27B-4bit` on port 1337 (~38 GB footprint) and `Muse-Glimmer-30B-4bit` on port 3301 (~24 GB footprint), alongside two virtual machines (`sanctum-vm` and Claude Desktop helper VM). Under this load, the box operates under constant swap pressure.
+
+In `haus.sanctum.backup.plist`, the job was pinned with:
+```xml
+<key>ProcessType</key>
+<string>Background</string>
+```
+
+On macOS 27 (Darwin 27.0.0), `ProcessType: Background` drops thread scheduling priority to 4 and allows the kernel memory compressor and jetsam manager to throttle and suspend the process indefinitely under memory contention. At 05:01:00, the job spawned, was immediately starved of CPU cycles and memory pages, and froze in memory until 11:39:15 when a console login signaled interactive priority.
+
+### The Fix on Manoir
+1. **Removed `ProcessType: Background`** from `haus.sanctum.backup.plist` and `haus.sanctum.backup-canary.plist`.
+2. **Self-Caffeination:** Added `exec caffeinate -dimsu "$0" "$@"` self-wrapping to both `sanctum-backup.sh` and `sanctum-backup-canary.sh`.
+3. **Automated Catch-up Window:** Expanded `StartCalendarInterval` from a single `05:00` fire to `[05:00, 06:00, 07:00, 08:00]`. Combined with the script's `--if-stale 20` interlock, if the machine is asleep or thrashing at 05:00, it automatically catches up on the next hour without running duplicate backups.
+4. **Added Strict Timeouts:** Subprocess calls to restic snapshot queries, Docker, and Brew metadata collection now enforce strict 15s to 60s timeouts to prevent indefinite hangs.
+
+---
+
+## Part 2: Defusing the Canary Landmine
+
+`haus.sanctum.backup-canary` runs automated drill restores from Google Drive into a temporary directory to verify backup integrity. On Sep 17, the drill began failing exit 1:
+```text
+Client.Timeout exceeded while awaiting headers
+```
+Rclone's OAuth token for the `gdrive-sanctum:` remote had expired. In headless launchd sessions, `rclone` could not refresh the token via interactive browser auth.
+
+### The Fix
+Added `rclone_preflight()` to `sanctum-backup-canary.sh`:
+- Runs an explicit headless token check against `rclone about gdrive-sanctum:` before initiating the drill.
+- Implements a 3-attempt exponential backoff retry on `ping_deadman()`.
+- Validated via `test-backup-canary-db-drill.sh`: 13/13 tests green.
+
+---
+
+## Part 3: The Snapshot That Counted to Zero on Berts
+
+The most treacherous defect was discovered on `berts` (the MacBook Pro). Every Saturday morning at 04:30, `haus.sanctum.backup` runs `/Users/bert/.local/bin/backup-sanctum.sh` to snapshot `manoir` across the local network and upload a deadman beat.
+
+In `backup-sanctum.sh`, the remote tar generation was defined as:
+```bash
+REMOTE_TAR="cd / && { for p in \
+  Users/bert/.sanctum/scripts Users/bert/.sanctum/services Users/bert/.sanctum/state \
+  Users/bert/.sanctum/docs Users/bert/.sanctum/bin Users/bert/.sanctum/boot \
+  Users/bert/.sanctum/instance.yaml \
+  Users/bert/Library/LaunchAgents/com.sanctum.*.plist; do \
+  [ -e \"\$p\" ] && printf '%s\\n' \"\$p\"; done; } | \
+  tar -czf '${REMOTE_TMP}' -T -"
+```
+
+When Sanctum migrated its LaunchAgents from `com.sanctum.*` to `haus.sanctum.*`, the path `Users/bert/Library/LaunchAgents/com.sanctum.*.plist` ceased to exist. 
+
+In zsh, an unquoted glob pattern with zero matches emits:
+```text
+zsh:1: no matches found: Users/bert/Library/LaunchAgents/com.sanctum.*.plist
+```
+and aborts the entire subshell immediately. Nothing was ever fed into `tar -T -`. `tar` wrote an empty archive:
+```text
+[2026-09-18T21:41:36Z] success sanctum-mini-20260918-174136.tgz size=4KB files=0 sha256=0a0cc84a395f8598
+```
+Because the script exited 0, it pinged the deadman switch, which dutifully reported that the backup succeeded! The backup log showed this had happened once before on Aug 22, completely undetected.
+
+### The Fix
+- Added zsh's `(N)` nullglob qualifier to both glob patterns: `com.sanctum.*.plist(N)` and `haus.sanctum.*.plist(N)`.
+- Preceded the loop with `setopt nullglob 2>/dev/null || true`.
+- Adopted the script into version control at `~/.sanctum-mbp/scripts/backup-sanctum.sh` with a live symlink from `~/.local/bin/backup-sanctum.sh`.
+- Tested live: immediately captured **18,421 files (361 MB)**.
+
+---
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| **Everything E2E Tested** | `test-backup-ensure-repo.sh` (8/8) + `test-backup-canary-db-drill.sh` (13/13) pass; live restic drill green; live `backup-sanctum.sh` captured 18,421 files (361 MB); Cloudflare Worker verified 0h / 1.7h / 1.7h. |
+| **in Sanctum-docs** | This field note + sidebar entry under Operations Field Notes. |
+| **Merged** | `~/.sanctum` commit `2ef5be3` on `origin/main`; `sanctum-cli` fast-forwarded to `origin/main`; `~/.sanctum-mbp` commit `af1ab82` on `main`. |
+| **And Deployed** | Live LaunchAgents reloaded in `gui/501`; `~/.local/bin/backup-sanctum.sh` symlinked to `sanctum-mbp`; `instance.yaml` on `berts` repaired. |
+
+---
+
+## Related
+
+- [Engineering Discipline](/architecture/engineering-discipline/) — EETISMAD as the shipping bar
+- [The Restore That Never Rang](/operations/2026-08-05-the-restore-that-never-rang/) — Closeout doctrine and deadman alerts
+- [The Reboot That Stayed Up](/operations/2026-07-31-the-reboot-that-stayed-up/) — Memory pressure and cold boot discipline
