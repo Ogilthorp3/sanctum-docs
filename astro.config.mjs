@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-17 — The hung bridge and the silent healer', slug: 'operations/2026-09-17-firewalla-bridge-socket-hang-and-healing' },
 								{ label: '2026-09-17 — macOS 27 post-reboot estate audit and service stabilization', slug: 'operations/2026-09-17-macos27-post-reboot-estate-audit' },
 								{ label: '2026-09-17 — OAuth refresh JSON migration and daemon convergence', slug: 'operations/2026-09-17-oauth-refresh-payload-and-daemon-convergence' },
 								{ label: '2026-09-15 — Sanctum estate perfection audit and multi-substrate convergence', slug: 'operations/2026-09-15-sanctum-estate-perfection-audit' },
