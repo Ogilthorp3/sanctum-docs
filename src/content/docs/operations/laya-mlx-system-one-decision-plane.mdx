@@ -1,0 +1,62 @@
+---
+title: Laya-MLX System 1 Decision Plane
+description: Deploying local, non-autoregressive Apple Silicon MLX decision models for sub-15ms task routing, salience, and triage.
+---
+
+import { Aside, Steps } from '@astrojs/starlight/components';
+
+Sanctum enforces a strict subscription-first and local $0 doctrine. Until now, agent decision-making lived at two extremes: brittle keyword regex matching or heavy frontier generative models. The deployment of `laya-mlx` bridges this gap, establishing a dedicated, zero-cost System 1 decision plane.
+
+## Architecture
+
+`haus.sanctum.laya` runs as a persistent background daemon on `127.0.0.1:1989`. It hosts the ModernBERT-large backbone (`aac6fef/laya-mlx`, ~421M parameters, ~803 MB FP16 safetensors) directly in Apple Silicon unified memory via MLX.
+
+```
+[User Prompt / Telemetry]
+        │
+        ▼
+[~/.sanctum/lib/laya.py] ──(HTTP POST <15ms)──► [haus.sanctum.laya :1989]
+        │                                                │
+        ▼ (fail-soft fallback)                           ▼
+[score_prompt() / Heuristics]                   [MLX FP16 Decision Head]
+                                                         │
+                                                         ▼
+                                                Typed Outputs:
+                                                - Choice (Route)
+                                                - Score (Salience)
+                                                - Noul (Boolean)
+```
+
+## Service Contract
+
+- **Endpoint**: `http://127.0.0.1:1989`
+  - `GET /_health`: Health, model name, uptime, request counter.
+  - `POST /predict`: Input state string + typed question schema (`choice`, `score`, `noul`).
+- **Resident Footprint**: ~28 MB process RSS, ~803 MB Metal buffer.
+- **Qui-Gon Triage Level**: P1.5 (Permanent daemon, exempt from P2/P3 eviction).
+- **Latency**: 11ms–70ms typical inference on Apple Silicon.
+
+## Consumer Integrations
+
+### 1. `sanctum-code` Routing
+`sanctum-code` queries `:1989` on every auto-route task. If Laya returns a valid route (`feature`, `ops`, `quick`, `review`, `hard`), it applies the typed decision and calibrated confidence. If the daemon is stopped, it transparently falls back to heuristic regex scoring.
+
+### 2. Diagnostics
+Health status is surfaced directly via:
+```bash
+sanctum-code doctor
+```
+Showing:
+```text
+OK   laya_mlx              system1       http://127.0.0.1:1989 (model=aac6fef/laya-mlx)
+```
+
+## Operational Verification
+
+```bash
+# Check daemon health
+curl -s http://127.0.0.1:1989/_health | jq .
+
+# Test decision prediction
+python3 -c "import sys; sys.path.insert(0, '/Users/bert/.sanctum/lib'); import laya; print(laya.route_coding_task('fix bridge timeout'))"
+```
