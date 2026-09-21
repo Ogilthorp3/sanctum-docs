@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-20 — The silent canary and the zero-clobber secret', slug: 'operations/2026-09-20-yoda-credential-resilience-and-zero-clobber' },
 								{ label: '2026-09-19 — Preserving the Gathering and the RDC Scene Hold', slug: 'operations/2026-09-19-rdc-lighting-party-hold' },
 								{ label: '2026-09-19 — The Digital Ark and the preserved correspondence', slug: 'operations/2026-09-19-ark-user-email-backup' },
 								{ label: '2026-09-18 — The Darwin QoS trap and the resilient scribe', slug: 'operations/2026-09-18-darwin-qos-and-crm-resilience' },
