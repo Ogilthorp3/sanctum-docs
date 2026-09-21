@@ -38,18 +38,18 @@ Sanctum enforces a strict subscription-first and local $0 doctrine. Until now, a
 
 ## Consumer Integrations
 
-### 1. `sanctum-code` Routing
+### 1. `sanctum-code` Routing & Diagnostics
 `sanctum-code` queries `:1989` on every auto-route task. If Laya returns a valid route (`feature`, `ops`, `quick`, `review`, `hard`), it applies the typed decision and calibrated confidence. If the daemon is stopped, it transparently falls back to heuristic regex scoring.
+Health status is surfaced directly via `sanctum-code doctor`.
 
-### 2. Diagnostics
-Health status is surfaced directly via:
-```bash
-sanctum-code doctor
-```
-Showing:
-```text
-OK   laya_mlx              system1       http://127.0.0.1:1989 (model=aac6fef/laya-mlx)
-```
+### 2. Thalamus Global Workspace (`thalamusd.py` on `:1988`)
+Thalamus arbitrates the global broadcast workspace for Sanctum agents. When agents post events without an explicit salience score, Thalamus automatically invokes Laya's semantic salience scoring (`score_salience()`), dynamically weighting urgent system events vs routine heartbeats based on text semantics. Thalamus also provides a dedicated `POST /salience` endpoint for real-time salience queries.
+
+### 3. Sentinel Anomaly Triage (`sharepoint-bridge-sentinel.py`)
+Sanctum sentinels monitor critical paths like the SharePoint / M365 authenticated bridge. Before escalating consecutive failures to Force Flow CRITICAL pages, `sharepoint-bridge-sentinel.py` queries Laya's `triage_incident()`. If diagnosed as a transient network timeout rather than an origin crash or auth failure, operator pager alerts are suppressed during temporary ISP jitter while maintaining immediate alerting on hard failures.
+
+### 4. Sanctum CRM & Jocasta Privacy Firewall (`sanctum_crm/lib.py`)
+In partner and work sessions (`CRM_SESSION=work`), Sanctum enforces strict privacy firewalls. Any communication draft, persona synthesis, or incoming text is passed through Laya's semantic privacy filter (`filter_privacy()`). If classified as `private_family` with $\ge 60\%$ probability, the operation immediately fails closed (`PermissionError`), protecting personal family communications from crossing into professional workspaces.
 
 ## Operational Verification
 
@@ -57,6 +57,14 @@ OK   laya_mlx              system1       http://127.0.0.1:1989 (model=aac6fef/la
 # Check daemon health
 curl -s http://127.0.0.1:1989/_health | jq .
 
-# Test decision prediction
-python3 -c "import sys; sys.path.insert(0, '/Users/bert/.sanctum/lib'); import laya; print(laya.route_coding_task('fix bridge timeout'))"
+# Test Thalamus semantic salience
+curl -s -X POST http://127.0.0.1:1988/salience \
+  -H "Content-Type: application/json" \
+  -d '{"content": "CRITICAL: Primary database connection pool exhausted"}' | jq .
+
+# Test sentinel dry run
+python3 ~/.sanctum/sentinels/sharepoint-bridge-sentinel.py --dry
+
+# Run full sanctum-code selftest suite
+sanctum-code selftest
 ```
