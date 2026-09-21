@@ -1,0 +1,87 @@
+---
+title: Sanctum Benchmark & Progression Tracker
+description: Continuous performance regression tracking across Laya-MLX System 1, Thalamus, CRM, and Edge infrastructure.
+---
+
+import { Aside, Steps, Card, CardGrid } from '@astrojs/starlight/components';
+
+Sanctum adheres to the doctrine that **every claim must cite a reproducible observation from disk**, and performance must be continually verified across releases. `sanctum-benchmark` is the unified CLI tool for measuring latency distributions ($p50, p95, p99$), concurrency throughput ($QPS$), memory footprints ($RSS$), and regression deltas across all operational planes.
+
+## Architecture
+
+`sanctum-benchmark` evaluates five integrated subsystem planes:
+
+```
+                          ┌───────────────────────────┐
+                          │     sanctum-benchmark     │
+                          └─────────────┬─────────────┘
+                                        │
+      ┌──────────────────┬──────────────┴─────┬──────────────────┬──────────────────┐
+      ▼                  ▼                    ▼                  ▼                  ▼
+┌───────────┐      ┌───────────┐        ┌───────────┐      ┌───────────┐      ┌───────────┐
+│ Laya-MLX  │      │ Thalamus  │        │  Sanctum  │      │   Edge    │      │  History  │
+│  System 1 │      │ Workspace │        │    CRM    │      │  Bridge   │      │  Tracker  │
+│   :1989   │      │   :1988   │        │  Privacy  │      │SharePoint │      │  .jsonl   │
+└───────────┘      └───────────┘        └───────────┘      └───────────┘      └───────────┘
+```
+
+## Workload Suites
+
+| Suite | Target Metric | Workloads Evaluated | Typical $p50$ |
+| :--- | :--- | :--- | :---: |
+| **`laya`** | System 1 decision latency | • `route_coding_task` (2 heads: route + thinking)<br/>• `score_salience` (event priority [0..1])<br/>• `triage_incident` (failure categorization)<br/>• `filter_privacy` (work vs family domain)<br/>• Concurrency throughput ($C=4$) | $30\text{ms} - 60\text{ms}$ |
+| **`thalamus`** | Global Workspace arbitration | • `GET /health`<br/>• `POST /salience` (thalamus $\to$ laya evaluation) | $<1\text{ms}$ (health)<br/>$35\text{ms}$ (salience) |
+| **`crm`** | Jocasta privacy firewall | • `crm_privacy_fast` (personal session pass-through)<br/>• `crm_privacy_work` (work session semantic gate) | $<0.1\text{ms}$ (fast)<br/>$35\text{ms}$ (work) |
+| **`bridge`** | Authenticated edge path | • Authenticated read of management folder via CF Access + HMAC + Graph | $600\text{ms} - 800\text{ms}$ |
+
+## Usage
+
+### 1. Run Standard Benchmark
+Runs 15 iterations per workload, records the run to `~/.sanctum/state/benchmarks/history.jsonl`, and prints the delta against the previous run:
+```bash
+sanctum-benchmark
+```
+
+### 2. Fast Smoke Benchmark
+Runs 5 iterations for quick sanity testing during deployment:
+```bash
+sanctum-benchmark --quick
+```
+
+### 3. Isolated Suite Run
+Focus on a specific subsystem:
+```bash
+sanctum-benchmark --suite laya
+sanctum-benchmark --suite thalamus
+sanctum-benchmark --suite crm
+sanctum-benchmark --suite bridge
+```
+
+### 4. Progression & History View
+Examine historical latency trends and throughput progression across git commits:
+```bash
+sanctum-benchmark --history 15
+```
+
+Sample output:
+```text
+=== Sanctum Benchmark Historical Progression (Last 3 Runs) ===
+
+Date / Time         Config      Laya p50   Salience    Privacy     QPS   Progression   
+---------------------------------------------------------------------------------------
+2026-09-21 05:07    f0e631a      199.9ms    114.6ms    103.7ms   26.9   BASELINE
+2026-09-21 05:07    f0e631a      201.8ms    120.5ms    114.3ms   31.2   parity (±0%)
+2026-09-21 05:08    338b77e      192.4ms    110.2ms    101.5ms   34.5   3.8% faster
+```
+
+### 5. Automated CI / JSON Output
+Dump structured metrics for external ingestion:
+```bash
+sanctum-benchmark --json
+```
+
+## Storage & Invariants
+
+- **History Location**: `~/.sanctum/state/benchmarks/history.jsonl` (append-only, atomic writes).
+- **Latest Pointer**: `~/.sanctum/state/benchmarks/latest.json`.
+- **Environment Metadata**: Every record embeds git commits for `sanctum-config`, `sanctum-emergence`, `sanctum-crm`, along with CPU model (`Apple M4 Pro`) and daemon memory RSS.
