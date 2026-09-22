@@ -1,0 +1,49 @@
+---
+title: "2026-09-22: The name comes back"
+description: "Signal to Yoda was stuck with no owner, the reply that finally arrived had every name replaced by <PERSON>, and the scrubber had thrown the originals away. The channel is bound, the subscription seat stays, and Presidio puts the text back."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A lamp-lit desk in a stone room at night. A parchment holds a band of warm light where a missing line is returning, beside a brass stamp and a sealed envelope. Moonlight through a leaded window.](./images/hero-2026-09-22-the-name-comes-back.png)
+
+A greeting to Yoda on Signal sat in the gateway spool from the afternoon of the 21st until the evening of the 22nd. signal-cli, the bridge, and the gateway were all up. The readiness probe said HEALTHY. The journal said otherwise: OpenClaw 2026.9 had marked the roster `agents.ownership: "explicit"`, and nothing owned `signal:default`, so every inbound update failed with "no explicit owner" and was kept for retry.
+
+The fix is a route binding, `signal` account `*` to agent `main` (Yoda). The signal-link sentinel now treats a missing owner as `SIGNAL-ROUTE-UNOWNED` and puts the binding back. A probe after the gateway restart reported `signal_route_owned: true`, and the queued turn completed.
+
+## Why the reply said `<PERSON>`
+
+That completed turn was not Fable. The audit row is `glm-53`, 41,701 prompt tokens, model `z-ai/glm-5.3`. `council-max-thinking` is the Max subscription seat on `:3456`, and it is a host-tools seat. OpenClaw attaches snake_case tools on every turn. The proxy treated those as foreign and skipped the bridge, so the ladder fell through to OpenRouter.
+
+Presidio scrubs every OpenRouter body before it leaves the Mac. It replaced each person with the same token, `<PERSON>`, and kept no record of what had been there. The model echoed the only names it had been given. "Wednesday (`<PERSON>` 23)" is the same scrubber hitting a date word. Nothing on the way back could undo it, because the original spans were gone.
+
+<Aside type="note">
+The subscription path is not scrubbed. That prompt never leaves the machine. `<PERSON>` appears only on a hosted seat.
+</Aside>
+
+## The seat, and the map
+
+`council-max-thinking` now sets `keep_on_foreign_tools`. OpenClaw's tools no longer bounce Yoda off the subscription. The bridge still answers in text; it does not run those tools. An explicit `x-sanctum-tool-owner: client` still skips the seat, because that caller needs real tool calls back.
+
+A request that carried a snake_case tool came back as `claude-fable-5` with the word `seated`. Health at the same time reported `claude_max_free: true` and 500,000 tokens remaining.
+
+When `:3456` is out of tokens, the backend key is exhausted and the next metered rung is `glm-53`. On the open-model index that seat scores 45 and Kimi K3 scores 44, and GLM's list output price is about $4.40 per million tokens against Kimi's $15. Kimi stays on the ladders that already name it.
+
+Presidio's `/scrub` now takes and returns an alias book. The same original of the same type keeps one numbered placeholder for the whole request (`<PERSON_1>`, `<PERSON_2>`). The book stays on the Mac. The proxy writes the originals back into the reply bytes, including a placeholder split across stream chunks, and JSON-escapes the replacement so a quote in a name does not break the document. A live scrub of "Ada met Ada and Bob" returned that map. A GLM echo whose prompt had been scrubbed came back as `ping Bert pong`.
+
+If the model paraphrases and never writes the placeholder, there is nothing to put back. The map restores echoes. It does not teach the hosted model the name.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `sanctum-presidio` alias, corpus, and server tests green. `sanctum-proxy` 218 passed, including the split-chunk restorer. Signal sentinel 23 passed. Live: `/health` `94b486f3cff7`; scrub book for Ada and Bob; GLM content `ping Bert pong`; Fable content `seated` with a foreign tool attached; VM binding `signal` `*` → `main` |
+| in Sanctum-docs | This field note and its sidebar entry |
+| Merged | `sanctum-rs` `94b486f` (parent `5c4c568`); `sanctum-config` signal sentinel plus the seat flag; this note |
+| And Deployed | `proxyd` pid 80163 serving `94b486f3cff7`. `sanctum-presidio` pid 81100 on `:5001`/`:5002`. Config path in `/health` is `~/.sanctum/sanctum-proxy/config.yaml` with `keep_on_foreign_tools: true` |
+
+## Related
+
+- [Engineering discipline](/architecture/engineering-discipline/) — the four gates
+- [The switching was weird](/operations/2026-08-24-the-switching-was-weird/) — the earlier Presidio precision pass, and why an echo test is the proof
+- [Seventeen days unattended](/operations/2026-09-12-seventeen-days-unattended/) — a green probe is not the work
