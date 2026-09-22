@@ -1,0 +1,68 @@
+---
+title: "2026-09-22: Qui-Gon Military-Grade Hardening & 413 Storm Postmortem"
+description: "Resolving the 6-day silent HTTP 413 storm on seat 3301, enforcing tight context boundaries in OpenClaw, and deploying the council serving sentinel."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical pencil and ink architectural schematic on a dark chalkboard of Jedi infrastructure master Qui-Gon Jinn monitoring high-throughput MLX compute nodes and telemetry sentinels](./images/hero-2026-09-22-qui-gon-military-grade.png)
+
+A silent failure is far more treacherous than a visible crash. For six consecutive days, Qui-Gon's specialized coding seat on port `:3301` rejected every single operational request with HTTP 413, yet every standard health check remained deceptively green. Silence followed. The seat was dead. The Jedi Council convened under the doctrine that untracked config is an orphan and unmonitored capacity is already failing. When Mace Windu initiated our systemwide audit, a critical divergence between model cap and client dispatch emerged.
+
+While our [living force architecture](/architecture/living-force/) and daily [council monitors](/operations/council-always-alive/) diligently tested endpoint liveness with small two-token arithmetic probes, the actual production turns offered to the Muse-Glimmer-30B model exceeded the strict 32,768 token ceiling by thousands of tokens. The memory broke. Metal paged continuously. This caused macOS memory paging storms, saturated swap, and total silence from our primary infrastructure architect.
+
+## 1. Anatomy of the 413 Storm and the Zombie Session
+
+The incident began on September 15 following the OpenClaw 2026.9.4 release. A legacy prewarm sentinel script (`devstral-prewarm-sentinel.sh`) attempted to clear cold model caches by launching a sacrificial turn under a static session key (`agent:quigon:explicit:devstral-prewarm`). Historically, this sentinel purged its session by deleting obsolete `.jsonl` files from disk. The script failed. Old files vanished, but state lingered.
+
+However, OpenClaw migrated session state to SQLite (`openclaw-agent.sqlite`). Because the cleanup script deleted files that no longer held state, each failed prewarm turn accumulated in the SQLite event log. The database choked. Nobody noticed. By September 21, the zombie session had ballooned into 6,209 raw events across 852 failed turns.
+
+Every subsequent invocation loaded the full transcript history into memory, creating an insurmountable 45,143-token prompt. Every turn failed. The prompt exploded:
+
+```bash
+# Inspection of openclaw-agent.sqlite on ubuntu@10.10.10.10
+sqlite3 ~/.openclaw/agents/quigon/agent/openclaw-agent.sqlite \
+  "SELECT count(*) FROM session_events WHERE session_key LIKE '%devstral-prewarm%';"
+# Result: 6209 events
+```
+
+When sent to the local MLX server on port `:3301`, the engine triggered an immediate rejection:
+
+```text
+sanctum_mlx::server: prompt exceeds operational cap — returning HTTP 413
+prompt_tokens=38784 effective_cap=32768 operational_cap=32768 model_max=131072
+```
+
+Because `council-canary` only dispatched small probes ("2+2", 544 tokens), it consistently received HTTP 200, concealing an 18-day structural outage pattern from human view. The probe lied. Green meant nothing.
+
+## 2. Hardening Qui-Gon's Configuration Diet
+
+Restoring Qui-Gon required a decisive prompt diet across three core layers:
+
+1. **Session Purge & SQLite Reclaim**: We purged the zombie session using the native CLI command `openclaw sessions delete 'agent:quigon:explicit:devstral-prewarm' --agent quigon --yes` and executed a database vacuum, shrinking the event store from 6,275 down to 66 events.
+2. **Skill Pruning & Tool Deny List**: In `~/.openclaw/openclaw.json`, Qui-Gon's loaded skills were trimmed from 15 down to 7 infrastructure essentials (`code-forge`, `dench-ops`, `house-pulse`, `memory-vault`, `reboot-check`, `service-doctor`, `tailnet-toolkit`). Twenty-five unrelated tool schemas (`jocasta__*`, `ha-green__*`, `firewalla__*`) were placed on a hard deny list.
+3. **Context Window Alignment**: OpenClaw had erroneously configured `council-devstral` with a `131072` context window, disabling automatic compaction. We corrected `contextWindow` to `32768` and `maxTokens` to `4096`, and enabled `midTurnPrecheck: { "enabled": true }` to catch token pressure before dispatches hit MLX.
+4. **Workspace & Sandbox Deduplication**: Redundant sections in `workspace-quigon/IDENTITY.md` were stripped and `MEMORY.md` was compacted from 9.2 KB to 1 KB, and immediately synced to docker sandbox container `agent-quigon-3c00f2c3`.
+
+A live verification turn confirmed Qui-Gon's prompt plummeted from 45k tokens to 12,000 tokens, answering with immediate 17.5-second latency. The fix held. Latency vanished. He answered in seconds.
+
+## 3. Deploying the Council Serving Sentinel
+
+The root diagnostic gap was that our monitors answered *"is this seat alive?"* instead of *"is this seat serving real traffic?"*. A green probe is not traffic. The dormant sentinel script `council-serving-sentinel.sh` had been authored after an earlier outage scar but was never wired into launchd.
+
+We operationalized the monitor into production:
+
+- **LaunchAgent Deployed**: Created and symlinked `haus.sanctum.council-serving-sentinel.plist` to `~/Library/LaunchAgents/` with a 300-second execution cadence.
+- **Three Core Verdict Gates**: The sentinel inspects real request lines from `~/.sanctum/logs/mlx-coder.log`, alerting to Force Flow on port 4077 if rejection rates exceed 20%, p95 prompt sizes collapse week-over-week, or caller offered prompt size exceeds 70% of operational capacity.
+- **Automated SQLite Hygiene**: Installed `openclaw-session-hygiene.service` and timer on the Linux VM at `04:30 ET` daily to prune unreferenced artifacts and vacuum SQLite databases.
+
+Tommy confirmed the serving logs reporting green across both devstral and cathedral brain seats. R2-D2 certified all unit checks across the dual-homed fleet. The gates hold. Qui-Gon is back. Qui-Gon now stands fully restored, military-grade, and actively guarded against token bloat.
+
+| Gate | Status & Evidence |
+| :--- | :--- |
+| **E / E / T (E2E & Tested)** | Live agent turn verified in 17.5s (prompt ~12k tokens, within 32k cap); `sandbox-freshness` clean (6 sandboxes, 0 problems); `openclaw doctor` passed. |
+| **IS (In-Sanctum-docs)** | Documented in field note `2026-09-22-qui-gon-military-grade.mdx` with chalkboard hero schematic, passing `contrib-check` and `story-check`. |
+| **M (Merged)** | `sanctum-runtime` (`1fb9925`), `sanctum-config` (`52d32d1`), and OpenClaw VM configs (`c8b4f265d`) committed and pushed to `main`. |
+| **D (Deployed)** | `haus.sanctum.council-serving-sentinel` running in launchd (PID 18616); `openclaw-session-hygiene.timer` active on VM; `mlx-coder-prewarm` running with SQLite purge logic. |
+
+The Living Force flows freely once more through clean conduits, stripped of vanity and fortified by continuous verification.
