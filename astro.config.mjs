@@ -321,6 +321,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-22 — The name comes back', slug: 'operations/2026-09-22-the-name-comes-back' },
 								{ label: '2026-09-22 — Inco DFlash2 speculative inference and SSM prefix ladder', slug: 'operations/2026-09-22-inco-dflash2-speculative-inference' },
 								{ label: '2026-09-22 — Zero-Python AI: Native Rust and Metal cutover', slug: 'operations/2026-09-22-zero-python-ai-estate' },
 								{ label: '2026-09-22 — The Three-Gigabyte Reflex: Reclaiming 2.4 GB from Metal Device Memory', slug: 'operations/2026-09-22-the-three-gigabyte-reflex' },
