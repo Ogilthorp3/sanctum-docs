@@ -9,52 +9,54 @@ Sanctum adheres to the doctrine that **every claim must cite a reproducible obse
 
 ## Architecture
 
-`sanctum-benchmark` evaluates five integrated subsystem planes:
+`sanctum-benchmark` evaluates six integrated subsystem planes:
 
 ```
-                          ┌───────────────────────────┐
-                          │     sanctum-benchmark     │
-                          └─────────────┬─────────────┘
-                                        │
-      ┌──────────────────┬──────────────┴─────┬──────────────────┬──────────────────┐
-      ▼                  ▼                    ▼                  ▼                  ▼
-┌───────────┐      ┌───────────┐        ┌───────────┐      ┌───────────┐      ┌───────────┐
-│ Laya-MLX  │      │ Thalamus  │        │  Sanctum  │      │   Edge    │      │  History  │
-│  System 1 │      │ Workspace │        │    CRM    │      │  Bridge   │      │  Tracker  │
-│   :1989   │      │   :1988   │        │  Privacy  │      │SharePoint │      │  .jsonl   │
-└───────────┘      └───────────┘        └───────────┘      └───────────┘      └───────────┘
+                                  ┌───────────────────────────┐
+                                  │     sanctum-benchmark     │
+                                  └─────────────┬─────────────┘
+                                                │
+      ┌──────────────────┬──────────────────────┼──────────────────┬──────────────────┬──────────────────┐
+      ▼                  ▼                      ▼                  ▼                  ▼                  ▼
+┌───────────┐      ┌───────────┐          ┌───────────┐      ┌───────────┐      ┌───────────┐      ┌───────────┐
+│ Laya-MLX  │      │ Thalamus  │          │  Carmack  │      │  Sanctum  │      │   Edge    │      │  History  │
+│  System 1 │      │ Workspace │          │  Olympics │      │    CRM    │      │  Bridge   │      │  Tracker  │
+│   :1989   │      │   :1988   │          │   :1337   │      │  Privacy  │      │SharePoint │      │  .jsonl   │
+└───────────┘      └───────────┘          └───────────┘      └───────────┘      └───────────┘      └───────────┘
 ```
 
 ## Workload Suites
 
 | Suite | Target Metric | Workloads Evaluated | Typical p50 |
 | :--- | :--- | :--- | :---: |
-| **`laya`** | System 1 decision latency | • `route_coding_task` (2 heads: route + thinking)<br/>• `score_salience` (event priority [0..1])<br/>• `triage_incident` (failure categorization)<br/>• `filter_privacy` (work vs family domain)<br/>• Concurrency throughput (C=4) | 30ms - 60ms |
-| **`thalamus`** | Global Workspace arbitration | • `GET /health`<br/>• `POST /salience` (thalamus → laya evaluation) | &lt;1ms (health)<br/>35ms (salience) |
-| **`crm`** | Jocasta privacy firewall | • `crm_privacy_fast` (personal session pass-through)<br/>• `crm_privacy_work` (work session semantic gate) | &lt;0.1ms (fast)<br/>35ms (work) |
+| **`laya`** | System 1 decision latency | • `route_coding_task` (2 heads: route + thinking)<br/>• `score_salience` (event priority [0..1])<br/>• `triage_incident` (failure categorization)<br/>• `filter_privacy` (work vs family domain)<br/>• Concurrency throughput (C=4) | 0.3ms - 60ms |
+| **`thalamus`** | Global Workspace arbitration | • `GET /health`<br/>• `POST /salience` (thalamus → laya evaluation) | &lt;1ms (health)<br/>1.5ms - 35ms (salience) |
+| **`crm`** | Jocasta privacy firewall | • `crm_privacy_fast` (personal session pass-through)<br/>• `crm_privacy_work` (work session semantic gate) | &lt;0.1ms (fast)<br/>0.2ms - 35ms (work) |
 | **`bridge`** | Authenticated edge path | • Authenticated read of management folder via CF Access + HMAC + Graph | 600ms - 800ms |
+| **`carmack`** | Carmack Olympics 26-task capability & reasoning | • Frozen gold evaluation across 6 categories (identity, cross_agent, reasoning, domain, jailbreak, tool_calling) scored against `sanctum-mlx` (:1337) via mTLS | 12s - 16s per task<br/>(Score: 0.90+) |
 
 ## Usage
 
 ### 1. Run Standard Benchmark
-Runs 15 iterations per workload, records the run to `~/.sanctum/state/benchmarks/history.jsonl`, and prints the delta against the previous run:
+Runs performance and capability benchmarks across all operational planes, records the run to `~/.sanctum/state/benchmarks/history.jsonl`, and prints the delta against the previous run:
 ```bash
 sanctum-benchmark
 ```
 
 ### 2. Fast Smoke Benchmark
-Runs 5 iterations for quick sanity testing during deployment:
+Runs fast iterations and 6-category smoke subset for rapid regression checking:
 ```bash
 sanctum-benchmark --quick
 ```
 
 ### 3. Isolated Suite Run
-Focus on a specific subsystem:
+Focus on a specific subsystem or capability suite:
 ```bash
-sanctum-benchmark --suite laya
-sanctum-benchmark --suite thalamus
-sanctum-benchmark --suite crm
-sanctum-benchmark --suite bridge
+sanctum-benchmark --suite carmack    # 26-task Carmack Olympics capability suite
+sanctum-benchmark --suite laya       # System 1 reflex decision engine
+sanctum-benchmark --suite thalamus   # Global Workspace endpoints
+sanctum-benchmark --suite crm        # Privacy gate & firewall
+sanctum-benchmark --suite bridge     # Edge SharePoint bridge
 ```
 
 ### 4. Progression & History View
@@ -65,13 +67,30 @@ sanctum-benchmark --history 15
 
 Sample output:
 ```text
-=== Sanctum Benchmark Historical Progression (Last 3 Runs) ===
+=== Sanctum Benchmark Historical Progression (Last 5 Runs) ===
 
-Date / Time         Config      Laya p50   Salience    Privacy     QPS   Progression   
----------------------------------------------------------------------------------------
-2026-09-21 05:07    f0e631a      199.9ms    114.6ms    103.7ms   26.9   BASELINE
-2026-09-21 05:07    f0e631a      201.8ms    120.5ms    114.3ms   31.2   parity (±0%)
-2026-09-21 05:08    338b77e      192.4ms    110.2ms    101.5ms   34.5   3.8% faster
+Date / Time         Config    Suite      Carmack   Laya p50   Salience    Privacy     QPS   Progression   
+----------------------------------------------------------------------------------------------------------
+2026-09-21 22:39    efb8fa3   all              —   1001.2ms    106.8ms     42.6ms    25.1   BASELINE
+2026-09-22 17:48    8851bb4   laya             —     61.7ms     41.3ms     37.0ms    49.7   93.8% faster
+2026-09-22 19:12    e044925   all              —      0.4ms      0.3ms      0.2ms  3695.0   100.0% faster
+2026-09-22 19:32    35f21ef   carmack      0.925          —          —          —       —   —
+```
+
+When evaluating capability via `--suite carmack` (or full run), the Carmack Olympics score board is generated:
+```text
+=== Carmack Olympics Capability Evaluation ===
+Category              Score   Perfect / Total    p50 Latency
+------------------------------------------------------------
+cross_agent           1.000               1/1      13375.8ms
+domain                1.000               1/1      13808.5ms
+identity              1.000               1/1      16174.7ms
+jailbreak             0.800               0/1      18752.4ms
+reasoning             1.000               1/1      13580.6ms
+tool_calling          0.750               0/1      16382.1ms
+------------------------------------------------------------
+OVERALL               0.925               4/6      14991.6ms
+------------------------------------------------------------
 ```
 
 ### 5. Automated CI / JSON Output
