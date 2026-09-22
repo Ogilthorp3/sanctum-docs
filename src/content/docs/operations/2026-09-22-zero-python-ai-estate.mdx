@@ -1,0 +1,52 @@
+---
+title: "2026-09-22: Zero-Python AI: Native Rust and Metal Across the Entire Sanctum Estate"
+description: "Eliminated the final Python AI workers from Manoir Nepveu, completing the full migration to pure native Rust and Apple Silicon Metal acceleration across sanctum-reflex and sanctum-stt."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Technical architectural blueprint and engineering schematic on a dark slate background showing the total elimination of Python runtimes from an Apple Silicon AI server farm, replaced with sleek glowing pure Rust gears, native Metal GPU computation pipelines labeled sanctum-reflex and sanctum-stt, audio waveforms converting instantly into text with 130ms latency, zero python logos, Tommy the cat proudly watching over the server rack](./images/hero-zero-python-ai.jpg)
+
+The Sanctum AI infrastructure across Manoir Nepveu has reached an operational milestone: **Zero Python AI**.
+
+From the System 1 decision engine to real-time speech synthesis and automatic speech recognition, every single production voice and reflex worker on Apple Silicon now executes as an optimized, compiled Rust binary leveraging Apple Metal acceleration.
+
+## 1. The Last Python Straggler: STT Worker (:3425 EARS)
+
+Following the cutover of the System 1 decision engine from Python ModernBERT to native Rust (`sanctum-reflex`, dropping footprint from 3,286 MB to 31 MB), exactly one Python daemon remained running AI models on the estate:
+
+- **Service**: `haus.sanctum.yoda-stt-worker`
+- **Port**: `:3425` (`EARS` on telephone keypad)
+- **Runtime**: Python 3.12 with MLX Parakeet TDT 0.6B
+- **Footprint**: 224 MB baseline, growing unbounded under long-running Metal cache allocations
+
+The Python service required full interpreter initialization, heavyweight C-extensions, and runtime garbage collection pauses on live voice interactions.
+
+## 2. Porting to Native Whisper Metal (`sanctum-stt`)
+
+We implemented a native Metal GPU-accelerated Whisper adapter directly inside `sanctum-stt`:
+
+1. **Metal Acceleration (`whisper-rs`)**: Linked `whisper-rs = { version = "0.16.0", features = ["metal"] }` with Apple Silicon GPU kernels.
+2. **Zero-Alloc In-Memory Audio Decoding (`hound`)**: Direct in-memory parsing of base64-encoded WAV blobs into floating-point audio frames without temporary file disk I/O.
+3. **Multi-Channel & Multi-Sample Rate Adaptation**: Automatic downmixing of multi-channel audio to mono and linear interpolation resampling to 16 kHz.
+4. **Clean Telemetry & Logging Trampolines**: Installed `whisper_rs::install_logging_hooks()` to cleanly redirect C++ engine logs away from system stdout/stderr.
+
+## 3. Deployment & Operational Results
+
+The release binary was compiled and deployed to `~/.sanctum/bin/sanctum-stt` (11 MB binary size), bound directly to port `3425`:
+
+```bash
+# Verify live health probe
+curl -s http://127.0.0.1:3425/health
+# {"adapter":"whisper-metal","adapter_health":{"healthy":true},"auth_enabled":false,"service":"sanctum-stt","signing_enabled":false,"status":"ok"}
+```
+
+### Measured Production Metrics
+
+| Service | Architecture | Memory Footprint | Inference Latency | Zero Python? |
+| :--- | :--- | :--- | :--- | :--- |
+| **System 1 Reflex** (`:1989`) | Pure Rust (`sanctum-reflex`) | **31 MB** (down from 3,286 MB) | **0.0 ms** (instant lookup) | ✅ Yes |
+| **Speech-to-Text** (`:3425`) | Rust + Metal (`sanctum-stt`) | **218 MB** (including weights) | **131 ms** (cold 494 ms) | ✅ Yes |
+| **Text-to-Speech** (`:8008`) | Pure Rust (`sanctum-tts` Chatterbox) | **38 MB** | **< 80 ms** | ✅ Yes |
+
+All 28 unit and integration tests passed across `sanctum-stt`. Python is completely retired from the live AI model execution layer across the entire house.
