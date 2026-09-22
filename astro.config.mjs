@@ -320,6 +320,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-22 — Voice stack symmetry: Migrating Yoda STT from 9011 to 3425 EARS', slug: 'operations/2026-09-22-yoda-stt-ears-port-migration' },
 								{ label: '2026-09-22 — Qui-Gon military-grade hardening and 413 storm postmortem', slug: 'operations/2026-09-22-qui-gon-military-grade' },
 								{ label: '2026-09-20 — Laya-MLX System 1 decision plane', slug: 'operations/laya-mlx-system-one-decision-plane' },
 								{ label: '2026-09-20 — The silent canary and the zero-clobber secret', slug: 'operations/2026-09-20-yoda-credential-resilience-and-zero-clobber' },
