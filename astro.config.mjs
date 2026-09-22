@@ -271,6 +271,7 @@ export default defineConfig({
 								{ label: 'MBP Reboot Runbook', slug: 'operations/mbp-reboot-runbook' },
 								{ label: 'mTLS Migration', slug: 'operations/mtls-migration' },
 								{ label: 'Firewalla Gold Pro Migration', slug: 'operations/firewalla-gold-pro-migration' },
+								{ label: 'Sanctum Benchmark', slug: 'operations/sanctum-benchmark' },
 							],
 						},
 						{
@@ -320,6 +321,8 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-22 — Inco DFlash2 speculative inference and SSM prefix ladder', slug: 'operations/2026-09-22-inco-dflash2-speculative-inference' },
+								{ label: '2026-09-22 — Zero-Python AI: Native Rust and Metal cutover', slug: 'operations/2026-09-22-zero-python-ai-estate' },
 								{ label: '2026-09-22 — The Three-Gigabyte Reflex: Reclaiming 2.4 GB from Metal Device Memory', slug: 'operations/2026-09-22-the-three-gigabyte-reflex' },
 								{ label: '2026-09-22 — Voice stack symmetry: Migrating Yoda STT from 9011 to 3425 EARS', slug: 'operations/2026-09-22-yoda-stt-ears-port-migration' },
 								{ label: '2026-09-22 — Qui-Gon military-grade hardening and 413 storm postmortem', slug: 'operations/2026-09-22-qui-gon-military-grade' },
