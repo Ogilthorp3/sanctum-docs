@@ -9,18 +9,18 @@ import { Aside } from '@astrojs/starlight/components';
 
 The Sanctum AI infrastructure across Manoir Nepveu has reached an operational milestone: **Zero Python AI**.
 
-From the System 1 decision engine to real-time speech synthesis and automatic speech recognition, every single production voice and reflex worker on Apple Silicon now executes as an optimized, compiled Rust binary leveraging Apple Metal acceleration.
+Every production voice and reflex worker on Apple Silicon now executes as a compiled Rust binary. Apple Metal provides direct GPU acceleration. The pipeline is lean. Speech synthesis, speech recognition, and low-latency reflex routing run without an interpreter.
 
 ## 1. The Last Python Straggler: STT Worker (:3425 EARS)
 
-Following the cutover of the System 1 decision engine from Python ModernBERT to native Rust (`sanctum-reflex`, dropping footprint from 3,286 MB to 31 MB), exactly one Python daemon remained running AI models on the estate:
+Following the optimization of estate services, exactly one Python daemon remained running AI models on the estate:
 
 - **Service**: `haus.sanctum.yoda-stt-worker`
 - **Port**: `:3425` (`EARS` on telephone keypad)
 - **Runtime**: Python 3.12 with MLX Parakeet TDT 0.6B
 - **Footprint**: 224 MB baseline, growing unbounded under long-running Metal cache allocations
 
-The Python service required full interpreter initialization, heavyweight C-extensions, and runtime garbage collection pauses on live voice interactions.
+The Python service required full interpreter startup and runtime garbage collection pauses. Latency spiked during live conversations. Native binaries eliminate that overhead completely.
 
 ## 2. Porting to Native Whisper Metal (`sanctum-stt`)
 
@@ -45,8 +45,9 @@ curl -s http://127.0.0.1:3425/health
 
 | Service | Architecture | Memory Footprint | Inference Latency | Zero Python? |
 | :--- | :--- | :--- | :--- | :--- |
-| **System 1 Reflex** (`:1989`) | Pure Rust (`sanctum-reflex`) | **31 MB** (down from 3,286 MB) | **0.0 ms** (instant lookup) | ✅ Yes |
-| **Speech-to-Text** (`:3425`) | Rust + Metal (`sanctum-stt`) | **218 MB** (including weights) | **131 ms** (cold 494 ms) | ✅ Yes |
-| **Text-to-Speech** (`:8008`) | Pure Rust (`sanctum-tts` Chatterbox) | **38 MB** | **< 80 ms** | ✅ Yes |
+| **System 1 Reflex** (`:1989`) | Pure Rust (`sanctum-reflex`) | **31 MB** (down from 3,286 MB) | **0.0 ms** (instant lookup) | Yes |
+| **Speech-to-Text** (`:3425`) | Rust + Metal (`sanctum-stt`) | **218 MB** (including weights) | **131 ms** (cold 494 ms) | Yes |
+| **Text-to-Speech** (`:8008`) | Pure Rust (`sanctum-tts` Chatterbox) | **38 MB** | **&lt; 80 ms** | Yes |
 
-All 28 unit and integration tests passed across `sanctum-stt`. Python is completely retired from the live AI model execution layer across the entire house.
+All 28 unit and integration tests passed across `sanctum-stt`. The voice pipeline connects directly to [Sanctum TTS](/architecture/sanctum-tts) and aligns with [Voice Stack Symmetry](/operations/2026-09-22-yoda-stt-ears-port-migration). Native binaries ensure deterministic execution across the entire estate.
+
