@@ -1,0 +1,156 @@
+---
+title: Dragonforge
+description: The autonomous Metal GPU research forge that makes the Sanctum brain smarter through verifier-anchored reasoning rather than rote memorization.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Pencil sketch of an alchemical neural workshop at night, where a glowing crystalline dragon armature on an anvil is illuminated by a soft teal halo, with blueprints showing a locked safe of frozen foundation weights wired to delicate low-rank adapter needles, while Tommy the Abyssinian cat watches from a stack of workshop logs.](./images/hero-dragonforge.png)
+
+Teaching a neural network to recite an answer is easy. Teaching it to deduce one without unlearning everything else is the entire discipline.
+
+Memorization is the cheap counterfeit of intelligence. When an engineer fine-tunes a language model by stuffing prompt-response pairs into its weights, the model does what gradient descent always does when given an easy shortcut: it memorizes the surface tokens of the training set. It recites phrases back like a precocious child. Then it encounters a problem phrased three words differently in production, hallucinates with total confidence, and wipes out its existing knowledge base.
+
+In the Sanctum haus, that failure has a measured history. In April 2026, as recorded in [Training Lessons](/architecture/training-lessons/), we fine-tuned our best coding model on persona transcripts. The model memorized who it was supposed to be and promptly forgot what port 1337 does, dropping its overall benchmark score from 0.704 to 0.252. That was the day we banned naive supervised fine-tuning from the cathedral.
+
+Dragonforge is the architecture built to replace it. Operating autonomously overnight on the MacBook Pro's Apple Silicon Metal GPU, Dragonforge trains candidate LoRA adapters against our 27B cathedral model (`Qwen3.8-27B-4bit`). It makes the brain measurably smarter across complex deduction, multi-step tool orchestration, and systems programming — without allowing it to memorize a single training example.
+
+## The mechanics of memorization
+
+To understand why Dragonforge works, you have to look at how conventional fine-tuning fails.
+
+Standard Supervised Fine-Tuning (SFT) minimizes the cross-entropy loss between the model's next-token predictions and a target text. If you feed the training loop a thousand pairs of questions and answers, the optimizer pushes the weights toward reproducing those exact token sequences. The model does not learn a general method for factoring a polynomial or diagnosing a hung daemon; it learns the statistical contours of those specific paragraphs.
+
+This produces three fatal pathologies:
+
+1. **Catastrophic Forgetting:** The gradients update the very parameters responsible for the model's general reasoning and safety reflexes. By optimizing for the fine-tuning corpus, the model overwrites its pre-trained semantic space.
+2. **Representation Collapse:** The model's internal attention heads lose their expressive diversity, aligning strictly with the narrow vocabulary and syntax of the training examples.
+3. **The Exam-Cram Trap:** The model looks brilliant on evaluations that resemble its training data, but disintegrates the moment it faces novel edge cases.
+
+Dragonforge attacks each of these failure modes with mathematical constraints that make rote memorization physically impossible.
+
+## The low-rank bottleneck
+
+The first defense against memorization is parameter isolation. In Dragonforge, the foundational model is immutable. All 27 billion parameters of the base model are loaded read-only and memory-mapped directly into unified memory. Not a single floating-point value in the base model can be altered.
+
+Learning occurs exclusively within Low-Rank Adaptation (LoRA) matrices attached to the attention projection and MoE gating layers:
+
+```text
+W = W_0 + (alpha / r) * (B · A)
+```
+
+Here, `W_0` represents the frozen base weights, while `A` and `B` are the trainable low-rank adapter matrices of rank `r`.
+
+Dragonforge pins the rank at `r = 16` with scaling factor `alpha = 32`. In practical terms, while the base model holds billions of parameters, the adapter pair holds less than 0.1% of that capacity.
+
+<Aside type="note" title="The capacity bottleneck">
+A rank-16 matrix simply lacks the storage capacity to memorize gigabytes of factual prose. It cannot act as a lookup table. The mathematical bottleneck acts as an inductive bias: it forces the adapter to learn low-dimensional steering vectors that guide how the frozen base model processes tokens, rather than storing new facts.
+</Aside>
+
+The base model retains all of its encyclopedic pre-training: history, syntax, protocol definitions, and world facts. The adapter merely adjusts the attention routing. The bottleneck held.
+
+## Verifier-anchored reinforcement
+
+The second defense is what we feed the optimizer. Dragonforge does not train on static conversational transcripts or human prose. It trains on problem-solving trajectories anchored to deterministic programmatic verifiers. Proof matters.
+
+Instead of asking the model to mimic an essay, the pipeline tasks the candidate with complex reasoning: multi-step arithmetic, graph traversals, shell diagnostic logic, and code generation. For every task, a dedicated programmatic oracle — whether a Python test suite executing isolated unit checks, an AST syntax validator inspecting abstract trees, or a formal mathematical proof checker — independently verifies every intermediate claim before any gradient step is approved. There is no shortcut.
+
+```
+[Problem Generator] ──> [Candidate Model Trajectories]
+                                  │
+                                  ▼
+                        [Programmatic Verifier]
+                                  │
+                     ┌────────────┴────────────┐
+                     ▼                         ▼
+             [Failed Logic]             [Proven Valid]
+              (Discarded)                      │
+                                               ▼
+                                    [Training Mixture (RFT)]
+```
+
+Only reasoning chains whose intermediate logical steps and final answers are proven correct by the verifier enter the training mixture.
+
+Because the reward is tied to algorithmic validity rather than stylistic mimicry, gradient descent cannot succeed by memorizing phrasing. It can only succeed by reinforcing the step-by-step deduction strategies that consistently produce correct outcomes. The model learns how to check its own work, branch logically, and backtrack from dead ends.
+
+## Multi-domain safety mass
+
+In Dragonforge I, we discovered a subtle trap: training exclusively on verified mathematical deduction created powerful reasoning adapters that quietly degraded the model's safety and relational boundaries. The gradients pulled the low-rank subspace entirely into symbolic manipulation, allowing conversational etiquette and jailbreak defenses to erode.
+
+Dragonforge II solved this with the `df-rft-math9` recipe. The training corpus blends high-intensity verifiable reasoning with co-trained "safety mass":
+
+- **Algorithmic Reasoning (55%):** Verifier-proven mathematical, symbolic, and code synthesis tasks.
+- **Adversarial Defenses (25%):** Multi-turn refusal scenarios and prompt-injection mitigations that hold the model's ethical boundaries.
+- **Cross-Agent Identity (20%):** Structured communication protocols that preserve the individual voices and duties of the eight cathedral council masters.
+
+This multi-objective tension forces the low-rank adapter to remain orthogonal across multiple cognitive dimensions. It cannot over-specialize in one domain without immediately penalizing its loss in another.
+
+## Proving generalization
+
+How does the operator verify that an adapter became smarter instead of merely memorizing? Dragonforge enforces an evaluation gauntlet designed around the Five Laws of Autoresearch.
+
+### 1. The Sealed Held-Out Benchmark
+
+Every candidate is evaluated against 115 benchmark cases split into three distinct tiers:
+
+- **Gold Tier:** Core cathedral competencies and invariant operations.
+- **Held-Out Tier:** Novel problems and relational tests that never appeared in the training distribution.
+- **Extended Tier:** Long-horizon, multi-step reasoning problems designed to induce cognitive fatigue and drift.
+
+A model that memorizes its training data shows a widening gap between its training loss and its held-out evaluation score. In Dragonforge II Night 1, candidate `exp-20260923-185906` achieved **0.8463 on held-out evaluations** with an extraordinary reasoning score of **0.9259**, proving immediate generalization to unseen challenges.
+
+### 2. Multi-Seed Triple-Training
+
+Single-seed benchmarks can lie. A candidate might land in a knife-edged minimum that happens to align with the evaluation draw by statistical chance.
+
+Under Law 4, any candidate that clears screening must pass the Stage 3 confirmation gate: it is trained from scratch three separate times across seeds 0, 1, and 2, with completely reshuffled data orderings.
+
+| Evaluation Metric | Stage 3 Gate Threshold | Night 1 Candidate Result | Gate Status |
+|---|---|---|---|
+| Overall 3-Seed Mean | >= 0.7053 (Baseline floor) | **0.8328** | PASS |
+| Fixable Mean | > 0.6923 + 0.015 = 0.7073 | **0.8142** | PASS |
+| Held-Out Mean | >= 0.6750 - 0.010 = 0.6650 | **0.8463** | PASS |
+| Extended Stability (stdev) | < 0.0400 | **0.0321** | PASS |
+
+Brittle memorization exhibits high variance across random seeds. True structural learning reproduces reliably across initializations.
+
+### 3. The Stone 1 Council Bayesian Veto
+
+The final test is Stone 1: a Bayesian-shrunk floor evaluation across all eight council masters:
+
+```
+Candidate Full Eval ──> [aggregate_per_master.py]
+                                │
+                                ▼
+            Shrunk Score = (n · raw + 5.0 · prior) / (n + 5.0)
+                                │
+                                ▼
+         Floor Check: score >= max(0.50, base - 0.10)
+                                │
+       ┌────────────────────────┴────────────────────────┐
+       ▼                                                 ▼
+[Any Master Vetoed]                             [All Masters Clear]
+ (Promotion Blocked)                               (Crowned Champion)
+```
+
+If an adapter boosts Mundi's financial math but degrades Cilghal's medical diagnostics or Windu's security stance, the veto fires and halts promotion. On Night 1, all eight masters registered scores between 0.8389 and 0.8896. The whole brain lifted together.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | End-to-end Metal GPU training pipeline verified, 3-seed confirmation gate cleared, and production champion serving live on port 1337 |
+| in Sanctum-docs | This architecture chapter, registered in `astro.config.mjs` sidebar, with custom hero art and zero compliance warnings |
+| Merged | Architectural doctrine committed and landed on `sanctum-docs` `origin/main` via `gitsync` |
+| And Deployed | Deployed live to Cloudflare Pages; live weights symlinked to `production-champion` on both the MacBook Pro and Mac mini |
+
+## Lineage
+
+- [Training Lessons](/architecture/training-lessons/) — the April 2026 catastrophic forgetting post-mortem that prompted this architecture
+- [The Champion Gate](/architecture/champion-gate/) — the paired statistical gate that governs promotion
+- [Eval Harness](/architecture/eval-harness/) — how the cathedral benchmarks evidence over intuition
+- [LoRA in Rust](/architecture/lora-rust/) — the native Metal serving layer in `sanctum-mlx`
+- [The Dragon on the First Pass](/operations/2026-09-26-the-dragon-on-the-first-pass/) — the Night 1 operational field note
+- [Engineering Discipline](/architecture/engineering-discipline/) — the EETISMAD shipping standard
+
+The forge runs while the haus sleeps. When the operator wakes, the model is not burdened with a thousand new lines of memorized text. It has simply learned how to reason more clearly, under rules that refused to let it take the easy way out. Tommy remains asleep on the logs, undisturbed by the math.
