@@ -144,6 +144,7 @@ export default defineConfig({
 						{ label: 'Model Comparison', slug: 'architecture/model-comparison' },
 						{ label: 'Model Tournament', slug: 'architecture/model-tournament' },
 						{ label: 'Training Lessons', slug: 'architecture/training-lessons' },
+						{ label: 'Dragonforge', slug: 'architecture/dragonforge' },
 						{ label: 'Engineering Discipline', slug: 'architecture/engineering-discipline' },
 						{ label: 'TCC Identity Anchors', slug: 'architecture/tcc-identity-anchors' },
 						{ label: 'The Reliability Doctrine', slug: 'architecture/reliability-doctrine-v1' },
