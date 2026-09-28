@@ -323,6 +323,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-27 — The Laptop That Became a Steam Deck', slug: 'operations/2026-09-27-the-laptop-that-became-a-steam-deck' },
 								{ label: '2026-09-26 — The Dragon on the First Pass', slug: 'operations/2026-09-26-the-dragon-on-the-first-pass' },
 								{ label: '2026-09-22 — The name comes back', slug: 'operations/2026-09-22-the-name-comes-back' },
 								{ label: '2026-09-22 — Inco DFlash2 speculative inference and SSM prefix ladder', slug: 'operations/2026-09-22-inco-dflash2-speculative-inference' },
