@@ -1,0 +1,96 @@
+---
+title: "2026-09-27: The Laptop That Became a Steam Deck"
+description: "A backup alarm that was really an identity bug. One Steam-store page load convinced the haus that Bert's laptop was his son's Steam Deck, the curfew took the backup heartbeat with it, and underneath sat four more silences that had all been reporting success."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil sketch on dark paper: an open laptop on a workbench at night, badly disguised as a handheld game console with a cardboard mask tied on with string, a padlock and chain across its keyboard. The only colour is a thin amber heartbeat line on its screen, running flat. An Abyssinian cat lifts one corner of the cardboard with a paw to look at the machine underneath.](./images/hero-2026-09-27-the-laptop-that-became-a-steam-deck.png)
+
+The off-site eye said Bert's weekly backup was 205 hours old. The backup disagreed.
+
+It had run on schedule early Saturday, on the MacBook Pro that pulls a copy of manoir every week: 426 MB, 18,458 entries, checksum good. Then it tried to tell GitHub, where the dead-man heartbeat lives, and got `connect: connection refused`. One attempt. No retry. The key aged quietly, and on Sunday the Cloudflare worker that watches from outside the haus paged `berts:weekly-backup 205h old`.
+
+A refused connection before dawn looks like a network hiccup. It was a curfew. On Thursday evening the haus had decided that Bert's laptop was Albert's game console, and consoles go to bed.
+
+## One page load
+
+The screen-time engine, force-flow, keeps a slot for Albert's Steam Deck. Since [the Quest that wore Unknown](/operations/2026-08-04-quest-that-wore-unknown/), an empty slot fills itself on first sighting: when a device with a rotating private address talks to hosts only that screen should talk to, the engine adopts it, so a parent never has to type a MAC address. That August note listed the Steam Deck's first auto-adopt among the paths nobody had exercised yet.
+
+Thursday evening exercised it. The laptop's USB-Ethernet adapter — private address, DHCP name just `Mac` — loaded something from `store.fastly.steamstatic.com`. One Steam-store page. force-flow adopted the adapter into `screens.steam_deck` on the spot, and thirty-three seconds later a second MacBook followed it in on host and vendor identity.
+
+The laptop's network order puts that adapter ahead of Wi-Fi. From Friday 22:30 to Saturday 10:00 the Steam Deck curfew blocked it, and at 04:31 the backup, having finished its local work, reached for the internet through it. We will not call that proven: the Firewalla's drop record for that minute has aged out. The refusal is *consistent with* the block, and the drop log still holds 2,822 drops of the laptop's own traffic on that adapter the same evening.
+
+## The label that wrote itself
+
+Adopting the wrong device is a bug. What made it stick was worse.
+
+When force-flow adopts a device, it also writes a friendly display name into Columbo's canon — here, "Steam Deck (Albert)". Meanwhile the scanner that decides whether an unknown host *is* a screen reads the Firewalla's `name` field as though it were the device's own hostname. That field is the label force-flow and Columbo write. The engine was asking its own sticky note who the device was, and the sticky note agreed.
+
+The same blindness had other victims. A phone announcing itself only as `iPhone` was adopted as the Basement Apple TV, because `iPhone` is a substring of the Apple TV's old alias, `Alberts-iPhone`. Two Living Room Sonos speakers sat enrolled in the Den Room Apple TV, whose `also_known_as` includes "Living Room". The iPhone and both speakers were being curfewed nightly with their screens. And the owner matcher mapped "Bert's iPhone" to Albert, because "Bert's iPhone" is, character for character, the tail of "Albert's iPhone".
+
+Five devices were wearing a screen's name. None of them had said so.
+
+## Ask the device
+
+The fix inverts the question. Instead of asking what the haus has called a device, ask what the device says it is.
+
+`phonebook.py` now derives a *self-advertised class* for every host from its own DHCP name, Bonjour name and vendor — iPhone, iPad, watch, Mac, HomePod, Sonos, or nothing — with the evidence attached, and publishes it every five minutes to `~/.sanctum/state/fw-identity.json`. force-flow consults that oracle on every adoption path. A phone, a Mac, a watch or a speaker is never auto-adopted as a kid's screen unless that screen explicitly accepts the class.
+
+Refusing must not open a hole, so the guard has a second half: a refused device that matches a screen *during that screen's curfew* is still paused, like any other stranger. Refused is not the same as waved through. The audit of existing enrollments pages and never unenrolls; taking a device out of curfew is a parent's call, not a heuristic's. If the oracle is missing or more than an hour stale, the guard fails open and says `GUARD BLIND`, hourly, until someone looks.
+
+Owner matching is token-bounded now. "Bert's" no longer lives inside "Albert's".
+
+## Four zeros that never shouted
+
+The Steam Deck was the loud failure. Following it down turned up four quiet ones, and not one of them had raised its voice.
+
+**Columbo had been blind for weeks.** The naming daemon ticks every ten minutes. It had not written a name since August 5, and every tick reported `resolved: 0`. Two causes, both silent. Its Python environment had no PyYAML, so the device registry loaded as an empty dict without raising. And launchd's `PATH` lacks `/sbin`, so the Firewalla SSH alias, whose ProxyCommand calls `route`, exited 255 — which `fw_devices()` read as "no hosts". When force-flow rewrote the canon file as the `sanctum` user on Friday night, Columbo also began crashing every tick on a `PermissionError`. Nothing raised an alert.
+
+**The sign-off tap never landed.** [The signature that comes to you](/operations/2026-08-07-the-signature-that-comes-to-you/) was built so that Bert's thumb, not a script, vouches for the week. In the eight weeks since, its log holds not one weekly-beat line, and no notification-action event ever reached Home Assistant, which is sitting on 1,489 notify-relay errors. It never paged because the tap shared its key with the laptop's automatic backup beat. The machine kept the human's key green.
+
+**The Firewalla's own watcher had been dead since July 13.** Its cron line lived only in a crontab that `update_crontab.sh` rebuilds from scratch.
+
+**Two hollow backups had beaten the dead-man.** On August 22 and September 18 the weekly archive held zero entries, and the beat went out anyway. [The snapshot that counted to zero](/operations/2026-09-18-the-snapshot-that-counted-to-zero/) fixed the glob that emptied it; nothing yet refused an empty archive at the door.
+
+## Make the zero shout
+
+Every repair is the same repair: a zero must explain itself out loud.
+
+Columbo's inputs are loud now: a registry or host list that comes back empty says so instead of passing for an answer. `/sbin` is on its path, PyYAML is pinned in `requirements-venv.txt`, conflicting identities are held for a human with a daily notice, and canon writes are atomic and group-writable. It also names Apple devices from what they advertise. The 22:26 tick wrote nine names out of nine; two entries called "iPhone (private)" became "Bert's iPhone", and the Sonos got their rooms back.
+
+Bert split the sign-off onto its own key, `berts:weekly-signoff`, which only the tap can write. The tap bridge now logs every silent exit, confirms its subscriptions, and keeps its connection honest with ping and pong.
+
+The beat script retries transient failures inside a 75-second deadline, fails fast on auth, and never moves a timestamp backwards. The backup rejects hollow archives. A beat that cannot get out waits in `.beat-pending` for an hourly catch-up, which re-checks the archive's hash and re-sends the *original* timestamp — a late beat can never vouch for a fresher backup than the one it holds. Run live through launchd: 18,460 entries, and the timestamp on GitHub equals the backup's own.
+
+The Firewalla watcher moved to the persistent `user_crontab` slot, and its files are tracked at last.
+
+## Three fix-firsts
+
+The fixes went to adversarial review before landing, and three verdicts came back the same: fix first.
+
+The first cut of the force-flow guard is the honest example. The review produced fourteen proofs, each a test that the guard survives one specific way of breaking it. Eleven failed against the first cut. All fourteen pass now, and they stay in the suite as `tests/test_self_class_guard_adversarial.py`, inside the engine's 990 tests.
+
+That first cut did escape once. Someone pushed it to `main` at 19:56 and pulled it into the live engine tree seven minutes later. The peer session asked about it denied it with transcript evidence, so the push stays unattributed. The running engine never loaded it.
+
+## What EETISMAD looks like here
+
+The bar is honest only if the unfinished rows are printed too.
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | force-flow 990 tests, including the fourteen adversarial proofs; Columbo 58; tap bridge 46; beat script 14, red on both old copies; backup run live through launchd, GitHub timestamp equal to backup timestamp |
+| in Sanctum-docs | This note, with a Field Notes sidebar entry |
+| Merged | `sanctum-config` 3a34232, 2d5842b, 5175a6b, abb2fe7, 00f954d, 185b35b; `sanctum-mbp` 2dcc726; `sanctum-screen-time` 7b7c616 through 4b72998 |
+| And Deployed | Columbo live (nine of nine names at 22:26); tap bridge restarted, both subscriptions acknowledged; backup and hourly catch-up live on the laptop; Firewalla watcher back in persistent cron |
+| Still owed | Bert runs `deploy-screen-time.sh --to 4b72998`, then the approved enrollment fixes go in through the loopback API; Bert pushes `sanctum-mbp` e00479d (the Firewalla beat); the Sunday tap drill; a dedicated non-admin Home Assistant user for the bridge |
+
+## Lineage
+
+- [The signature that comes to you](/operations/2026-08-07-the-signature-that-comes-to-you/) — the Sunday tap this incident proved had never landed
+- [The Quest that wore Unknown](/operations/2026-08-04-quest-that-wore-unknown/) — where screens learned to adopt rotating addresses on first sighting
+- [Everyone says they're Albert's iPhone](/operations/2026-08-09-everyone-says-theyre-alberts-iphone/) — the last time a substring decided whose device it was
+- [The snapshot that counted to zero](/operations/2026-09-18-the-snapshot-that-counted-to-zero/) — the hollow archive, fixed at the glob
+- [Device identity](/operations/device-identity/) — how Columbo and the phonebook name things
+
+The eye was right that something had gone 205 hours without proof. It was never the backup. It was the haus believing its own labels, and now it asks the device first — and any zero it gets back has to say so out loud.
