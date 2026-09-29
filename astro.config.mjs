@@ -323,6 +323,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-09-28 — A Flicker Is Not a Panic', slug: 'operations/2026-09-28-a-flicker-is-not-a-panic' },
 								{ label: '2026-09-28 — The Tree That Walked Off', slug: 'operations/2026-09-28-the-tree-that-walked-off' },
 								{ label: '2026-09-28 — The Turn That Asked First', slug: 'operations/2026-09-28-the-turn-that-asked-first' },
 								{ label: '2026-09-27 — The Laptop That Became a Steam Deck', slug: 'operations/2026-09-27-the-laptop-that-became-a-steam-deck' },
