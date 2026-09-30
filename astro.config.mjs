@@ -121,6 +121,7 @@ export default defineConfig({
 						{ label: 'Council Router', slug: 'architecture/council-router' },
 						{ label: 'Agents Architecture', slug: 'architecture/agents' },
 						{ label: 'IBKR Sell Window', slug: 'architecture/ibkr-window' },
+						{ label: 'Finance Window', slug: 'architecture/finance-window' },
 						{ label: 'Jocasta MCP', slug: 'architecture/jocasta-mcp' },
 						{ label: 'Sanctum Proxy', slug: 'architecture/proxy' },
 						{ label: 'Sanctum Cloud Proxy', slug: 'architecture/sanctum-cloud-proxy' },
