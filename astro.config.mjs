@@ -91,6 +91,7 @@ export default defineConfig({
 						{ label: 'What is Sanctum?', slug: 'getting-started/what-is-sanctum' },
 						{ label: 'A Day in the Haus', slug: 'getting-started/a-day-in-the-haus' },
 						{ label: 'Quick Start', slug: 'getting-started/quick-start' },
+						{ label: 'The Tribe', slug: 'getting-started/tribe' },
 						{ label: 'Requirements', slug: 'getting-started/requirements' },
 						{ label: 'Installation', slug: 'getting-started/installation' },
 						{ label: 'First Run', slug: 'getting-started/first-run' },
