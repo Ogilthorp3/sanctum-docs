@@ -325,6 +325,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-01 — The Wall That Was Armed Too Late', slug: 'operations/2026-10-01-the-wall-that-was-armed-too-late' },
 								{ label: '2026-09-28 — A Flicker Is Not a Panic', slug: 'operations/2026-09-28-a-flicker-is-not-a-panic' },
 								{ label: '2026-09-28 — The Tree That Walked Off', slug: 'operations/2026-09-28-the-tree-that-walked-off' },
 								{ label: '2026-09-28 — The Turn That Asked First', slug: 'operations/2026-09-28-the-turn-that-asked-first' },
