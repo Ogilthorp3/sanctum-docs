@@ -11,7 +11,7 @@ The Mac Mini is box-fresh on your desk. Untouched wallpaper, zero apps, the litt
 
 ## Before you start
 
-Sanctum runs on **Apple Silicon Macs**. The hub is a Mac Mini (M-series, 16 GB+ RAM, 256 GB+ disk). If you don't have one yet, see [Requirements](./requirements/) — the honest answer is "the cheapest current-generation Mac Mini will do."
+Sanctum's first install runs on an **Apple Silicon Mac with 32 GB of memory**. A Mac Studio and a Mac Mini are the same install. 32 GB is the line because the local model, the Dragon, is a 27-billion-parameter model and it fills the machine. A 16 GB Mac can still install the backup tools. It cannot hold the Dragon. The shopping list is on [Requirements](./requirements/).
 
 You also need:
 
@@ -73,13 +73,30 @@ You do **not** need:
 
    You'll see a small ASCII splash, then a line that greets you by name, then a guided arc of named chapters — **Welcome → Your AI → Your Network → Your Data → You're Alive** — with a step counter and a green check that lights only when a step genuinely succeeded:
 
-   - **Your AI** connects **Claude** (a Claude Max or Pro subscription used free through the local proxy — the default — or an Anthropic API key) and **Gemini** (a Google AI / Gemini API key). Keys land in the macOS Keychain. Skippable; the local `mlx_local` seat is always the offline fallback.
-   - **Your Network** auto-detects your Bell hub, Firewalla, and Orbi and walks guided, fail-closed pairing. Also skippable.
+   - **Your AI** connects **Claude** (a Claude Max or Pro subscription, or an Anthropic API key) and **Gemini** (a Google AI key). Keys land in the macOS Keychain. Skip both if you only want the Dragon. The cloud seats are optional.
+   - **Your Network** looks for a Bell hub, a Firewalla, and an Orbi. Skip this chapter. Those live on the operator's haus, not on a friend's desk.
    - **Your Data** estimates the backup set (Documents, Desktop, ssh keys, dotfiles), walks Cloudflare R2 setup if needed (auto-opening the right tabs), shows a dry run, runs the real backup, and restores a known file as a canary to confirm the round-trip.
 
-   When it finishes, a recap card and a green panel say **"Your Sanctum is alive, &lt;your name&gt;."** Take a screenshot. Manage gear later with `sanctum net hub|firewalla|orbi`; talk to your AI with `sanctum chat`.
+   When it finishes, a recap card and a green panel say **"Your Sanctum is alive, &lt;your name&gt;."** Take a screenshot.
 
-4. **Verify.**
+4. **Install the Dragon and talk to it.**
+
+   Quit browsers and other large apps first. The model takes most of a 32 GB Mac.
+
+   ```bash
+   curl -fL -o sanctum-dragon.zip \
+     https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/dragon-1/sanctum-dragon-guest.zip
+   unzip sanctum-dragon.zip
+   cd sanctum-dragon-guest
+   ./install.sh
+   ./chat.sh
+   ```
+
+   The first launch downloads the public base weights, about 15 GB, then applies the Dragon adapter that is already in the zip. Later launches only load what is on disk. Type a message and press return. `q` quits. `r` starts over.
+
+   `sanctum chat` on a fresh Mac is the council on the operator's haus. It bows out until that haus is present. The Dragon in this folder is the local model.
+
+5. **Verify.**
 
    ```bash
    sanctum status        # the whole haus at a glance
@@ -94,6 +111,7 @@ You do **not** need:
 
 - **Daily backups**, automatically, via a `com.sanctum.backup` LaunchAgent that runs at a quiet hour, plus a `com.sanctum.backup-canary` companion that restores a known file and confirms the round-trip. The backup you can't restore isn't a backup, so we check.
 - **A health check you can run anytime** — `sanctum doctor` probes the LaunchAgents, providers, and backup repos; `sanctum self-test` runs the twelve probes that decide whether the install is sound. That's the quick path in a nutshell: a backup, and the means to prove it works.
+- **The Dragon**, a local Qwen3.8 27B chat that stays on this Mac. It is the model that fits in 32 GB. It is not a second copy of the operator's council.
 - **A clean audit trail** — every action that matters is logged to `~/.sanctum/logs/` with bounded rotation. You can read what your haus has been doing, and it won't quietly eat your disk.
 - **No phone-home.** Nothing leaves your machine unless you explicitly configure a cloud target (which you just did, for backups, encrypted with a key only you hold).
 
@@ -108,7 +126,7 @@ If something in the quick path stalls way past the thirty-minute mark, that's a 
     You'll get a notification when the daily backup completes. That's intentional. After that, Sanctum will go quiet for a while — it doesn't have anything to tell you yet.
   </Card>
   <Card title="Day 2-3" icon="laptop">
-    Try `sanctum chat` to talk to your local agents. Try `sanctum status` first thing each morning. Sanctum is meant to fade into the background; if you find yourself running these commands less, that's a sign it's working.
+    Talk to the Dragon with `./chat.sh` in the folder you unzipped. Try `sanctum status` first thing each morning. Sanctum is meant to fade into the background; if you find yourself running these commands less, that's a sign it's working.
   </Card>
   <Card title="Day 4-7" icon="moon">
     The backup and its canary keep running on their own schedule; you don't tend them. If your Mac reboots for any reason (Apple update, power blip, you walked into the cord), the LaunchAgents come back by themselves — no login, no manual unlock — and pick up where they left off.
