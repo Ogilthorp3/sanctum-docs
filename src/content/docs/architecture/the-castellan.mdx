@@ -7,7 +7,7 @@ description: A Rust LaunchDaemon that programs macOS's own memory arbiter — je
 
 The Temple holds the kyber. The Council reaches for it through seven Jedi. But somebody has to keep the building — open its doors, ring its bell, and decide who eats first when the larder runs low. That officer is the **Castellan**.
 
-His launchd label is `com.sanctum.castellan`. His codename — used in the spec, the commits, and the lore — is **Gollum**, because he counts the precious memory all day and assigns it to its rightful keeper. The codename matters. Gollum the character is a warning about the precious: he had it, it consumed him, he could not put it down. The Castellan is the deliberate inversion. He has no authority his death can revoke and no information his death can lose. He was built so the precious cannot consume him.
+His launchd label is `haus.sanctum.castellan`. His codename — used in the spec, the commits, and the lore — is **Gollum**, because he counts the precious memory all day and assigns it to its rightful keeper. The codename matters. Gollum the character is a warning about the precious: he had it, it consumed him, he could not put it down. The Castellan is the deliberate inversion. He has no authority his death can revoke and no information his death can lose. He was built so the precious cannot consume him.
 
 ## Why the haus hired him
 
@@ -31,7 +31,7 @@ macOS exposes the truth through `libproc.proc_pid_rusage(RUSAGE_INFO_V6).ri_phys
 
 He does NOT arbitrate memory. The kernel already has an arbiter — compression plus jetsam priority bands plus wired pages — and it is correct, efficient, and impossible to outperform from user space. The Castellan's job is to **program the kernel's arbiter**: tell it which processes are critical, which are evictable, and which pages to pin. Once that policy is set, the OOM decision lives in the kernel and stays there.
 
-He runs as a root LaunchDaemon — `/Library/LaunchDaemons/com.sanctum.castellan.plist` — because programmatic cross-process jetsam adjustment is a privileged operation on macOS. From that vantage he uses two kernel-mediated levers:
+He runs as a root LaunchDaemon — `/Library/LaunchDaemons/haus.sanctum.castellan.plist`, executing a root-owned copy at `/usr/local/libexec/sanctum/castellan` — because programmatic cross-process jetsam adjustment is a privileged operation on macOS. From that vantage he uses two kernel-mediated levers:
 
 - **`memorystatus_control`** sets per-PID jetsam priority bands. Cilghal goes to `CRITICAL` (190); Devstral to `IDLE` (band 0, first to die); the Lima VM to `HOME`; the Castellan himself to `CRITICAL` so the keeper of the Temple cannot be the first thing the kernel kills.
 - **`metal-wired-limit-mb`** at each seat's launch — Cilghal's 18 GB of weights are wired and unswappable; Devstral's 2 GB are wired with the rest pageable, so her pages yield first under pressure.
@@ -43,7 +43,7 @@ He then runs a quiet two-second loop: re-measure, consider idle-bootouts of the 
 ## The three doctrines
 
 1. **Kernel-as-arbiter.** He never decides who dies. The kernel does. He only configures policy. The active loop does only what the kernel cannot do declaratively — load, unload, and refuse.
-2. **Static Cilghal peak-reserve.** He always reserves Cilghal's peak (41 GB), not her current 21 GB. Devstral lives only in the slack above that reserve. A code request that would push past the reserve queues, falls through to a cloud upstream, or refuses — never evicts Cilghal.
+2. **Typical, not worst case.** He plans each seat at what it typically holds while serving, measured — not at its peak (Bert's call, 2026-10-03). Transients belong to the safety floor and to macOS compression; what he watches live is the kernel's own available figure, swap depth and pressure. A request that does not fit queues, falls through to a cloud upstream, or refuses — it never evicts the brain.
 3. **Deadman-timed everything.** Every SIGSTOP he sends gets a tombstone file under `/Library/Application Support/Sanctum/Castellan/run/stopped/` named for the PID. A companion process — `castellan-deadman`, a separate root LaunchDaemon — watches his heartbeat at `/Library/Application Support/Sanctum/Castellan/run/heartbeat`. If the heartbeat goes stale for more than sixty seconds, the companion SIGCONTs every process the Castellan left stopped and clears the tombstones.
 
 ## When the Castellan dies
@@ -62,7 +62,13 @@ This is what "military-grade fail-OPEN" means in this haus.
 | `sanctum-pressure-valve` | swap usage | reacted only after swap began — too late to prevent pressure |
 | `ram-sentinel` | top-RSS offender | restarted the wrong process — a desktop app instead of the model actually consuming Metal |
 
-The Castellan inherits port 2189 with a drop-in API surface — `/status`, `/services`, `/load/{svc}`, `/release/{svc}` — plus the new `/ensure-loaded/{svc}` endpoint the proxyd code-seat hook calls. That endpoint is the on-call lifecycle. If the seat is already in the live snapshot it's a `200` instantly and a tick on the idle clock so the seat won't be auto-evicted while traffic is active. If not, the Castellan gates the call through admission — Devstral's 14 GB has to fit in the slack above Cilghal's peak-reserve — and on `Admit` synchronously `launchctl bootstrap`s the seat's plist on a blocking thread, then polls `probe_cmd` to readiness so proxyd can forward the moment the response returns. On `NeedsShedding` it's a `503` and the request falls through to the next upstream; the request path never wedges. The trio's user-domain plists are renamed `.retired-YYYYMMDD` by the cutover script; backups live under `~/.sanctum/backups/castellan-cutover-YYYYMMDD-HHMMSS/`. Rollback is a `sudo launchctl bootout` of the system pair, a manual rename of the trio's `.retired-YYYYMMDD` files, and three `launchctl bootstrap` calls back into the user domain.
+The Castellan inherits port 2189 with a drop-in API surface — `/status`, `/services`, `/load/{svc}`, `/release/{svc}` — plus the new `/ensure-loaded/{svc}` endpoint the proxyd code-seat hook calls. That endpoint is the on-call lifecycle. If the seat is already in the live snapshot it's a `200` instantly and a tick on the idle clock so the seat won't be auto-evicted while traffic is active. If not, the Castellan gates the call through admission — the seat's typical budget has to fit what the kernel says is available above the safety floor — and on `Admit` synchronously `launchctl bootstrap`s the seat's plist on a blocking thread, then polls `probe_cmd` to readiness so proxyd can forward the moment the response returns. On `NeedsShedding` it's a `503` and the request falls through to the next upstream; the request path never wedges. The trio's user-domain plists are renamed `.retired-YYYYMMDD` by the cutover script; backups live under `~/.sanctum/backups/castellan-cutover-YYYYMMDD-HHMMSS/`. Rollback is a `sudo launchctl bootout` of the system pair, a manual rename of the trio's `.retired-YYYYMMDD` files, and three `launchctl bootstrap` calls back into the user domain.
+
+## How he ships, and how he heals
+
+A binary reaches `/usr/local/libexec/sanctum/castellan` only through `~/.sanctum/scripts/deploy-castellan.sh`: clean, pushed source; his own tests; an atomic swap that keeps the previous binary; and a restart that is verified, not assumed — a pid that started after the install, and an answer on `/status`. The verification is there because on 2026-10-05 macOS killed his first launch on a fresh build and launchd threatened to drop the job. The script records what it installed in `~/.sanctum/bin/castellan.manifest.json`, and `~/.sanctum/bin/castellan` is a shim to the deployed binary, so the CLI and the daemon are one build.
+
+His rescue of a pinned seat kickstarts a job launchd still has and bootstraps one it has lost; `kickstart` alone cannot bring back a vanished job. `haus.sanctum.heal-canary` keeps him honest: the Castellan Heal Drill boots it out and expects him to put it back within seconds. He did it in about one — [the field note](/operations/2026-10-05-the-brain-that-needed-68-gb-to-wake-up/) has the night.
 
 ## Where to read the wiring
 
