@@ -1,0 +1,72 @@
+---
+title: "2026-10-05: The Brain That Needed 68 GB to Wake Up"
+description: "Bert asked whether Sanctum could live on a 32 GB laptop. The answer was hiding in a loader that computed the whole model before reading it — and behind it sat a keeper that cried Catastrophic, a rescue that could not rescue, and a CI gate that went red with no code change."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil sketch on dark paper: a cutaway of a small two-room dwelling at night. On a workbench in the middle stands an open wooden crate holding a compact engine no bigger than a toaster, and the packing straw it came in has drifted across both rooms, banked against the windows, spilled out of the door and piled up into the attic. The only colour is a thin amber needle glowing on a wall gauge. An Abyssinian cat sits on the attic beam above the straw, looking down at the engine as if the mess were its fault.](./images/hero-2026-10-05-the-brain-that-needed-68-gb-to-wake-up.png)
+
+Bert asked a small question on a Saturday: could the haus run on a 32 GB MacBook Pro? The brain is a 15 GB model that serves at about 20 GB. On paper, a 32 GB laptop had room to spare.
+
+On the Mini, the same brain had just peaked at 68.4 GB — while starting. Not while thinking, not while reading a long prompt: while waking up, on a box with 64 GB of memory. Every Sunday at 03:30 the weekly restart walked it through that peak, and every Sunday the Mini survived by pushing everything else into swap.
+
+## Sixty-eight gigabytes to say hello
+
+The castellan keeps a peak for every service he watches, and his said 70,077 MB for the cathedral on `:1337`. On the MacBook Pro, a stripped-down laptop profile of the same model peaked at 66.9 GB during load and then settled at 15.1. The steady state was never the problem. Waking up was.
+
+MLX is lazy. Building a model creates its weights as recipes — "random numbers of this shape" — that cost nothing until something asks for the values. The loader read the weights shard by shard, swapping each recipe for the real tensor, and called `model.eval()` at the end of every shard. Eval means compute everything. After the first shard, everything included the random initialisation of every layer not read yet: tens of gigabytes of noise, quantised and materialised, then thrown away as the next shard replaced it.
+
+Four loaders did it — `qwen3_5`, `qwen3_5_moe`, `qwen2` and `mistral`. The fix moves one line: evaluate once, after the last shard (sanctum-rs `53f6819`, merged to `main` as `7d07bad`). The live brain's start peak fell from 68.4 GB to 19.5 GB, and the laptop profile's from 66.9 to 15.2. The answers stayed identical, token for token, at temperature 0.
+
+One knob finished the job: `SANCTUM_MLX_PREFILL_CHUNK`, default 2048. At 512, the worst moment of reading a 31,600-token prompt drops from 23.4 GB to 19.1 GB, and prefill gets about 7% slower. The verdict for a 32 GB Mac: 15.2 GB to start, 16 typical, 19.1 at the worst moment.
+
+## The keeper who cried Catastrophic
+
+While measuring, we read the castellan's log. He had written `pressure tier=Catastrophic` every two seconds — 1,800 times an hour — on a Mini that was working fine.
+
+He counted "available" as free plus speculative plus purgeable pages, which ignores most of what macOS can reclaim, and he judged swap by the space left in swap files the kernel grows on demand. A box with plenty of room read as a box on fire. The new gate (`082d06a`) asks the kernel for its own figure, `kern.memorystatus_level`. It judges swap by depth — 2/8 of RAM is Warn, 3/8 Critical, 4/8 Catastrophic — and keeps kernel pressure as a one-way escalator. Normal is silent.
+
+Bert set the budgets the same way: pragmatic, not for the worst case. A service's `ram_budget_mb` is what it typically holds while serving, measured. Transients belong to the 4 GB floor and to macOS compression.
+
+When Bert installed the new binary, the castellan said Warn. That was honest: 17.5 GB of swap, past the 16 GB line. `fseventsd` alone held 8 GB, nearly all of it compressed or swapped — a leak the haus has met before.
+
+## A rescue that could not rescue
+
+The castellan also pins the brain: probe it every two seconds, rescue it when it is down. The probe had been asking about a retired label — 51,262 false "Down" verdicts and a failing rescue every half hour, harmless only because it was wrong. Fixing the label exposed the deeper flaw. The rescue was `launchctl kickstart -k`, and kickstart only works on a job launchd still knows. The cases that need a rescue are exactly the ones where it does not.
+
+The same day supplied both. Restarting the brain after the deploy, a `bootout && bootstrap` raced — bootout returns before the job is gone — and the bootstrap failed with EIO, leaving the brain down for about fifty seconds. Then the castellan's own first launch on his new binary was killed by macOS — `OS_REASON_CODESIGNING | Launch Constraint Violation` — and Gatekeeper's first scan of the fresh build finished a fraction of a second later. launchd logged "removing service"; a throttled retry ten seconds later came up.
+
+The rescue now asks before it acts: kickstart the job if launchd has it, bootstrap its plist if not. A canary proves it. `haus.sanctum.heal-canary` is an idle `/bin/sleep` pinned with the brain's exact rescue. The drill boots it out; the castellan put it back in about a second and wrote `rescue succeeded` — proof that the heal works on a job that has vanished. The old command, run by hand on the same vanished job, exits 113: *Could not find service*.
+
+The castellan's deploy got the same treatment. `deploy-castellan.sh` is now the only way a binary reaches `/usr/local/libexec/sanctum/`. It runs the fresh build once before launchd does, waits for a pid that started after the install, and bootstraps the job again if launchd drops it.
+
+<Aside type="caution">
+The castellan rejects the whole pinned manifest when one entry is invalid, and then probes nothing — the brain included — until it parses. Adding the canary with `expected_memory_min_bytes: 0` (the parser wants more than zero, even for launchd) blinded him for about 45 seconds.
+</Aside>
+
+## Red without a code change
+
+The castellan push turned the `military-grade` CI gate red. The castellan was not the cause: clippy rejected code that `#[async_trait]` generates in two other crates, and nothing in those files had changed since the last green run. The runner's floating `@stable` had moved from rustc 1.98.1 to 1.99.0 during that very run, and the new clippy flags the `#[must_use]` that async-trait 0.1.89 adds. Upstream had already fixed it in 0.1.92. The cure was a lockfile change (`d1e1854`), and both workflows went green.
+
+## What EETISMAD looks like here
+
+Each change carries a named suite that went red before it went green.
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `Cathedral Loader Peak`: the deployed engine loads a synthetic 4-shard model at 1.02x its weights, and the pre-fix build fails at 2.7-3.1x (proven on the MacBook Pro with byte-identical builds; on the Mini it skips itself while swap is this deep). `Castellan Deploy Lane`: 13 hermetic cases; without the re-bootstrap, the dropped-job case fails. `Castellan Heal Drill`: healed in about a second. `Castellan Live`: 7 of 8, with no false Catastrophic and the plan fitting the pool; the eighth check, binary against manifest, waits for the first lane deploy. `MLX Deploy Lane` 19 of 19. CI `military-grade` and `test` green |
+| in Sanctum-docs | This note; [The Castellan](/architecture/the-castellan/), [The Capacity Doctrine](/architecture/capacity-doctrine/) and [sanctum-mlx](/architecture/sanctum-mlx/) corrected |
+| Merged | `sanctum-rs` 53f6819, 082d06a, d1e1854, 7d07bad; `sanctum-config` 3420607, 5d726dc, c36be1c, 86b8bd2, 41447ec, bf14017, b51a9f7, 671e1fb, 8250aff |
+| And Deployed | engine `d2f1990f` on both seats, healthy over mTLS; castellan running the 082d06a gate since 12:28, installed by hand; rescue and canary live (the manifest is read every pass) |
+| Still owed | the castellan's first deploy through his own lane, which writes his manifest; `fseventsd` restart (`sudo`, a quiet moment) |
+
+## Lineage
+
+- [The Castellan](/architecture/the-castellan/) — the keeper, his deploy lane and his heal
+- [The Capacity Doctrine](/architecture/capacity-doctrine/) — pragmatic budgets and the gate that reads the kernel
+- [sanctum-mlx](/architecture/sanctum-mlx/) — the engine and its loaders
+- [The binary that came back](/operations/2026-09-11-the-binary-that-came-back/) — why a deployed binary has a manifest and never a commit
+- [The reboot that stayed up](/operations/2026-07-31-the-reboot-that-stayed-up/) — the last time a cold start was the honest test
+
+The 32 GB answer is yes. The brain still needs a moment to wake up; it no longer needs the whole haus to do it.

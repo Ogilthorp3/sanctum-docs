@@ -58,11 +58,12 @@ The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint, hot-swa
 
 | `model_type` | Status | Notes |
 |--------------|--------|-------|
-| `qwen3_5_moe` | Production | Qwen3.6-35B-A3B-4bit MoE on `:1337`. Native multimodal (vision canary live 2026-05-10). |
+| `qwen3_5_moe` | Reference | Qwen3.6-35B-A3B-4bit MoE, production on `:1337` before the dense 27B returned. Native multimodal (vision canary live 2026-05-10). |
 | `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
-| `qwen3_5` (dense) | Reference | The original v0.2.0 27B-4bit path. Still in the loader; not the current production champion. |
-| `mistral` | Production | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only) on `:3301`. The `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
-| Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Any other `model_type` is refused outright with a message naming the four it does load. |
+| `qwen3_5` (dense) | Production | Qwen3.8-27B-4bit on `:1337` (48 of 64 layers linear attention) with the DFlash2 draft model, as of 2026-10-05. The original v0.2.0 path, back in the seat. |
+| `mistral`, `mistral3` | Reference | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only), on `:3301` until Muse-Glimmer-30B took the seat. The `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
+| `muse_glimmer` | Production | Muse-Glimmer-30B-4bit on `:3301`, the backup brain, as of 2026-10-05. |
+| Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Any other `model_type` is refused outright with a message naming the six it does load. |
 
 Two cross-request tricks keep it fast and honest:
 
@@ -304,6 +305,8 @@ With the binary live, the gap was operational: nobody would notice if the server
 
 | Layer | Mechanism |
 |-------|-----------|
+| Loader peak | Every loader evaluates once, after its last shard (sanctum-rs `53f6819`, `main` `7d07bad`). Evaluating per shard computed the random initialisation of every unread layer: the 27B brain peaked at 68.4 GB while starting, and at 19.5 GB since. `Cathedral Loader Peak` in `~/.sanctum/tests/run-all.sh` loads a synthetic 4-shard model through the deployed binary and fails above 1.35x its weights; the pre-fix build fails at 2.7-3.1x. [Field note](/operations/2026-10-05-the-brain-that-needed-68-gb-to-wake-up/) |
+| Prefill chunk | `SANCTUM_MLX_PREFILL_CHUNK` (default 2048, clamped 128-8192) sets the prefill window. 512 drops a 31.6k-token prompt's peak from 23.4 to 19.1 GB for about 7% slower prefill, same answers: the 32 GB-laptop setting |
 | Guardian | `council-guardian`, every 60s, `GET /v1/models` — proves HTTP is alive, nothing more |
 | Canary | `council-canary`, every 10 min, POSTs "What is 2+2? Respond with only the number." Response must contain `4`; two consecutive misses alert Force Flow `/notify` (the pipe signal-health uses), 30-min cooldown; it never restarts (guardian owns that) |
 | Drift | `council-drift`, hourly, SHA-256-compares every deployed plist/script/manifest against canonical copies in `services/sanctum-mlx/deploy/` in the Mini's `sanctum-rs` checkout; checks the Application Firewall state and asserts every expected agent is loaded; drift → level=error log + Force Flow alert. `deploy-sanctum-mlx.sh verify` runs it interactively |
@@ -394,7 +397,7 @@ All paths are in the cathedral fork at `~/Projects/sanctum-rs-cathedral/`. The o
 | `services/sanctum-mlx/src/metrics.rs` | Prometheus recorder, RED metrics, inference token counters |
 | `services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift agents; canonical copies for drift check |
 | `services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | End-to-end mTLS canary battery |
-| `~/Library/LaunchAgents/com.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
+| `~/Library/LaunchAgents/haus.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
 | `~/Library/LaunchAgents/com.sanctum.mlx-devstral-rust.plist` | Coder `:3301` runtime config (Devstral-Small-2-24B-Instruct-2512-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
 | `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | RETIRED 2026-06-07 — was the coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs); removed when the coder role moved to Codestral |
 | `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with the LM Studio decommission |
