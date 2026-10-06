@@ -44,6 +44,10 @@ Qui-Gon's lens shaped the design more than mine did. The original draft had only
 macOS ships neither `timeout` nor `gtimeout`. Homebrew's `coreutils` is not installed on this Mini. The watchdog uses a pure-bash `shell_timeout` helper — background the command, schedule a `kill -KILL`, wait, return 124 if the killer fired. If you copy this script to another Mac and find every probe registering as a timeout, check that `timeout` exists before assuming the daemon is wedged. We learned this when the first force-fire test silently no-op'd because `timeout 0.001 cmd` returned `command not found` instead of 124.
 </Aside>
 
+<Aside type="note">
+Update, 2026-10-06: the symptom probe outgrew its timeout. By July a full `fileproviderctl dump` of the iCloud domain was 126 MB and about 33 CPU-seconds, so it could never answer in three seconds, and the watchdog killed a healthy daemon every thirty minutes until October. The probe is now off by default, and the primary signal waits for sixty minutes of sustained `R` instead of five, because a legitimate resync can run nine. See [The Watchdog That Was the Wedge](/operations/2026-10-06-the-watchdog-that-was-the-wedge/).
+</Aside>
+
 ## What we still don't know
 
 We do not know why fileproviderd wedged. The sample stack from the force-fire smoke test shows the main thread parked in `start` with no clear culprit — because the process was healthy at the moment we forced the trigger. The next real wedge will produce a stack we can read. After three or four of them — the watchdog logs the kill reason, the consec counters, the CPU time — there will be a pattern, and either the upstream cause or its trigger will surface. We will know whether it is OneDrive, Google Drive, iCloud, or an interaction between two of them, because the symptom probe targets a specific domain and the others can be tested in isolation.

@@ -1,0 +1,63 @@
+---
+title: "2026-10-06: The Watchdog That Was the Wedge"
+description: "fseventsd kept ballooning to 20+ GB. The feeder was our own fileproviderd watchdog: its health probe asked for a 126 MB dump with three seconds to deliver it, so since July it had been killing a healthy daemon every thirty minutes."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil sketch on dark paper: a gardener kneels in a small greenhouse at night, holding up a healthy seedling he has just pulled to inspect its roots, a pocket watch open in his other hand. Beside him a heap of identical uprooted plants spreads across the floor. The only colour is the amber glow of a lantern hanging from the frame. An Abyssinian cat sits by the heap, looking straight out of the picture as if asking who will put them back.](./images/hero-2026-10-06-the-watchdog-that-was-the-wedge.png)
+
+`fseventsd` was holding 24 GB. It had done this before — 20.7 GB on 2026-09-11 — and after the 30 September reboot it climbed back to 23 GB in six days. The memory note from September even named a suspect: fileproviderd, "watchdog-killed and respawned every ~30 min, which is the likely feeder." Bert's message on the 6th was shorter: this is a recurring problem, let's find why.
+
+## Bursts on the half hour
+
+`fseventsd` logs a line each time it resolves a client's group list — in practice, as clients connect. Over 24 hours it had written 28,742 of them. Most minutes held about five. Some held 1,100: 12:33, 13:03, 13:33, 14:04, 14:35 and on through the evening, a tide every thirty-and-a-half minutes.
+
+The fileproviderd watchdog writes its own forensics. Its kill log, converted to local time, lists 12:33, 13:03, 13:33, 14:04, 14:35. Every respawned fileproviderd opens about a thousand FSEvents connections in its first minute, and the watchdog had been killing it about 47 times a day since at least the middle of September.
+
+## A healthy daemon, killed on schedule
+
+The watchdog was born on [2026-05-01](/operations/2026-05-01-asymmetric-doors/), after a genuine wedge: fileproviderd stuck in `R` for 1,203 CPU-minutes, `~/Documents` refusing a local Terminal. It watches two signals. The primary one is sustained `STAT=R` above 20% CPU. The symptom one was Qui-Gon's addition, a functional test instead of a process-state proxy: ask fileproviderd for `fileproviderctl dump` of the iCloud Drive domain, and call it wedged if two answers in a row take longer than three seconds.
+
+Its tick log tells the rest. A fresh fileproviderd idles through its five-minute boot grace on one second of CPU. Then the probes begin, and every tick reads the same: `STAT S`, 0.0% CPU, `symptom 1` — and CPU time up about 31 seconds since the minute before. Thirty minutes later the cooldown expires and the watchdog kills it as wedged.
+
+One dump, run by hand on a fresh daemon, settled it: 34 seconds of wall time, 33 CPU-seconds, 126 MB of output, then idle again. The watchdog asked for that every sixty seconds and allowed three. The "database RO" queue busy in the stack captures — string appends, dictionary lookups, memmove — was, by every sign, the dump itself, serialising the iCloud Drive database for a client that had already given up.
+
+## Our own wrong turn
+
+In July this loop read as an iCloud Drive defect. Kills had jumped from one-to-six a day to forty-eight around 2026-07-21, and the stacks pointed at iCloud Drive's own database queue. A two-hour OneDrive pause ruled out the wrong cloud, and the conclusion — a broken file-provider database, fixable by toggling iCloud Drive off and on — waited two and a half months for a reset nobody performed. The likeliest reading of 07-21 is simpler: it is the day the dump outgrew three seconds. The stacks were honest. They showed the work the probe had asked for.
+
+The symptom probe was a good idea in May, when a dump was quick. A probe's cost has to stay measured, because the thing it measures keeps growing.
+
+## What fseventsd was keeping
+
+Stopping the kills did not stop the growth, which told us where to look. Between 19:16 and 19:20, with no kill in sight, `fseventsd`'s virtual size still grew about 23 MB a minute. Our working model: each SIGKILLed fileproviderd left its thousand streams behind, and every one of them kept queueing every file event on the box, draining into nothing. That makes the leak (dead streams) × (disk activity). It accelerates with every kill, and it explains why a day of heavy builds made it worse. The model is not proven; `sudo lsmp -p` on `fseventsd` would count the ports it still holds.
+
+<Aside type="caution">
+A restart is the only thing that clears what `fseventsd` has accumulated. Killing it costs one Spotlight and Time Machine rescan; launchd brings it back in a second.
+</Aside>
+
+## The fix
+
+The dump probe is off by default (`SYMPTOM_PROBE=0`, sanctum-config `e3d00c9`). On the first four ticks after the change, the watchdog read `symptom 0`, and fileproviderd's CPU time stopped climbing. Bert restarted `fseventsd` at 19:22: 23 GB became 5 MB, swap fell from 29.6 GB to 9.6 GB, and the castellan walked from Critical to Warn to silent in four seconds, following the swap down.
+
+## A resync is not a wedge
+
+Bert's restart had a price. `fseventsd` logged 8,884 client connections in the minute of 19:30, and fileproviderd started a full resync: `STAT R` at 110–250% CPU for about nine minutes, then idle by itself. The primary signal called five minutes of that a wedge, and once the cooldown expired it would have killed fileproviderd mid-scan — restarting the scan and seeding the fresh `fseventsd` with dead streams, the same loop through the other door. We paused the watchdog for fourteen minutes instead, and the rescan finished untouched while we watched it minute by minute. The primary signal now waits for sixty minutes of sustained `R` (`433281f`). A resync takes nine; the one real wedge on record took days.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `fileproviderd Watchdog` (hermetic, 4 of 4): an idle daemon survives; a real wedge (60 busy ticks) is still killed and respawned; tonight's resync, replayed, is never killed; the old probe with a slow dump kills an idle daemon. The pre-fix settings fail it twice over: `SYMPTOM_PROBE=1` kills the idle daemon, `THRESHOLD_CONSECUTIVE=5` kills the resync. `fseventsd Health` (live): 4 of 4 at 19:56 — footprint 4.5 MB, probe off in the deployed script, no probe-driven kill in 45 minutes, latest ticks `symptom 0` |
+| in Sanctum-docs | This note; [Asymmetric doors](/operations/2026-05-01-asymmetric-doors/) and [The service user](/architecture/service-user/) now point here |
+| Merged | `sanctum-config` e3d00c9 (probe off), 59ad927 (suites), 433281f (sixty-minute primary) |
+| And Deployed | The LaunchAgent runs the repo script directly; live ticks `symptom 0`, no kills since 19:10. `fseventsd` restarted at 19:22 and stayed flat (4.5 MB at 19:56); after the one-time resync, its connection log fell to 6–10 a minute with no half-hour bursts |
+
+## Lineage
+
+- [Asymmetric doors](/operations/2026-05-01-asymmetric-doors/) — the wedge that was real, and the watchdog it produced
+- [The brain that needed 68 GB to wake up](/operations/2026-10-05-the-brain-that-needed-68-gb-to-wake-up/) — the night before, when `fseventsd` was the eight gigabytes behind the castellan's Warn
+- [The Castellan](/architecture/the-castellan/) — the keeper whose tier followed the swap down
+
+The tide on the half hour has stopped. `fseventsd` still logs a few client connections a minute, the ordinary traffic of a Mac, and nobody is pulling up the seedlings to look at their roots anymore.

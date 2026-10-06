@@ -325,6 +325,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-06 — The Watchdog That Was the Wedge', slug: 'operations/2026-10-06-the-watchdog-that-was-the-wedge' },
 								{ label: '2026-10-05 — The Brain That Needed 68 GB to Wake Up', slug: 'operations/2026-10-05-the-brain-that-needed-68-gb-to-wake-up' },
 								{ label: '2026-10-02 — The Lead That Stayed a Lead', slug: 'operations/2026-10-02-the-lead-that-stayed-a-lead' },
 								{ label: '2026-10-01 — The Wall That Was Armed Too Late', slug: 'operations/2026-10-01-the-wall-that-was-armed-too-late' },
