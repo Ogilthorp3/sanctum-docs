@@ -192,6 +192,7 @@ export default defineConfig({
 						{ label: 'Memory Vault', slug: 'guides/memory-vault' },
 						{ label: 'Memory Service', slug: 'guides/memory' },
 						{ label: 'Health Monitoring', slug: 'guides/health-monitoring' },
+						{ label: 'Engineering Toolkit', slug: 'guides/engineering-toolkit' },
 					],
 				},
 				{
