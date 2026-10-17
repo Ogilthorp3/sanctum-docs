@@ -1,0 +1,72 @@
+---
+title: "2026-10-17: The Healer That Unplugged the Fiber"
+description: "When the fiber link flickered under PPPoE Bridge Mode, three layers conspired against the haus: an empty policy routing table on the Firewalla, a DHCP healer that ran dhclient -r on a PPPoE wire every hour, and an iPhone hotspot collision that broke long-lived streams."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil sketch on dark paper of a robotic medic in a subterranean stone server vault earnestly reaching to pull a glowing teal fiber-optic cable out of a brass patch panel while holding a clipboard diagram of an older copper router, as an Abyssinian cat sits atop the rack with one paw pinning the cable securely in its socket.](./images/hero-2026-10-17-the-healer-that-unplugged-the-fiber.png)
+
+The Wi-Fi bars on the MacBook were full. The lease on `10.0.0.x` was fresh. Nothing on the LAN could reach the outside world. Every sixty-seven minutes, Qui-Gon's doctor woke up on `manoir.local`, diagnosed a dead WAN, and pulled the plug again.
+
+We had switched the Bell GigaHub into pure PPPoE Bridge Mode so the Firewalla Gold Pro could dial `pppoe0` directly and own the public IP without Bell's `/1` netmask games. The bridge held. The healers we built for the old DHCP world did not know that.
+
+## A hollow policy table and a silent drop
+
+When `pppoe0` redialed after a night fiber blip, the Linux kernel dutifully installed `default dev pppoe0` in `table main`. The Firewalla does not route LAN traffic from `table main` alone. Its policy router consults rule `32765`, which looks up `table global_default` before falling through.
+
+That table was empty. Worse, when `firemain` exited during the flap, it left the kernel's `FORWARD` chain policy set to `DROP` with zero jump rules, while `/home/pi/.router/config/dnsmasq/br0.resolv.conf` pointed at a vanished file. Every LAN device received `REFUSED` on DNS and a silent firewall drop on raw IPs.
+
+Meanwhile, `firerouter`'s internal `PingTest` tried to verify WAN health by binding a socket to the public IP on `pppoe0` and pinging the peer gateway. Because `table global_default` lacked a default route, strict reverse-path filtering (`rp_filter`) rejected the probe. `firerouter` concluded the fiber was dead and tore `pppoe0` down in a loop.
+
+## The doctor with the wrong textbook
+
+On `manoir.local`, two watchdogs were watching the edge: `singlenat-watchdog.sh` and Qui-Gon's `fw-heal-forwarding.sh`. Both were written during [the slash-one war](/operations/2026-06-15-the-slash-one-that-ate-the-lan/), when `eth0` carried a DHCP lease from Bell's Advanced DMZ.
+
+Their recovery playbook for a dark WAN was muscle memory: release the DHCP lease on `eth0`, request a fresh one, and restart `firerouter`. Under PPPoE Bridge Mode, `eth0` has no IPv4 address; it is the raw Ethernet carrier underneath `pppoe0`. Running `dhclient -r eth0` and restarting `firerouter` every hour did not heal the WAN. It killed the PPPoE session that was trying to recover. Twelve vault notes in a row recorded the same verdict: `WAN-LINK-DOWN`, `converged: false`.
+
+<Aside type="danger" title="Never run dhclient on a PPPoE carrier">
+When `ip route` or `/home/pi/.router/config/wan.json` says the WAN interface is `pppoe0` (`type: pppoe`), `eth0` is only the L2 transport. Releasing DHCP on `eth0` or bouncing `firerouter` tears down the PPPoE tunnel. Heal `pppoe0` in place instead.
+</Aside>
+
+## The incoming SYN-ACK cliff and the hotspot ambush
+
+Two more traps waited once the tunnel came back. First, when we ran a multi-stream throughput test directly on the Firewalla Gold Pro (`10.0.0.1`), outbound TLS handshakes succeeded and the payload immediately stalled. Our CDN guard (`sanctum-mss-fastly-fix.sh`) clamped `TCPMSS` to `1400` on `FORWARD` and `OUTPUT`, which protected LAN clients and outbound `SYN` packets. It did not clamp `PREROUTING`. When Cloudflare replied to a process on the Firewalla itself, its incoming `SYN-ACK` announced `MSS 1460`, and the Firewalla's kernel emitted 1500-byte packets that died on the 1492-byte `pppoe0` wire.
+
+Second, on the operator's MacBook Pro, iCloud Keychain had quietly synced the iPhone's personal hotspot SSID back into `en0`'s preferred network list while the phone was plugged in over USB-C (`en7`). Whenever home Wi-Fi flickered, macOS associated `en0` to the phone's Wi-Fi hotspot while `en7` was already tethered to the same phone over USB. Both interfaces claimed `172.20.10.0/28`, routing flapped between `en0` and `en7`, and long-lived SSE streams died with `write: broken pipe`.
+
+## What landed
+
+We replaced the one-shot DHCP assumptions with a four-layer PPPoE armor across the Firewalla, `manoir.local`, and the MacBook Pro:
+
+1. **Five-second box sentinel (`sanctum-poison-sentinel.service`):** Runs `/home/pi/.firewalla/config/sanctum-route-poison-sentinel.sh` continuously on the Firewalla. Whenever `pppoe0` has an IPv4 address, it enforces `default dev pppoe0` in both `table global_default` and `table main`, flips `iptables -P FORWARD ACCEPT` if `firemain` leaves it `DROP`, and restores the `br0.resolv.conf` symlink if `dnsmasq` loses its upstream file.
+2. **PPPoE reconnect & boot hooks (`/etc/ppp/ip-up.d/zz-sanctum-pppoe` and `post_main.sh`):** Immediately invoke `/home/pi/.firewalla/config/sanctum-pppoe-armor.sh` whenever `pppd` negotiates a session or the box reboots, disabling `rp_filter` on `pppoe0`/`eth0` and clamping `TCPMSS 1400` across `FORWARD`, `OUTPUT`, and `PREROUTING`.
+3. **PPPoE-aware fleet healers:** Updated `singlenat-watchdog.sh` and `fw-heal-forwarding.sh` on `manoir.local` to detect `pppoe0` first and run `sanctum-pppoe-armor.sh` in place, never `dhclient -r`.
+4. **Hotspot collision guard (`wifi-stability-sentinel.sh`):** On the MacBook Pro, the 3-minute sentinel strips the iPhone hotspot SSID from `en0` if iCloud Keychain re-syncs it, and keeps `Wi-Fi` (`#1`) ordered above `iPhone USB` (`#2`) whenever `en0` holds a `10.0.0.x` home lease.
+
+With `PREROUTING` clamped and the sentinel active, we measured live PPPoE throughput directly on the Firewalla Gold Pro over its 10GbE `eth0` port:
+
+```text
+Firewalla Gold Pro (10GbE eth0 -> pppoe0 -> Cloudflare)   2.15 Gbps (2,147 Mbps)
+MacBook Pro (Nepveu-6G Wi-Fi -> Orbi 960 -> Firewalla)    0.74 Gbps (  740 Mbps)
+```
+
+At **2.15 Gbps** over software PPPoE on the Gold Pro's Intel N97, pure Bridge Mode outruns every Wi-Fi radio and 1G/2.5G port in the haus—without touching Bell's Advanced DMZ or its `/1` poison route.
+
+## What EETISMAD looks like here
+
+| Gate | Evidence |
+|---|---|
+| Everything E2E Tested | `test-pppoe-wan-armor.sh` (36 of 36 green): hermetic `singlenat-eval.sh` gates, MBP durability symlinks, static healer contracts, live MBP Wi-Fi/USB service-order checks, and live Firewalla `pppoe0` + `global_default` + `PREROUTING` MSS 1400 verification |
+| in Sanctum-docs | This field note + sidebar entry; [Single-NAT Setup](/getting-started/single-nat-setup/) and [Engineering Discipline](/architecture/engineering-discipline/) updated |
+| Merged | Landed in `sanctum-mbp`, `sanctum-config`, `openclaw-skills`, and `sanctum-docs` on `origin/main` |
+| And Deployed | `sanctum-poison-sentinel.service` active on Firewalla `10.0.0.1`, `/etc/ppp/ip-up.d/zz-sanctum-pppoe` live, `sanctum net home status` all GREEN |
+
+## Lineage
+
+- [The Slash-One That Ate the LAN](/operations/2026-06-15-the-slash-one-that-ate-the-lan/) — why we left Bell's Advanced DMZ `/1` route behind
+- [The Speed Test That Cried Slow](/operations/2026-06-19-the-speed-test-that-cried-slow/) — why single-stream tests lie and 12-stream tests tell the truth
+- [Single-NAT Setup](/getting-started/single-nat-setup/) — the canonical WAN edge guide
+- [Engineering Discipline](/architecture/engineering-discipline/) — the EETISMAD shipping bar
+
+The fiber stays plugged in now. Qui-Gon's doctor knows the difference between a DHCP lease and a PPPoE tunnel, the MacBook stays off its own phone's Wi-Fi, and Tommy can sleep on a warm 10GbE switch without anyone pulling the cable out from under his paw.
