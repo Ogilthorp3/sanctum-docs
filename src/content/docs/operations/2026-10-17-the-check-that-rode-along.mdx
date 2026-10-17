@@ -1,0 +1,73 @@
+---
+title: "2026-10-17: The Check That Rode Along"
+description: "Two Tailscale clients on one MBP got the automation key refused by a source-address pin, and ssh connection sharing made the automation-key checks look fine. The app is gone, the pin is corrected, and the menu bar now says when one machine shows up twice."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil sketch on dark paper: an open laptop on a cluttered workbench beside a glowing desk lamp. On the wall behind it one shadow is hatched solid, while a second, faint teal outline of the same laptop stands slightly apart, as if the machine had been counted twice.](./images/hero-2026-10-17-the-check-that-rode-along.png)
+
+The menu bar listed the MBP twice.
+
+The haus SwiftBar plugin that watches the tailnet was not glitching. The second line was a real second node: the Tailscale macOS app, registered again beside the Homebrew `tailscaled` the haus standardizes on, with a `-1` name and an address of its own.
+
+A duplicate in a menu is trivia. This one came with a refused key: the Mini was turning the MBP's automation key away.
+
+## An address the MBP no longer used
+
+Two clients means two nodes, and the app's node carried the route to the Mini. Running the app and the Homebrew daemon on one Mac is a known conflict ([tailscale/tailscale#19139](https://github.com/tailscale/tailscale/issues/19139)), and the plugin's own docstring already warned about it. It had the Mini in mind.
+
+The Mini's `authorized_keys` pins the MBP's automation key with a `from=` restriction, so sshd accepts that key only from the address the pin names. The pin named an address the MBP no longer used. sshd did exactly what it was told and refused the key: `Permission denied (publickey)`. Nothing was wrong with the key.
+
+## What the check actually checked
+
+The failure should have been loud. The checks said otherwise.
+
+The MBP's ssh config shares one connection to the Mini: `ControlMaster auto`, with `ControlPersist 4h` keeping the master alive for four hours after its last session. The operator logged in with a personal key, and that login opened the master. Later `ssh` commands attached to it instead of authenticating again. So the automation-key checks rode along on a connection the automation key had never opened, and they looked successful.
+
+The campaign supervisor does not share. It connects with `ControlMaster=no` and `ControlPath=none`, so every connection authenticates for real, and it kept failing. The honest test was the supervisor: it had no master to ride.
+
+<Aside type="tip" title="Verify with sharing off">
+A check that shares a connection tests the connection, not the credential. Verify an automation credential with sharing off.
+</Aside>
+
+## The case file
+
+Four things we saw, and what each one turned out to be.
+
+| What we saw | What it was |
+|---|---|
+| The MBP listed twice in the menu bar | The Tailscale app registered a second node, with a `-1` name, beside the Homebrew `tailscaled` |
+| `Permission denied (publickey)` for the automation key | The `from=` pin named an address the MBP no longer used |
+| The automation-key checks passed | They rode a shared master that the operator's personal key had opened |
+| The campaign supervisor kept failing | It connects with sharing off, so its authentication was real |
+
+## What changed
+
+- The Tailscale app is uninstalled, and its stale node is deleted through the Tailscale API.
+- The automation key's `from=` pin now names the MBP's one tailnet address. The change is committed in the Mini's tracked config, and a fresh login with sharing off confirmed it.
+- The SwiftBar tailnet plugin now flags two or more nodes that share one HostName. It stays read-only: it raises the flag and leaves the tailnet alone.
+
+The flag reads:
+
+```text
+⚠️ N nodes named X: two Tailscale clients on one machine? (tailscale #19139)
+```
+
+N is the count and X is the shared HostName.
+
+## Still open
+
+One thing is unfinished. One is not understood.
+
+- The Mini's live `~/.ssh/authorized_keys` is a copy of the tracked file, not a symlink to it. The haus rule is that the repo file is the live file, so today the commit and what sshd reads can drift apart. That durability gap is left for the operator.
+- Home Assistant Green was unreachable from the Mini for about 13 hours the same night, after the nightly Firewalla reboot, and recovered without action. No cause is claimed. The investigation is open.
+
+## Lineage
+
+- [Three Things That Woke You](/operations/2026-05-20-three-things-that-woke-you/) — where the dedicated automation key was wired in, so a locked password manager could not stop a daemon
+- [Hive Topology](/architecture/hive-topology/) — the tailnet as a name-only plane, with the MagicDNS contract that goes with it
+- [The Laptop That Became a Steam Deck](/operations/2026-09-27-the-laptop-that-became-a-steam-deck/) — another laptop mistaken for something else, and silences that had all been reporting success
+- [The Pressure-Valve Trilogy Redux](/operations/2026-04-26-valve-trilogy-redux/) — the last ControlMaster story here, where the master died and took the forwards with it
+
+The menu bar lists the MBP once. If it ever lists it twice again, it will ask the right question.
