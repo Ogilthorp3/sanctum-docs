@@ -1,0 +1,81 @@
+---
+title: "2026-10-18: Reclaiming the FSEventsd Reservoir"
+description: A 32GB memory leak in macOS fseventsd, the swap-sentinel critical tripwire, and the autonomous sentinel deployed to permanently heal recurring bloat.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![An ancient stone pressure valve releasing an enormous deluge of trapped reservoir water back into a crystal alpine basin, brass gears glowing under cold light, dark void background](./images/hero-pressure-valve.png)
+
+At 16:17 EDT on October 18, `swap-sentinel --check` tripped into **CRITICAL** state: 35 swapfiles active, 33.9 GiB swap allocated, and memory compressor segments pinned. 
+
+The culprit was not an unoptimized local model or an orphaned Python process. It was `/System/Library/Frameworks/CoreServices.framework/.../Support/fseventsd` (PID 113), running as root. Over twelve days of continuous operation since the October 6 reboot, `fseventsd` had accumulated 191 hours of CPU time and consumed **32.3 GB of physical footprint**—of which **32.1 GB was dirty memory compressed and swapped into disk**.
+
+## The Diagnostic Tell
+
+Inspecting `fseventsd` with `vmmap` and `footprint` revealed an unbounded heap leak in Darwin's FSEvents implementation:
+
+```text
+======================================================================
+fseventsd [113]: 64-bit    Footprint: 32 GB (16384 bytes per page)
+======================================================================
+  Dirty      Clean  Reclaimable    Regions    Category
+  32 GB        0 B        15 MB      14667    Malloc Small
+ 230 MB        0 B        16 KB        470    Malloc Metadata
+```
+
+In `com.apple.fseventsd.plist`, Apple marks the daemon:
+- `KeepAlive = true`
+- `HopefullyExitsLast = true`
+- `EnablePressuredExit = false`
+
+Because `EnablePressuredExit` is explicitly disabled, macOS Jetsam and memory pressure handlers never terminate `fseventsd` when RAM is constrained. Instead, Darwin continues compressing its pages into `/System/Volumes/VM/swapfile*` until the system hits the swapfile limit.
+
+Historical logs showed this was recurring:
+- **2026-09-11**: Manual restart via `launchctl kickstart`.
+- **2026-10-06**: Manual kill via `kill $(pgrep -x fseventsd)`.
+- **2026-10-18**: Leaked to 32.3 GB footprint; manual intervention needed again.
+
+## The Immediate Relief
+
+Killing the bloated daemon (`kill $(pgrep -x fseventsd)`) allowed launchd to instantly respawn a clean instance:
+- `fseventsd` footprint dropped from **32.3 GB** down to **5.1 MB**.
+- Swap usage immediately plunged from **33.9 GiB** down to **8.6 GiB** (reclaiming over 25 GiB of swap and compressed RAM).
+- Active swapfiles fell from 35 back to 10.
+- `swap-sentinel --check` returned to raw normal.
+
+## The Permanent Fix
+
+A recurring problem must not rely on manual memory triage. We engineered a four-layer permanent autonomous defense:
+
+### 1. Autonomous Sentinel (`sanctum-fseventsd-sentinel.sh`)
+Located in `sanctum-runtime/scripts/` and symlinked to `~/.sanctum/scripts/sanctum-fseventsd-sentinel.sh`, the sentinel executes every 5 minutes:
+- Reads true process footprint via `/usr/bin/footprint -f bytes -p fseventsd`.
+- Evaluates against `THRESHOLD_MB=3072` (3 GiB) and `EMERGENCY_MB=8192` (8 GiB).
+- **Anti-flapping safeguards**:
+  - Boot/process grace period: minimum 600s (10 minutes) uptime before an auto-heal is considered.
+  - Cooldown: minimum 3600s (1 hour) between restarts.
+  - Debounce: requires 2 consecutive breaching samples (unless emergency threshold is breached).
+- On heal, restarts `fseventsd`, verifies the new PID is healthy (< 100 MB footprint), logs forensics to `~/.sanctum/logs/fseventsd-sentinel.log`, and dispatches an alert to [Force Flow](/architecture/force-flow/).
+
+### 2. Root LaunchDaemon (`haus.sanctum.fseventsd-sentinel`)
+Installed in `/Library/LaunchDaemons/haus.sanctum.fseventsd-sentinel.plist` (tracked in `sanctum-runtime/launchagents/`), running as `root` with `StartInterval=300`. It ensures autonomous enforcement across reboots with zero dependency on interactive user sessions.
+
+### 3. Sudoers Privilege Envelope
+Added to `/etc/sudoers.d/sanctum-kickstart` (and tracked in `~/.sanctum/scripts/service-user/sudoers-sanctum-kickstart`):
+```text
+bert ALL=(root) NOPASSWD: /usr/bin/pkill -x fseventsd
+bert ALL=(root) NOPASSWD: /usr/bin/footprint -f bytes -p fseventsd
+bert ALL=(root) NOPASSWD: /usr/bin/footprint -f bytes [0-9]*
+```
+Allows unprivileged health checks (`--check`) and manual CLI intervention without password prompts.
+
+### 4. Volume Logging Hygiene (`no_log`)
+Created `.fseventsd/no_log` on cold archive volumes (`/Volumes/Ark` and `/Volumes/ARK-GO`) so multi-terabyte bulk file operations do not generate needless FSEvents churn.
+
+### 5. Swap Sentinel Integration
+Integrated `--relieve` into `swap-sentinel.sh`. If swap ever enters `critical`, `swap-sentinel` triggers an immediate relieve pass on `fseventsd` if it is holding more than threshold memory.
+
+<Aside type="tip">
+Run `/Users/bert/.sanctum/scripts/sanctum-fseventsd-sentinel.sh --check` anytime to inspect the current live footprint, uptime, and debounce status of `fseventsd`.
+</Aside>
