@@ -326,6 +326,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-18 — Reclaiming the FSEventsd Reservoir', slug: 'operations/2026-10-18-reclaiming-the-fseventsd-reservoir' },
 								{ label: '2026-10-17 — The Check That Rode Along', slug: 'operations/2026-10-17-the-check-that-rode-along' },
 								{ label: '2026-10-17 — The Healer That Unplugged the Fiber', slug: 'operations/2026-10-17-the-healer-that-unplugged-the-fiber' },
 								{ label: '2026-10-06 — The Watchdog That Was the Wedge', slug: 'operations/2026-10-06-the-watchdog-that-was-the-wedge' },
