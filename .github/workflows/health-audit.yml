@@ -23,10 +23,13 @@ permissions:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
 
@@ -63,9 +66,10 @@ jobs:
         if: steps.check.outputs.exit_code != '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           gh label create docs-audit \
-            --repo "${{ github.repository }}" \
+            --repo "$GH_REPO" \
             --color "BFD4F2" \
             --description "Tracked by the weekly contrib-check audit" \
             2>/dev/null || true
@@ -74,6 +78,7 @@ jobs:
         if: steps.check.outputs.exit_code != '0'
         env:
           GH_TOKEN:     ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:      ${{ github.repository }}
           AUDIT_OUTPUT: ${{ steps.check.outputs.output }}
           ERR_COUNT:    ${{ steps.check.outputs.err_count }}
           WARN_COUNT:   ${{ steps.check.outputs.warn_count }}
@@ -105,7 +110,7 @@ jobs:
           )
 
           existing=$(gh issue list \
-            --repo "${{ github.repository }}" \
+            --repo "$GH_REPO" \
             --label docs-audit \
             --state open \
             --json number \
@@ -114,12 +119,12 @@ jobs:
           if [ -n "$existing" ]; then
             echo "Updating existing audit issue #$existing"
             gh issue edit "$existing" \
-              --repo "${{ github.repository }}" \
+              --repo "$GH_REPO" \
               --body "$body"
           else
             echo "Opening new audit issue"
             gh issue create \
-              --repo "${{ github.repository }}" \
+              --repo "$GH_REPO" \
               --title "Docs CONTRIBUTING compliance backlog" \
               --label docs-audit \
               --body "$body"
@@ -129,10 +134,11 @@ jobs:
         if: steps.check.outputs.exit_code == '0'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO:  ${{ github.repository }}
         run: |
           set -eu
           existing=$(gh issue list \
-            --repo "${{ github.repository }}" \
+            --repo "$GH_REPO" \
             --label docs-audit \
             --state open \
             --json number \
@@ -140,7 +146,7 @@ jobs:
           if [ -n "$existing" ]; then
             echo "Audit clean — closing #$existing"
             gh issue close "$existing" \
-              --repo "${{ github.repository }}" \
+              --repo "$GH_REPO" \
               --comment "Audit clean as of $(date -u +%Y-%m-%dT%H:%M:%SZ). Auto-closed by Docs health audit."
           else
             echo "Audit clean — no open issue to close."

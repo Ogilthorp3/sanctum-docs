@@ -23,8 +23,9 @@ permissions:
 jobs:
   regenerate:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -42,6 +43,9 @@ jobs:
           shasum -a 256 -c install.sh.sha256
 
       - name: Commit if changed
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME:   ${{ github.ref }}
         run: |
           if git diff --quiet public/install.sh.sha256; then
             echo "hash file already current — nothing to commit"
@@ -52,7 +56,7 @@ jobs:
           git add public/install.sh.sha256
           git commit -m "chore(install.sh): regenerate sha256 [skip ci]"
           # Only push on push events to main, not on PRs (PRs can't push back to base).
-          if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+          if [ "$EVENT_NAME" = "push" ] && [ "$REF_NAME" = "refs/heads/main" ]; then
             git push origin HEAD:main
           else
             echo "Skipping push (PR or non-main context)"
