@@ -41,6 +41,8 @@ bash $ETK intake "<dataroom>" ~/work/<name>   # 1. text, renders
 bash $ETK packs ~/work/<name>/packs --project "$P"   # 2. index
 bash $ETK assemble "$P"        # 3. Claude Docs export -> memo
 bash $ETK build "$P"           # 4. PDF + Word, in projects/<name>/out/
+bash $ETK pieces "$P"          #    web links: what it would publish
+bash $ETK pieces "$P" --yes --check-web   # publish, then build again
 bash $ETK check "$P"           # 5. N pass, N fail, N skip
 bash $ETK deliver "$P" --to "$TO"         # 6. dry run
 bash $ETK deliver "$P" --to "$TO" --yes   #    the copy
@@ -54,9 +56,10 @@ bash $ETK deliver "$P" --to "$TO" --yes   #    the copy
 | `build` | HTML, source links, typography, a two-pass print, the link mechanism, then the Word edition | An `--out` inside the dataroom, the deliverable folder or a read-only root |
 | `check` | One `PASS`, `FAIL` or `SKIP` line per check, then `N pass, N fail, N skip`; exit 1 on any failure | A build made from another project |
 | `relink` | Rewrites the `file://` links of one PDF as relative URIs or GoToR actions | A PDF without Chrome's classic cross-reference table |
+| `pieces` | Publishes the documents a build cites to a private cloud folder (rclone), one public link per file, and writes the manifest `links.web` reads | Sending without `--yes` (exit 2), an uncited document, the root of a remote, a build older than its project, overwriting or deleting a file it did not publish, a manifest that git would track |
 | `deliver` | Runs `etk check`, then prints `NEW` or `OVERWRITE` for the PDF and the Word file | Copying when `etk check` fails or without `--yes` (exit 2), a folder that does not exist |
 
-The safety rules live in the code, not in a checklist. `check` changes nothing, and `deliver` is the only command that ever writes in a shared folder. It never creates one, and an output name with `{date}` in it adds a dated copy beside the previous one instead of replacing it.
+The safety rules live in the code, not in a checklist. `check` changes nothing. Two commands write where someone else reads, and both print what they would do, then wait for `--yes`. `deliver` is the only one that writes in a shared folder, which it never creates, and an output name with `{date}` in it adds a dated copy beside the previous one instead of replacing it. `pieces` publishes copies of the cited documents to a cloud drive the operator chose.
 
 Both editions come from one source. The PDF is Chrome's job, below. The Word edition starts from the same final HTML: `docx/build_docx.sh` turns it into a document model, renders it with Node and the `docx` library, and embeds the theme's static fonts. The file is written only once a validation passes: the package, the text word for word against the HTML, every link in document order, the fonts. LibreOffice then renders it as a check, and `etk check` reports its page count beside the PDF's. Word itself cannot be driven headless, so no build ever opens the file in Word: a person does, once, before it ships.
 
@@ -101,12 +104,17 @@ Launched through LaunchServices with `open -n -g -b`, headless Chrome prints, an
 
 ## The link that would not open
 
-A citation link has one job: open the cited file on the reader's Mac. An absolute `file://` link does that only where the path exists, which is the Mac that built the PDF. The October 2026 click tests settled the rest. Preview opens absolute links only: relative ones, URI or GoToR, open nothing, even when PDFKit resolves them perfectly in a script. Its sandbox refuses targets in temporary folders, yet opens them in iCloud Drive, and through a symlink in `/Users/Shared`. Word opens relative links with no setup at all.
+A citation link has one job: open the cited document for the person reading. The first dossier went out with `file://` links into the shared folder, and the click tests of October 2026 took that design apart.
 
-That gives the pattern for a folder shared between Macs. The PDF links through `links.href_root`, a folder of symlinks in `/Users/Shared` that points each Mac at its own copy of the share, created once per Mac by a few lines of shell. The Word edition links relative to the deliverable folder. Relative paths are always counted from a file's real place, never through the shortcut, and the suite proves it. The mechanism stays a parameter of each project, chosen after a click test on the reader's side, on the real shared paths:
+Preview is sandboxed. It opens a linked PDF inside its own process, where the sandbox lets it read only the document the reader opened, so a `file://` link into the dataroom answers "you don't have permission", through the real iCloud Drive path or a symlink in `/Users/Shared` alike. The early click test that passed was one long-running Preview in a lucky state: `sandbox_check` against the running Preview found none of the linked files readable. Preview also refuses custom URL schemes, folders and anything but a PDF, with a beep, and relative links open nothing. Only `http(s)` links leave it, for the browser.
+
+And a dossier travels, by text message, to a phone that has no copy of the dataroom. iCloud Drive cannot carry the documents either: a link the system makes for one file expires after 30 days, and a shared folder cannot point at one file and asks its reader to sign in. What works for every reader is a web link to one document.
+
+The file-link mechanisms stay, for readers who have the dataroom: Word opens relative links once it is granted the folder, and relative paths are always counted from a file's real place, never through a shortcut. The mechanism remains a parameter of each project, chosen after a click test on the reader's side:
 
 | Where | Parameter | Values |
 |---|---|---|
+| Both editions, web links | `links.web`, `pieces.remote` | The manifest `etk pieces` writes, and the rclone folder it publishes to, never the root of the remote |
 | HTML and PDF as printed | `links.root`, `links.href_root` | Absolute `file://` under the dataroom, or under another prefix that exists on the reader's Mac |
 | PDF edition | `links.pdf` | `absolute` (the default), `relative[:<dir>]`, `gotor[:<dir>]`, `gotor-all[:<dir>]` |
 | Word edition | `links.docx` | `absolute`, `relative[:<dir>]` (the default when there is a deliverable folder), `prefix:<old>=<new>` |
@@ -116,24 +124,40 @@ A relative link is counted from the deliverable folder by default, so it follows
 
 Three tools bring evidence to the choice of mechanism instead of opinions. `etk relink` rewrites one PDF in any mode. `python3 -I lib/checks.py pdf-links` resolves every target the way that mode implies and counts the missing ones. And `lib/pdfkit_links.js`, run through `osascript`, asks PDFKit, the engine inside Preview, what it thinks each link points to.
 
+## Publishing the pieces
+
+`etk pieces` takes the documents a build cites, and only those, to a private folder of a cloud drive through rclone, and gives each file its own public link; the folder itself is never shared, so nobody browses from one document to the next. It writes a manifest of the links, and `links.web` makes the next build link every citation to its document, in both editions. What it promises, from photos that lose their GPS position to a manifest that git may never track, is listed in the first annex, and `etk check` holds every build to it.
+
 <Aside type="caution">
-`etk check` proves that every link has a file behind it. It cannot prove that the reader's Preview will agree to open one. A dossier whose links all resolve on the building Mac can still be a beautifully typeset set of dead ends on the reader's, so click one there before calling it delivered. And no cloud share link of the folder goes into a document for a third party without the operator's say-so.
+`etk check` proves that every link has a document behind it, and with `--check-web` that a stranger can open it. It cannot prove what the reader's viewer will do with a click, so click one link on the reader's device before calling a dossier delivered. And publishing is disclosure: whoever holds the PDF can open every document it cites. The operator chooses the cloud drive, reads the list the dry run prints, and decides whether a dossier carries public links at all.
 </Aside>
 
-## The suite, and where things live
+The dataroom is still somebody else's folder, and the only thing the toolkit will ever add to it is the dossier itself, when asked. The documents it cites leave only as copies, one link each, on a drive the operator chose. Every citation is a door to one of them: the toolkit proves there is a room behind each door and that a stranger can open it, and one click on the reader's phone proves it opens for them.
 
-Like every shipping component, the toolkit carries its own suite, in the spirit of [Engineering Discipline](/architecture/engineering-discipline/). It is registered in `~/.sanctum/tests/run-all.sh` as **Engineering Toolkit**, runs in about a minute, and ends on a single `N pass, N fail, N skip` line.
+## Annex: what `etk pieces` guarantees
+
+- A photo goes up without its EXIF block, where a phone writes the GPS position, the date and the device; the orientation is kept and the pixels are not re-encoded.
+- A document keeps its remote name, and so its link, while its file name stays the same: a new version replaces the old one behind the same link.
+- The manifest records each document's MD5 as published; a file changed since stays unlinked, and fails `etk check`, until `etk pieces` sends it.
+- It never overwrites or deletes a file it did not put there; a document no longer cited stays public, and listed, until `--prune` deletes it.
+- The manifest is rewritten after every upload and link, so a run cut short still records what it made public. It is a list of bearer links: gitignored, readable by its owner only, refused anywhere git would track it.
+
+`etk check` reads the manifest at check time: every cited document published and unchanged, each one's link in the PDF and the Word file, and no file link left. With `--check-web`, which `etk deliver` always adds, it opens every link as a stranger would, with no cookie and no account, and fails on a sign-in page.
+
+## Annex: the suite, and where things live
+
+Like every shipping component, the toolkit carries its own suite, in the spirit of [Engineering Discipline](/architecture/engineering-discipline/). It is registered in `~/.sanctum/tests/run-all.sh` as **Engineering Toolkit**, runs in about five minutes, and ends on a single `N pass, N fail, N skip` line.
 
 ```bash
 ~/.sanctum/engineering-toolkit/tests/test-engineering-toolkit.sh
 ```
 
-It is hermetic and synthetic. It copies the demo project into `tests/.work/`, gitignored and kept for inspection. There it generates a dataroom: two PDFs printed by Chrome, a JPEG with a stale EXIF block, a DOCX converted by `soffice`, and a file name with decomposed accents. Then it runs everything: assemble, media, intake, packs, build, every link, text parity, JPEG embedding, PDF text, two builds that must match page for page and part for part, relinking as URIs and as GoToR, the Word edition in every link mode, `deliver` from dry run to overwrite notice, and every refusal to write in the dataroom. Outside the logged-in Aqua session, where LaunchServices cannot start Chrome, everything after the static checks reports `SKIP` rather than failing.
+It is hermetic and synthetic. It copies the demo project into `tests/.work/`, gitignored and kept for inspection. There it generates a dataroom: two PDFs printed by Chrome, a JPEG with a GPS position and a stale EXIF block, a DOCX converted by `soffice`, and a file name with decomposed accents. Then it runs everything: assemble, media, intake, packs, build, every link, text parity, JPEG embedding, PDF text, two builds that must match page for page and part for part, relinking as URIs and as GoToR, the Word edition in every link mode, `deliver` from dry run to overwrite notice, and every refusal to write in the dataroom. The web links run against a stand-in for rclone that never leaves the Mac, and a local server that answers like a file nobody shared. Then the code was broken on purpose, one defect at a time, until every defect turned a test red. Outside the logged-in Aqua session, where LaunchServices cannot start Chrome, everything after the static checks reports `SKIP` rather than failing.
 
 | Path | What lives there |
 |---|---|
 | `bin/etk` | The command |
-| `lib/` | Config, memo assembly, HTML, source links, French typography, contents, relink, checks, PDF scanning, photos, intake, and two PDFKit scripts |
+| `lib/` | Config, memo assembly, HTML, source links, French typography, contents, relink, checks, PDF scanning, photos, intake, publishing the cited documents, and two PDFKit scripts |
 | `render/render_pdf.sh` | The headless Chrome print: `--two-pass` for the contents page numbers, one throwaway profile per print |
 | `themes/art-deco/` | `theme.yaml`, `deco.css`, the frame, rule, fan and cover-art SVGs (`ornaments.py` draws the last two), PNG renders of the ornaments for Word, and the fonts with `OFL.txt` and `FONTS.md` |
 | `docx/` | The Word edition: `build_docx.sh`, the HTML-to-model step, a Node renderer on `docx` 9.6.1, font embedding, validation |
@@ -142,5 +166,3 @@ It is hermetic and synthetic. It copies the demo project into `tests/.work/`, gi
 | `README.md`, `SKILL.md` | The reference, and the method |
 
 All of it lives in `~/.sanctum/engineering-toolkit/`, inside the private sanctum-config repo, because project folders hold private material; changes land with [gitsync](/architecture/gitsync/), pathspec only. The three typefaces, Poiret One, Josefin Sans and Cormorant Garamond, ship under the SIL Open Font License, with the license text beside them. This page is the public half: the method and the machinery, never a dossier.
-
-The dataroom is still somebody else's folder, and the only thing the toolkit will ever add to it is the dossier itself, when asked. What changed is the way back in. Every citation in the dossier is a door into that folder: the toolkit proves there is a room behind each one, and one click on the reader's Mac proves the door opens.
