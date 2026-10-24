@@ -326,6 +326,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-24 — The Ferric Hub and the Compounding Wiki', slug: 'operations/2026-10-24-the-ferric-hub-and-the-compounding-wiki' },
 								{ label: '2026-10-22 — The Null That Paged', slug: 'operations/2026-10-22-the-null-that-paged' },
 								{ label: '2026-10-22 — The Sentinel That Patches the Fleet', slug: 'operations/2026-10-22-the-sentinel-that-patches-the-fleet' },
 								{ label: '2026-10-18 — Reclaiming the FSEventsd Reservoir', slug: 'operations/2026-10-18-reclaiming-the-fseventsd-reservoir' },
