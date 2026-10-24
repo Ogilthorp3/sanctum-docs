@@ -25,7 +25,7 @@ Today's stack is the local git vault, fronted by two access surfaces (a Rust RES
 |-------|------|---------|------|
 | **Memory Vault** | Git-native versioned source of truth, primary cross-agent semantic memory | Local-only git repo at `~/.sanctum/memory/` (GitHub mirror archived 2026-05-16 as part of the privacy scrub; the haus does not sync its thoughts to the cloud) | Free |
 | **`sanctum-memory` REST** | The read/write data plane over the vault git repo | Rust service on `127.0.0.1:42069`, serving `/health` and `/v1/*` HTTP routes (`search`, `read`, `write`, `recall`, `ingest`, `consolidate`) | Free |
-| **`memory_vault` MCP** | Tool surface — how an agent's tool-call becomes a vault operation | Python server (`python -m memory_vault`) over stdio, exposing the 8 `memory_*` tools below | Free |
+| **`memory_vault` MCP** | Tool surface & Karpathy-style Second-Brain Wiki Compiler | Native Rust binary (`sanctum-memory-vault`) over stdio + CLI flags (`--consolidate`, `--wiki-lint`, `--hub-caps`), exposing 9 `memory_*` tools | Free |
 | **Neo4j / Graphiti** | Entity relationships & graph queries | Reached via SSH tunnel on local port 31416 (graph runs on the VM, not the host) | Free (self-hosted) |
 
 <Aside type="tip">
@@ -116,47 +116,48 @@ Every note has a computed importance score (0.0 to 1.0) that determines its TTL.
 
 Notes accessed 5+ times are protected from expiry regardless of score. If the system keeps coming back to a memory, there's probably a reason. Even if that reason is paranoia.
 
-## Consolidation
+## Consolidation & Karpathy Second-Brain Wiki Compiler
 
-The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory-consolidate`). Like sleep for the brain, except it runs on schedule, never hits snooze, and files a report when it's done.
+The consolidation engine runs daily at 4:17 AM (LaunchAgent: `com.sanctum.memory-consolidate`) directly inside the Rust `sanctum-memory-vault --consolidate` binary (`services/memory-vault-mcp/src/consolidate.rs`). Inspired by Andrej Karpathy's *LLM Wiki* second-brain architecture, it treats `inbox/` and episodic streams as raw sources that are **compiled** into living, cross-linked canonical entity pages rather than merely shoveled into a growing folder of timestamped fragments.
 
 <Steps>
-1. **Scan inbox** for notes older than 24 hours
-2. **Deduplicate** against existing long-term knowledge
-3. **Classify** and move to the appropriate long-term directory
-4. **Recompute** importance scores for all active notes
-5. **Expire** notes that have exceeded their TTL
-6. **Enforce caps** via bounded archive-eviction (see *Hard Caps* below)
-7. **Clean archive** — delete archived notes older than 90 days
-8. **Generate report** in `meta/consolidation-log.md`
+1. **Scan inbox** (both `inbox/<agent>/*.md` and top-level `inbox/*.md` drops) for notes older than 24 hours
+2. **Compile into canonical Wiki pages** — match fragments against 13 canonical entity pages (`knowledge/{systems,network,devices,finance,people}/wiki-*.md`), append structured dated synthesis entries with backlinks, and archive the raw fragment with `superseded_by` pointing to the canonical wiki page
+3. **Update Agent Knowledge Frontiers** — maintain `agents/<agent>/knowledge-frontier.md` with each agent's latest domain contributions
+4. **Refresh Maps of Content** — regenerate the canonical index tables in `MOC.md` and `MOC-systems.md`
+5. **Recompute** importance scores and **expire** TTL-exceeded notes
+6. **Enforce dynamic hub caps** via `sanctum-memory-vault --hub-caps` and bounded archive-eviction
+7. **Run Wiki Lint** (`sanctum-memory-vault --wiki-lint`) — verify zero broken `[[wikilinks]]`, zero orphan knowledge pages, and zero uncompiled fragment clusters
+8. **Clean archive & SQLite artifacts** — prune archived notes older than 90 days and stale `.vault.db.stale-*` files, then write `meta/consolidation-log.md`
 </Steps>
 
-Any agent can trigger consolidation manually via the `memory_consolidate` MCP tool.
+Any agent can trigger consolidation or wiki linting manually via the `memory_consolidate` and `memory_wiki_lint` MCP tools.
 
 ## Hard Caps
 
-To prevent bloat, each layer has a maximum note count. Without limits, a system that remembers everything eventually remembers nothing useful — a problem familiar to anyone who's ever hoarded browser tabs.
+To prevent bloat, each layer has a dynamic maximum note count computed by `sanctum-memory-vault --hub-caps` (`base + per_hub * active_hubs`). Without limits, a system that remembers everything eventually remembers nothing useful — a problem familiar to anyone who's ever hoarded browser tabs.
 
-| Layer | Max Notes | Action at Cap |
-|-------|-----------|---------------|
-| Inbox | 300 | Bounded archive-eviction, ≤50/run |
-| Knowledge | 1000 | Bounded archive-eviction, ≤20/run |
-| Events | 500 | Bounded archive-eviction, ≤100/run |
-| Procedures | 200 | Bounded archive-eviction, ≤10/run |
+| Layer | Base Cap | Dynamic Hub Scaling (`meta/caps.json`) | Action at Cap |
+|-------|----------|----------------------------------------|---------------|
+| Inbox | 300 | +7 per active hub (307 with 1 hub) | Wiki compilation + bounded archive-eviction |
+| Knowledge | 1000 | +197 per active hub (1197 with 1 hub) | Wiki compilation + bounded archive-eviction |
+| Events | 500 | Dynamic active window | Bounded archive-eviction |
+| Procedures | 200 | Static runbook cap | Bounded archive-eviction |
 
-Eviction sorts candidates by `(importance ascending, created ascending)` and skips anything with `importance > 0.8` — permanent knowledge survives cap pressure. Each run is rate-limited so a layer at 6× cap converges over many nightly cycles rather than collapsing in one massacre. Archived notes are retained for 90 days via `ARCHIVE_RETAIN_DAYS` before deletion — eviction is reversible during that window.
+Eviction sorts candidates by `(importance ascending, created ascending)` and skips anything with `importance > 0.8` — permanent knowledge and canonical `wiki-*.md` pages (`importance: 0.95`) survive cap pressure. Archived notes are retained for 90 days via `ARCHIVE_RETAIN_DAYS` before deletion — eviction is reversible during that window.
 
-## MCP Tools (8 total)
+## MCP Tools (9 total)
 
 | Tool | Description |
 |------|-------------|
-| `memory_search` | Full-text search with tag and folder filters |
-| `memory_read` | Read a note (auto-tracks access) |
+| `memory_search` | Full-text search (SQLite FTS5) with tag and folder filters |
+| `memory_read` | Read a note (auto-tracks access count and timestamp) |
 | `memory_write` | Create/update with schema enforcement |
 | `memory_delete` | Remove a note |
 | `memory_list` | List notes by folder, tag, or type |
 | `memory_links` | Traverse the wikilink graph |
-| `memory_consolidate` | Trigger consolidation (dry-run by default) |
+| `memory_consolidate` | Run the native Rust consolidator + Second-Brain Wiki compiler (dry-run by default) |
+| `memory_wiki_lint` | Audit the vault for broken `[[wikilinks]]`, orphan knowledge pages, and uncompiled fragments |
 | `memory_health` | Vault health metrics dashboard |
 
 ## On Mem0 (historical aside)
