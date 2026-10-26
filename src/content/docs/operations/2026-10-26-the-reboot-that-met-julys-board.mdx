@@ -1,0 +1,69 @@
+---
+title: "2026-10-26: The Reboot That Met July's Board"
+description: "An October reboot exposed a stdio-only Memory Vault swap, a stale LiveKit idle worker queue in Yoda's voice pool, two silent launchd failures, and four post-boot probes still grading July's topology."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![An overhead technical pencil sketch on dark slate paper: brass calipers align the concentric rings of an open chronometer with a circuit-board stethoscope whose glowing teal traces converge into a central crystal prism.](./images/hero-2026-10-26-the-reboot-that-met-julys-board.png)
+
+A reboot does not break a daemon replaced four days ago. It evicts the old binary from RAM so you finally meet the new one.
+
+When `manoir` came back from its October 25 reboot, `apple-post-boot.sh` paged with a stubborn scoreline: `32->32/41 — 1 fixed, 6 still failing`. Even the single "fix" was fiction: Phase 3 had dutifully executed `docker start homeassistant` on a Mac whose Docker engine was retired in August and whose Home Assistant moved onto a dedicated Green appliance in July. Underneath those six red lines and two amber warnings sat two genuine service regressions, two silent `launchd` casualties, and four probes still grading a haus from three months earlier.
+
+## Six reds and two warnings, sorted by what was actually true
+
+| Check | What the board claimed | What was actually on disk |
+|---|---|---|
+| `mac/memory-vault` | `:42069 DOWN` | **Real regression.** On October 22, `memory-vault-mcp` replaced `~/.sanctum/bin/sanctum-memory-vault`. The old `:42069` HTTP process stayed resident in RAM until the October 25 reboot; afterward, `haus.sanctum.memory-vault` launched the stdio-only MCP binary against `/dev/null` and exited every 15 seconds with `connection closed: initialize request`. |
+| `mac/yoda-canary-internal` | `last cycle FAIL` | **Real voice regression.** [Yoda](/agents/yoda/) failed four consecutive hourly internal voice canaries (`20:00Z` through `23:00Z`) with `DuplexClosed` while popping dead pre-warmed worker subprocesses from `livekit-agents`'s idle queue. |
+| `mac/home-assistant` | `:8123 DOWN` | **Stale probe + hidden crash-loop.** Home Assistant was healthy on Green via `10.0.0.1:8123` (`socat` on `bridge100`), while `apple-services.sh` still polled `localhost:8123`. Meanwhile, `haus.sanctum.ha-green-bridge` was silently crash-looping every 10 seconds under `/opt/homebrew/bin/python3` (`ModuleNotFoundError: No module named 'websocket'`). |
+| `mac/haus-control` | `degraded: home-assistant` | **Cascade.** `mac/firewalla-bridge` (`:1984`) and `lan/firewalla` were healthy; the composite check failed solely because `mac/home-assistant` failed. |
+| `mac/dashboard` | `:1111 DOWN` | **Stale probe.** Command Center had moved behind `haus.sanctum.pq-terminator.1111` (`X25519MLKEM768` TLS 1.3 over `command-center.sock`), returning `HTTP 200` on HTTPS while the probe spoke plain HTTP. |
+| `vm/briefing-cron` | `0 of 3 briefing jobs` | **Stale probe.** Morning, Cilghal, Mundi, and Windu briefings had migrated from `yoda`'s crontab to four `haus.sanctum.*-briefing` Mac LaunchAgents. |
+| `mac/yoda-cert-monitor` | `log stale or missing` | **Silent `launchd` spawn failure.** After Homebrew upgraded `python@3.12` in place, `launchd` rejected the cached vnode signature with `OS_REASON_CODESIGNING` at each 09:00 calendar tick. |
+| `mac/docker` | `no containers running` | **Leftover directory.** An empty `~/.colima` folder from May triggered the local container check on a host where `yoda` runs every container. |
+
+## Teaching one Rust binary both doors (`:42069` and MCP stdio)
+
+In [The Ferric Hub and the Compounding Wiki](/operations/2026-10-24-the-ferric-hub-and-the-compounding-wiki/), `memory-vault-mcp` consolidated vault search, `--consolidate`, `--wiki-lint`, and `--hub-caps` into a single Rust binary backed by `.vault.db` (`rusqlite` + FTS5). Installing that binary onto `~/.sanctum/bin/sanctum-memory-vault` unified the CLI and MCP stdio paths, while overlooking one detail: `/Library/LaunchDaemons/haus.sanctum.memory-vault.plist` runs that exact path as a persistent daemon (`sanctum-memory-vault -m memory_vault`) with `MEMORY_VAULT_TRANSPORT=sse` and a stale `MEMORY_VAULT_PORT=18097` environment variable left over from spring.
+
+Because the previous `sanctum-memory` daemon already held `:42069` in memory, nothing complained for seventy-two hours. Once the reboot cleared RAM, `launchd` spawned the new binary with stdin wired to `/dev/null`. `rmcp`'s stdio transport read immediate `EOF`, logged `Error: connection closed: initialize request`, and died every `ThrottleInterval` (`15s`).
+
+Splitting `:42069` back into a separate binary would have reintroduced two SQLite schemas competing over `.vault.db`. Instead, `memory-vault-mcp` now speaks both transports from the same crate:
+
+- **MCP stdio (`rmcp`)** when invoked by an editor or agent harness with no daemon flags (`MEMORY_VAULT_TRANSPORT` unset or `stdio`).
+- **Axum HTTP (`:42069`)** when invoked with `-m memory_vault`, `--daemon`, `--http`, or `MEMORY_VAULT_TRANSPORT != "stdio"`, serving `/`, `/health`, `/v1/search`, and `/v1/read` against the same `VaultIndex`.
+
+Port resolution reads explicit `--port` first, then `services.memory_vault.port` (`42069`) from `~/.sanctum/instance.yaml`, before falling back to `MEMORY_VAULT_PORT` — neutralizing the stale `18097` in the root plist without touching `/Library/LaunchDaemons`.
+
+<Aside type="caution" title="In-place Mach-O replacement on Apple Silicon">
+Never `cp` over a running binary on macOS arm64. Writing into an mapped vnode invalidates its code-directory pages mid-execution and triggers `SIGKILL (Code Signature Invalid)`. Stage to `sanctum-memory-vault.new`, `codesign -s - -f`, and `mv -f` atomically onto the target path.
+</Aside>
+
+## Four dead workers in Yoda's pre-warmed queue
+
+Yoda's voice daemon (`haus.sanctum.yoda-agent`) stayed `running` throughout the afternoon, yet four straight internal LiveKit canaries failed in three milliseconds:
+
+```text
+livekit.agents - ERROR - unhandled exception while running the job task
+  File ".../livekit/agents/ipc/proc_pool.py", line 176, in launch_job
+    proc = await self._warmed_proc_queue.get()
+  File ".../livekit/agents/ipc/job_proc_lazy_main.py", line 161, in launch_job
+    await self._channel.asend( InitializeJobRequest(...) )
+livekit.agents.utils.aio.duplex_unix._DuplexClosed
+```
+
+`livekit-agents 1.3.12` defaults `num_idle_processes` to `4` whenever a `prewarm_fnc` is registered. Under a brief host CPU stall exceeding `proc_client.py`'s 60-second `ping_timeout`, all four idle subprocesses concluded the parent had crashed and exited cleanly. In `ProcPool._monitor_process_task`, the supervisor removed each exited child from `self._executors` and spawned replacements, while leaving the four dead objects sitting at the head of `self._warmed_proc_queue`. The next four calls popped one corpse apiece, hit `_DuplexClosed` on `InitializeJobRequest`, and hung up before Yoda could draw breath. Only after four failed canaries drained the dead entries did the fifth canary reach a fresh worker.
+
+In `yoda-voice-agent`, `build_worker_options()` now sets `num_idle_processes=0`. Spawning a fresh subprocess per call adds roughly `800ms` of Silero VAD load — invisible inside a 20-second greeting budget — and makes a stale idle socket structurally impossible. Live verification via `python -m canaries.canary_internal` completed in `4802ms` (`first_audio_ms=3302`).
+
+## Aligning the bridges, the signatures, and the post-boot board
+
+The remaining failures were a study in [Kickstart Is Not a Heal](/architecture/kickstart-is-not-a-heal/):
+
+1. **Home Assistant Green WebSocket relay (`haus.sanctum.ha-green-bridge`).** While `socat` on `10.0.0.1:8123` forwarded HTTP cleanly to `192.0.2.3:8123`, the event relay plist invoked bare `/opt/homebrew/bin/python3` (`Python 3.15`), which lacked `websocket-client`. Pointing the LaunchAgent at `~/.sanctum/cli-venv/bin/python3` and declaring `websocket-client>=1.8` in `sanctum-cli/pyproject.toml` restored live `state_changed` and `mobile_app_notification_action` subscriptions on the first start.
+2. **Stale BTM code-directory hash (`haus.sanctum.yoda-cert-monitor`).** Re-bootstrapping (`launchctl bootout` + `launchctl bootstrap`) refreshed `launchd`'s cached Mach-O hash for `.venv/bin/python`, clearing `OS_REASON_CODESIGNING` (`180 days remaining` on `yoda.crt`). Scanning every remaining `haus.sanctum.*` LaunchAgent confirmed zero other `spawn failed` states.
+3. **Post-boot probes and remediations (`openclaw-skills/apple-toolkit`).** `apple-services.sh` now verifies `10.0.0.1:8123` plus `ha-green-bridge.py` liveness when `localhost:8123` is absent, probes `https://127.0.0.1:1111/` for PQ-TLS Command Center, matches the Rust `sanctum-stt` worker alongside legacy Python MLX STT, counts `haus.sanctum.*-briefing` Mac LaunchAgents when VM cron has zero entries, and checks installed runtimes (`OrbStack.app`, `Docker.app`, or `colima` in `PATH`) rather than a leftover `~/.colima` folder. `post-boot-remediation.json` retired `docker start homeassistant` in favor of kickstarting `haus.sanctum.ha-green-bridge`, added bounded remediations for `mac/dashboard` and `mac/memory-vault`, and passes `test-post-boot-remediations.sh` (`9` guarded entries).
+
+Running `apple-post-boot.sh --skip-wait --skip-signal` after the cutover returned `41/41 pass, 0 warn, 0 fail, 0 fixes` and emptied `~/.sanctum/state/post-boot-prolonged-failures.json` to `{}`. A post-boot board is only an instrument when it grades the haus that is actually running — and when the binary in RAM is the same binary sitting on disk.
