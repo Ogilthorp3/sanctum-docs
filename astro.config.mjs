@@ -326,6 +326,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: "2026-10-26 — The Reboot That Met July's Board", slug: 'operations/2026-10-26-the-reboot-that-met-julys-board' },
 								{ label: '2026-10-24 — The Tap That Froze the Watch', slug: 'operations/2026-10-24-the-tap-that-froze-the-watch' },
 								{ label: '2026-10-24 — The Ferric Hub and the Compounding Wiki', slug: 'operations/2026-10-24-the-ferric-hub-and-the-compounding-wiki' },
 								{ label: '2026-10-22 — The Null That Paged', slug: 'operations/2026-10-22-the-null-that-paged' },
