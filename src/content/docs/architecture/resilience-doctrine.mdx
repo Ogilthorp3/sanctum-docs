@@ -15,9 +15,9 @@ The Resilience Doctrine removes those assumptions: seven small, fail-safe, mostl
 
 | Piece | Daemon / tool | Cadence | What it gives the haus |
 |---|---|---|---|
-| Power-sense + graceful shutdown | `com.sanctum.power` | 20s loop | a sense of grid-vs-battery; a clean halt before the cell dies |
-| Operator dead-man's-switch | `com.sanctum.deadman` | every 6h | a sense of its own mortality — a bell, never a gavel |
-| WAN sentinel | `com.sanctum.wan-sentinel` | every 60s | a sense of its uplink; auto-flip to local seats |
+| Power-sense + graceful shutdown | `haus.sanctum.power` | 20s loop | a sense of grid-vs-battery; locks `SanctumVault` and halts cleanly before the cell dies |
+| Operator dead-man's-switch | `haus.sanctum.deadman` + `deadman-autobeat` | 6h check / 30m HID beat | a sense of its own mortality — conscious-intent HID/SSH beats, never passive beacons |
+| WAN sentinel | `haus.sanctum.wan-sentinel` | every 60s | a sense of its uplink; auto-flip to local seats |
 | Offline-mode failover | `sanctum-offline` | manual | re-point every cloud seat onto the cathedral, reversibly |
 | R2 break-glass backup | `sanctum-r2-breakglass` | daily | a geo-redundant rebuild seed on free-tier Cloudflare R2 |
 | Cold model-weights archive | `sanctum-cold-archive` | manual | a cold, integrity-verified copy of the kyber |
@@ -38,7 +38,7 @@ The state machine is `GRID → BATTERY → CRITICAL` (thresholds `WARN_SOC=40`, 
 | Off-mains debounce | sustained past `ON_BATTERY_DEBOUNCE` (45s) |
 | Armed | `POWER_ARMED` is true |
 
-The shutdown is a bounded ordered sequence — quiesce the cathedral, stop the proxyd writers (`signal-cli`), `limactl stop` the VM, `sync`, `shutdown -h now` — each step timeout-bounded, so a hung step is skipped and the run always reaches the protective `sync` and halt. `pmset` is corroboration only — under pass-through it always reads "AC Power," so it never vetoes the EcoFlow sensor.
+The shutdown is a bounded ordered sequence — quiesce the cathedral, stop the proxyd writers (`signal-cli`), `/opt/homebrew/bin/limactl stop` the VM, cryptographically lock `/Volumes/SanctumVault` via `sanctum-vault-armor lock` so the powered-off chassis rests sealed in `BFU`, `sync`, and halt cleanly via Aqua `System Events` `shut down` (falling back to `sudo -n /sbin/shutdown -h now`) — each step timeout-bounded, so a hung step is skipped and the run always reaches the protective `sync` and halt. `pmset` is corroboration only — under pass-through it always reads "AC Power," so it never vetoes the EcoFlow sensor.
 
 <Aside type="caution" title="A blind read never powers off the haus">
 With no EcoFlow keys in `~/.sanctum/secrets/`, `classify()` returns `UNKNOWN` and `evaluate()` does an explicit `pass` — silent by design. A genuinely blind *sensor* (an API/network failure) pages `error`/`blind`; an *unprovisioned* one does not page at all, and off-mains with an unreadable SoC returns `UNKNOWN` rather than act blind.
@@ -66,7 +66,7 @@ It does *not* health-probe the local backends — it audits config text, not sil
 
 ## A sense of its own mortality
 
-Every key in the haus gates on Bert; if he becomes unavailable, the Sanctum is a black box the family cannot open. `sanctum-deadman.py` (`com.sanctum.deadman`, `StartInterval` 21600s ≈ 6h) closes that gap. Bert proves liveness with `sanctum-alive` (weekly is plenty); any beat resets the ladder to LIVE, silence climbs it:
+Every key in the haus gates on Bert; if he becomes unavailable, the Sanctum is a black box the family cannot open. `sanctum-deadman.py` (`haus.sanctum.deadman`, `StartInterval` 21600s ≈ 6h) closes that gap, paired with `sanctum-deadman-autobeat.py` (`haus.sanctum.deadman-autobeat`, every 30m). Rather than forcing manual calendar rituals that drift into false alarms, `deadman-autobeat` calls `sanctum-alive` **only** on genuine conscious physical or terminal intent — kernel `IOHIDSystem` `HIDIdleTime < 3600s` at the desk or an active remote SSH TTY idle `< 3600s`, never passive phone Wi-Fi beacons or background cron jobs. Any real beat holds the ladder at `LIVE`; true absence climbs it:
 
 | Tier | Days silent | What fires |
 |---|---|---|
@@ -96,16 +96,17 @@ Most pieces ship inert. The gate is always a credential or a flag only Bert shou
 
 | Piece | Dormant state | What arms it |
 |---|---|---|
-| `sanctum-power` | no EcoFlow keys → `UNKNOWN`, silent | `ecoflow-{access-key,secret-key,sn}` in `~/.sanctum/secrets/` |
-| `sanctum-power` halt | logs the plan, never halts | `POWER_ARMED` in `{1,true,yes}` |
-| `sanctum-wan-sentinel` | logs `disarmed:page-only` | `SANCTUM_WAN_AUTO_OFFLINE` in `{1,true,yes}` + `sanctum-offline` present |
-| `sanctum-r2-breakglass` | logs "DORMANT", exits 0 | R2 creds in keychain via `sanctum-r2-mint` |
+| `sanctum-power` | no EcoFlow keys → `UNKNOWN`, silent | **Armed live (`GRID`, 99% SoC)** via `ecoflow-{access-key,secret-key,sn}` in `/Volumes/SanctumVault/secrets/` |
+| `sanctum-power` halt | logs the plan, never halts | **Armed live** (`POWER_ARMED=true` in `haus.sanctum.power.plist`) |
+| `sanctum-wan-sentinel` | logs `disarmed:page-only` | **Armed live** (`SANCTUM_WAN_AUTO_OFFLINE=true` + `sanctum-offline` verified) |
+| `sanctum-deadman` | manual beat only | **Live (`tier: LIVE`)** + `haus.sanctum.deadman-autobeat` (`IOHIDSystem` / SSH TTY `< 3600s`) |
+| `sanctum-r2-breakglass` | logs "DORMANT", exits 0 | **Active daily** (`sanctum-breakglass` R2 bucket + symlink-resolved `/Volumes/SanctumVault/secrets`) |
 | `sanctum-cold-archive` | dry-run only | `COLD_ARCHIVE_DEST` on a mounted, writable drive |
-| continuity kit | `[FILL-IN]` placeholders | Bert hand-fills the paper templates |
+| continuity kit | `[FILL-IN]` placeholders | Bert hand-fills paper templates; live cancel card sealed inside `/Volumes/SanctumVault/continuity/` |
 
 ## How it composes into resilience
 
-The honest version: the haus is *ready to be made ready*. The reflexes are built, exercised by zero-network self-test fixtures, and wired to [Force Flow](./force-flow.mdx) (`http://127.0.0.1:4077/notify`) — but most ship disarmed, and several stay dormant until Bert provisions a credential or a drive only he should hold. That is the doctrine, not a gap — the same fail-safe instinct [the Capacity Doctrine](./capacity-doctrine.mdx) applies to RAM: a reflex you cannot trust to *fail safe* is worse than none, and family contact stays human-gated by council non-negotiable.
+The reflexes are no longer merely wired on paper — the core loop is live and armed on `manoir`. EcoFlow telemetry polls every 20 seconds with low-battery vault-lock and Aqua shutdown armed, WAN loss flips cloud seats onto the local cathedral automatically, `deadman-autobeat` tracks real human keyboard/SSH presence without crying wolf, and [Sanctum Vault Armor](./vault-armor.mdx) seals every credential behind `2-of-3` blinded threshold witnesses before power leaves the rail. That is the same fail-safe instinct [the Capacity Doctrine](./capacity-doctrine.mdx) applies to RAM: every irreversible gate requires independent proof, and family contact stays human-gated by council non-negotiable.
 
 What changed is the floor. Before this campaign every one of those failure modes was silent; now each has a sense, a sentinel, and a printed page in a fire-safe that survives even the loss of the box holding everything else.
 
