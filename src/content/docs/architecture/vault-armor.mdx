@@ -18,7 +18,7 @@ Custom encrypted containers fail operators on their worst day. When a bespoke FU
 | Stratum | Mount | Boot behavior | What lives here | What a stolen chassis yields |
 |---|---|---|---|---|
 | **BFU** (Rescue & Reachability Plane) | `/` and `/System/Volumes/Data` | Boots immediately on AC restore | `macOS`, `sshd`, `tailscaled`, Screen Sharing, `sanctum-vault-armor`, local `ML-KEM-768` decapsulation key | OS binaries, public configs, and a ciphertext envelope that cannot be unsealed alone |
-| **AFU** (Crown-Jewel Vault) | `/Volumes/SanctumVault` | Locked (`FileVault: Yes`, `Locked: Yes`) until `2-of-3` witness quorum | Vault canary (Phase 1); `~/.sanctum/secrets`, mTLS CA keys, OAuth tokens, and SQLite memory stores (Phase 2) | **Zero** — hardware AES-XTS media keys remain sealed inside Secure Enclave `xART` |
+| **AFU** (Crown-Jewel Vault) | `/Volumes/SanctumVault` | Locked (`FileVault: Yes`, `Locked: Yes`) until `2-of-3` witness quorum | `~/.sanctum/secrets` (`29` credentials on `manoir`, `4` on `chalet`), `deadman-cancel-card.txt`, `chalet` witness Share 2, and `SOPS/age` break-glass bundles (`phase2-afu-enforced`) | **Zero** — hardware AES-XTS media keys remain sealed inside Secure Enclave `xART` |
 
 The `BFU` plane never touches `sshd`, `~/.ssh/authorized_keys`, `tailscaled`, or Screen Sharing. No bug in Vault Armor can brick remote access. Even if every witness on Earth disappears at once, the operator still lands on the box over SSH and unlocks `/Volumes/SanctumVault` with stock `/usr/sbin/diskutil`.
 
@@ -80,9 +80,17 @@ sanctum vault-armor lock                       # unmount and cryptographically l
 sanctum vault-armor unlock --wait 180          # 2-of-3 blinded witness unlock (boot LaunchAgent)
 ```
 
-Rollout follows a two-phase discipline alongside [Closing the Apocalypse Seams](/operations/2026-10-27-closing-the-apocalypse-seams/), [The Sentinel That Patches the Fleet](/operations/2026-10-22-the-sentinel-that-patches-the-fleet/), and [Sanctum Continuity](/architecture/sanctum-continuity/):
+## Symmetric dual-site DAG without opening satellite ACLs
 
-- **Phase 1 — Non-Destructive Shadow Canary (`active`).** `/Volumes/SanctumVault` mounts automatically at boot via `haus.sanctum.vault-armor.plist`, `manoir` stores `0/3` shares locally, and live `2-of-3` unlock across `manoir-fw` and `chalet` completes in `2.00s` while all 41 production services run undisturbed.
-- **Phase 2 — Secret Cutover.** Once shadow reboots prove rock-solid across maintenance windows, `~/.sanctum/secrets` symlinks into `/Volumes/SanctumVault/secrets`, `sanctum-boot-ready` gates secret-consuming daemons on the vault canary, and `/etc/sanctum-keychain-pw` retires from the `BFU` disk permanently.
+Both `manoir` and `chalet` run `phase2-afu-enforced` Vault Armor, yet Tailscale ACLs intentionally forbid `chalet` from initiating inbound TCP or SSH to `manoir`. Weakening hub isolation to unlock a cabin Mac would trade one attack surface for another. Instead, the two vaults form a strict **acyclic boot DAG** with zero inbound satellite holes:
+
+1. **Cold boot on `manoir`.** `gui/501/haus.sanctum.vault-armor` queries `manoir-fw` (Share 1) and `chalet` (Share 2), unlocks `manoir:/Volumes/SanctumVault` in `2.00s`, and fires `vault-armor-post-unlock.sh` to kickstart early-boot system daemons (`proxyd`, `force-flow`, `memory-vault`) once `~/.sanctum/secrets` resolves.
+2. **Hub witness + reverse tunnel.** Post-unlock immediately starts `haus.sanctum.vault-armor-witness` (`127.0.0.1:42071/v1/eval`, reading `chalet-share-2.json` from `manoir`'s `AFU` vault) and `haus.sanctum.chalet-witness-tunnel` (`ssh -N -R 127.0.0.1:42071:127.0.0.1:42071 chalet`).
+3. **Headless cold boot on `chalet`.** Because `chalet` runs 100% headless with no Aqua login (`gui/501` absent), `system/haus.sanctum.vault-armor` runs as a system `LaunchDaemon` at boot, querying `chalet-fw` via a `restrict,command=...` forced-command SSH key (Share 1) and `http://127.0.0.1:42071/v1/eval` over the hub-initiated tunnel (Share 2). `chalet:/Volumes/SanctumVault` unlocks unattended in `4s`, while Share 3 sits `age`-encrypted inside `manoir`'s `AFU` escrow.
+
+Rollout completed in two verified waves alongside [Closing the Apocalypse Seams](/operations/2026-10-27-closing-the-apocalypse-seams/), [The Sentinel That Patches the Fleet](/operations/2026-10-22-the-sentinel-that-patches-the-fleet/), and [Sanctum Continuity](/architecture/sanctum-continuity/):
+
+- **Phase 1 — Non-Destructive Shadow Canary (`verified`).** Proved `0/3` local share storage, round-trip break-glass escrow, and `2.00s` `2-of-3` unlock across `manoir-fw` and `chalet` with zero disruption to the 41-service stack.
+- **Phase 2 — Full `AFU` Enforcement (`active` on `manoir` and `chalet`).** `~/.sanctum/secrets` and `deadman-cancel-card.txt` live inside `/Volumes/SanctumVault` with `rm -P` shredded `BFU` originals, `sanctum-boot-ready` gates on `.sanctum-vault-canary.json`, `sanctum-r2-breakglass` resolves symlinked secret directories via `os.path.realpath`, and `sanctum-power` locks `SanctumVault` automatically before low-battery shutdown.
 
 The box still wakes itself in the dark after the ice storm clears. Now, if someone carries it out into the snow instead, the aluminum shell has nothing left to say.
