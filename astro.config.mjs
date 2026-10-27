@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-27 — The Read That Would Not Die', slug: 'operations/2026-10-27-the-read-that-would-not-die' },
 								{ label: '2026-10-27 — The Stamp That Outlived the Beat', slug: 'operations/2026-10-27-the-stamp-that-outlived-the-beat' },
 								{ label: '2026-10-27 — Closing the Seams Beneath the Shield', slug: 'operations/2026-10-27-closing-the-apocalypse-seams' },
 								{ label: "2026-10-26 — The Reboot That Met July's Board", slug: 'operations/2026-10-26-the-reboot-that-met-julys-board' },
