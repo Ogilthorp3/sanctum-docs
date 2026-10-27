@@ -167,6 +167,7 @@ export default defineConfig({
 						{ label: 'The Kitchen Loop', slug: 'architecture/kitchen-loop' },
 						{ label: 'R2D2 — Auto-Fix Supervisor', slug: 'architecture/r2d2' },
 						{ label: 'The Resilience Doctrine', slug: 'architecture/resilience-doctrine' },
+						{ label: 'Sanctum Vault Armor (BFU/AFU)', slug: 'architecture/vault-armor' },
 						{ label: 'The Parachute', slug: 'architecture/the-parachute' },
 						{ label: 'Sanctum Continuity', slug: 'architecture/sanctum-continuity' },
 						{ label: 'gitsync', slug: 'architecture/gitsync' },
