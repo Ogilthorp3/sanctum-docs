@@ -1,0 +1,47 @@
+---
+title: "2026-10-27: Closing the Seams Beneath the Shield"
+description: "An adversarial cyber-and-grid readiness audit after the 41/41 reboot sweep uncovered twenty-nine stale LWCR timer signatures, an EcoFlow GET signing trap, a blocked DoH canary in WAN failover, pre-cutover drill and secret-rotation paths, an Argon CLI sandbox stall, and two Rust advisories."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![An architectural ink and brass blueprint on dark slate paper: five interlocking shield plates surround a central crystal core while glowing amber and teal filaments weld hairline seams connecting a battery gauge, a fiber-optic switch, a brass cryptographic seal, and clockwork gears.](./images/hero-2026-10-27-closing-the-apocalypse-seams.png)
+
+A green post-boot board proves the haus woke up. It does not prove what happens next. Pull the fiber, cut the grid, or swap twenty-nine binaries underneath `launchd`, and a quiet seam becomes the whole story.
+
+One day after [The Reboot That Met July's Board](/operations/2026-10-26-the-reboot-that-met-julys-board/) brought `manoir` back to `41/41`, we ran an adversarial readiness audit across the estate, asking which defenses would hold under simultaneous WAN loss, mains failure, and upstream supply-chain churn and which ones were still coasting on summer assumptions. Every perimeter wall held: `mTLS` on all LAN ports, post-quantum `X25519MLKEM768` TLS 1.3, loopback-bound daemons, an airgapped `yoda` VM, and 3-2-1-1-0 backups. Underneath that armor, five seams were quietly waiting.
+
+## Five seams hiding behind a green board
+
+| Seam | What looked healthy | What disk inspection actually found |
+|---|---|---|
+| Scheduled `launchd` timers | `launchctl list` showed exit `0` across all `haus.sanctum.*` calendar jobs | `launchctl print` flagged `29` calendar LaunchAgents with `needs LWCR update` after Homebrew upgraded `bash` and `python@3.12` in place, putting scheduled jobs at risk of `OS_REASON_CODESIGNING` (`EX_OSERR 71`). |
+| Mains-loss & WAN-cut sentinels | Both `haus.sanctum.power` and `haus.sanctum.wan-sentinel` were `running` | `sanctum-power.py` sat `UNKNOWN` (`telemetry_ok: false`) looking for flat secret files instead of Keychain credentials and sending `Content-Type: application/json` on signed GETs (`code=8521`); `wan-sentinel` probed `one.one.one.one` (blocked by Firewalla's DoH filter) with `heal_armed: false`. |
+| Chaos drills & break-glass rotation | Monthly drill and 90-day secret-rotation plists were loaded | `chaos-forge` preflight and `rotate-secrets.sh` still targeted retired Mac Docker (`localhost:8123` and `com.sanctum.*` labels) rather than Home Assistant Green (`192.0.2.3:8123`) and `haus.sanctum.*`, while `sanctum-drill-watch.sh` tripped over an inline Python quoting bug. |
+| [Windu](/agents/windu/) threat-watch & runtime currency | Daily perimeter & CVE verdicts ran at 07:40 | `ask_argon` invoked `agy` without `--sandbox` on the heavy model tier and timed out at `180s` (`argon: null`), `python@3.11` trailed `3.11.18`, and `5s` cold Mach-O probes occasionally false-warned right after Home Assistant OS upgrades. |
+| Rust workspace supply chain | `cargo build --release` succeeded cleanly | `cargo deny check` flagged `RUSTSEC-2026-0387` (`crypto-bigint` via unused `russh` `rsa` feature) and `RUSTSEC-2026-0386` (`tokio 1.52.1` Windows named-pipe DACL advisory). |
+
+## Teaching upgrades to refresh `launchd` Launch Constraints
+
+In [The Sentinel That Patches the Fleet](/operations/2026-10-22-the-sentinel-that-patches-the-fleet/), we met `launchd`'s Launch Constraint (`LWCR`) cache on `tailscaled`. Calendar LaunchAgents fail more quietly. When Homebrew upgrades `/opt/homebrew/bin/bash` or `/opt/homebrew/bin/python3`, every loaded `StartCalendarInterval` plist still holds the old Mach-O CDHash (`needs LWCR update`). Nothing crashes at upgrade time. Instead, the job aborts days later when its scheduled window fires.
+
+Both `~/.sanctum/windu/windu-threat-watch.py` (`_refresh_stale_lwcr_agents` across `manoir`, `mbp`, and `chalet`) and `~/.sanctum/bin/sanctum-sunday-upgrade.sh` (`lwcr_refresh_agents` in pure `plutil` + `launchctl`, zero Python) now close that gap automatically. After each upgrade, they scan calendar-only plists (`RunAtLoad=false`, `KeepAlive=false`) and evict stale CDHashes via `bootout` + `bootstrap` without triggering out-of-window runs.
+
+## Giving `sanctum-power` and `wan-sentinel` real teeth
+
+Wiring `sanctum-power.py` against the live EcoFlow Delta 3 Max Plus exposed two protocol traps. Synthetic fixtures never caught either one.
+
+1. **Signed GET query parameters vs `Content-Type: application/json`.** EcoFlow's Americas IoT Open API (`https://api-a.ecoflow.com`) signs sorted query parameters (`sn=...&accessKey=...&nonce=...&timestamp=...`) with HMAC-SHA256. Sending `Content-Type: application/json` on `GET /iot-open/sign/device/quota/all?sn=...` tells the gateway to sign an empty JSON body instead, failing every call with `code=8521 signature is wrong`.
+2. **Delta 3 protobuf v2 keys and the BMS float band.** On Delta 3 firmware, battery state lives under `cmsBattSoc`, `powGetAcIn`, `cmsChgDsgState`, and `cmsMaxChgSoc`. When USB-C ports draw 15–27W at `100%` charge on grid power, the BMS shuts off AC charging (`powGetAcIn = 0.0`, `cmsChgDsgState = 1`) and lets the pack drift 2–3% below `cmsMaxChgSoc` before topping back up. Treating `soc >= cmsMaxChgSoc - 3.0` as inside the BMS float band stops false `BATTERY` pages while leaving ~97% of a 2,048 Wh LFP pack to alert and halt cleanly at `15%`.
+
+<Aside type="note" title="Arming failover vs arming power-off">
+`haus.sanctum.wan-sentinel` now probes `cloudflare.com` (avoiding Firewalla's `one.one.one.one` DoH canary block) with `SANCTUM_WAN_AUTO_OFFLINE=1` armed. Running `sanctum-offline --self-test` proved all `165` cloud routes remap to local Cathedral `:1337` and restore byte-for-byte. By contrast, `haus.sanctum.power` keeps `POWER_ARMED=false` until watched through a live mains pull: telemetry is green (`state: "GRID"`, `soc: 100.0`), and hardware halts wait for physical proof.
+</Aside>
+
+## Closing the loop across drills, rotation, Windu, and Cargo
+
+- **Break-glass secret rotation (`~/Backups/rotate-secrets.sh`).** Updated preflight and rotation targets from retired localhost Docker to Home Assistant Green (`ssh green` `/homeassistant/secrets.yaml` + `ha core restart`), `~/.sanctum/secrets/{ha-token,firewalla-bridge-token,netcontrol-token}`, VM `openclaw.json` fallback, and `haus.sanctum.{firewalla,ha-green-bridge,ha-gateway,yoda-agent}` (`--dry-run` verified all `9/9` slots).
+- **Chaos & monthly drills (`openclaw-skills`, `sanctum-runtime`, `~/.sanctum/drills`).** Pointed `chaos-forge/scripts/preflight.sh` at VM Docker (`6/6` preflight pass), retired `docker-oom.sh`, fixed `sanctum-drill-watch.sh` JSON quoting (`age_days: 1` against `reboot-2026-10-26.md`), aligned monthly drill labels to `haus.sanctum.*`, and verified `21/21` BATS assertions plus live `drill-jsonl-lock-flood.sh`.
+- **Windu Argon sandbox & Rust advisories (`sanctum-rs`).** Adding `--sandbox` and `gemini-4-argon-low` to `ask_argon` cut advisory triage from a `180s` timeout to `~9s`; bumping `python@3.11` to `3.11.18` and widening Mach-O version probes to `15s` cleared runtime drift. In `sanctum-rs`, dropping `russh`'s unused `rsa` feature (Firewalla SSH uses `ED25519`) and updating `tokio` to `1.54.1` brought `cargo deny check` to zero advisories (`advisories ok, bans ok, licenses ok, sources ok`).
+
+Grand walls rarely fail first. Sensors go blind, bottles shift under cached hashes, and drills keep grading last summer's machine. Close those seams, and the shield holds when the lights actually go out.
