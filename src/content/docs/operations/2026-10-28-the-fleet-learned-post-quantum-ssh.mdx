@@ -1,0 +1,78 @@
+---
+title: "2026-10-28: The Fleet Learned Post-Quantum SSH"
+description: "OpenSSH 10.6p1 moved the fleet's SSH handshakes onto ML-KEM hybrid key exchange, on ports 2222 and 2223, while the old system sshds stayed reachable on 22. Two nodes are blocked, and one server is waiting on a sudo prompt."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-sketch fleet of small machines linked by thin tunnels to a fortress gate, one teal halo on the post-quantum lock, Tommy the cat watching](./images/hero-the-fleet-that-whispered-in-pq.png)
+
+The first warning arrived as asterisks, not a prompt. A test connection from `mbp` to `chalet-fw` printed:
+
+```
+** WARNING: connection is not using a post-quantum key exchange algorithm.
+** This session may be vulnerable to "store now, decrypt later" attacks.
+```
+
+The server was OpenSSH 8.2p1 on Ubuntu 20.04; the client was OpenSSH 10.6p1. The two had no post-quantum key exchange in common. That is the whole test: a handshake that still works, but quietly records a session that a future quantum machine can decrypt.
+
+## The warning that was not a failure
+
+The connection succeeded. That is why the warning matters. `chalet-fw`'s system sshd is 8.2p1 and offers exactly one PQ KEX, `sntrup4591761x25519-sha512@tinyssh.org` (`ssh -Q kex` on the box, rc=0). The `mbp` client offers `mlkem768x25519-sha256`, `sntrup761x25519-sha512`, and `sntrup761x25519-sha512@openssh.com` (`ssh -Q kex`, rc=0). None of those names overlap. The server falls back to a classical KEX, the session works, and the client prints the warning (`grep -c post-quantum` on stderr -> 1, rc=0).
+
+The working twin was `manoir-fw`, Ubuntu 22.04 and OpenSSH 8.9p1. Its system sshd offers `sntrup761x25519-sha512@openssh.com` (`ssh -Q kex`, rc=0), so the same client connected with no warning (`grep -c post-quantum` -> 0, rc=1). One box had the algorithm, the other did not.
+
+## What 10.6p1 changes
+
+OpenSSH 10.6p1 is the version the fleet now runs at the edge. It is the SSH layer of the [security model](/operations/security/), not a replacement for the [old key that retired](/operations/2026-06-08-the-ssh-key-the-box-no-longer-needs/). The client's KEX list includes `mlkem768x25519-sha256` (`ssh -Q kex`, rc=0), and the Sanctum sshd config selects it explicitly:
+
+```
+KexAlgorithms mlkem768x25519-sha256,sntrup761x25519-sha512@openssh.com
+```
+
+That line is line 6 of `/opt/sanctum-ssh/etc/sshd_config` on both firewalls (`sudo grep -n KexAlgorithms` -> rc=0). The same config pins `Port 2222` (line 1), `PasswordAuthentication no` (line 8), `AllowUsers pi` (line 10), and `UsePAM yes` (line 11). The `UsePAM yes` is not decoration: the first build without PAM refused the `pi` login with "account is locked."
+
+The host keys are generated once, at `/opt/sanctum-ssh/etc/ssh_host_ed25519_key` and three siblings, and the service does not regenerate them. On the firewalls the systemd unit `sanctum-ssh.service` is both active and enabled (`systemctl is-active` and `is-enabled` -> rc=0), so the 10.6p1 listener survives a reboot.
+
+## The rollout, port by port
+
+The fleet did not replace its system sshds. It added a second listener on a Sanctum port, leaving the OS sshd on 22 as the fallback.
+
+| Node | SSH role | Version | Port | State |
+|---|---|---|---|---|
+| mbp | client | OpenSSH 10.6p1, OpenSSL 4.1.0 | outbound | PASS |
+| mbp | system sshd | OpenSSH 10.5p1 | 22 | PASS |
+| manoir | system sshd | OpenSSH 10.5p1 | 22 | PASS |
+| manoir | Sanctum sshd | OpenSSH 10.6p1, OpenSSL 4.1.0 | 2223 | BLOCKED |
+| manoir-fw | Sanctum sshd | OpenSSH 10.6p1, OpenSSL 3.0.2 | 2222 | PASS |
+| manoir-fw | system sshd | OpenSSH 8.9p1 | 22 | PASS |
+| chalet-fw | Sanctum sshd | OpenSSH 10.6p1, OpenSSL 1.1.1f | 2222 | PASS |
+| chalet-fw | system sshd | OpenSSH 8.2p1 | 22 | FAIL |
+| chalet | none reachable | — | — | BLOCKED |
+| manoir-ha | none reachable | — | — | BLOCKED |
+
+The `mbp` client is 10.6p1 (`ssh -V` -> rc=0). Its system sshd is still 10.5p1 on 22 (`/usr/sbin/sshd -V` -> rc=0), and the Homebrew sshd 10.6p1 is installed but not yet a listener (`sshd -V` -> rc=0).
+
+`manoir` has the same shape: system sshd 10.5p1 on 22, Homebrew sshd 10.6p1 installed (`sshd -V` -> rc=0), and a Sanctum config that passes syntax check (`sshd -t -f ~/.sanctum/ssh/sshd_config-2223.conf` -> rc=0). It is not listening: `nc -z` on 2223 returns rc=1. Starting it needs root, and `sudo -n true` on `manoir` returns rc=1 with "a password is required." The config, start script, and LaunchDaemon are committed in the `manoir` repo; the listener is the one step left for the operator.
+
+`chalet` is offline (`tailscale status` -> "offline, last seen 20h ago"), and `manoir-ha` refuses the automation key (`ssh` -> `Permission denied (publickey)`, rc=255). Both are blocked on access, not on code.
+
+## The verification matrix
+
+From the `mbp` 10.6p1 client, the Sanctum listeners answered on both firewalls: `manoir-fw` port 2222 (`ssh` rc=0, PQ warnings 0) and `chalet-fw` port 2222 (`ssh` rc=0, PQ warnings 0). The system sshds answered too: `manoir` port 22 (`ssh` rc=0, PQ warnings 0), `manoir-fw` port 22 (`ssh` rc=0, PQ warnings 0), and `chalet-fw` port 22 (`ssh` rc=0, PQ warnings 1 — the 8.2p1 fallback).
+
+The one warning left is the one the rollout was meant to remove. On 2222, `chalet-fw` now runs 10.6p1 with the same `mlkem768x25519-sha256` KEX and the same `Port 2222`; the warning count is 0. The system sshd on 22 still carries 8.2p1 and still warns, but that is the fallback lane, not the Sanctum lane.
+
+<Aside type="note">
+The matrix is not a claim that every node is done. `manoir` 2223 is BLOCKED on a sudo prompt, `chalet` is BLOCKED on being offline, and `manoir-ha` is BLOCKED on key auth. The listeners that answered are PASS; the nodes that did not are named.
+</Aside>
+
+## The nodes that are not done
+
+`manoir` is the first server with a prepared but unstarted 10.6p1 listener. The config is tracked, the host keys are the Homebrew keys, and the LaunchDaemon plist is `com.sanctum.sshd2223` with `RunAtLoad` and `KeepAlive`. The start script runs `sshd -t` before `sshd -D`, so a syntax error fails before the daemon is up. What is missing is the operator's sudo password, not a file.
+
+`chalet` needs to come back online before its system sshd 8.2p1 can be retired. `manoir-ha` needs a key the automation lane can use. Until then, the fleet's edge is asymmetric: two firewalls speak 10.6p1 on 2222, one Mac speaks it on 2223, and the old 22 fallback is still the safety net.
+
+## The landing
+
+The fortress is not a wall. It is a fleet that agrees on the same handshake. On the firewalls, that agreement is live on 2222 and the warning is gone. On `manoir`, the agreement is a config file and a LaunchDaemon waiting for root. On `chalet`, it is a box that is not answering. The rollout is not finished because the fleet is not uniform; it is finished when the last warning is a deliberate fallback, not the default.
