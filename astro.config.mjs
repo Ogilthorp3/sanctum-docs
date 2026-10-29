@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-29 — Seven Shields at Both Gates', slug: 'operations/2026-10-29-seven-shields-at-both-gates' },
 								{ label: '2026-10-29 — The Warning That Blinded the Healer', slug: 'operations/2026-10-29-the-warning-that-blinded-the-healer' },
 								{ label: '2026-10-29 — The Client That Cried Down', slug: 'operations/2026-10-29-the-client-that-cried-down' },
 								{ label: '2026-10-28 — The Fleet Learned Post-Quantum SSH', slug: 'operations/2026-10-28-the-fleet-learned-post-quantum-ssh' },
