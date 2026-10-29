@@ -54,7 +54,7 @@ The fleet did not replace its system sshds. It added a second listener on a Sanc
 
 The `mbp` client is 10.6p1 (`ssh -V` -> rc=0). Its system sshd is still 10.5p1 on 22 (`/usr/sbin/sshd -V` -> rc=0), and the Homebrew sshd 10.6p1 is installed but not yet a listener (`sshd -V` -> rc=0).
 
-`manoir` has the same shape: system sshd 10.5p1 on 22, Homebrew sshd 10.6p1 installed (`sshd -V` -> rc=0), and a Sanctum config that passes syntax check (`sshd -t -f ~/.sanctum/ssh/sshd_config-2223.conf` -> rc=0). The listener answered after the operator's sudo prompt: `ssh -p 2223 manoir 'echo ok'` rc=0, `ssh -p 2223 manoir '/opt/homebrew/bin/ssh -V'` -> OpenSSH_10.6p1, PQ warnings 0, and `ssh-keyscan -t ed25519 -p 2223 manoir` rc=0. The LaunchDaemon is running (`launchctl print system/com.sanctum.sshd2223` -> `state = running`, rc=0).
+`manoir` has the same shape: system sshd 10.5p1 on 22, Homebrew sshd 10.6p1 installed (`sshd -V` -> rc=0), and a Sanctum config that passes syntax check (`sshd -t -f ~/.sanctum/ssh/sshd_config-2223.conf` -> rc=0). The listener answered after the operator's sudo prompt: `ssh -p 2223 manoir 'echo ok'` rc=0, `ssh -p 2223 manoir '/opt/homebrew/bin/ssh -V'` -> OpenSSH_10.6p1, PQ warnings 0, and `ssh-keyscan -t ed25519 -p 2223 manoir` rc=0. The LaunchDaemon is running under `haus.sanctum.sshd2223` (`launchctl print system/haus.sanctum.sshd2223` -> `state = running`, pid 97022, rc=0); the old `com.sanctum.sshd2223` label is gone (`launchctl print system/com.sanctum.sshd2223` rc=113).
 
 `chalet` came back online: `tailscale ping -c 1 chalet` rc=0 (pong via DERP, 126ms), `ssh chalet 'echo ok'` rc=0, PQ warnings 0, and `/usr/sbin/sshd -V` -> OpenSSH_10.3p1. It has no Homebrew ssh and no Sanctum listener (`/opt/homebrew/bin/ssh` rc=127, `brew` rc=127, `~/.sanctum/ssh` rc=1). `manoir-ha` still refuses the automation key (`ssh` -> `Permission denied (publickey)`, rc=255).
 
@@ -70,7 +70,7 @@ The matrix is not a claim that every node is done. `manoir` 2223 answered after 
 
 ## The nodes that are not done
 
-`manoir` is the server whose 10.6p1 listener answered. The config is tracked, the host keys are the Homebrew keys, and the LaunchDaemon plist is `com.sanctum.sshd2223` with `RunAtLoad` and `KeepAlive`; `launchctl print system/com.sanctum.sshd2223` reports `state = running` (rc=0). The start script runs `sshd -t` before `sshd -D`, and `sshd -t -f ~/.sanctum/ssh/sshd_config-2223.conf` rc=0.
+`manoir` is the server whose 10.6p1 listener answered. The config is tracked, the host keys are the Homebrew keys, and the LaunchDaemon plist is `haus.sanctum.sshd2223` with `RunAtLoad` and `KeepAlive`; its `ProgramArguments` is `~/.sanctum/bin/sshd-2223-start.sh`, which `mkdir -p run`, runs `sshd -t`, then `exec sshd -D`. `plutil -lint` rc=0; `launchctl print system/haus.sanctum.sshd2223` reports `state = running`, pid 97022 (rc=0); `run/sshd-2223.pid` exists. The old `com.sanctum.sshd2223` label is not found (`launchctl print` rc=113).
 
 `chalet` is back online with a system sshd 10.3p1, but no 10.6p1 listener yet; `manoir-ha` needs a key the automation lane can use. Until then, the fleet's edge is asymmetric: two firewalls speak 10.6p1 on 2222, one Mac speaks it on 2223, and the old 22 fallback is still the safety net.
 
@@ -80,7 +80,9 @@ The fortress is not a wall. It is a fleet that agrees on the same handshake. On 
 
 ## The next morning
 
-On 2026-10-29 the operator ran the rollout script. `manoir` 2223 answered: `ssh -p 2223 manoir 'echo ok'` rc=0, PQ warnings 0, `ssh -p 2223 manoir '/opt/homebrew/bin/ssh -V'` -> OpenSSH_10.6p1. The LaunchDaemon is running: `launchctl print system/com.sanctum.sshd2223` -> `state = running` (rc=0).
+On 2026-10-29 the operator ran the rollout script. `manoir` 2223 answered: `ssh -p 2223 manoir 'echo ok'` rc=0, PQ warnings 0, `ssh -p 2223 manoir '/opt/homebrew/bin/ssh -V'` -> OpenSSH_10.6p1. The LaunchDaemon is running as `haus.sanctum.sshd2223`: `launchctl print system/haus.sanctum.sshd2223` -> `state = running`, pid 97022 (rc=0); the old `com.sanctum.sshd2223` label is gone (rc=113).
+
+The LaunchDaemon was renamed from `com.sanctum.sshd2223` to `haus.sanctum.sshd2223` and now runs `~/.sanctum/bin/sshd-2223-start.sh` instead of the sshd binary directly. The script does `mkdir -p ~/.sanctum/ssh/run`, `sshd -t -f …`, then `exec sshd -D -f … -E …`; `run/sshd-2223.pid` exists (root, 6 bytes). The installed plist is `/Library/LaunchDaemons/haus.sanctum.sshd2223.plist` (`plutil -lint` rc=0); the old `com.sanctum.sshd2223.plist` is removed.
 
 Tailnet Lock is enabled: `tailscale lock status` rc=0 -> `Tailnet Lock is ENABLED.`, with trusted signing keys for `mbp` (`tlpub:1efbfb5df89d9b079ec20c15d3073845040035a9b86953cb234cad217bbd967d`) and `manoir` (`tlpub:3aa81e47a24e94b904ee8244f9c9649c51cdad3fb592093ef06d934ee3b77fd0`). `tailscale lock init --gen-disablements 2 --gen-disablement-for-support --confirm` rc=0; the two disablement secrets were printed at init and are not reproduced here. The status check immediately after init still said NOT enabled; the later check said ENABLED.
 
