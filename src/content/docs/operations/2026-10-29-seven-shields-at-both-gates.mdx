@@ -1,0 +1,47 @@
+---
+title: "2026-10-29: Seven Shields at Both Gates"
+description: "Enforcing bidirectional hostile-country GeoIP blocks across both Firewalla perimeters — and ringing Force Flow only when an inside device touches a bolted gate."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A monochrome graphite architectural sketch of twin stone gatehouses labeled GATE I and GATE II, seven bolted country shields CN RU KP IR BY SY CU spanning both gates, external arrows shattering silently against outer masonry, a taut inner tripwire touching CN to ring a watchman's bell, and Tommy the Abyssinian cat perched between the gates.](./images/hero-2026-10-29-seven-shields-at-both-gates.png)
+
+A silent country block hides the one fact you actually need: which device inside just tried to phone out.
+
+Before bolting seven country shields onto both Firewalla gates (`manoir-fw` Gold Pro and `chalet-fw` Purple), we audited 24 hours of live traffic against Firewalla's current GeoIP database (`/home/pi/.firewalla/run/countryData/geoip-country.dat`). Active household flows to China (`CN`), Russia (`RU`), North Korea (`KP`), Iran (`IR`), Belarus (`BY`), Syria (`SY`), and Cuba (`CU`) stood at zero. Not one legitimate service needed them. Yet Redis on `manoir-fw` held two silent history trails that had never paged anyone: `423` blocked hits (`pid=57089`) from an IoT endpoint to `api.cartsee.cartx.cloud` in China, and `12` blocked hits (`pid=4151`) from a household phone to `yandex.com` (`77.88.55.88:443`) in Russia. Worse, `chalet-fw` had zero country blocks at all.
+
+## Four traps between "create a rule" and an honest gate
+
+Turning that asymmetry into a self-healing, closed-loop perimeter across both sites exposed four mechanical traps that only live disk inspection caught:
+
+| Seam | Naive assumption | What live inspection proved |
+|---|---|---|
+| Production REST gate (`app-local.js`) | `POST 127.0.0.1:8834/v1/policy/create` creates a policy | Firewalla's local API gates `/v1/policy/*` behind `!firewalla.isProductionOrBeta()` (`404 Not Found`), whereas `/v1/encipher/simple?command=cmd&item=policy:create` stays enabled in production and writes native Region Blocking rules (`purpose: "region_blocking"`) visible in the iOS app. |
+| Stale vs live GeoIP DB (`country.js`) | Calling `country.init()` from `/tmp` loads the box's GeoIP map | Outside `/home/pi/firewalla`, `git rev-parse` fails inside `country.js` and silently falls back to a bundled 2021 `.dat` file that misclassifies German Hetzner ranges (`91.107.141.152`) as `IR`; running inside `/home/pi/firewalla` loads `/home/pi/.firewalla/run/countryData/geoip-country.dat`. |
+| `ipset` protocol skew on Purple (`v7.5`) | `sudo ipset list -t c_bd_country:CN_dm_set` always prints `Number of entries:` | Gold Pro (`ipset v7.15`) prints `Number of entries: 12810`, while Purple (`ipset v7.5`, kernel protocol 6 vs userspace 7) omits that header even when `278,552` bytes of CIDRs are loaded — requiring a member-line fallback so closed-loop checks neither lie green nor cry empty. |
+| WAN scan noise & `FireMain` flush lag | Alert on every `audit:drop:*` entry above the previous poll timestamp | Internet background scanners write continuously to `audit:drop:if:*` and `audit:drop:system`, while real LAN attempts land in `audit:drop:<MAC>` in batches ~15–25s after packet drop with `_ts` stamped at packet arrival. |
+
+## Enforcing 34,781 CIDR prefixes on both boxes
+
+`~/.sanctum/firewalla/sanctum-geoip-shield.py` enforces bidirectional (`direction: "bidirection"`) global Region Blocking policies across all seven jurisdictions on both `manoir-fw` and `chalet-fw`, enables `acl_audit=1` in `sys:features`, and refuses to exit `0` unless three independent layers agree on every reachable gate:
+
+1. **Policy layer:** An active, unscoped, non-disabled `type: "country"`, `action: "block"`, `direction: "bidirection"` policy exists for all seven ISO codes.
+2. **Netfilter layer:** `sudo iptables-save` confirms `FW_FIREWALL_GLOBAL_BLOCK` references `c_bd_country:<CC>_dm_set` for each code.
+3. **Kernel `ipset` layer:** Every `c_bd_country:<CC>_dm_set` holds a non-zero CIDR table (`12,810` `CN`, `18,820` `RU`, `2,068` `IR`, `550` `BY`, `394` `SY`, `111` `CU`, and `28` `KP` — `34,781` IPv4 CIDR blocks per box, mirrored in IPv6 `_dm_set6`).
+
+[Windu](/agents/windu/) checks `FW_FIREWALL_GLOBAL_BLOCK` hourly in `~/.sanctum/windu/windu-doctor.py` and daily in `~/.sanctum/windu/windu-threat-watch.py` (`hostile-geoip-shield`). Delete or disable a shield on either box, and Windu notices. `auto_patch_runtimes()` immediately runs `sanctum-geoip-shield.py --apply --box <host>` and bolts it back into place.
+
+## Ringing the bell only when an inside host touches the shield
+
+To alert without turning residential Shodan background noise into pager fatigue, `~/.sanctum/sentinels/firewalla-security-alarm-sentinel.py` (running every five minutes under `haus.sanctum.firewalla-security-alarm-sentinel`) added a second high-signal channel alongside `/alarms`:
+
+- **Strict LAN-MAC scoping:** Only Redis ZSET keys matching `^audit:drop:(([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2})$` are inspected; `audit:drop:system` and `audit:drop:if:*` WAN drops are excluded by construction.
+- **Dual attribution (`bType` + `pid`):** Audit rows match whether `FireMain` stamps `"bType": "country", "bTarget": "CN"` or records only `"pid"` against an active country-block policy.
+- **90-second overlap + deterministic event ledger:** Each poll queries `(watermark - 90s, +inf)` and deduplicates via `seen_geo_events` so a 20-second `FireMain` batch flush never slips behind an advancing watermark, while a 1-hour per-`(box, mac, country, dest)` cooldown collapses retry bursts into one Force Flow notification (`box=manoir-fw device=Playroom Laptop (10.0.0.50, FA:CE:DE:CA:CA:01) -> 223.5.5.5:443/tcp`).
+
+<Aside type="note" title="End-to-end verification across both sites">
+`sanctum-geoip-shield.py --apply` created the missing `SY`/`CU` policies on `manoir-fw` and all seven policies (`pid=10496..10502`) on `chalet-fw`, verifying identical `34,781`-CIDR `ipset` counts on both boxes (`ok: true`). Live outbound probes from `manoir` and `chalet` to `223.5.5.5:443` (`CN`) and `77.88.55.88:443` (`RU`) failed immediately (`curl` exit `7`), landed in `audit:drop:<MAC>` on their respective Firewalla boxes, and paged Force Flow cleanly on the next sentinel pass with zero repeat alerts on follow-up runs.
+</Aside>
+
+In [The Warning That Blinded the Healer](/operations/2026-10-29-the-warning-that-blinded-the-healer/) and [Closing the Seams Beneath the Shield](/operations/2026-10-27-closing-the-apocalypse-seams/), we hardened the kernels and daemons behind the perimeter. Now both gates match. Seven shields stand bolted across each portcullis: silent when outside storms hit the masonry, yet naming the culprit the instant any device inside reaches for a hostile shore.
