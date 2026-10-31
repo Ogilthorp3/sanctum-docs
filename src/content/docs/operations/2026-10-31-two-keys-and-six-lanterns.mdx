@@ -1,0 +1,47 @@
+---
+title: "2026-10-31: Two Keys and Six Lanterns"
+description: "Why an unpinned post-quantum SSH cutover blinded one gate's log poller, while Firewalla's own Device Active Protect microsegmentation masqueraded as a six-device quarantine."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A monochrome graphite architectural sketch of the stone CHALET GATE with a geometric 10.6 PQ key snapping into a KNOWN_HOSTS ledger box, six glowing household lanterns inside dotted DAP allowlist niches with stray sparks bouncing off, and Tommy the Abyssinian cat sitting beside a six-switch OK panel.](./images/hero-2026-10-31-two-keys-and-six-lanterns.png)
+
+Two warnings sat in [Windu](/agents/windu/)'s ledger on Halloween morning, and acting on either at face value would have broken a working defense.
+
+Checking Windu thirty-eight hours after [Seven Shields at Both Gates](/operations/2026-10-29-seven-shields-at-both-gates/) showed his autonomous patcher humming: `node` rolled across all three Macs, `cloudflared` and `opencode` updated on `manoir`, Home Assistant Green's `a0d7b954_tailscale` add-on bumped from `0.30.4` to `0.30.5`, and a live outbound probe to `www.yandex.ru` blocked and paged Force Flow on the first hit. Beneath that green surface, five seams still needed permanent surgery.
+
+## Seam 1: The post-quantum cutover that tripped `StrictHostKeyChecking`
+
+Starting at `2026-10-30T19:18Z`, `~/.sanctum/logs/firewalla-security-alarm-sentinel.log` began logging `REMOTE HOST IDENTIFICATION HAS CHANGED!` against `chalet-fw` every five minutes. Had the satellite firewall rebooted into a volatile key?
+
+Disk inspection on `chalet-fw` over port `2222` proved the opposite. Two minutes earlier (`15:16` EDT), `sanctum-ssh22.service` (`Sanctum OpenSSH 10.6p1 PQ sshd on 22`) had been enabled in systemd alongside `sanctum-ssh.service` (`2222`), permanently retiring Ubuntu 20.04's legacy `OpenSSH_8.2p1` daemon so port `22` negotiates `mlkem768x25519-sha256` and serves persistent ext4 host keys from `/opt/sanctum-ssh/etc/`. All three Macs (`manoir`, `mbp`, and `chalet`) still pinned the retired `8.2p1` key in `~/.ssh/known_hosts`. Meanwhile, `~/.sanctum/bin/firewalla-ssh-keycheck.sh` never noticed because it tested only `manoir-fw`'s LAN IP with `StrictHostKeyChecking=no`.
+
+We pulled the verified `ed25519`, `ecdsa`, and `ssh-mldsa44-ed25519` public keys directly from `/opt/sanctum-ssh/etc/` over an authenticated session, pinned them across `manoir`, `mbp`, and `chalet`, and upgraded `firewalla-ssh-keycheck.sh` to verify strict alias handshakes (`manoir-fw` and `chalet-fw`) twice daily.
+
+## Seam 2: Six micro-segmented lanterns mistaken for prisoners
+
+`windu-doctor.py` reported `5/6` lanes `OK` and one perennial warning: `device_quarantine` flagged six unmanaged IoT devices as "blocked INDEFINITELY" and advised running `fw-unblock-device.sh`. Running that command would have been an own goal.
+
+Inspecting the raw policy objects and `iptables-save` chains on `manoir-fw` showed what those six rules actually were:
+
+| Layer | What naive rule-scanning saw | What `manoir-fw` was actually enforcing |
+|---|---|---|
+| Host state (`hosts:<MAC>`) | Six non-screen IoT MACs with `type: "mac", action: "block"` and no `expire` | Every one of the six carried `acl: true` and `dap.state: "optimizing"` — none was quarantined from the LAN or its cloud controller. |
+| Policy metadata | Indefinite MAC block (`pid=40937..40943`, `4957`) | Every policy carried `"purpose": "dap"` and `"seq": 3` — Firewalla's **Device Active Protect** default-deny tail rule, alongside a synthetic `pid=1` placeholder (`target: "TAG"`). |
+| Netfilter (`iptables-save`) | `FW_FIREWALL_DEV_BLOCK_LO` jump for each MAC | Preceded in `FW_FIREWALL_DEV_ALLOW_LO` by `c_bd_dap_<mac>_alw_set` and `c_bd_dap_<mac>_tls_hostset` packet marks (`0x4f83`) that bypass the tail drop for learned legitimate destinations. |
+
+Extracting `find_rogue_mac_blocks()` in `~/.sanctum/windu/windu-doctor.py` to exclude `purpose == "dap"`, disabled rules, and non-MAC targets (`target == "TAG"`) preserved instant detection of real accidental quarantines (like [The Firewall That Quarantined the Dishwasher](/operations/2026-07-29-the-firewall-that-quarantined-the-dishwasher/)) while retiring the false alarm for good.
+
+## Seams 3–5: Cellar paths, root boundaries, and doubled logs
+
+While auditing every remaining Windu LaunchAgent and helper, we closed three quieter maintenance traps in the same pass:
+
+- **Homebrew Cellar time-bomb in `sshd-2223-start.sh`.** Following [The Fleet Learned Post-Quantum SSH](/operations/2026-10-28-the-fleet-learned-post-quantum-ssh/), `~/.sanctum/bin/sshd-2223-start.sh` hardcoded `/opt/homebrew/Cellar/openssh/10.6p1_1/sbin/sshd`, which would break `haus.sanctum.sshd2223` on the very next `brew upgrade openssh`. Switching to the stable `/opt/homebrew/opt/openssh/sbin/sshd` symlink — paired with `~/.sanctum/scripts/sanctum-harden-sshd2223.sh` to install the start script and config `root:wheel` under `/usr/local/libexec/sanctum/` and `/etc/sanctum/` — removes both the version-bump trap and the user-writable root path.
+- **Doubled lines in `windu-briefing.log`.** `windu-briefing.py` appended each line directly to `~/.openclaw/logs/windu-briefing.log` *and* printed to `stdout`, while `haus.sanctum.windu-briefing.plist` pointed `StandardOutPath` at the exact same file. Routing `StandardOutPath` to `/dev/null` and `StandardErrorPath` to `windu-briefing.err.log` cut the duplicate entries immediately.
+
+<Aside type="note" title="Six for six on live verification">
+`test_windu_security.py` passed `16/16` unit assertions. Reloading `haus.sanctum.windu-briefing` wrote single clean entries, `firewalla-ssh-keycheck.sh` logged `key-auth OK (manoir-fw + chalet-fw strict aliases verified)` with zero post-quantum warnings, `firewalla-security-alarm-sentinel.py` polled both gates cleanly (`failed=0`), `windu-threat-watch.py --patch-only` held `11/11` checks at `affected: false`, and `windu-doctor.py --armed` reached `6/6` `OK` (`regressions: 0`).
+</Aside>
+
+Falsify before you fortify. Had we deleted the six `dap` rules to turn a dashboard green, we would have stripped microsegmentation off six IoT devices; reading the kernel chains first turned a false alarm into a sharper sensor.
