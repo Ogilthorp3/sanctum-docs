@@ -1,0 +1,43 @@
+---
+title: "2026-10-31: Six Daemons Forged in Rust and Hardened Runtime"
+description: "Retiring six Python, Node, and Bash daemons into four Developer ID–signed Rust crates — closing a URL-traversal airlock bypass, ending an 8,640-spawn/day token-logging loop, and cutting daemon RSS in half."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A monochrome graphite engineering sketch of six precision-machined steel gears interlocked inside a chamfered minimalist aluminum block, set beside retired glass vacuum tubes, loose clockwork springs, and a machinist caliper on warm drafting paper.](./images/hero-2026-10-31-six-daemons-forged-in-rust.png)
+
+Six quiet daemons on `manoir` had stopped evolving months ago. Under [Language Maturity](/architecture/language-maturity/), Python and Node stop paying rent there and start charging interest. So we read every line first. Auditing those six listeners before porting them to `sanctum-rs` exposed three live boundary flaws, plus a silent `launchd` duel leaking token prefixes every ten seconds.
+
+## What was still running in interpreted runtimes
+
+Memory and CPU told the first half of the story. Before cutover, `ps` on `manoir` showed six steady-state daemons burning `151 MB` of resident RAM and over thirty minutes of cumulative CPU on busy-polling loops and repeated interpreter startups:
+
+| Legacy unit | Runtime | Port / trigger | Baseline RSS & CPU | Boundary or efficiency flaw uncovered |
+|---|---|---|---|---|
+| `ha-gateway.js` | Node.js | `bridge100:8199` | `19.0 MB` | Checked `ALLOWED_PATHS` with raw `req.url.startsWith('/api/states/')` without URL-decoding or dot-segment normalization (`%2e%2e` traversal), compared bearer tokens with `===`, and logged the first 20 chars of `HA_TOKEN` on startup. |
+| `dench-proxy.js` | Node.js (`root`) | `0.0.0.0:80` | `15.7 MB` | Ran the entire V8 runtime as `uid 0` solely to bind port `80`, and reconstructed WebSocket `Upgrade` requests by concatenating raw HTTP header strings. |
+| `msg-bus/bus.py` | Python `.venv` | `127.0.0.1:4076` | `18.0 MB`, `9m 05s` CPU | Polled SQLite `queue.db` four times per second (`time.sleep(0.25)`) around the clock and interpolated message bodies into AppleScript source strings. |
+| `chi-sentinel.py` + `fseventsd-sentinel.sh` | Python + `root` Bash | `127.0.0.1:7777` + `300s` | `60.2 MB`, `20m 51s` CPU | Held a `60 MB` Python process for a 30-second `/chi` JSON gauge while a separate `root` daemon spawned Python subprocesses every five minutes just to parse JSON state for [Reclaiming the FSEventsd Reservoir](/operations/2026-10-18-reclaiming-the-fseventsd-reservoir/). |
+| `grok-oauth-proxy.js` | Node.js | `127.0.0.1:4200` | `23.3 MB`, `28s` CPU | Stored live OAuth refresh and bearer tokens in plain V8 heap strings and rewrote `~/.grok/auth.json` without `Zeroizing` buffers. |
+| `agy-proxy.js` | Node.js | `127.0.0.1:6543` | `11.3 MB`, `15s` CPU | Ran under `ProcessType: Background` (susceptible to E-core starvation under GPU load) and spawned `agy` CLI subprocesses without isolated POSIX process-group reaping. |
+
+## Four Rust crates, built the Apple way
+
+Rather than redesigning any wire contract, we ported all six units into four focused crates in `sanctum-rs` (`bb52ca4`) with `100%` HTTP, SQLite WAL, and CLI parity:
+
+1. **`services/sanctum-airlock` (`sanctum-ha-gateway` + `sanctum-dench`).** `sanctum-ha-gateway` canonicalizes every incoming URI — rejecting `%2e`, `%25`, `%2f`, `%5c`, nul bytes, backslashes, double slashes, and `..` segments before checking the method-scoped allowlist — validates bearer tokens via length-hiding SHA-256 `subtle::ConstantTimeEq`, holds `HA_TOKEN` in `zeroize::Zeroizing<String>`, logs only an 8-hex-char SHA-256 fingerprint, and writes `0600` structured audit entries. `sanctum-dench` links directly against Apple's `<launch.h>` `launch_activate_socket("Listeners", ...)` FFI so `launchd` (`PID 1`) binds `:80` and hands the descriptor to an unprivileged `UserName=sanctum` process, proxying HTTP and RFC 6455 WebSockets over `hyper 1.x` `on_upgrade` with zero raw header concatenation.
+2. **`services/sanctum-msg-bus` (`sanctum-msg-bus`).** Preserves the exact SQLite WAL `queue.db` schema and `/enqueue`, `/msg/{id}`, and `/healthz` routes on `127.0.0.1:4076`, but replaces Python's `4 Hz` polling loop with `tokio::sync::Notify` (`0.0%` idle CPU) and passes iMessage text and buddy handles as positional `on run argv` parameters to `/usr/bin/osascript` so untrusted text never touches AppleScript syntax.
+3. **`services/sanctum-chi` (`sanctum-chi`).** Serves `/chi` and `/health` on `127.0.0.1:7777` while preserving all five Jedi Council capacity invariants (`--self-test` verified), and folds the root `fseventsd` balloon sentinel into `sanctum-chi fseventsd` using XNU `proc_pid_rusage` (`RUSAGE_INFO_V4` `ri_phys_footprint`) plus existing `NOPASSWD` `footprint`/`pkill` rules from an unprivileged `StartInterval=300` LaunchAgent.
+4. **`services/sanctum-sub-proxy` (`sanctum-grok-proxy` + `sanctum-agy-proxy`).** Wraps OAuth credentials in `Zeroizing<String>` with single-flight atomic `0600` refresh and `499` client-hangup stream aborts on `:4200`, while serving `:6543/health` from memory in `418 µs` (`test-agy-proxy-health.sh` `3/3` pass) and reaping timed-out CLI trees via negative-PGID `SIGTERM -> 2s -> SIGKILL`.
+
+## Two traps caught during live cutover
+
+Hot-swapping the LaunchAgents on `manoir` exposed two real host seams. Unit tests never saw them:
+
+- **The silent `launchd` duel on `:8199`.** The moment we booted out `gui/501/haus.sanctum.ha-gateway`, a stale duplicate `/Library/LaunchDaemons/haus.sanctum.ha-gateway.plist` (`system/` domain, `ThrottleInterval: 10`, `SuccessfulExit: false`) grabbed `10.10.10.1:8199`. Inspecting `~/.sanctum/logs/ha-gateway/launchagent.log` showed that whichever copy lost the boot race had been failing with `EADDRINUSE` and respawning every ten seconds — `8,640` failed Node startups per day, each printing the `HA_TOKEN` prefix. Retiring `ha-gateway.js` into an immediate `exit(0)` stub satisfied `SuccessfulExit: false` on the stale daemon immediately while `~/.sanctum/scripts/sanctum-seal-root-daemons.sh` removes the duplicate plist permanently alongside the `:80` `sanctum-dench` socket-activation cutover.
+- **macOS Application Firewall (`socketfilterfw`) vs. ad-hoc Mach-O on `bridge100`.** Loopback (`lo0`) daemons answered on the first millisecond, but `curl http://10.10.10.1:8199/health` completed the TCP handshake and stalled. Checking `/usr/libexec/ApplicationFirewall/socketfilterfw` explained why: `Firewall is enabled (State = 1)` with `Automatically allow built-in/downloaded signed software ENABLED`. `/opt/homebrew/bin/node` sat on the firewall allowlist; an ad-hoc (`codesign -s -`) Mach-O binary on non-loopback `bridge100` did not. Re-signing all six binaries with our Apple `Developer ID Application` certificate and **Hardened Runtime** (`--options runtime`, `flags=0x10000(runtime)`) both cleared `socketfilterfw` cleanly and turned on XNU's kernel enforcement against `DYLD_*` injection, unsigned code pages, and `task_for_pid` attachment.
+
+<Aside type="note" title="Live cutover telemetry on manoir">
+Workspace `cargo clippy -- -D warnings`, `cargo deny check`, and `15/15` crate unit + e2e tests passed cleanly (`sanctum-rs` `bb52ca4`). Across the five hot-swapped user daemons, resident memory dropped from `131.9 MB` to `58.6 MB` (`-55.6%` — led by `sanctum-chi` falling from `60.2 MB` to `11.8 MB`), idle CPU fell to `0.0%`, `GET /api/states/%2e%2e/config` on `:8199` returned `403` while authenticated `GET /api/states/sun.sun` returned `200`, and `rust_readiness.py` advanced the fleet registry to `12 graduated · 1 hardening · 1 rusted · 1 porting`.
+</Aside>

@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-10-31 — Six Daemons Forged in Rust and Hardened Runtime', slug: 'operations/2026-10-31-six-daemons-forged-in-rust' },
 								{ label: '2026-10-31 — The Name the NIC Kept', slug: 'operations/2026-10-31-the-name-the-nic-kept' },
 								{ label: '2026-10-31 — Two Keys and Six Lanterns', slug: 'operations/2026-10-31-two-keys-and-six-lanterns' },
 								{ label: '2026-10-29 — Seven Shields at Both Gates', slug: 'operations/2026-10-29-seven-shields-at-both-gates' },
