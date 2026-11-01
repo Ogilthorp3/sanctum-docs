@@ -1,0 +1,43 @@
+---
+title: "2026-10-31: One Compass for Every Horizon"
+description: "Turning The Holocron into a configuration-agnostic Sanctum control plane — replacing nine hardcoded endpoint assumptions with live topology resolution, subscription-first Jocasta routing, and full Rust fleet telemetry across hub and roaming Macs."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![An architectural graphite and ink sketch on dark slate drafting paper showing a glowing emerald-teal crystalline polyhedron centered inside a brass astrolabe compass on a wooden desk beside an attentive cat, with four delicate teal light-threads reaching outward to sketches of a stone manor, an open laptop, a pine-ringed mountain cabin, and a standalone tower workstation.](./images/hero-2026-10-31-one-compass-for-every-horizon.png)
+
+Open [The Holocron](/architecture/holocron-gui/) on `manoir` and the Status crystal glowed steady green. Click deeper and the illusion cracked. Home Assistant refused to connect on loopback. Cilghal's balance wing painted an offline card. Jocasta's chat spun for fifteen seconds and gave up, while carrying `mbp` onto another network left Family dark. Nine separate places still assumed the entire haus lived on `127.0.0.1` at June's paths, while October's [thirteen graduated Rust daemons](/architecture/language-maturity/) ran underneath without a seat on the glass.
+
+## Nine quiet drifts between summer and autumn
+
+Every drift had a reason when someone wrote it. None survived autumn intact. Auditing every IPC handler in `main.js` and every `fetch()` in `src/renderer/` against the live listeners on `manoir`, `mbp`, and `chalet` turned up nine concrete mismatches plus a crash-looping Archives server:
+
+| Surface | What the app assumed | What the runtime actually did |
+|---|---|---|
+| Home Assistant (`HausControlPanel`) | Hardcoded `http://127.0.0.1:8123` unless `HA_URL` was exported in the shell | `launchd` GUI apps do not inherit interactive shell exports; Home Assistant Green lives on the LAN / `bridge100` airlock in `~/.sanctum/endpoints.json`. |
+| Castellan Memory Pool (`App.tsx`) | Polled `GET :2189/capacity` and read `budgeted_used_mb` + `loaded[].service` | Rust `sanctum-castellan` serves `GET :2189/status` returning `used_mb`, `headroom_mb`, and `loaded[].name` / `phys_footprint_mb` — leaving `:2189/capacity` permanently `404`. |
+| Cilghal Balance (`App.tsx`) | Hardcoded a raw tailnet IP on `:8770/panel/#${VITE_CILGHAL_COACH_TOKEN}` | `cilghal-coach` binds loopback behind `tailscale serve` (matching MagicDNS `Host` headers, returning `404` on raw IP), and packaged builds lacked build-time env tokens without Keychain hydration. |
+| Kiwix Library (`SettingsPage` & `⌘K`) | Hardcoded `http://127.0.0.1:8888` | `kiwix-serve-start.sh` intentionally binds the tailnet interface only (no LAN listener), refusing loopback connections. |
+| `:38883` Origin Proxy (`ServiceIframe`) | Encoded origins with base64url (`-` / `_`) in React, decoded standard base64 in `main.js` | Any origin whose base64 encoding contained `-` or `_` decoded into a malformed hostname, and a duplicated `302` block rewrote `Location` headers twice. |
+| Jocasta Chat (`chat-with-jocasta`) | Opened a plain `http.request` to TLS `:4040`, never called `req.write(postData)`, and sent no bearer token | Every chat timed out after 15 seconds; worse, unauthenticated `:4040/v1/messages` routes to metered cloud fallback instead of `$0` subscription seats. |
+| Family & Screen Flow (`ScreenTimePanel`, `ScreenFlowHero`, `TopAppsCard`, `ActivityCard`) | Fetched `http://127.0.0.1:4077` directly from the renderer (including raw `DELETE` on holidays) | `holocron-tunnel` on `mbp` only forwarded `:2187`, `:2189`, and `:3344`, leaving Family blind off-box and bypassing `force-flow-delete` parent-unlock IPC. |
+| Vault Ceremony (`gvRun` & `GV_BIN_DEFAULT`) | Hardcoded a developer workspace path and spawned `sanctum-vault` attached to the parent TTY | Launching from a terminal let Rust `rpassword` open `/dev/tty` instead of piped `stdin`, hanging paper-escrow recovery drills indefinitely. |
+| Startup & Archives (`ensureSanctumBackends` + `jocasta-crm`) | Probed plain HTTP `:1111` and spawned a retired script; `jocasta-crm-server.py` referenced `Dict[str, Any]` without importing `typing` | `haus.sanctum.jocasta-crm` (`:6666`) crash-looped on `NameError`, holding Watchdog overall status in `degraded`. |
+
+## Resolving the topology before painting a pixel
+
+Qui-Gon's rule for multi-node software is simple: ask the host what it is, verify what answers, and let the operator override anything in one `0600` file. We built `resolveHolocronEnvironment()` in `main.js` and paired it with `<HolocronConfigProvider>` in the renderer so a single `.app` bundle adapts to every Sanctum configuration:
+
+1. **Five deployment profiles plus `auto`.** On launch, the resolver inspects `~/.sanctum/.node_id`, `~/.sanctum/endpoints.json`, and installed LaunchAgents to classify the Mac as `hub` (`manoir`), `remote` (`mbp`), `satellite` (`chalet`), `standalone` (single-Mac `127.0.0.1` install), or `custom`, merging operator overrides from `~/.sanctum/state/holocron-config.json` (`0600`).
+2. **Parallel candidate probing and Keychain hydration.** Each of the ten service endpoints races its ordered candidates (`127.0.0.1`, MagicDNS / LAN registry entries, and post-quantum TLS `:4078` for remote Force Flow) with sub-second timeouts, while Cilghal's `#token` fragment is hydrated main-side from `~/.sanctum/secrets/cilghal-coach-token` or login Keychain (`cilghal-coach-token`) so packaged builds never need build-time secrets baked into JavaScript bundles.
+3. **IPC transport for Force Flow and subscription-first Jocasta.** A shared `ffGet()` helper routes Family and Activity reads through `force-flow-get` in `main.js` (and holiday removals through `parent-unlock`-gated `force-flow-delete`). `chat-with-jocasta` now injects live Watchdog, Chi, and Sidecar telemetry into Jocasta's system prompt and cascades strictly across `$0` subscription and local seats (`:4200` Grok OAuth -> `:3456` Claude Max -> `:6543` Gemini AGY -> `:1337` Local MLX Cathedral).
+4. **Full October 2026 stack surface (`SanctumStackPanel` + `TopologySettingsCard`).** Status now renders progressive-disclosure Apple Settings cards for the Chi energy field (`:7777/chi` GPU/RAM/thermal/token axes) and `$0` inference seats, Windu's `6/6` security locks plus `/Volumes/SanctumVault` armor and `sanctum-chi fseventsd` probes, and the live daemon fleet parsed from `~/.sanctum/rust-readiness/rust_readiness.yaml` + `ps`/`launchctl` with Touch ID–gated `haus.sanctum.*` user-agent restarts. Settings gains a full **Topology & Configuration** card with profile pills, sidebar module switches (`Family`, `Haus`, `Voice`, `AI Council`), `holocron-tunnel` control, and a live ten-endpoint reachability matrix.
+
+## The CDP race inside native Electron E2E
+
+Shipping the Developer ID–signed bundle exposed one last seam. `HOLOCRON_E2E_MODE=native` failed on launch. Specifically, `tests/holocron-e2e.sh` polled `http://127.0.0.1:9223/json/version` and immediately ran `agent-browser connect 9223`. Chromium's DevTools socket answers `/json/version` milliseconds before `app.whenReady()` opens the first `BrowserWindow`. At that instant `/json/list` is still `[]`, so `agent-browser` issues `Target.createTarget` — a call Electron's DevTools server rejects outright (`Not supported`). Waiting for `"type": "page"` in `/json/list` and keeping native reloads on the packaged `file://` bundle closed the race for good.
+
+<Aside type="note" title="Verification & deployment across manoir and mbp">
+All static, security, and runtime gates passed with zero warnings: `pnpm audit --audit-level=high`, `pnpm lint` (`--max-warnings 0`), `pnpm lint:css`, `pnpm ux:check` (`32` files, `0` violations), `pnpm smoke` (`9/9` markers), `pnpm smoke:harden` (`23/23` boundary contracts including `HOL-15` `0600` config persistence and `HOL-16` `haus.sanctum.*` kickstart allowlisting), `pnpm smoke:vault` (`24/24` with `detached` `setsid` TTY isolation), `pnpm smoke:parent-unlock`, `yoda-port-drift-check.sh` (`5/5` on `:8765`), and `tests/holocron-e2e.sh` across `web`, `native`, and `release`. Restoring `from typing import Any, Dict` in `jocasta-crm-server.py` brought `:6666` back online, and the freshly signed `/Applications/The Holocron.app` was installed and `codesign --verify --deep --strict` verified on both `manoir` and `mbp`.
+</Aside>
