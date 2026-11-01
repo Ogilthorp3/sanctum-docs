@@ -24,13 +24,13 @@ Point an Electron `<iframe src="...">` at a backend and Chromium reads the heade
 
 The brute-force fix — strip those headers globally at the Electron level — is brittle, and it quietly disables protections you want everywhere else. So we didn't. Instead the Holocron runs a dedicated, transparent local HTTP proxy inside its `main.js` process on port 38883.
 
-The React renderer encodes the target **origin** (e.g. `http://10.0.0.5:8770`, one of the hosts on the [node topology](/architecture/node-topology/)) into base64 and constructs a proxy URL, appending the exact requested path:
-`http://127.0.0.1:38883/{base64Origin}/panel/`
+The React renderer encodes the target **origin** (using URL-safe base64url so `+` and `/` never collide with path segments on the [node topology](/architecture/node-topology/)) and constructs a proxy URL, appending the exact requested path:
+`http://127.0.0.1:38883/{base64urlOrigin}/panel/`
 
 That one routing schema keeps two very different fetch patterns honest:
 
-1. **Absolute paths resolve safely.** If the iframe's HTML fetches `/global.js`, the browser resolves it against the proxy root (`http://127.0.0.1:38883/global.js`) — no base64 prefix. The proxy detects the missing prefix, intercepts the `Referer` header (`.../{base64Origin}/panel/`), decodes the origin, and transparently fetches `http://10.0.0.5:8770/global.js`.
-2. **Relative paths resolve perfectly.** If the iframe fetches `app.js`, the browser resolves it against the iframe's exact URL directory (`http://127.0.0.1:38883/{base64Origin}/panel/app.js`). The proxy splits the base64 origin from the appended path, decodes it to `http://10.0.0.5:8770`, and fetches `http://10.0.0.5:8770/panel/app.js`.
+1. **Absolute paths resolve safely.** If the iframe's HTML fetches `/global.js`, the browser resolves it against the proxy root (`http://127.0.0.1:38883/global.js`) — no base64 prefix. The proxy detects the missing prefix, intercepts the `Referer` header (`.../{base64urlOrigin}/panel/`), decodes the origin, and transparently fetches `{origin}/global.js`.
+2. **Relative paths resolve perfectly.** If the iframe fetches `app.js`, the browser resolves it against the iframe's exact URL directory (`http://127.0.0.1:38883/{base64urlOrigin}/panel/app.js`). The proxy splits the base64url origin from the appended path, decodes the origin, and fetches `{origin}/panel/app.js`.
 
 On the way back, the proxy intercepts the response and strips `CSP`, `X-Frame-Options`, and `Cross-Origin-Embedder-Policy` before streaming it to the renderer. The panel loads. Subresources load. Routing works. Any external dashboard — one we wrote, one we didn't — drops into the Holocron looking like it was always part of the app, all while honoring the OS and Chromium sandbox constraints everywhere else.
 
@@ -39,6 +39,17 @@ Qui-Gon, who optimizes everything, calls the proxy elegant. Qui-Gon calls a lot 
 <Aside type="tip">
 When changing the proxy logic in `main.js`, Vite's HMR (Hot Module Reload) does **not** restart the main process. You must fully quit The Holocron (Cmd+Q) and restart it to apply proxy routing changes.
 </Aside>
+
+## Topology & Configuration Engine
+
+A desktop app that hardcodes `127.0.0.1` works only on the Mac where every daemon lives. Open that same app on a roaming laptop or a satellite node and half the cards go dark. Open it on a fresh single-Mac install without a tailnet and hardcoded remote hostnames fail in the opposite direction.
+
+To run cleanly across any deployment shape, `main.js` resolves a live environment snapshot (`resolveHolocronEnvironment`) before the renderer paints and re-probes on demand:
+
+1. **Role detection (`auto` | `hub` | `remote` | `satellite` | `standalone` | `custom`).** The resolver inspects `~/.sanctum/.node_id`, `~/.sanctum/endpoints.json`, and local LaunchAgents (`haus.sanctum.force-flow`, `haus.sanctum.watchdog-rust`, `haus.sanctum.holocron-tunnel`), then merges any operator overrides persisted at `~/.sanctum/state/holocron-config.json` (`0600` owner-only).
+2. **Parallel endpoint racing.** Every upstream surface — Watchdog (`:2187`), Force Flow (`:4077` HTTP / `:4078` post-quantum TLS), Navigator Sidecar (`:3344`), Castellan (`:2189/status`), Home Assistant (`:8123`), Command Center (`:1111`), Cilghal Coach (`:8770` with runtime Keychain fragment hydration), Kiwix (`:8888`), Jocasta CRM (`:6666`), and Dragonpit — races candidate URLs in parallel and binds to the first healthy responder.
+3. **IPC-mediated reads and Touch ID writes.** Force Flow reads (`force-flow-get`) and mutations (`force-flow-post`, `force-flow-delete`) traverse the Electron main process so roaming laptops reach post-quantum TLS `:4078` without browser CORS or self-signed certificate rejections, while mutating actions and `haus.sanctum.*` LaunchAgent restarts remain gated behind `sanctum-parent-unlock` Touch ID verification.
+4. **Live control plane (`SanctumStackPanel`).** Alongside Watchdog sector vitals, the Status destination surfaces the Chi capacity sentinel (`:7777/chi`), subscription-first `$0` AI seats (`:3456`, `:4200`, `:6543`, `:4040`, and Castellan-resident local MLX pools), Windu's six security locks plus `/Volumes/SanctumVault` mount state, and the [graduated Rust daemon fleet](/operations/2026-10-31-one-compass-for-every-horizon/).
 
 ## One pane of glass
 
