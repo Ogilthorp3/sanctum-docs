@@ -1,0 +1,56 @@
+---
+title: "2026-11-03: The Ear That Stayed Home"
+description: "Yoda's ear is Parakeet TDT 0.6B v3 on the Mini, and a missed transcript no longer sends the caller's audio to Deepgram."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A pencil-and-ink sketch on dark slate: a small green parakeet perched on the brass earpiece of an old desk telephone, listening, with a coiled cloth cord and a quiet lantern on the mahogany bench.](./images/hero-2026-11-03-the-ear-that-stayed-home.png)
+
+The mouth was already the one that passed the blind listen. The ear was not. `sanctum-stt` on `:3425` was Whisper base, a 141 MB `ggml-base.bin`, and the orchestrator still had a second rung that posted the caller's audio to Deepgram Nova-3 whenever that local hop missed its 800 ms. Parakeet TDT 0.6B v3 was named in the worker and never loaded. On 3 November the ear moved, and the cloud rung came off.
+
+## What is live
+
+| Piece | Where |
+|---|---|
+| Engine | `haus.sanctum.yoda-parakeet`, `mlx-community/parakeet-tdt-0.6b-v3`, `127.0.0.1:9011` |
+| Front door | `haus.sanctum.yoda-stt-worker` (`sanctum-stt`) on `:3425`, adapter `parakeet-stt` |
+| Ladder | Local ear, then the hold message. `YODA_STT_DEEPGRAM=0` |
+| Voice | Unchanged. Chatterbox fine-tune `cbx-yoda-mlx-q8` |
+
+`~/.sanctum/stt.yaml` points the Whisper `model_path` at a file that is not on disk, so the daemon falls through to the Parakeet proxy. `ggml-base.bin` is still in `~/.sanctum/models/whisper/` for a rollback. The Library plist for the new job is a symlink onto `~/.sanctum/launchagents/live/haus.sanctum.yoda-parakeet.plist`, which is the file launchd loaded.
+
+<Aside type="note">
+The first transcript after the Parakeet process starts can take about a second and a half, past the 800 ms hop, and that turn plays the hold message. The worker stays loaded. A warm line on this Mini was 120 ms.
+</Aside>
+
+## The smoke
+
+From `~/Projects/yoda-voice-agent`:
+
+```bash
+.venv/bin/python -m pytest tests/unit/test_stt_client.py -q
+./scripts/smoke-yoda-ear.sh
+```
+
+The unit file checks that the ladder is `stt.primary` then `stt.hold` unless Deepgram is explicitly enabled. The smoke checks the live front door, the model id, the `YODA_STT_DEEPGRAM=0` pin, and a second pass of `tests/fixtures/ready-i-am.wav`. That second pass has to come back containing "Ready" with `x-sanctum-stt-backend: parakeet-stt` inside 800 ms.
+
+On this landing the unit file was 3 passed. The committed fixture through `:3425` returned `Ready I am.` at 120 ms, backend `parakeet-stt`, with the adapter healthy and the pin at `0`. Those are the checks inside `scripts/smoke-yoda-ear.sh`.
+
+## Landed
+
+| Repo | Commit |
+|---|---|
+| `yoda-voice-agent` | `fadd6b0` |
+| `sanctum-config` (`~/.sanctum`) | `f4c7949` |
+
+Rollback is the reverse of the yaml and the pin: set `adapters.whisper.model_path` back to `ggml-base.bin`, restart `haus.sanctum.yoda-stt-worker`, and set `YODA_STT_DEEPGRAM` to `1` only if the cloud hop should take audio off the machine again. A kickstart does not reload plist environment. Bootout, then bootstrap.
+
+## EETISMAD
+
+| Letter | This change |
+|---|---|
+| Everything E2E tested | `tests/unit/test_stt_client.py` and `scripts/smoke-yoda-ear.sh`, green against the live ear |
+| in Sanctum-docs | This field note, sidebar entry under Field Notes |
+| Merged | `gitsync` to `origin/main` on `yoda-voice-agent` and `sanctum-config` |
+| And deployed | launchd already reads those `~/.sanctum` files. Health on `:3425` and `:9011` is the running ear |

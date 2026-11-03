@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-03 — The Ear That Stayed Home', slug: 'operations/2026-11-03-the-ear-that-stayed-home' },
 								{ label: '2026-11-01 — Every Dial at Rest', slug: 'operations/2026-11-01-every-dial-at-rest' },
 								{ label: '2026-10-31 — One Compass for Every Horizon', slug: 'operations/2026-10-31-one-compass-for-every-horizon' },
 								{ label: '2026-10-31 — The Fortress That Became a Product', slug: 'operations/2026-10-31-the-fortress-that-became-a-product' },
