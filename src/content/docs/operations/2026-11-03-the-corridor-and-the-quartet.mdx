@@ -1,0 +1,54 @@
+---
+title: "2026-11-03: The Corridor and the Quartet"
+description: "Replacing static HRV gates with a 30-day rolling readiness corridor and medication-aware RHR calibration, lighting 90-day sparklines and the Weekly Longevity Quartet, opening an 0600 Canadian/US bloodwork vault, and bringing full native parity to The Holocron Santé."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide architectural graphite, ink, and warm brass sketch on dark slate paper depicting a healer-watchmaker's mahogany bench: a glowing emerald-teal holocron pyramid sits beside four interlocking concentric brass training rings and an undulating silver pulse ribbon flowing safely inside a twin-railed brass corridor, flanked by sealed glass apothecary vials, a porcelain morning coffee cup, and Tommy the Abyssinian cat perched beside a quiet brass lantern.](./images/hero-2026-11-03-the-corridor-and-the-quartet.png)
+
+A static resting threshold does not know your autonomic nervous system. Cilghal learned that on Tuesday. Two days after [Every Dial at Rest](/operations/2026-11-01-every-dial-at-rest/) brought Apple Health and Withings together across [The Holocron](/architecture/holocron-gui/), a hardcoded population floor could still make the morning dashboard cry `low` recovery on a rested morning, because one fixed number cannot tell one person's normal from another person's fatigue.
+
+## The corridor replaces the gate
+
+Population HRV medians confuse inter-individual anatomy with intra-individual fatigue (`Plews et al., 2013 · PMID 23899752`; `Buchheit, 2014 · PMID 24791914`). Two healthy people can sit at very different baselines, and some medications shift resting heart rate without any true sympathetic overreaching.
+
+We replaced the fixed cutoff with `coach/recovery.py`. On every `/twin`, `/coach`, and `/panel/` request, Cilghal computes the person's own 30-day rolling HRV median and interquartile `0.5 × IQR` smallest worthwhile change (`SWC`) corridor alongside a 30-day RHR baseline that can allow for a logged medication that raises resting heart rate, and for deep-sleep architecture. Fresh installs with fewer than five watch nights fall back gracefully to population norms.
+
+Measured against a person's own baselines instead of a population floor, a rested morning reads `good` instead of a false-alarm `low`, and the overall Hero Level follows. Drop HRV below `78%` of corridor and spike RHR, and the amber `low` shield fires right on cue.
+
+## Ninety days of horizon and four rings
+
+Single-day snapshots also hide slow trends. Adding `coach/trends.py` and inline SVG sparklines across both `:8770/panel/` and `Santé` exposed what single numbers missed, with ninety days of trend behind every vital.
+
+Raising `VO₂max` toward a longevity target (`Mandsager et al., 2018 · PMID 30347096`) requires weekly rhythm rather than guesswork. The new **Weekly Longevity Quartet** (`GET /quartet`, `POST /quartet`, stored in `0600` `~/.sanctum/cilghal-coach/quartet.json` per household `profile_id`) pairs automatic Apple Watch workout classification with one-tap check-ins across four physiological pillars:
+
+| Pillar | Weekly dose | Physiological target |
+|---|---|---|
+| `Zone 2 Aerobic Base` | `3 × 45 min` nasal pace | Mitochondrial biogenesis & capillary density |
+| `Norwegian 4×4 VO₂max` | `1 × 4×4 min` hard intervals | Central stroke volume ceiling (`PMID 17414804`) |
+| `Strength & Carries` | `2 × 40 min` heavy resistance | Type II fiber retention |
+| `Mobility & Downshift` | `2 × 15 min` vagal work | Parasympathetic vagal tone & joint longevity |
+
+Cilghal routes the single highest-yield next session dynamically. On a `low` readiness morning, she holds `4×4` intervals and routes to `Mobility & Downshift`. On a `peak` or `steady` day, she can weigh the user's genetic profile and prioritize morning aerobic intervals to unlock maximal activity-dependent `BDNF` expression and prefrontal clarity.
+
+## Bloodwork that knows about medications
+
+Wearables see rhythm. Bloodwork sees cargo. Standard clinic portals routinely misread lab values that a supplement or medication can shift without any change in the underlying organ function.
+
+`coach/labs.py` (`GET /labs`, `POST /labs`, `0600` `~/.sanctum/cilghal-coach/labs.json`) adds a zero-cloud **Longevity Bloodwork Vault** tracking eight high-signal markers (`ApoB`, `Lp(a)`, `Cystatin C eGFR`, `Ferritin`, `HbA1c`, `hs-CRP`, `25-OH Vitamin D`, and `Homocysteine`):
+
+- **Dual-unit Canadian SI & US normalization.** Whether a Québec lab prints `ApoB` in `g/L` and `Lp(a)` in `nmol/L` or a US panel reports `mg/dL`, Cilghal normalizes units deterministically and grades against longevity targets rather than disease-floor reference ranges.
+- **Smart Paste & clean-room isolation.** Pasting raw portal lines into either UI parses markers locally via regex (`parse_lab_text`) with zero LLM calls and zero personal defaults in git. When an active entry in `medications.json` is known to skew creatinine, Cilghal explicitly flags `Cystatin C eGFR` as the true renal yardstick.
+
+## Morning coffee, safer skies, and native Santé parity
+
+Three proactive guardrails and full Electron parity completed the loop:
+
+1. **Routine-anchored pharmacology & neuro nudges.** `coach/daily_feedback.py` and `coach/sleep_coach.py` weave dynamic chronotype (`morning`, `intermediate`, `evening`), profile-aware acoustic wind-down cues, a personal caffeine cutoff, and the morning coffee routine into daily coaching.
+2. **Pre-flight travel radar.** `GET /twin` scans a 14-day lookahead across local DuckDB `v_event` calendar rows for flight keywords (`flight`, `vol`, `airport`, `YUL`, `YYZ`, `CDG`, `LHR`). When a person's own profile flags a travel precaution and a flight is coming up, both dashboards raise a short travel-wellness checklist.
+3. **Native Holocron `Santé` parity.** `main.js`, `preload.js`, `i18n.tsx` (`fr` + `en`), and `DigitalTwinDashboard.tsx` bring every new surface natively into The Holocron without opening a browser: the readiness header pill, 90-day `<MiniSparkline />` curves inside every biometric tile, one-tap Quartet ring toggles (`twin-quartet-toggle`), one-tap medication check-ins (`twin-medications-mutate`), the Smart Paste Bloodwork card (`twin-labs-mutate`), pre-flight alerts, and regimen-aware Sub-Cellular Sandbox prompts.
+
+<Aside type="note" title="EETISMAD closeout and MBP benchmark boundary">
+Landed at `cilghal-coach` `fe3a6e4` (`121/121` pytest + `27/27` live `tests/e2e_panel.sh` on `:8770`), `the-holocron` `4245110` (`pnpm lint --max-warnings 0`, `lint:css`, `ux:check` `0` violations, `smoke` `9/9`, `smoke:vault` `24/24`, `smoke:harden` `28/28` including `HOL-18`, `smoke:parent-unlock`, and `test:e2e`), and `sanctum-config` `120a5c9` (replacing unbounded `sys.stdin.read()` in `vault_hook_brief.py` with `read_stdin_bounded` so `agy` and `grok` vault hooks never block on open PTYs or unclosed pipes, gitignoring `cilghal-coach/*.json`, and passing `14/14` `test_cli_vault_install.py` across `manoir` and `chalet`). `/Applications/The Holocron.app` is Developer ID–signed, Apple-notarized, stapled, and verified live on `manoir`. Per a Council hold, zero builds or installs touched `mbp` during the active `qwen-haus-dragon` run; `origin/main` is ready for `mbp` pull once Phase 3 clears.
+</Aside>
