@@ -1,0 +1,73 @@
+---
+title: "2026-11-06: Four Hinges Behind the Airlock"
+description: "Eliminating shell interpolation in vault.sh, gating memory-vault-mcp HTTP reads behind opt-in bearer auth, stripping off-box fallback ladders on private turns in proxyd, and sealing Home Assistant state-forge and dench peer seams."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide architectural pencil, graphite, and charcoal cutaway sketch on dark slate paper showing a stone-and-iron submarine airlock bulkhead from the inside: four machined iron hinge-pins and a sliding deadbolt lock a circular hatch while a single warm amber lantern-prism illuminates a sealed conduit and four outer bridge pipes end cleanly against capped steel flanges.](./images/hero-2026-11-06-four-hinges-behind-the-airlock.png)
+
+An airlock only holds if nobody threads a pull-cord through the hinge pin. Six days after [Six Daemons Forged in Rust](/operations/2026-10-31-six-daemons-forged-in-rust/) moved our perimeter gateways onto compiled binaries, a red-team sweep across the haus traced every cross-trust hop from `sanctum-vm` and the tailnet back into `manoir`. None of the weak spots sat in the front door. Every single one hid in a convenience seam behind it: a shell string assembled for SSH, a loopback forwarder inside Lima, a two-message prompt envelope from OpenClaw, and a canonical route prefix that trusted `PUT` alongside `POST`.
+
+## Replacing the shell wire in `vault.sh`
+
+For months, `memory-vault/scripts/vault.sh` bridged VM and satellite agents to the authoritative Obsidian tree on `manoir` through a helper called `vault_run`. Strings crossed trust boundaries raw. That helper interpolated caller arguments into inline Python snippets and handed the resulting string to `bash -c` locally or `ssh "$MAC_SSH"` remotely. Single-quote escaping stopped casual typos, not hostile filenames or metacharacters, while path checks compared string prefixes without canonicalizing symlinks and concurrent same-second `send` bursts overwrote the same `<from>-<epoch>-<slug>.md` inbox file.
+
+We deleted `vault_run` outright. `vault_py` took its place:
+
+- **Zero remote shell or code shipping.** Local calls invoke `python3 -c "$VAULT_PY_BACKEND"` directly via `execve` argv vectors with `--` option guards. Remote SSH calls (`vault.sh`, `agy-vault.sh`, `grok-vault.sh`, and `screen.sh`) serialize only structured JSON argv vectors on `stdin` into static `--stdin-json` entrypoints on `manoir`. Neither shell metacharacters nor executable Python source ever cross the SSH wire.
+- **Canonical vault containment.** Every `search`, `read`, `write`, `list`, `send`, `read-msg`, `ack`, `seen`, and `board` path resolves through `os.path.realpath` containment against `VAULT_DIR`, rejecting `..` traversals, `.git/` writes, and file or directory symlink escapes.
+- **Collision-free atomic delivery.** `send` now opens inbox notes with `O_CREAT | O_EXCL | O_WRONLY` (`0644`) and appends `.2`, `.3` sub-second sequence suffixes under concurrent bursts while preferring exact stem matches on `ack` and `seen`.
+
+## Closing Lima's loopback reflection on `:42069`
+
+Binding `haus.sanctum.memory-vault` to `127.0.0.1` (`sanctum-cli` service-user template `bd3191f`) stops LAN and tailnet peers from reaching `:42069`, yet Lima's user-mode network stack forwards guest traffic addressed to `host.lima.internal` straight onto host `127.0.0.1`. From inside `sanctum-vm`, a loopback bind alone still looks wide open.
+
+We sealed `memory-vault-mcp` at two independent layers inside `sanctum-rs`:
+
+1. **Opt-in constant-time HTTP bearer gate.** `/v1/search` and `/v1/read` now inspect `MEMORY_VAULT_HTTP_TOKEN`. When unset or empty — the production default on `manoir`, where MCP clients speak stdio — both routes return `404 {"error":"disabled"}` while `/` and `/health` stay `200` for liveness probes. When a token is configured, `memory-vault-mcp` requires `Authorization: Bearer <token>` verified byte-for-byte in constant time, rejects query-parameter tokens, and logs unauthorized peer socket addresses without echoing secret query strings.
+2. **Symlink-aware `Vault::resolve` and `walk_md`.** Even for local MCP stdio callers, `Vault::resolve` now walks existing ancestor components via `fs::symlink_metadata` plus `fs::canonicalize` containment, and full-text directory walks skip symbolic links before reading disk.
+
+## Keeping Cilghal and Jocasta on the box during outages
+
+In `sanctum-proxy` (`:4040`), two subtle interactions threatened on-box privacy for Cilghal and Jocasta turns:
+
+- **The OpenClaw two-user-message blind spot.** OpenClaw splits each turn into two consecutive `role: "user"` blocks: the operator's prompt followed by a short runtime context block (`Runtime: agent=cilghal ...`). `route::is_high_stakes` inspected only `messages.last()`, which read the benign runtime footer and missed sensitive clinical or legal keywords one element earlier. `is_high_stakes` now scans every `user` block in the active turn — everything after the last non-tool `assistant` reply — preserving privacy routing across intra-turn tool loops and resetting cleanly on the next casual turn.
+- **Server-side off-box ladder stripping.** Even after a privacy reroute selected `council-mlx`, outage fallback chains could still step down onto localhost subscription shims (`:3456` Claude Max, `:6543` Gemini, `:4200` Grok) that look local by socket address yet forward prompts to external cloud APIs. `ModelEntry::is_on_box_inference` and `requires_on_box_privacy` now strip every cloud provider and every subscription shim from the candidate ladder on privacy reroutes and dedicated private seats (`cilghal-health`, `council-heretic`, `council-crm`). If local MLX is down, `proxyd` fails closed with `503` rather than leaking a private turn off-box.
+- **Dual-locked memory exclusion.** `MemoryConfig` keeps `memory.enabled: false` pinned in `config.yaml` and `sanctum-doctor.sh`, and excludes `cilghal` and `jocasta` in Rust even if an operator ever enables background recall for general seats.
+
+## Locking Windu's state table and localizing `dench`
+
+The same compile pass closed two remaining perimeter seams in `sanctum-airlock`, building on [The Fortress That Became a Product](/operations/2026-10-31-the-fortress-that-became-a-product/) and [The Corridor and the Quartet](/operations/2026-11-03-the-corridor-and-the-quartet/):
+
+| Surface | Previous behavior | Hardened contract |
+|---|---|---|
+| `sanctum-ha-gateway` (`:8199`) | Allowed `GET` and `PUT` on `/api/states/*`, letting a compromised VM forge Home Assistant entity state (`alarm_control_panel.alarmo`) without firing physical service calls | Allows read-only `GET /api/states/*` (`200`) and rejects `PUT /api/states/*` with `403` before Windu service evaluation |
+| `sanctum-dench` (`:80`) | Fallback bind defaulted to `0.0.0.0:80` and accepted any peer socket reaching launchd's listener | Defaults fallback bind to `127.0.0.1:80` and enforces `is_dench_peer_allowed`, admitting loopback and RFC1918 LAN (`holocron.local` and a local notifier) while rejecting RFC6598 tailnet and WAN peers (`403`) unless `DENCH_ALLOW_TAILNET=1` |
+| `yoda-token-minter` (`F4`) | Verified live tailnet `tag:admin` enforcement without hermetic regression tests | Pinned in `~/.sanctum/tests/test_livekit_token_minter.py` (`2/2` pytest) verifying untagged peers receive `403` and `tag:admin` peers mint scoped room tokens |
+
+`sanctum-doctor.sh` enforces those vault invariants on every run: `sanctum-vm` probing `host.lima.internal:42069/v1/read` must receive `000`, `401`, or `404`, every non-loopback interface on `manoir` must refuse `:42069/health` at TCP connect (`curl` exit `7`), and `proxyd` must report `memory.enabled: false`.
+
+## Second sweep: sealing the hypervisor floor and the LAN control plane
+
+Once the four application hinges were pinned, we ran a second full-estate sweep across every socket, mount table, firewall chain, and SSH key on `manoir`, `sanctum-vm`, `chalet`, and `mbp`. An application token on `:42069` means little if the hypervisor still shares the host home directory underneath it. Seven deeper structural seams came out of the floorboards in one pass:
+
+- **Lima `virtiofs` unmount and `host.lima.internal` reflection drop.** Default Lima templates mount the host home tree over `virtiofs` and forward arbitrary TCP ports through the user-mode NAT gateway onto host `127.0.0.1` listeners (`signal-cli` `:8080`, OAuth shims `:3456`/`:4200`/`:6543`, `msg-bus` `:4076`). We unmounted the host tree live inside `sanctum-vm`, pinned `mounts: []` in tracked `lima/sanctum-vm.lima.yaml`, and added a pre-RFC1918 `lima_host_reflect_blocked` drop rule in `lima/sanctum-vm-nftables.conf` allowing only DNS (`:53`) and DHCP (`:67`/`:68`) to Lima's user-mode gateway while keeping the routed vmnet airlock bridge intact.
+- **`vm-ssh-gate.sh` forced-command allowlist — plus the healer that kept undoing it.** Tracing why `sanctum-vm` held an unrestricted `authorized_keys` entry revealed a classic self-inflicted regression: every fifteen minutes, `jocasta-bridge-heal.sh` verified SSH reachability and, on transient failure, appended the bare VM public key straight back into `authorized_keys`. Both `authorized_keys` and `jocasta-bridge-heal.sh` now pin VM keys to `restrict,command=".../vm-ssh-gate.sh"`, an exact `SSH_ORIGINAL_COMMAND` dispatcher admitting only the three MCP stdio shims (`jocasta`, `ha-green`, `firewalla`), `vault.sh --stdin-json`, `screen.sh --stdin-json`, `memory-sentinel.sh`, and health probes (`exit 126` on anything else). Satellite sync keys carry `no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty`.
+- **Forwarded control-plane auth, `tailscale whois` peer gates, and localhost CSRF shields.** An orphaned October socket-probe cluster (`python3 -m http.server` + `nc` listeners) was swept and permanently guarded in `sanctum-doctor.sh`. In `sanctum-force-flow` (`:4077`, fronted on LAN by PQ-terminator `:4078`), forwarded requests to `POST /notify` now require `SCREEN_CONTROL_TOKEN`, while `GET /history`, `GET /haus-health`, and `GET /vault/brain` require either `SCREEN_CONTROL_TOKEN` or a verified `tag:sanctum-admin` / personal tailnet identity via cached `tailscale whois --json` (`401` to unauthenticated LAN callers, preserving notarized Holocron reads). `meeting-briefs-server.py` (`:2600`) enforces the same `tailscale whois` peer gate (`403` to `tag:satellite`), symlink refusal, and `Content-Security-Policy: default-src 'none'`. Finally, `sanctum-msg-bus` (`:4076`), `sanctum-sub-proxy` (`:6543`, `:4200`), and `sanctum-watchdog` (`:2187`) now reject cross-site browser `POST` drive-bys (`Sec-Fetch-Site: cross-site` or external `Origin`) with `403`.
+
+Four hinges in Pass 1; seven floorboard bolts in Pass 2. `sanctum-doctor.sh` checks them on demand — and Windu now enforces them around the clock.
+
+## Arming Windu: twelve perimeter probes and a preemptive tripwire
+
+Fixing a gate once stops yesterday's intrusion. Teaching Windu to guard every hinge continuously stops tomorrow's before it reaches the inner door:
+
+- **Twelve twice-confirmed posture probes in `security-posture-sentinel.sh`.** First we fixed a subtle clobber bug where a non-loopback Heretic (`:6669`) exposure assigned `overall="RED"` directly instead of `page_red=1`, allowing the final summary block to overwrite the verdict back to `GREEN`. Then we expanded the sentinel from six checks to twelve, adding twice-confirmed functional probes for `:42069` Memory Vault loopback + unauthenticated read refusal (`vault42069`), `:4077` Force-Flow forwarded control-plane auth (`ff4077`), `:8199` Home Assistant airlock `PUT /api/states/*` refusal (`ha8199`), `:2600` morning-briefing forwarded refusal (`briefs2600`), `:4076`/`:6543` cross-site browser CSRF `403` shields (`csrf`), and rogue ad-hoc `http.server` / socket-probe sweeps (`roguehttp`).
+- **Armed `airlock_isolation` DRI check + Sith intrusion tripwire in `windu-doctor.py`.** Hourly `windu-doctor` (`7/7` checks) now verifies `mounts: []` in Lima, zero guest `/Users` mounts, active `lima_host_reflect_blocked` + `cve98432` `nftables` chains inside `yoda`, live `000` drop on `host.lima.internal:8080`, `vm-ssh-gate.sh` pins across both `authorized_keys` and `jocasta-bridge-heal.sh`, and `proxyd` `memory.enabled: false`. On top of structural checks, an intrusion tripwire escalates through Force Flow the moment it fires.
+- **Kernel-advisory durability, Darwin/Linux Tailscale alignment, and live digest attestation.** We committed Windu's previously untracked `CVE-2026-98432` kernel-advisory module (`kernel_advisory.py`, Firewalla `post_main.d` TCP IP-options drop, and `yoda` `nftables.d` include), eliminated false-positive `tailscale-fleet-currency` alerts when Homebrew ships a Darwin-only point release ahead of Linux `tailscale/tailscale:latest`, and wired `windu-ha-report.py` to append Windu's live `7/7` DRI shield status to nightly perimeter and daily digest dispatches.
+
+The bulkhead holds from both sides — and Windu's blade is drawn at the threshold.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Pass 1 shipped across `openclaw-skills` `fa6993f`, `sanctum-cli` `bd3191f`, `sanctum-rs` `292c941`, and `sanctum-config` `264a3b9`. Pass 2 shipped across `openclaw-skills` `12dc9cc` (`30/30` `test-vault-security.sh`), `sanctum-rs` `5733f06` (`4/4` `sanctum-force-flow`, `3/3` `sanctum-msg-bus`, `4/4` `sanctum-sub-proxy`, `19/19` `sanctum-watchdog`, zero clippy warnings), and `sanctum-config` `0425d13` (`4/4` `test_meeting_briefs_server.py` + six `sanctum-doctor.sh` `P2-1..P2-5` guards green). Windu continuous perimeter & tripwire upgrade verified across `21/21` `test_windu_security.py` unit tests on both Python `3.9.6` and `3.15`, live `12/12` `security-posture-sentinel.sh` (`-> GREEN`), live `7/7` `windu-doctor.py` (`regressions: 0`, `opencode` `2.2.6` current), and active family screen-time overrides preserved.
+</Aside>

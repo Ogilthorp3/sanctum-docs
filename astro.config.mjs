@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-06 — Four Hinges Behind the Airlock', slug: 'operations/2026-11-06-four-hinges-behind-the-airlock' },
 								{ label: '2026-11-03 — The Corridor and the Quartet', slug: 'operations/2026-11-03-the-corridor-and-the-quartet' },
 								{ label: '2026-11-03 — The Ear That Stayed Home', slug: 'operations/2026-11-03-the-ear-that-stayed-home' },
 								{ label: '2026-11-01 — Every Dial at Rest', slug: 'operations/2026-11-01-every-dial-at-rest' },
