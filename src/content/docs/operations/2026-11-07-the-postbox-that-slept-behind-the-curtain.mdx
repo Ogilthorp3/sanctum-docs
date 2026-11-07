@@ -1,0 +1,39 @@
+---
+title: "2026-11-07: The Postbox That Slept Behind the Curtain"
+description: "Waking a hidden Mail.app before every Jocasta harvest, armoring proxyd hot-reload across fseventsd heals, and lifting the Endocrine gland out of Background QoS starvation."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide architectural pencil, graphite, and charcoal cutaway illustration on dark slate paper showing a brass-and-mahogany pneumatic post station behind a heavy velvet curtain: a clockwork escapement lever illuminated by a warm amber brass lamp taps an overhead four-tube manifold open so sealed parchment cylinders drop cleanly into gleaming catch-trays while a small dial rests in the green arc.](./images/hero-2026-11-07-the-postbox-that-slept-behind-the-curtain.png)
+
+A dawn pager tells one of two stories. Either a pipe burst overnight, or the watchman mistook a quiet street for a broken gate. Saturday morning on `manoir` brought three critical alerts across Force Flow: Jocasta's `crm-freshness` email channel (`8.1h > 6h` SLA), `proxyd`'s `config-drift` hot-reload check, and Chitti's seventh organ (`Endocrine GLAND_DOWN`, `panel stale 1179s`). Tracing the logs behind [Every Dial at Rest](/operations/2026-11-01-every-dial-at-rest/) and [The Warning That Blinded the Healer](/operations/2026-10-29-the-warning-that-blinded-the-healer/) revealed one shared thread across all three alarms, because every single fault hid behind a silent macOS background boundary where a daemon stayed alive on paper while its Mach port, sandbox poll, or scheduler slot went dark.
+
+## 1. Jocasta's hidden postbox: two days, three silences
+
+Interpreter-wide Full Disk Access stays off the table on `manoir` by Windu's doctrine. Jocasta therefore reads correspondence hourly through AppleEvents against a hidden background `Mail.app` (`open -gj -a Mail`). Putting `mail-sync.log` beside `crm-freshness.log` separated three distinct mechanisms:
+
+- **Friday's real 39.6-hour server dormancy.** Inside Mail's sandboxed preferences, `PollTime` sat at `-1` ("Automatically"). Hidden with zero windows on a headless Mac Mini, `Mail.app` went idle and stopped polling Exchange and IMAP altogether. JXA still answered Jocasta in milliseconds from Mail's frozen local cache — returning the same forty overlap rows and exiting `0` while real mail piled up upstream. When `Mail.app` restarted Friday afternoon, Jocasta ingested **172 queued emails** in one run.
+- **Saturday morning's genuine overnight quiet.** Friday's final email landed at `22:08` local time. Nobody wrote overnight. At `06:11` Saturday, message age crossed six hours (`8.1h`) and paged Force Flow even though all four upstream servers held nothing new.
+- **The 18-day quiet-account cursor loop.** Whenever a quiet account such as iCloud caught up (`ceiling is None`) with zero new rows, `fetch_from_jxa` popped its slice cursor and re-walked ten 48-hour slices from scratch on the next run.
+
+Jocasta now closes all three seams together in `sanctum-crm`. Before reading a single tray, `_sync_mail_servers` pins `fetch interval` to `5` minutes, invokes `check for new mail`, and drains `background activity count` to zero (relaunching Mail cleanly on `-1712` timeouts). Quiet caught-up accounts retain a rolling `now - 36h` cursor in `mail-jxa-cursor.json`. Finally, `_email_quiet_why` rescues overnight and weekend silence up to **18 hours** — but only when `mail-sync-status.json` proves an active server sync succeeded within `2.5h` with zero failed accounts and no newer candidate rows.
+
+## 2. The deafened `proxyd` watcher and the starved Endocrine beat
+
+Two sibling mysteries completed the morning audit. Neither was a fluke.
+
+- **`proxyd` deafened after an `fseventsd` heal.** `proxyd` had started on October 26 and hot-reloaded `config.yaml` cleanly on October 27 (`loaded_at=1793131032`). On November 4 (`last_heal=1793848437`), Qui-Gon and `sanctum-chi fseventsd` reaped a bloated 3 GB `fseventsd` (`PID 48230 -> 67953`). On macOS, restarting `fseventsd` orphans existing `FSEventStream` Mach ports silently without emitting channel errors in `notify`. Both `config.yaml` and `budget.yaml` watchers sat permanently deaf until Friday evening's edit tripped `config-drift`. Worse, when `fseventsd` *was* alive, a single save fired eight un-debounced reloads in `97ms`. A new `watch.rs` supervisor now pairs `notify` directory events (`100ms` debounce + SHA-256 deduplication) with a **1-second `stat` + periodic SHA-256 fallback** on the same thread, automatically re-binding `RecommendedWatcher` whenever `stat-poll` catches a silent edit.
+- **Endocrine `GLAND_DOWN` under `ProcessType=Background`.** Both `haus.sanctum.endocrine-gland` (`StartInterval=120`) and its sentinel ran under `ProcessType=Background` (`PRIO_DARWIN_BG` + `IOPOL_THROTTLE`). During Friday evening's GPU load (`1794011050..1794015464`), disk throttling starved cold imports of the full Typer and Rich CLI tree past the `25s` wall four beats in a row before `republish_checkpoint()` could even execute. Then `launchd` coalesced and deferred the `Background` timer past `600s` (`1179s` and `3468s`), aging both `panel.json` and `beat-seen` into `GLAND_DOWN`. Lifting the gland and sentinel LaunchAgents to `ProcessType=Standard`, routing `endocrine-tick.sh` straight into stdlib-only `gland_daemon --once --compact` (**60ms** vs **390ms**), and bounding worst-case HTTP timeouts (`11.5s < 20s` inner alarm) eliminated both failure modes.
+
+| Subsystem & fault | Silent macOS mechanism | Permanent defense |
+|---|---|---|
+| Jocasta `Mail.app` harvest (`crm-freshness`) | Headless `PollTime = -1` stopped background Exchange/IMAP fetches; quiet nights breached 6h SLA | Active `check for new mail` + `background activity count` drain, pinned `now - 36h` cursor, and 7-gate `18h` sync-proof quiet rescue |
+| `proxyd` hot-reload (`config.yaml` & `budget.yaml`) | `fseventsd` restart (`PID 48230 -> 67953`) orphaned `FSEventStream` Mach ports with zero errors | `watch::spawn_file_watcher`: `notify` (`100ms` debounce + SHA-256 dedupe) + `1s` `stat`/SHA-256 poll + automatic watcher re-bind |
+| Chitti seventh organ (`haus.sanctum.endocrine-gland`) | `ProcessType=Background` deferred `StartInterval=120` past `600s` and throttled CLI imports past `25s` | `ProcessType=Standard`, stdlib-only `gland_daemon --once --compact` (`60ms`), and `11.5s` worst-case probe budget |
+
+Every hidden curtain in the house now answers to a direct mechanical check. Quiet nights sleep undisturbed, and real stalls surface on time.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Shipped across three repositories and live-verified on `manoir`: (1) `sanctum-crm` (`153d22b`) — `329 passed, 1 skipped` (`+11` mail/sentinel tests); `PollTime` pinned `-1 -> 5`, `haus.sanctum.crm-freshness` `exit 0` (`8/8` channels `ok`). (2) `sanctum-rs` (`17d438b`) — `331 passed, 0 failed` in `sanctum-proxy` (`+3` `watch::tests` covering dead-`fseventsd` atomic-rename poll fallback, burst coalescing, and parse-failure retry), `clippy -D warnings` clean, deployed via `deploy-proxyd.sh`. (3) `sanctum-cli` (`0c754eb`) — `2068 passed, 4 skipped` (`66/66` endocrine tests, `ruff` + `mypy` clean), `Standard` QoS LaunchAgents reloaded on `manoir` with `60ms` beats and `HEALTHY` sentinel checks.
+</Aside>
