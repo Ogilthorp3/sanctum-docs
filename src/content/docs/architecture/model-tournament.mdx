@@ -1,6 +1,6 @@
 ---
 title: Model Tournament
-description: How new models earn their seat at the Council — automated evaluation, per-category benchmarking, and zero-touch deployment.
+description: How new models earned their seat at the Council — automated evaluation, per-category benchmarking, and a promotion path that now waits for a human.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -10,10 +10,10 @@ import CouncilRoster from '../../../components/CouncilRoster.astro';
 
 A new model drops on OpenRouter. The card says it's "state of the art." The benchmark thread says it's "incredible." Someone on Reddit says it changed their life. None of these people are running a Jedi Council on a Mac Mini in Québec, so none of these opinions are useful.
 
-When you play the game of throughputs, you win or you die. There is no middle ground, there is no honourable mention, and there is no "promising direction." The question isn't "is it good?" — that's what marketing answers. The question is: "is it better than what we have, at the specific thing each Jedi needs?" That question can only be answered by training an adapter, running the [eval suite](/architecture/eval-harness/) against the reigning champion, and making it clear four progressively-finer gates before it earns the throne. So that's what happens here. Automatically. Without a human in the loop. Without vibes.
+When you play the game of throughputs, you win or you die. There is no middle ground, there is no honourable mention, and there is no "promising direction." The question isn't "is it good?" — that's what marketing answers. The question is: "is it better than what we have, at the specific thing each Jedi needs?" That question can only be answered by training an adapter, running the [eval suite](/architecture/eval-harness/) against the reigning champion, and making it clear four progressively-finer gates before it earns the throne. So that's what happened here. Automatically. Without a human in the loop, until the autumn of 2026 put one back at the last door. Without vibes.
 
-<Aside type="note">
-This has crowned its own kings since 2026-04-12. Status: automated — no human signs off on a promotion, and the page you are reading was true the last time the gate stack ran, which was probably last night.
+<Aside type="caution" title="Status, 2026-11-08">
+This tournament crowned its own kings from 2026-04-12. That nightly pipeline is retired with its 35B base model, the forges that followed it are parked, and a deploy to the brain now waits for a human's go. The brain has served plain Qwen3.8-27B-4bit with no adapter since 2026-10-02, after the promotion script measured a Dragonforge II adapter against an older model's score file. The pipeline below is the record of how the tournament ran.
 </Aside>
 
 ## The Pipeline
@@ -52,7 +52,7 @@ cd ~/Projects/council-autoresearch && ./run_overnight.sh
 python benchmark.py
 ```
 
-The thresholds are deliberate, and more importantly they are *derived, never set*. Each one is the current champion's own eval score plus a margin — so the bar for "better" is whatever the sitting king actually proved, not a round number someone liked. A king is replaced only when the challenger clears every gate the king himself defined: not on a procedural technicality, not by a single lucky run, and absolutely not because the herald liked the look of it. The full calibration story — six days of it, including the gate that was wrong for two weeks — lives in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/).
+The thresholds are deliberate, and more importantly they are *derived, never set*. Each one is the current champion's own eval score plus a margin — so the bar for "better" is whatever the sitting king actually proved, not a round number someone liked. A king is replaced only when the challenger clears every gate the king himself defined: not on a procedural technicality, not by a single lucky run, and absolutely not because the herald liked the look of it. The full calibration story — six days of it, including the gate that was wrong for two weeks — lives in [The Champion Gate Stack](/operations/2026-06-08-the-champion-gate-stack/). A derived bar is only as current as the file it is derived from: on 2026-10-02 the promotion script was found deriving a Qwen3.8 adapter's floor from the May 35B model's score file, and promotion now refuses unless candidate and base are the same model on the same cases.
 
 ## The Categories
 
@@ -67,7 +67,7 @@ The eval suite scores every candidate in six categories, and a champion only shi
 | `isolation` | It keeps secure-tier data inside the secure tier |
 | `jailbreak` | It says no to the prompt designed to make it say yes |
 
-The current local champion is the LoRA adapter symlinked at `~/.sanctum/adapters/production-champion` (today: `champion-exp-20260512-170902`), trained on top of `Qwen3.6-35B-A3B-4bit`. That symlink *is* the throne. When the gate stack crowns a successor, `promote_champion.sh` re-points it, refreshes the per-master floors, and recalibrates the gates so the next challenger has to beat the new king, not the old one.
+There is no local champion today. In the tournament's day the champion was the LoRA adapter symlinked at `~/.sanctum/adapters/production-champion` (from May, `champion-exp-20260512-170902`), trained on top of `Qwen3.6-35B-A3B-4bit`. That symlink *was* the throne. When the gate stack crowned a successor, `promote_champion.sh` re-pointed it, refreshed the per-master floors, and recalibrated the gates so the next challenger had to beat the new king, not the old one.
 
 <Aside type="tip">
 The `domain` cases are mined from real `instance.yaml` values. If the model doesn't know that port 1337 is the MLX seat, or that `bridge100` must come up before the VM, or which device on the LAN belongs to which kid — it fails. No partial credit for "good reasoning about networking." You know the topology or you don't. (The real MACs never make it into this public doc — placeholders only, `AA:BB:CC:DD:EE:XX` — but the eval runs against the live values.)
@@ -79,7 +79,7 @@ The gate stack decides which model serves which agent. Not a human. Not a commit
 
 <CouncilRoster variant="tiered" />
 
-The logic behind those rows: each agent routes to a *logical tier* (`council-tiered`, `council-local`, `council-secure`), and `proxyd` on `:4040` [resolves the tier to a concrete model](/architecture/dynamic-model-routing/). Cilghal runs `council-local` — its primary is the local `Qwen3.6-35B-A3B-4bit-text` and it never leaves the box, because health data and fund terms cannot leave the machine. That is a hard privacy constraint, not a performance tradeoff: the gate stack picks the best *eligible* model for Cilghal, and "eligible" means "local, full stop."
+The logic behind those rows: each agent routes to a *logical tier* (`council-tiered`, `council-local`, `council-secure`), and `proxyd` on `:4040` [resolves the tier to a concrete model](/architecture/dynamic-model-routing/). Cilghal runs `council-local` — its primary is the local Qwen3.8-27B-4bit, behind the ablated door on `:6669`, and it never leaves the box, because health data and fund terms cannot leave the machine. That is a hard privacy constraint, not a performance tradeoff: the gate stack picks the best *eligible* model for Cilghal, and "eligible" means "local, full stop."
 
 <Aside type="caution">
 Privacy enforcement is per-agent, and it is only as honest as the tier each agent is pinned to. Cilghal is genuinely local-only. But the `council-secure` tier currently resolves to `gemini-3.1-pro-preview` (a cloud model), and Ki-Adi-Mundi's primary is `council-tiered/council-max-thinking` (cloud-tiered with local fallback) — so "secure" does not yet mean "local" for every agent the name suggests. Treat the table above as the source of truth and the tier *names* as aspirational until `council-secure` is repointed at a local seat. Verify the resolved primary, not the tier label.
@@ -91,12 +91,12 @@ The benchmark evaluates every model in the LiteLLM config plus the direct local 
 
 | Seat | Where | Role |
 |------|-------|------|
-| `Qwen3.6-35B-A3B-4bit` | local MLX, `:1337` (mTLS) | Haus default — the local champion's base model |
-| `council-code` → `Codestral-22B-v0.1-4bit` | local, `:3301` | On-call code seat for Qui-Gon |
+| `Qwen3.8-27B-4bit` | local MLX, `:1337` (mTLS) | Haus default brain, no adapter since 2026-10-02 |
+| `council-code` → `Muse-Glimmer-30B-4bit` | local, `:3301` | On-call code seat for Qui-Gon |
 | `council-max-thinking` → `claude-opus-max` | cloud tier | Heavy reasoning when local isn't enough (Max subscription, latest Opus) |
 | `council-secure` → `gemini-3.1-pro-preview` | cloud tier | See the caution above — name says secure, route says cloud |
 
-`Codestral-22B` replaced `Qwen2.5-Coder-14B` on the code seat — the 14B held it for a while and earned its retirement, which is the only honourable way to leave a throne in this haus. And bigger is not always the point: a 30B mixture-of-experts with 3B active can post a flashy coding score and still lose to a denser model that knows the *domain* cases cold. The gate stack doesn't care about your architecture diagram. It cares whether you know which port is the MLX seat.
+`Codestral-22B` replaced `Qwen2.5-Coder-14B` on the code seat, Devstral followed it, and Muse-Glimmer-30B holds it now — the 14B held it for a while and earned its retirement, which is the only honourable way to leave a throne in this haus. And bigger is not always the point: a 30B mixture-of-experts with 3B active can post a flashy coding score and still lose to a denser model that knows the *domain* cases cold. The gate stack doesn't care about your architecture diagram. It cares whether you know which port is the MLX seat.
 
 ## Verifying it yourself
 
