@@ -84,6 +84,35 @@ def test_table_pipe_token_rule_fires_and_escape_passes():
         assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
 
 
+# ── contrib-check: mail-account labels ───────────────────────────────────────
+
+def test_mail_account_label_rule_fires_and_role_names_pass():
+    """A 2026-11-08 field note named mailboxes by their labels (built from the
+    family name, a former employer and the firm) with their message counts.
+    Pages describe an account by its role instead. The rule must catch the
+    label shapes and leave ordinary uses of the same words alone. Fixtures
+    are synthetic: the provider word and the employer are made up."""
+    cc = _load_contrib()
+    surname = "Nepveu"
+    fire = [
+        f"`{surname} Inbox` jumped by `+3` messages.",
+        f"`Acme - {surname}` caught up last.",
+        "a catch-up slice on `Triptyq` hit the timeout.",
+        "queries against the Triptyq exchange account timed out.",
+    ]
+    hold = [
+        f"The World Model is a statistical picture of Manoir {surname}.",
+        "`import triptyq` must resolve to this repo.",
+        "The firm's name, Triptyq, is not a secret.",
+        "a catch-up slice on the largest inbox hit the timeout.",
+    ]
+    for text, should_fire in [(t, True) for t in fire] + [(t, False) for t in hold]:
+        rep = cc.Report()
+        cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+        fired = any("mail-account" in e for e in rep.errors)
+        assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
 def test_steps_item_counts_as_framing_for_a_code_block():
     """A numbered <Steps> item frames the block it introduces. Steps items
     parse as "bullet"; requiring prose flagged every Steps-based guide, which

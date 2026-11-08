@@ -127,6 +127,13 @@ Docs ship to a public repo. Assume a hostile reader. The following never appear 
   2026-08-24 after 36 such mentions were found live on sanctum.run** — the rule
   above covered haus identifiers exhaustively and had never contemplated the
   work lane. All seven patterns are now enforced by `contrib-check.py`.
+- **Mail-account labels and their counts** — the haus names its mailboxes
+  after the people and the firms behind them, so a label maps whose mail the
+  haus reads, and a count beside it measures someone's inbox. Describe an
+  account by its role ("the largest inbox", "the iCloud account") and leave its
+  message counts out. Added 2026-11-08 after a field note shipped three labels
+  with their weekend counts; `contrib-check.py` catches the label shapes without
+  listing any new private name.
 
 Canonical placeholder registry:
 

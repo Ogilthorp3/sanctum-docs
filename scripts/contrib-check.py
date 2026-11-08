@@ -126,6 +126,26 @@ LEAK_WORKLANE_RES = [
     (re.compile(r"\b\d{2}_(Gestion|Occasions)\b", re.I), "real fund document root — keep taxonomy generic"),
 ]
 
+# MAIL-ACCOUNT labels. The haus names its mailboxes after the people and the
+# firms behind them, so a label maps whose mail the haus reads, and a count
+# beside it measures someone's inbox. Describe an account by its role ("the
+# largest inbox", "the iCloud account") and leave its counts out. Added
+# 2026-11-08, after a field note shipped three labels with their weekend
+# counts. Per "lint where the data lives", these patterns reuse only names
+# this file already holds (the surname, the firm) plus generic words; no new
+# private string is published to catch the old ones.
+LEAK_MAIL_ACCOUNT_RES = [
+    (re.compile(r"\bnepveu\s+(exchange|icloud|gmail|outlook|mail|inbox)\b", re.I),
+     "mail-account label built from the family name — describe the account by its role"),
+    (re.compile(r"\b[a-z][a-z0-9]*\s+-\s+nepveu\b", re.I),
+     "mail-account label built from the family name — describe the account by its role"),
+    # Case-sensitive on purpose: the lowercase `triptyq` is a Python package.
+    (re.compile(r"`Triptyq`"),
+     "the firm's mailbox as a mail-account label — say \"the largest inbox\" and leave its counts out"),
+    (re.compile(r"\btriptyq`?\s+(exchange\s+account|inbox|mailbox)\b", re.I),
+     "the firm's mailbox as a mail-account label — say \"the largest inbox\" and leave its counts out"),
+]
+
 # UUIDs tied to real accounts (the rule names them). A SharePoint list GUID is
 # a direct object handle in the firm's tenant; one was live on 2026-08-24.
 LEAK_GUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b", re.I)
@@ -308,6 +328,13 @@ def check_no_leak(path, rel, body, body_line_offset, report):
                 report.err(
                     rel, i, "no-leak",
                     f"work-lane identifier '{m.group(0)}' — {hint}",
+                )
+
+        for rx, hint in LEAK_MAIL_ACCOUNT_RES:
+            for m in rx.finditer(line):
+                report.err(
+                    rel, i, "no-leak",
+                    f"mail-account label '{m.group(0)}' — {hint}",
                 )
 
         for m in LEAK_GUID_RE.finditer(line):
