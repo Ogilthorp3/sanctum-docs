@@ -21,7 +21,7 @@ def _label_hit(label):
     return bool(fl) and (hn == fl or hn in fl or fl in hn)
 ```
 
-When iOS hides a device's real name behind Private Wi-Fi Address, it can join broadcasting nothing but the bare word `iPad`. That word is a substring of "Albert's iPad Pro". The `family` dict is walked in `devices.yaml` order, Albert is listed first, and so **every anonymous iPad in the house silently became Albert's** — and was auto-written into his device list, permanently.
+When iOS hides a device's real name behind Private Wi-Fi Address, it can join broadcasting nothing but the bare word `iPad`. That word is a substring of "Albert's iPad Pro". The `family` dict is walked in `devices.yaml` order, Albert is listed first, and so **every anonymous iPad in the haus silently became Albert's** — and was auto-written into his device list, permanently.
 
 The fix was small: a bare device-type word — `iPad`, `iPhone`, `Watch`, `Mac` — now resolves to *no owner at all*, in either direction. It is a device type every member of the family owns at least one of, not an identity. Five regression tests, green suite, shipped.
 
@@ -44,7 +44,7 @@ andreanne_iphone     NEVER SEEN
 
 That string appears 9,722 times in the log. Columbo had never successfully identified a single phone in the entire life of the feature.
 
-The reason was structural. It listened for Apple's `_companion-link` mDNS advertisement during a fourteen-second browse — and iOS only advertises that while a device is awake and unlocked. A live probe from the hub returned twenty-eight instances: every Mac, every Apple TV, every speaker in the house. Not one iPhone. Not one iPad.
+The reason was structural. It listened for Apple's `_companion-link` mDNS advertisement during a fourteen-second browse — and iOS only advertises that while a device is awake and unlocked. A live probe from the hub returned twenty-eight instances: every Mac, every Apple TV, every speaker in the haus. Not one iPhone. Not one iPad.
 
 So Albert's curfew had been resting on static MAC addresses that had long since rotated away. His enrolled `phone_mac` was eight days stale. His enrolled iPad MAC did not exist in the Firewalla's host table at all. And the only thing still catching his devices when they rotated was the substring bug — the one that had just been fixed.
 
@@ -52,11 +52,11 @@ So Albert's curfew had been resting on static MAC addresses that had long since 
 A buggy fallback can be load-bearing. The substring match was wrong about *whose* device it was, but it was the last mechanism still pulling rotated phones into a child's curfew. Fixing the misattribution removed the enforcement with it, and the suite stayed green through both — because nothing tested the thing that had never worked. Before deleting a wrong mechanism, find out what it was accidentally doing right.
 </Aside>
 
-## A house full of impostors
+## A haus full of impostors
 
 The Firewalla sits on the gateway and sniffs Bonjour and DHCP around the clock. It already had the names columbo's brief browse kept missing. Columbo was already SSH-ing into that same redis for an unrelated purpose — it simply never used the name fields to pin. That was the fix: pin from the always-on view instead of the lucky one.
 
-Which surfaced the second problem. Ask this house which device is Albert's iPhone and four of them put a hand up:
+Which surfaced the second problem. Ask this haus which device is Albert's iPhone and four of them put a hand up:
 
 | Device | What it broadcasts |
 |---|---|
@@ -67,7 +67,7 @@ Which surfaced the second problem. Ask this house which device is Albert's iPhon
 
 The first live run of the new pass pinned **Kitchen 5** as Albert's iPhone. It was not merely a match — it was the *freshest* match, so most-recently-active handed it the pin over the real phone. Albert's curfew was active at the time. The next enforcement tick would have MAC-paused a kitchen speaker.
 
-It was caught before that tick fired, reverted, and the rule that prevents it is the house doctrine stated properly for the first time: `dhcpName` **overrules** `bonjourName` when the two disagree. They had been treated as interchangeable alternatives — try one, fall back to the other. They are not alternatives. They are ranked. A device firmware sets its own DHCP name; a Bonjour name can be echoed, inherited, or left behind as a relic by a device that was renamed years ago.
+It was caught before that tick fired, reverted, and the rule that prevents it is the haus doctrine stated properly for the first time: `dhcpName` **overrules** `bonjourName` when the two disagree. They had been treated as interchangeable alternatives — try one, fall back to the other. They are not alternatives. They are ranked. A device firmware sets its own DHCP name; a Bonjour name can be echoed, inherited, or left behind as a relic by a device that was renamed years ago.
 
 Two guards now stand in front of every pin: a member pin may never claim a MAC that belongs to a screen or shared device — the Basement Apple TV hosts the HomeKit hub, and pausing it at curfew would take the lights with it — and the device class must survive the dhcp-overrules-bonjour test.
 

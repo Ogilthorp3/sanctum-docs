@@ -1,0 +1,39 @@
+---
+title: "2026-11-08: The Linter That Said All Clear"
+description: "Replacing a silent BSD grep false-green in lint-haus.sh, clearing 48 Haus Rule drifts, healing Kaizen's stuck timer backlog, and converging eight Sanctum repos onto main."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil, graphite, and charcoal sketch on dark slate paper of an architectural watchmaker's workshop: at the center bench a brass optical comparator illuminates a braided steel cable and four synchronized escapement timers with a focused teal halo, while an Abyssinian cat watches from a neatly aligned row of sealed ledger volumes under a subtle amber lamp.](./images/hero-2026-11-08-the-linter-that-said-all-clear.png)
+
+An exit code of two is a confession. Pipe stderr into `/dev/null` and append `|| true`, and it becomes a compliment. For months on macOS, `scripts/lint-haus.sh` ended every run with `Violations: 0 — all clear.` Handed a file containing `The house lights turned on when we got home.`, it still printed `0`. A parallel Claude session caught the silence during preflight and dropped the repro into the Memory Vault. The [Green Lie](/operations/2026-08-08-the-green-lie/) had found its simplest disguise yet: BSD `grep` (`2.6.0-FreeBSD`) rejects `-P` with exit status `2`, and `2>/dev/null || true` promoted a broken flag into a clean bill of health across four hundred thirty-seven pages.
+
+## 1. Forty-eight drifts behind one swallowed flag
+
+Replacing BSD `grep -P` with an isolated `python3 -I` scanner inside `scripts/lint-haus.sh` turned the silent pass into a real map. Skipping fenced code blocks, inline code spans, markdown link targets, and preserved `title:` slugs narrowed two hundred forty-eight raw matches down to **48 actual Haus Rule violations** across twenty-five pages. Product names (`Home Assistant`, `HomeKit`), filesystem paths (`/home/`, `$HOME`), and genuine English idioms stay on an explicit allowlist.
+
+`lint-haus.sh --self-test` now runs a synthetic positive-and-negative fixture before deployment. The scanner cannot go deaf again. If the repro sentence fails to trigger exit `1`, or if legitimate `Home Assistant` and `$HOME` lines false-fire, the linter exits `2` on the spot. Sweeping all twenty-five prose pages restored `Violations: 0 — all clear.` honestly.
+
+## 2. Clearing Kaizen's stuck-timer backlog around a frozen spine
+
+Earlier this afternoon, R2D2's first [Kaizen](/operations/2026-11-08-two-seconds-against-a-five-second-flywheel/) audit (`agents/r2d2-kaizen.md`) surfaced five scheduled `launchd` jobs sitting at non-zero exit codes on `manoir`. At the same time, a deploy freeze held `sanctum-config` at commit `15ce8aa`. Not one byte inside `~/.sanctum` could move. Windu and Qui-Gon traced the four actionable faults to their owning repositories and live LaunchAgents instead:
+
+| Job surfaced by Kaizen | Root cause on disk | Permanent fix shipped |
+|---|---|---|
+| `haus.sanctum.rotate-secrets` (`last_exit=141`) | An orphan FIFO proved `ha_create_token()` died with `SIGPIPE` (`141`) writing to `fd 3` after `websocat` closed on step `[1/6]`, aborting `[2/6]`–`[6/6]` | Replaced FIFO + `websocat` in [Secret Rotation](/operations/secret-rotation/) (`rotate-secrets.sh`) with an in-memory `python3 -I` RFC 6455 WebSocket handshake over `subprocess.Popen` pipes (`0` `/tmp` files, `BrokenPipeError` caught, `chmod 600` log, guarded sub-rotators) |
+| `haus.sanctum.skills-push-vm` (`last_exit=1 -> 0`) | Three hotfixed files (`vault.sh`, `screen.sh`, `test-vault-security.sh`) had been `scp`'d directly onto `<VM>`, refusing `git merge --ff-only`, while `launchd` hit `/usr/bin/git`'s Xcode license shim | Prepended `/opt/homebrew/bin` in `push-skills-to-vm.sh`, switched `/tmp/skills.bundle` to `mktemp`, and added SHA-256 reconciliation for pre-staged files matching `refs/remotes/mini/main` while still refusing divergent VM edits (`exit 2`) |
+| `com.sanctum.den-override-once-20261012` (`last_exit=78 -> retired`) | Untracked one-shot LaunchAgent plist from October 12 still loaded in `gui/501`, pointing at deleted `~/.sanctum/tmp/den-override-2130.sh` | Booted out `gui/501/com.sanctum.den-override-once-20261012` and removed the orphan plist under the no-orphan-config rule |
+| `haus.sanctum.post-boot` (`last_exit=6 -> 0`) | Stale boot-time `exit 6` persisted in `launchd` long after all `41` Apple service permissions recovered | Verified `apple-services.sh --json` (`0` failures) and kickstarted `haus.sanctum.post-boot` (`41/41 pass`, Signal suppressed, `last_exit=0`) |
+
+The fifth job stays at `exit 1` on purpose. Windu's scanner is read-only by design, and its next step belongs to a human.
+
+## 3. Eight repositories converged on `main`
+
+Repaired daemons mean little when local working trees drift. Walking every repository under `~/Backups` and `~/Projects` converged all eight ready Sanctum codebases cleanly onto `origin/main` — `sanctum-backup-config`, `openclaw-skills`, `sanctum-backup-deadman`, `jocasta-council` (isolating `jocasta-council.duckdb` from live CRM locks), two private repositories, `health-center`, and `sanctum-docs` — while preserving open review branches untouched and holding `sanctum-config` pinned at `15ce8aa` until the freeze lifts.
+
+Every gate that reports zero now proves it can count to one first.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Shipped and verified across eight repositories on `manoir`: (1) `sanctum-docs` — `lint-haus.sh --self-test` `PASS` + `438` docs at `0` violations, `contrib-check.py` `0` errors, `story-check.py` `0` errors, Astro build green. (2) `sanctum-backup-config` (`1edee2c`, `97f3d92`) — `6/6` pass in `tests/test-rotate-secrets-ws.sh` (covering mid-handshake server close without `141`, valid long-lived token minting, auth refusal, and zero `/tmp` residue) + `rotate-secrets.sh --dry-run` `exit 0`. (3) `openclaw-skills` (`164f0d5`) — `3/3` pass in `tools/test-push-skills-to-vm.sh`, `test-vault-security.sh` `ALL PASSED`, `49/49` pytest pass in `personal-finance/tests/`, and live `haus.sanctum.skills-push-vm` kickstart `exit 0` (`40` toolkits synced, `reconciled=3`). (4) `jocasta-council` (`6913e9e`, `8/8` tests), `sanctum-backup-deadman` (`3cec113`), the two private repositories, and `health-center` (`6cafc10`) all clean on `origin/main`, with `sanctum-config` held at `15ce8aa`.
+</Aside>
