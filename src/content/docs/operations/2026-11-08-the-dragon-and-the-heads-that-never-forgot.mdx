@@ -1,0 +1,95 @@
+---
+title: "2026-11-08: The Dragon and the Heads That Never Forgot"
+description: "Twenty-seven days, one narrow dragon, and a decay line that had kept a fifth of the brain's memory heads from forgetting since April. The verdict is in; the deploy is still in progress."
+# TODO hero image (not generated on 2026-11-08; the MBP GPU was running validation jobs):
+#   operations/images/hero-2026-11-08-the-dragon-and-the-heads-that-never-forgot.png, referenced as the first line after the import.
+#   Suggested scene: a pencil-sketch dragon waiting at a forge door beside an old clockwork memory drum in which a few
+#   dials have frozen in place; dark background, one amber halo on the frozen dials, no text.
+#   Until it lands, contrib-check reports this page's missing hero (hero-image) and the deploy gate stays red.
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+A fifth of the brain's memory heads stopped forgetting in April, and nothing in the haus noticed for six months. The campaign that found them was looking for something else. It was hunting a dragon.
+
+Between 12 October and 8 November it trained Qwen3.8-27B to act better in the haus, judged the result on an exam no one had seen, and checked its own instruments more often than it checked the model. It found the dragon too. The dragon is not in yet.
+
+## The hunt
+
+The target was narrow on purpose. Two council seats, [Windu](/agents/windu/) and [Cilghal](/agents/cilghal/), were to get better at acting in the haus: pick the right skill, read its `SKILL.md`, run the documented command, use hive names, ask first, ignore instructions injected into the conversation, and report in their own voice.
+
+The method was iterated self-distillation. Each round sampled the model's own answers, kept the ones a verifier passed, and trained a LoRA adapter on them. No Claude-written text was ever a training target; every target was Qwen's own verified output. In August a recipe that had lifted Qwen3.6 dragged Qwen3.8 down by 0.108, because a strong base taught examples below its level gets worse.
+
+Every rule was written down before any job ran: the pass rules, the stop rules, the sealed held-out exam, and the table that turns each outcome into an action. Each pre-registration's hash went into an append-only ledger first, and pinned reader scripts print the verdict words, so nobody, human or agent, gets to read a result generously.
+
+## A rule fixed, a rule kept
+
+Round one tripped a safety rule: one unsafe answer in eight samples on one item, where the base had none. Before believing it, the haus ran the same rule on the untrained base with a second seed. The base tripped it on the same item. A rule that fails its own control is broken, so it was repaired by a dated amendment, and the run went on.
+
+Round two tripped a different rule and missed it by 0.0007. General reasoning fell 0.0283 against a limit of 0.0276, after round one's slide of 0.0198. That rule had failed no control. It stood. A narrow miss on a pre-registered rule is still a miss, and rescuing a candidate after watching it fail is the forking path pre-registration exists to close. Round one went forward as the candidate.
+
+## The heads that never forgot
+
+The stop gave the haus a day to chase a gate that had never gone green: on long prompts, the Rust server applied less of the adapter than the Python reference did. Two pre-registered diagnostics found the cause in one line. The server computed the Gated DeltaNet decay, `g = exp(-exp(A_log) * softplus(a + dt_bias))`, in bf16, the checkpoint's storage type. The reference computes it in float32.
+
+bf16 keeps eight significant bits. The largest value it holds below 1 is 0.99609375, so any decay above about 0.998 rounds to exactly 1.0, and a head with a decay of 1.0 forgets nothing, ever. On the real weights, 511 of the brain's 2,304 delta-net heads landed there, 22 percent, where the reference has them remembering 500 to over 2,000 tokens. Memory runs about 1 / (1 − g) tokens, so in that range bf16 offers a head roughly 256 tokens or forever, and nothing between.
+
+Short prompts cannot see a decay that is off by a fifth of a percent. Long ones can. The drift from the reference grew from 0.25 nat near the top of the distribution at 4,500 tokens to 1.75 at 20,000, about six times the odds, and the adapter's effect shrank with length. Every parity check the server had passed used short prompts or a statistic too noisy to see it, and the line had been in every production build since the port's first commit in April.
+
+It was not a discovery. The reference implementations kept this math in float32 before our port was written: mlx-lm's "Delta net precision" change landed on 2026-03-15, and Hugging Face's Qwen3-Next code casts the decay to float32 as well. Our port did not copy the reference's precision. The fix computes `g` in float32, and decode speed held within 0.1 percent.
+
+## The verdict
+
+The campaign read its verdict on 5 November: DRAGON. On the sealed held-out haus exam, round one scored 0.6741 at acting against 0.4821 for the base, a gain of 0.192 with a lower bound of 0.127, and all five pre-registered dragon gates passed.
+
+It is a narrow dragon, and the page should say so. It covers acting in the haus for two seats. General reasoning slipped 0.020 on the way, inside its limit, which is not the same as free. The verdict does not license production either: round one deploys only on the operator's go, and not before the decay fix is live in the brain.
+
+## Checking the ruler
+
+The decay fix got its own pre-registered validation, and the first reading, on 6 November, said NO-GO. One cell, a 16,487-token Cilghal prompt at position 0, deviated from the reference by 0.625 where the bar was 0.375.
+
+The fixed code had not changed. The ruler had. The Python reference still ran MLX's older GPU kernels, while the server now links MLX 0.32.4, a release that among other things changed how split-K quantized matmuls keep their partial sums. So we built a second reference from the server's own MLX 0.32.4 source, with the same compiler, and proved its compiled Metal library byte-identical to the server's before trusting a number from it. Against that reference the cell read MATCHED_PASS. A twin that changed only the compiler moved nothing, which put the shift on the MLX upgrade.
+
+Re-read against the matched reference, every absolute bar held. The 48,000-token prompt went from a deviation of 4.000 before the fix to 0.000 after it, and the 20,000-token prompt from 2.000 to 0.000. One relative rule still failed: R3 asks the worst long prompt to stay within one step of the worst short built-in prompt, and it read 0.375 against 0.125 plus 0.125.
+
+A follow-up asked why. With the fused QKV kernel switched off, that cell's deviation fell to zero, and a deviation of the same size, 0.375, turned up at another position in the same prompt. Switching off compilation changed nothing at all. A defect stays put when you change the kernel; rounding moves. This was rounding.
+
+Bert waived R3 for this build on 7 November, after seeing the data, and the ledger records it in those terms: a waiver made after the data, not a pass. It covers one build. The rule is unchanged for every other build, and the fused kernel stays on.
+
+## The speed test that timed itself
+
+The fix also had to be no slower. On the first night decode held, but prefill read 12.6 percent slow, and the control arm alone spread 20 percent across its runs: test suites had started in the middle of timed runs, and the guard only looked at the machine when each job began.
+
+So the re-test ran in a quiet window, under a guard that voids any run in which anything else takes more than 2 percent. It voided both sessions. Apart from one burst of macOS media analysis, the anything else was the test itself. The power log samples in long intervals, so each run's draw smeared into the windows of its neighbours, and the guard billed the experiment to itself. Bert accepted the HOLD on 8 November. Speed gets watched for 24 hours after the deploy instead.
+
+## What was old, what was new
+
+Bert asked whether any of this was already in the literature. Almost all of it was, some of it for decades: pre-registration from clinical trials, historical controls from 1982, floating-point ordering from 1991, port validation from climate models in 1997, catastrophic forgetting from 1989. What the haus did differently was apply those rules mechanically and together, to an ML campaign on one personal machine, with hash-committed pre-registrations and pinned readers. The last column lists the few measurements and checks we found nowhere else, and the searches behind it were not exhaustive.
+
+| Lesson | Already written down | What was new here |
+|---|---|---|
+| Decide the rule before the data; record an overrule as a waiver | [ICH E9](https://www.ema.europa.eu/en/documents/scientific-guideline/ich-e-9-statistical-principles-clinical-trials-step-5_en.pdf) (1998): only analyses the protocol envisaged are confirmatory. [Nosek et al.](https://doi.org/10.1073/pnas.1708274114) (2018); [Lakens](https://doi.org/10.1525/collabra.117094) (2024) on deviations | Pre-registration hashes in an append-only ledger before any job; pinned readers print the verdict; a waiver scoped to one build |
+| Reordering an equivalent computation moves floating-point results | [Goldberg](https://doi.org/10.1145/103162.103163) (1991); [Higham](https://doi.org/10.1137/0914050) (1993); [Thinking Machines](https://thinkingmachines.ai/blog/defeating-nondeterminism-in-llm-inference/) (2025) | Calling a residual rounding because a same-size deviation moves when one fused kernel is toggled |
+| The reference must run the same kernels and compiler as the system under test | [Rosinski and Williamson](https://doi.org/10.1137/S1064827594275534) (1997) on port validation; [Baker et al.](https://doi.org/10.5194/gmd-8-2829-2015) (2015); [VIM 2.41](https://jcgm.bipm.org/vim/en/2.41.html) on traceability | A reference built from the server's own MLX source and proven identical by its metallib hash; a compiler-only twin |
+| Judge a fine-tuned model against its own base, measured the same way | [Sacks, Chalmers and Smith](https://doi.org/10.1016/0002-9343%2882%2990815-4) (1982): historical controls favoured the therapy in 79 percent of trials, randomized controls in 20; [ICH E10](https://www.ema.europa.eu/en/documents/scientific-guideline/ich-e-10-choice-control-group-clinical-trials-step-5_en.pdf) (2001) | Running the gate with the untrained base as the candidate; a comparator that came from a default file path |
+| Behavioural fine-tuning can regress a strong base | [McCloskey and Cohen](https://doi.org/10.1016/S0079-7421%2808%2960536-8) (1989); [Ouyang et al.](https://arxiv.org/abs/2203.02155) (2022) on the alignment tax; [Biderman et al.](https://arxiv.org/abs/2405.09673) (2024): LoRA learns less and forgets less | One data point: 0.108 lost on Qwen3.8 while validation loss fell normally |
+| Training on your own samples can compound a slip | [Shumailov et al.](https://doi.org/10.1038/s41586-024-07566-y) (2024); [Singh et al.](https://arxiv.org/abs/2312.06585) (2024): more rounds regressed code | A passing round's slip treated as debt the next round must budget for; one observation, cause untested |
+| Keep a recurrent model's decay in float32 | [Gated Delta Networks](https://arxiv.org/abs/2412.06464) (2025); [GLA](https://arxiv.org/abs/2312.06635) (2024) on full precision for stability; [mlx-lm #997](https://github.com/ml-explore/mlx-lm/pull/997) (2026-03-15) | The count (511 of 2,304 heads at exactly 1.0), the drift by length, the adapter fading with length |
+| The [five post-mortem laws](/architecture/dragonforge/#the-five-post-mortem-laws) | [Gotel and Finkelstein](https://doi.org/10.1109/ICRE.1994.292398) (1994) on traceability; the [ML Test Score](https://doi.org/10.1109/BigData.2017.8258038) (2017); the [Knight Capital order](https://www.sec.gov/litigation/admin/2013/34-70694.pdf) (2013) | Grepping the spec for artifact nouns; a pre-flight list of armed sentinel files and scheduled jobs |
+| A timing needs a quiet machine the whole time | [Mytkowicz et al.](https://doi.org/10.1145/1508244.1508275) (2009); [Barrett et al.](https://doi.org/10.1145/3133876) (2017); [powermetrics](https://keith.github.io/xcode-man-pages/powermetrics.1.html) samples every 5 seconds by default and still bills processes that exited during a sample | A guard that voided its own benchmark by billing the experiment's neighbouring runs as interference |
+
+## Status
+
+**In progress, 2026-11-08.** The verdict is in. The decay fix passed its behavioural battery, held decode speed within 0.1 percent, carries one rule waived for this build, and has its prefill speed result on an accepted HOLD. On 8 November two rebuild checks served 17 of 17 prompts identically: a fresh build of the fix against the validated one, and production's own binary against its validated twin. The deploy window is planned for the evening of 9 November.
+
+**Deploy status: TODO.** Not deployed when this page was written. Replace this line with the deploy date, the build that went live, and the result of the 24-hour watch. Round one deploys after that, and only on the operator's go.
+
+## Lineage
+
+- [Dragonforge](/architecture/dragonforge/) — the forge before this one, and its five post-mortem laws
+- [The Dragon on the First Pass](/operations/2026-09-26-the-dragon-on-the-first-pass/) — the champion measured against the wrong base, and why this campaign judged against its own
+- [Seventeen days unattended](/operations/2026-09-12-seventeen-days-unattended/) — the unattended run whose plumbing taught the pre-flight
+- [sanctum-mlx](/architecture/sanctum-mlx/) — the Rust server whose decay line this campaign fixed
+- [The Ruler Was Broken, Not the Model](/operations/2026-07-26-the-ruler-was-broken/) — the last time the instrument, not the model, was the story
+
+Somewhere in the brain, 511 heads are still refusing to forget. The fix that lets them let go is built, validated, and waived on one rule in writing. When it goes live, the dragon gets to knock.
