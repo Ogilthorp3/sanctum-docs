@@ -1,0 +1,50 @@
+---
+title: "2026-11-08: Two Seconds Against a Five-Second Flywheel"
+description: "Retiring two launchd teardown races across Cathedral restarts and teaching R2D2 and Qui-Gon to self-heal and compound new recipes daily."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![An architectural pencil, charcoal, and warm sepia ink-wash illustration on textured cream paper inside a vaulted stone cathedral undercroft: a massive bronze-and-iron flywheel on heavy timber beams coasts smoothly toward rest while a precision brass interlock pawl waits above a notched shaft collar, illuminated by a warm amber oil lantern beside watchmaker calipers and a numeral-free spring dial on a stone bench.](./images/hero-2026-11-08-two-seconds-against-a-five-second-flywheel.png)
+
+A twenty-six-gigabyte flywheel does not stop in two seconds. Every Sunday at `03:30` on `manoir`, `haus.sanctum.cathedral-weekly-restart` cycles [Sanctum MLX](/architecture/sanctum-mlx/) (`Qwen3.8-27B-4bit` on `:1337`) so the Council sheds unbounded Metal compile-cache accretion and keeps full generation speed without disabling compilation. At `03:30:29` this morning, Force Flow paged `CRITICAL`: `launchctl bootstrap returned non-zero. Cathedral may be down.` Seconds later, `:1337` was already warm again. Castellan had caught the fall. Yet `cathedral-weekly-restart.log` told a starker story: **every Sunday since September 20** — nine runs straight — had died with the same `Bootstrap failed: 5: Input/output error`.
+
+## 1. Three seconds too early, nine Sundays in a row
+
+Aligning `sanctum-mlx.log`, Force Flow history, and `launchd` unified logs exposed the race to the millisecond:
+
+- **`03:30:05.932` — Baseline probe.** The script ran a 256-token pre-restart benchmark (`[pre] tok/s=12.09`), finishing at `03:30:27.076`.
+- **`03:30:27.166` — Teardown begins.** `launchctl bootout` sent `SIGTERM` to `PID 81669`. The Rust server began draining connections and unmapping **18.4 GB of wired / 26 GB of resident Metal GPU buffers**.
+- **`03:30:29.330` — The stopwatch guess.** After a hardcoded `sleep 2`, the script called `launchctl bootstrap` just **`2.16s`** into teardown. Too soon. `haus.sanctum.mlx` still lived inside `launchd`. Kernel supervision rejected the duplicate registration with `5: Input/output error` (`EIO`), Force Flow paged at `03:30:29.544`, and the script exited `1`.
+- **`03:30:32.362` — The flywheel finally stops.** Five point two seconds after `bootout` — three full seconds after the weekly script walked away — `launchd` logged `service inactive: haus.sanctum.mlx` and `removing service`. Castellan re-bootstrapped `:1337` at `03:30:34` (`PID 51903`), leaving the Council seat unprimed because the compile-cache warm-up probes never ran.
+
+We had already solved this exact teardown physics inside `deploy-sanctum-mlx.sh --restart` after [Kickstart Is Not a Heal](/architecture/kickstart-is-not-a-heal/) and [The Brain That Needed 68 GB to Wake Up](/operations/2026-10-05-the-brain-that-needed-68-gb-to-wake-up/). Only the Sunday cron still trusted a two-second sleep.
+
+## 2. The second race: Castellan heals faster than `sleep 1`
+
+Live `D`-gate verification on `manoir` immediately uncovered a deeper race inside `deploy-sanctum-mlx.sh --restart` itself. At `12:51:56.648`, `held_restart` sent `bootout` to `PID 51903`, checked `launchctl print` at `12:52:01.319`, and entered `immune sleep 1`. Three hundred eighty-two milliseconds later (`12:52:01.701`), `launchd` finished removing `haus.sanctum.mlx`. Then Castellan's 2-second root supervision tick arrived at `12:52:02.182` — **`492ms` after teardown, still inside `held_restart`'s one-second sleep** — and bootstrapped `haus.sanctum.mlx` onto fresh `PID 55881`. When `held_restart` woke at `12:52:02.486`, `gone()` saw the service still listed, assumed `bootout` had never finished, waited out the full `60s`, and false-paged `exit 9` on a healthy, freshly restarted brain.
+
+Auditing both scripts against Windu's filesystem rules closed every seam in one pass:
+
+| Seam uncovered on `2026-11-08` | Failure mode on `manoir` | Hardened contract shipped |
+|---|---|---|
+| Raw `bootout` + `sleep 2` + single `bootstrap` (`cathedral-weekly-restart.sh` and `restart-on-tailscale-drift.sh`) | `26 GB` Metal teardown takes `~5.2s`, causing `9` straight `EIO` failures and bypassing `sanctum-mlx-deploy.lock` | Delegate both callers to `deploy-sanctum-mlx.sh --restart` (`flock` serialization, `--check` manifest gate, active `:1337` stream drain, up to `60s` teardown poll, `3x` bootstrap retry, new-PID + post-restart `--check`) |
+| Castellan `2s` heal inside `held_restart`'s `1s` sleep | Root supervisor re-bootstrapped `haus.sanctum.mlx` in `492ms` (`51903 -> 55881`), fooling `gone()` into a `60s` stuck-bootout `exit 9` | Capture `LAST_PRINT_PID` inside `gone()` with zero extra `launchctl` calls; treat a non-empty PID change across `bootout` wait as `RESTART=up` and run full binary + `--check` verification |
+| Active deploy collision vs preflight refusal | Colliding with an in-flight deploy/rollback would abort noisy, while a non-zero `/health` timeout previously fell through to `exit 0` | Treat `exit 2` lock-held refusal as a clean `[skip]` (`exit 0`, zero false alert), fail-loud on `/health` timeout (`180s`), and avoid duplicate pages when `deploy-sanctum-mlx` already paged |
+| Predictable `/tmp/cathedral-probe.json` + hand-built JSON `curl` | World-writable `/tmp` target invited symlink/FIFO hazards; unescaped string interpolation risked `400` drops at Force Flow | Time and parse probes purely in memory via `python3 -I` (`time.monotonic()`), refuse symlinked log paths, and dispatch alerts through `sanctum-notify` (socket -> loopback -> spool) |
+
+## 3. R2D2 and Qui-Gon close the loop — and compound daily
+
+Fixing two bash scripts was necessary; leaving the blind spot that hid nine failed Sundays was unacceptable. Every ten minutes for sixty-three days, `launchd-health-sentinel` recorded `{"label": "haus.sanctum.cathedral-weekly-restart", "kind": "stuck", "exit": 1}` in `launchd-health.log` — over **nine thousand rows** — while R2D2's `detect_launchd_stuck_nonzero_exit` dropped every `PID == "-"` timer job by design and Qui-Gon's `cathedral_1337` check probed a bare TCP socket (`listening(1337)`) and healed via raw `launchctl kickstart -k`, bypassing `sanctum-mlx-deploy.lock` altogether.
+
+Three autonomous upgrades now make Sanctum self-heal this failure class and improve its own coverage every twenty-four hours:
+
+- **R2D2 deterministic hygiene self-heal (`heal-cathedral-weekly-restart`).** `detect_cathedral_weekly_restart_failed` watches `haus.sanctum.cathedral-weekly-restart` on every 10-minute cycle. When `last_exit != 0`, it verifies `:1337` has zero active `ESTABLISHED` streams, `sanctum-mlx-deploy.lock` is free, and no `gdn` or `deploy-sanctum-mlx` Vault board claim is live (deferring cleanly without burning its 6-hour cooldown when busy). `heal-cathedral-weekly-restart.sh` preflights `--dry-run`, refuses unhealable manifest/config disownment (`exit 3` -> immediate escalation), kickstarts the job, and verifies `last_exit == 0`.
+- **Qui-Gon functional mTLS probe + held restart (`quigon-doctor.py`).** `probe_cathedral_1337` replaces bare TCP socket polling with authenticated mTLS `GET /health` against `:1337`, guarded by a `180s` per-process cold-load window (`ps -o etime=`) plus a `4s` confirm retry so mid-day restarts and heavy prefills never false-trip. `heal_cathedral_1337` delegates directly to `deploy-sanctum-mlx.sh --restart`, deferring cleanly whenever `sanctum-mlx-deploy.lock` is held.
+- **Daily Kaizen compounding + subscription-first Hermes failover (`r2d2/kaizen.py` + `r2d2/hermes.py` + `haus-watch.sh`).** Wired into the daily `haus-watch` digest (`classify.py --kaizen`), `kaizen.py` mines `launchd-health.log`, `r2d2-audit.jsonl`, and `quigon/audit.jsonl` every day to publish `agents/r2d2-kaizen.md` into the Memory Vault: ranking chronic uncovered stuck timer jobs (`>= 6` consecutive scans still non-zero in live `launchctl list`), clustering recurring unmapped Hermes escalations into next-up deterministic recipe candidates, and auditing every self-heal win or failure. Its first pass immediately caught two silent regressions inside `hermes.py` itself — OpenRouter had delisted `hermes-3-llama-3.1-70b` (`710` `HTTP 404` drops in 24h) while healthy `"success": true` `chitti-samskara` heartbeats were starving real failure lines — so `hermes.py` now defaults to `nousresearch/hermes-4-405b`, falls back automatically to local `proxyd` (`:4040` `council-fast`) on `404`/`429`/`5xx`, and drops `"success": true` heartbeats at ingest.
+
+Neither the Sunday hygiene cron nor the MLX deploy lane guesses teardown timing anymore — and no scheduled job can sit broken in `launchd` for nine weeks without R2D2 either healing it in ten minutes or putting its recipe spec on the Council's morning table.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Shipped in `sanctum-config` (`3f35523`, `84ee3fd`, `15ce8aa`) and live-verified on `manoir`: `258/258` pass in `tests/test-deploy-sanctum-mlx.sh` (including `R13c` Castellan `492ms` re-bootstrap during `bootout` wait), `11/11` pass in `tests/test-cathedral-weekly-restart.sh` (including `:1337` active-stream drain), `4/4` pass in `tests/test-heal-launchagent-race.sh`, and `82/82` pytest pass across `tests/test_quigon_doctor_labels.py`, `tests/test_quigon_http_code.py`, and `r2d2/tests/` (`24` registered R2D2 recipes passing `--self-check`, now wired into `tests/run-all.sh`). On its scheduled `18:13:57Z` cycle (`cycle_id=0c7aac5973fa`), live `haus.sanctum.r2d2` autonomously detected `haus.sanctum.cathedral-weekly-restart` (`last_exit=9`), restarted `haus.sanctum.mlx` onto `PID 76989` (`bootout took 5s`), warmed `[boot] alive and warm at 25s` (`[pre] tok/s=9.94` -> `[post] tok/s=9.55`), and cleared `last_exit` to `0` in `126s` with zero operator intervention.
+</Aside>
