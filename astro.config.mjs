@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-08 — The Postbox That Lied in a Millisecond', slug: 'operations/2026-11-08-the-postbox-that-lied-in-a-millisecond' },
 								{ label: '2026-11-07 — The Postbox That Slept Behind the Curtain', slug: 'operations/2026-11-07-the-postbox-that-slept-behind-the-curtain' },
 								{ label: '2026-11-06 — Four Hinges Behind the Airlock', slug: 'operations/2026-11-06-four-hinges-behind-the-airlock' },
 								{ label: '2026-11-03 — The Corridor and the Quartet', slug: 'operations/2026-11-03-the-corridor-and-the-quartet' },

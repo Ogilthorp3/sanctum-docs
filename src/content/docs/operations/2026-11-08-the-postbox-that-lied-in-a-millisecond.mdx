@@ -1,0 +1,39 @@
+---
+title: "2026-11-08: The Postbox That Lied in a Millisecond"
+description: "Witnessing real Exchange wire reconciliation through unified logs, collapsing 30k-row JXA message scans 13x via primary-key specifiers, and guarding active watermarks."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide isometric architectural pencil, graphite, and charcoal cutaway illustration on dark slate paper showing a mahogany-and-brass pneumatic post mechanism: on the outer wall a decoupled brass bell clapper swings freely in empty air above jammed gears, while inside the housing a watchmaker's secondary inspection escapement sights the main brass drive-wheel teeth through a crystal lens with subtle emerald light, releasing sealed parchment cylinders down four polished brass chutes into gleaming catch-trays under a warm amber wall lantern.](./images/hero-2026-11-08-the-postbox-that-lied-in-a-millisecond.png)
+
+A doorbell can ring while the bolt stays thrown. Yesterday's repair in [The Postbox That Slept Behind the Curtain](/operations/2026-11-07-the-postbox-that-slept-behind-the-curtain/) taught Jocasta to knock on `Mail.app`'s door every hour (`check for new mail`), drain `background activity count` to zero, and cap quiet-inbox rescue at eighteen hours so upstream stalls would still page Force Flow. At `07:41` Sunday morning on `manoir`, that fuse fired. `crm-freshness` paged `CRITICAL` (`email: 33.5h since last message, SLA 6h`). The bell had lied. Asking a hidden macOS app whether it checked the mail is very different from proving a packet ever crossed the wire.
+
+## 1. The 1-millisecond false green inside `MCTaskManager`
+
+`Mail.app` (`PID 33259`) had launched headless via `open -gj -a Mail` on Friday afternoon with `NSAppSleepDisabled` unset. Seven hours later (`2026-11-07 03:08:49Z`), its internal `MCTaskManager` worker queue deadlocked completely while the main Cocoa runloop stayed responsive:
+
+- **Push events arrived and vanished.** `EWSStreamingSubscription` kept receiving Exchange push wakes every five seconds (`Syncing 2 folders in response to 5 events`). Zero `MFEWSMailboxSyncTask` jobs started.
+- **`check for new mail` lied in `0.001s`.** Every hour, Jocasta's AppleEvent logged `Starting a manual fetch` at `.963` and `Background fetch completed` at `.964` — a 1-millisecond roundtrip that queued `IMAPMailboxSyncTask` entries onto the frozen queue while `background activity count` answered `0`.
+- **Ninety-four weekend emails waited upstream.** Quitting `PID 33259` and launching a fresh hidden `Mail.app` (`PID 48278`) reconciled every tenant in under fifteen seconds. `Nepveu Exchange` jumped by `+65` messages, `Triptyq` by `+27`, and `Vrvana - Nepveu` by `+2` (**94 queued weekend emails**, `97` total through Sunday noon).
+
+Two secondary traps surfaced during live recovery. First, yesterday's rolling cursor rule (`cutoffs[acc] < now - 36h`) matched active accounts too, because `per_account_cutoffs()` already subtracts the 36-hour overlap from each DuckDB watermark. While `Mail.app` sat frozen, that rule crept `mail-jxa-cursor.json` forward past Friday evening's Exchange watermarks. Deleting the cursor file saved every Friday message. Second, harvesting a 48-hour catch-up slice on `Triptyq` (`30,019` Inbox messages) hit the `300s` JXA timeout twice in a row.
+
+## 2. Ground-truth wire witness and a 13x JXA speedup
+
+Sampling `Mail.app`'s main thread (`sample Mail 1`) pinpointed why dense catch-up slices crossed five minutes after [The Read That Would Not Die](/operations/2026-10-27-the-read-that-would-not-die/). `MFMailbox(ScriptingSupport)` lacks indexed Key-Value Coding accessors. Keeping an unevaluated `NSIndexSpecifier` (`var msg = mb.messages[i]`) forced Foundation to call `-[MFLibraryStore copyOfAllMessagesWithOptions:]` — materializing all `30,019` SQLite rows — on **every property and recipient lookup** (`5` to `15` full-table scans per message). Evaluating `var msg = mb.messages[i]()` once resolves the index into an O(1) `messages.byId(uid)` primary-key specifier. Pairing it with bulk `msg.toRecipients.address()` dropped that 77-message `Triptyq` slice from **`>300s` to `23.64s`**. Thirteen times faster.
+
+To witness genuine Exchange wire activity without granting interpreter-wide Full Disk Access (`cfprefsd` gates `~/Library/Containers/com.apple.mail` behind FDA under `launchd`), Jocasta now reads `MFExchangeAccount`'s `Default`-level unified log events (`MFEWSLastSyncDate-<UUID> wrote last sync date to user defaults on the main thread`). Apple marks those events `%{public}@` and emits them only after `MFEWSMailboxSyncTask` finishes reconciling folders on the wire:
+
+| Fault uncovered on `2026-11-08` | Root mechanism on `manoir` | Permanent defense in `sanctum-crm` |
+|---|---|---|
+| `check for new mail` 1ms false-green (`38h` freeze) | Headless `MCTaskManager` deadlocked while AppleEvents still returned `0` active tasks | Verify `min(MFEWSLastSyncDate-*) <= 1800s` across active Exchange tenants (`cfprefsd` + zero-FDA `/usr/bin/log` fallback), pin `NSAppSleepDisabled=YES`, and auto-relaunch `Mail.app` when stale |
+| `300s` catch-up timeout on `30,019`-row `Triptyq` Inbox | Unevaluated `mb.messages[i]` re-scanned all `30k`–`64k` SQLite rows per property + per recipient | Resolve `mb.messages[i]()` once to O(1) `byId(uid)` + bulk `msg.toRecipients.address()` (`>300s -> 23.64s`), narrow timed-out `>=8h` slices to `12h`, and relaunch before sibling accounts on double timeout |
+| Rolling cursor creeping past frozen active accounts | `cutoffs[acc] = watermark - 36h` always trailed `now - 36h`, writing cursors onto active accounts | Retain rolling cursors strictly when `server_sync` is verified and `cutoffs[acc] < now - 48h` (dormant accounts such as `iCloud` only) |
+| Weekend quiet SLA vs deadlocked `Mail.app` | Unverified `18h` rescue rightly paged at `33.5h`, while un-witnessed extension would mask freezes | Extend weekend quiet rescue to `48h` strictly when `ews_last_sync_at` proves wire sync within `2.5h` |
+
+Jocasta no longer takes the postbox's word that the mail carrier stopped by. Every hourly beat verifies the timestamp stamped by the Exchange engine itself, heals a wedged `Mail.app` before messages pile up, and sweeps thirty-thousand-row trays in seconds.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Shipped in `sanctum-crm` (`48a4362`) and live-verified on `manoir`: `340 passed, 1 skipped` (`+11` regression tests across `test_mail_fixes.py` and `test_freshness_sentinel.py` covering `MCTaskManager` stale-EWS auto-relaunch, post-relaunch upstream failure propagation, non-FDA unified-log `MFEWSLastSyncDate` witnessing, O(1) `byId` + vectorized recipient JXA, `48h -> 12h` slice narrowing, active-account cursor isolation, and `48h` EWS-witnessed weekend rescue). Live `launchctl kickstart -k gui/501/haus.sanctum.jocasta-mail-sync` populated `ews_last_sync_at: 1794158577.84`, recovered all `97` weekend and morning emails (`249,148` total), isolated `mail-jxa-cursor.json` to `iCloud`, confirmed `NSAppSleepDisabled = 1`, and returned `sanctum-crm status --check` `exit 0` (`8/8` channels `ok`).
+</Aside>
