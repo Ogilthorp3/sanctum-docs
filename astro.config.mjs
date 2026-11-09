@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-08 — The Healer That Undid Its Own Relief', slug: 'operations/2026-11-08-the-healer-that-undid-its-own-relief' },
 								{ label: '2026-11-08 — The Linter That Said All Clear', slug: 'operations/2026-11-08-the-linter-that-said-all-clear' },
 								{ label: '2026-11-08 — Two Seconds Against a Five-Second Flywheel', slug: 'operations/2026-11-08-two-seconds-against-a-five-second-flywheel' },
 								{ label: '2026-11-08 — The Postbox That Lied in a Millisecond', slug: 'operations/2026-11-08-the-postbox-that-lied-in-a-millisecond' },

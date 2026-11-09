@@ -1,0 +1,50 @@
+---
+title: "2026-11-08: The Healer That Undid Its Own Relief"
+description: "Diagnosing 78 iPhone Home Assistant pushes in a single day and closing four non-converging loops across Qui-Gon, Memory Sentinel, Haus Pulse, Free-Sub Brain, and the MBP SSD sentinel."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide sepia ink and architectural graphite sketch on cream cotton rag paper showing an antique brass counterweight governor linked to a glass siphon manifold with four calm cascading overflow bowls draining into a carved limestone basin beside a sunlit conservatory window framed by ferns.](./images/hero-2026-11-08-the-healer-that-undid-its-own-relief.png)
+
+Home Assistant Green had zero persistent notifications on its own board. Yet the operator's iPhone buzzed **78 times** between midnight and eight in the evening. Force Flow (`notifications.db`, sequence `58,844`) held the entire trail: every push arrived through the phone's companion-app notify service, and **73 of the 78 alerts (`93.6%`)** came from four loops that detected real trouble, ran a half-measure or undid their own repair, and paged again on the next timer tick.
+
+## 1. Sixty seconds between relief and relapse
+
+Forty-three of today's iPhone alerts (`217` across seven days) complained about swap on `manoir`. Two separate defects kept that fire burning.
+
+First, `quigon-doctor.py` fought itself inside the same process invocation. At `15:08:17`, `17:11:02`, and `18:12:32`, `quigon-doctor.py --heal` invoked `memory-sentinel.py --relieve` at the top of its pass. Because the primary `:1337` [Cathedral](/operations/council-always-alive/) (`Qwen3.8-27B`) had been pushed past `75%` into swap, [The Pressure Valve](/operations/pressure-valve/) unloaded the `17.6 GiB` backup coder seat (`haus.sanctum.mlx-coder` on `:3301`) via `launchctl bootout` and recorded `last_shed` in `~/.sanctum/state/memory-sentinel.json`. Sixty seconds later in that **exact same run**, Qui-Gon walked its check table down to `devstral_3301`, saw TCP `:3301` closed, checked `under_pressure()` (which inspected only `chi.json` `ram_frac >= 0.92` and ignored both kernel memory pressure and `memory-sentinel.json`), and ran `enable+bootstrap haus.sanctum.mlx-coder`. Every hour, Qui-Gon parked seventeen gigabytes of weights and immediately hauled them back upstairs. Two minutes after reload, `devstral-prewarm-sentinel.sh` sent a nineteen-thousand-token sacrificial prompt into `:3301`, driving `kern.memorystatus_vm_pressure_level` straight back to `2`.
+
+Second, `haus-pulse.py` still carried pre-dual-residency swap lines (`13.0 GiB` amber, `16.5 GiB` red) with no kernel pressure check at all. Steady dual residency on `manoir` sits at `14.5–18.5 GiB` swap at `pressure=1`, right across both tripwires. `haus-pulse` fired twenty-five gentle and loud transitions in a single Sunday.
+
+Closing the loop took four coordinated edits:
+- **`quigon-doctor.py` (`probe_coder_3301` & `under_pressure`)**: reads `~/.sanctum/state/memory-sentinel.json` so a backup seat intentionally parked by `memory-sentinel` reports `ok=True` (`parked by memory-sentinel`), and treats `kern.memorystatus_vm_pressure_level >= 2` as `pressured=True`.
+- **`memory-sentinel.py` & `swap-sentinel.sh`**: raises `SHED_COOLDOWN` from `30m` to `2h` (`7200s`) and adds `--relieve --sustained` before `swap-sentinel`'s thirty-minute `(still)` repeat page; if shedding a fully-swapped backup drops kernel pressure back to `1`, `swap-sentinel` logs `self-healed-warn` instead of paging the iPhone.
+- **`haus-pulse.py`**: aligns swap thresholds (`24 GiB` amber / `28 GiB` red + `pressure >= 2` / `4`) with `swap-sentinel` and calls `memory-sentinel.py --relieve` before raising a swap finding.
+
+## 2. The airlock severed the CLI's mirror, not the daemon
+
+Nineteen loud `error` pushes today (`47` across forty-eight hours, one every sixty minutes since Friday night) came from Qui-Gon's `yoda_identity` check:
+
+```text
+PLACEHOLDER/wrong identity: Account: +15555550101  Operator: +15555550100
+```
+
+Friday's [Four Hinges Behind the Airlock](/operations/2026-11-06-four-hinges-behind-the-airlock/) unmounted the host home directory inside `sanctum-vm`. Yoda's live `yoda-chat-proxy.service` unit kept working because its systemd drop-in (`10-operator.conf`) injected `YODA_ACCOUNT` and `YODA_OPERATOR`. However, `probe_yoda_identity()` ran `yoda-chat status` as an unprivileged CLI subprocess **outside** systemd. Without environment variables or the unmounted host `~/.sanctum/.instance.json`, `yoda_chat/config.py` fell back to its `+15555550xxx` scaffold defaults. `heal_yoda_identity()` then restarted `yoda-chat-proxy.service` without ever creating `~/.sanctum/.instance.json` inside `<VM>`, failed its post-heal probe eight seconds later, and paged the operator every hour with zero chronic backoff.
+
+`vm-autostart.sh` and `heal_yoda_identity()` now project a secret-free, two-field `~/.sanctum/.instance.json` (`0600`, containing only `notifications.signal.{account, target}`) across the airlock before restarting `yoda-chat-proxy.service`. Running `heal_yoda_identity()` converged `probe_yoda_identity()` in two seconds (`identity bound to real account/operator`). In addition, `quigon-doctor.py` now caps identical non-converging escalations at two hourly pages before throttling to a twelve-hour digest (`ESCALATE_DIGEST_SEC=43200`), resetting immediately once a check turns green.
+
+## 3. `http=000000` on a thinking proxy and an idle-campaign abort on `mbp`
+
+The remaining eleven alerts split across two shell bugs:
+
+| Alert source (`24h` / `7d`) | Exact failure mechanism | Self-healing upgrade |
+|---|---|---|
+| `free-sub-brain-sentinel.sh` (`6x` / `29x`) | `curl -sS -m 12 -o /tmp/fsb-g.out -w "%{http_code}" ... \|\| echo "000"` timed out (`exit 28`) when `agy-proxy` routed `gemini-best-pro` to thinking mode (`8–18s`). `curl` printed `000` and `\|\| echo "000"` appended a second `000`, producing `http=000000` alongside stale JSON left in `/tmp/fsb-g.out`. Meanwhile `heal_agy` ran only when `/health` failed, never when chat wedged behind a green `/health`. | Switched to per-run `mktemp` truncated before each call, fixed exit capture (`000`, never `000000`), raised chat timeout to `25s` with one `3s` retry, and armed `heal_agy` (`launchctl kickstart -k gui/$uid/haus.sanctum.agy-proxy`) + re-probe whenever chat consecutively fails behind a healthy `/health`. |
+| `mbp` `disk-sentinel.sh` (`4x` / `18x`) | Internal SSD hit `14 GiB` free (`99%`). `prune-adapters.sh` saw zero `exp-*` dirs younger than `3` days on finished September campaigns and aborted with `exit 1` (`ABORT: retention would keep ZERO experiment dirs`), skipping checkpoint trim too. `disk-sentinel.sh` also lived as an untracked orphan file, scanned only one `council-autoresearch` root (`1.3G`) while missing `15.9G` in sibling `council-autoresearch-*` trees and `5.3G` in `sanctum-rs-lora/target`, and paged `error` every `6h` with no state file. | Updated `prune-adapters.sh` to retain the newest `MIN_KEEP_DIRS=2` experiments plus champion on idle campaigns, tracked `sentinels/disk-sentinel.sh` in `sanctum-mbp` (symlinked at `~/.sanctum/disk-sentinel/disk-sentinel.sh`), swept all `council-autoresearch*` roots and clean `>14d` non-GDN Rust targets before classifying severity (**reclaiming `+17 GiB` immediately: `14 GiB -> 31 GiB` free**), and added edge + `24h` digest hysteresis. |
+
+Whether Qui-Gon, Yoda, Windu, or R2-D2 holds the watch, a sentinel earns the right to wake the operator only after its own hands have tried the wrench and stepped out of its neighbor's way.
+
+<Aside type="note" title="EETISMAD verification ledger">
+Verified across four repositories and three nodes (`manoir`, `sanctum-vm`, `mbp`): (1) `sanctum-config` (`08c16cd`) — `25/25` pytest pass (`test_self_heal_iphone_storm.py`, `test_quigon_doctor_labels.py`, `test_quigon_http_code.py`), `16/16` pass in `test-memory-sentinel-restore.py`, `9/9` pass in `test_memory_sentinel.py`, `6/6` pass in `test-swap-sentinel-relief.sh`, `4/4` pass in `test-swap-sentinel-hysteresis.sh`, and `5/5` pass in `test-free-sub-brain-reprobe.sh`. Live `manoir` verification: `probe_yoda_identity()` converged (`True`), `haus-pulse.py` `level=green` (`0` findings), `free-sub-brain-sentinel.sh` `overall=ok` (`3/3` brains green). Also included deploy coordination (a Vault board claim deferral + `300s` deploy timeout in `heal_cathedral_1337`) and notified the active Claude session in the Memory Vault (`haus.sanctum.mlx` `PID 76989` untouched). (2) `sanctum-mbp` (`415a4a9`) & `council-autoresearch` (`1ba6367` on `main`, `0075f22` on `campaign/champion-week-2026-06-15`) — `8/8` pass under `/bin/bash` 3.2 in `tests/test_disk_sentinel.sh`; live `disk-sentinel.sh` reclaimed `+17 GiB` (`14 GiB -> 31 GiB` free) while preserving all GDN/v1 worktrees and models untouched. (3) `sanctum-docs` — `lint-haus.sh`, `contrib-check.py`, `story-check.py`, `hero-dupe-check.py`, and `pnpm build` all green.
+</Aside>
