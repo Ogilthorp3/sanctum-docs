@@ -27,7 +27,7 @@ def main():
     
     def ahash(path, size=8):
         img = Image.open(path).convert("L").resize((size, size), Image.LANCZOS)
-        px = list(img.getdata())
+        px = list(img.tobytes())  # mode "L": one byte per pixel; getdata() goes in Pillow 14
         avg = sum(px) / len(px)
         bits = 0
         for i, p in enumerate(px):
@@ -38,6 +38,7 @@ def main():
         return bin(a ^ b).count("1")
     
     entries = []  # (page, imgpath, dhash, ahash)
+    skipped = []  # pages whose hero could not be hashed
     for f in sorted(glob.glob(os.path.join(REPO, "src/content/docs/**/*.mdx"), recursive=True)):
         with open(f) as fh:
             head = fh.read(4000)
@@ -52,6 +53,7 @@ def main():
             entries.append((page, imgpath, dhash(imgpath), ahash(imgpath)))
         except Exception as e:
             print(f"  skip {page}: {e}")
+            skipped.append(page)
     
     # cluster by combined similarity (both dhash AND ahash close)
     n = len(entries)
@@ -84,6 +86,11 @@ def main():
             # min pairwise distance to the cluster anchor
             print(f"      {entries[i][0]}   ({os.path.basename(entries[i][1])})")
         print()
+    # A hero the gate could not hash is unverified, not unique. Exit 2, so a
+    # Pillow change that breaks hashing fails loudly instead of scanning zero.
+    if skipped:
+        print(f"UNHASHED heroes: {len(skipped)} (see skip lines above)")
+        return 2
     # CI gate: a nonzero exit blocks the deploy when two pages share
     # visually-identical art ("never the same image on two pages" — Bert,
     # 2026-07-30). Regenerate the duplicate, don't lower the threshold.
