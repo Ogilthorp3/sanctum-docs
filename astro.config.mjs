@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-10 — The Falcon in the Clocktower', slug: 'operations/2026-11-10-the-falcon-in-the-clocktower' },
 								{ label: '2026-11-08 — The Dragon and the Heads That Never Forgot', slug: 'operations/2026-11-08-the-dragon-and-the-heads-that-never-forgot' },
 								{ label: '2026-11-08 — The Healer That Undid Its Own Relief', slug: 'operations/2026-11-08-the-healer-that-undid-its-own-relief' },
 								{ label: '2026-11-08 — The Linter That Said All Clear', slug: 'operations/2026-11-08-the-linter-that-said-all-clear' },

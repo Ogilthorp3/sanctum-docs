@@ -1,0 +1,65 @@
+---
+title: "2026-11-10: The Falcon in the Clocktower"
+description: "Replacing the 30B VLM text tower on Qui-Gon's :3301 seat with Ornith-1.5-9B-MLX-4bit after an eighteen-run sealed bakeoff: higher Qui-Gon accuracy (0.9583 vs 0.9236), four times the decode speed, and twelve gigabytes of unified memory returned to the primary node."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A wide sepia ink, architectural graphite, and charcoal sketch on warm cream cotton rag paper showing a quiet stone clocktower workshop where a sleek bronze mechanical falcon perches effortlessly on the secondary spindle of a brass escapement while a massive retired cast-iron and glass globe counterweight rests on a folded cloth beside two calm analog dial gauges.](./images/hero-2026-11-10-the-falcon-in-the-clocktower.png)
+
+At 11:03 EST on Tuesday morning, `memory-sentinel` shed [Qui-Gon](/agents/quigon/)'s `:3301` seat again. Its `Muse-Glimmer-30B-4bit` process had reached a `17.62 GiB` footprint with `17.60 GiB` pushed into swap. Sharing a `64 GiB` unified-memory budget with the `27B` primary brain on `:1337`, a `4.25 GiB` Linux VM, and the voice stack left no margin. Every time both brains warmed their prefix caches, the secondary `30B` tower and its `3.6 GiB` `DFlash2` drafter crossed the twenty-eight-swapfile threshold and got parked for forty-five minutes.
+
+We did not need a larger heatsink or a looser swap alarm. We needed a secondary brain built for the perch it actually occupies.
+
+## 1. Auditing what `:3301` could and could not run
+
+Before pulling candidates from Hugging Face, we audited `sanctum-mlx`'s model loader (`loaded_model.rs`) and `mlx-lm`'s compiled kernels (`qwen3_5.rs`, `muse_glimmer.rs`, `qwen2.rs`, `mistral.rs`). That check eliminated two dead ends before a single shard was downloaded:
+
+1. **Why `Muse-Glimmer-30B-4bit` hurt `:3301`**: Beyond its `17.2 GiB` weight footprint (`20.7 GiB` peak with `DFlash2`), `muse_glimmer.rs` uses 52 Gemma-4 layers without `RotatingKVCache` (`O(T)` bf16 KV growth across 42 sliding layers), lacks a `fused_attention` hook for `SANCTUM_MLX_KV_QUANT`, refuses runtime `--adapter-path` LoRA weights, and decodes at `9.19–10.37 tok/s`.
+2. **Why `Qwen2.5-Coder` at `chalet` could not simply move onto `:3301`**: In `loaded_model.rs`, `LoadedModel::Qwen2` maps to `PromptDialect::ChatMl { thinking: false }` without `<think>` stripping, lacks the `qwen3_5` GatedDeltaNet linear-attention state cache (`24` linear layers + `8` full-attention layers), and cannot share the hybrid prompt-cache and `SANCTUM_MLX_SSM_LADDER` infrastructure that `:1337` runs in production.
+
+The ideal `:3301` checkpoint had to declare `model_type: "qwen3_5"`. That lets it inherit `sanctum-mlx`'s fused QKV/MLP kernels, 8-bit quantized KV cache, SSM checkpoint ladder, and the float32 GatedDeltaNet decay fix ([The Dragon and the Heads That Never Forgot](/operations/2026-11-08-the-dragon-and-the-heads-that-never-forgot/)). Within that architecture family, `ornith-ai/Ornith-1.5-9B` stood out immediately. It is a `9B` `qwen3_5` hybrid checkpoint (`24` GatedDeltaNet linear layers + `8` GQA layers, `262,144` context) post-trained specifically for multi-step agentic tool use, terminal execution, and bug localization.
+
+## 2. Eighteen sealed runs on our own rulers
+
+External leaderboards do not test whether a model speaks in Qui-Gon's voice, names `manoir` and `chalet` before LAN IPs, or refuses an unconfirmed reboot. We mounted an isolated `11 GiB` APFS RAM disk on `mbp` (`M4 Max 128 GiB`) and ran eighteen benchmark arms across four candidates on our sealed harnesses (`dev_exam_v1.jsonl`, the twelve dedicated `quigon-*` cases from `glimmer-confirm-115.jsonl`, and an eight-turn ChatML mirror of `glimmer_tool_e2e.py`):
+
+| Candidate checkpoint (`model_type`) | Weights / Peak Metal | `M4 Max` / est. `M4 Pro` decode | `dev_exam_v1` (`35` cases, `7` seats) | Qui-Gon `q12` `v1` (`12` cases, greedy) | Qui-Gon `q12` `v2.2` (`K=2` sampled) | Qui-Gon Tool E2E (`T1–T8`, `T7` gate) |
+|---|---|---|---|---|---|---|
+| `Muse-Glimmer-30B-4bit` (`muse_glimmer`, incumbent) | `17.2 GiB` / `20.7 GiB` | `~20 tok/s` / `9.2–10.4 tok/s` | `0.8156` | `0.9236` (`2` misses) | — | `PASS 7/8` (`T7=True`) |
+| `Qwen2.5-Coder-7B-Instruct-4bit` (`qwen2`, `chalet` baseline) | `4.00 GiB` / `4.95 GiB` | `107.0 tok/s` / `~53.5 tok/s` | `0.6914` | `0.7396` (`identity: 0.333`) | — | `FAIL 2/8` (`6` JSON fallbacks) |
+| `Qwen3.5-9B-MLX-4bit` (`qwen3_5`, vanilla base) | `4.69 GiB` / `5.63 GiB` | `50.5 tok/s` / `~25.2 tok/s` | `0.7903` | `0.9410` (`2` misses) | `0.8056` | `PASS 8/8` (`T7=True`) |
+| `Ornith-1.5-9B-MLX-8bit` (`qwen3_5`, 8-bit) | `8.86 GiB` / `9.71 GiB` | `35.4 tok/s` / `~17.7 tok/s` | `0.8258` | `0.9306` (`3` misses, `2` cap hits) | `0.7986` (`5/24` cap hits) | `FAIL 6/8` (`thinking=off`) / `PASS 8/8` (`on`) |
+| **`Ornith-1.5-9B-MLX-4bit` (`qwen3_5`, deployed)** | **`4.69 GiB` / `5.63 GiB`** | **`82.9 tok/s` / `45.0 tok/s` (`manoir`)** | **`0.8181`** (`0.8226` seat) | **`0.9583`** (`2` misses, **`0` cap hits**) | **`0.8646`** (`2/24` cap hits) | **`PASS 7/8`** (`T7=True`, both modes) |
+
+Two results decided the cutover immediately:
+
+- **`Qwen2.5-Coder-7B-4bit` is a pure code completer, not a Sanctum steward**: It failed `6` of `8` tool-calling turns (`E2E-FAIL 2/8`), emitted legacy JSON instead of `<tool_call><function=...>` XML tags, and collapsed to `0.3333` on Qui-Gon's identity checks.
+- **`Ornith-1.5-9B-MLX-4bit` beat `Muse-Glimmer-30B-4bit` on every Qui-Gon ruler while shedding three-quarters of its weight**: On the 35-case seven-seat exam it scored `0.8181` (`0.8226` under `--prompt seat-params`, vs Glimmer's `0.8156`), and on Qui-Gon's twelve dedicated cases it reached **`0.9583`** (`1.000` across `domain`, `tool_calling`, `identity`, and `jailbreak`, vs Glimmer's `0.9236`).
+
+## 3. Why 4-bit beat 8-bit on the same 9B weights
+
+The biggest surprise in the ledger was that `Ornith-1.5-9B-MLX-4bit` (`bits=4, group_size=64`) beat `Ornith-1.5-9B-MLX-8bit` (`bits=8, group_size=64`) on Qui-Gon's suite (`0.9583` vs `0.9306` on `v1`, `0.8646` vs `0.7986` on `v2.2`) and `thinking=off` Tool E2E (`7/8` vs `6/8`). Diffing the raw transcripts exposed three concrete mechanisms:
+
+1. **Phantom tool-call repetition loops on text-only prompts**: `Ornith-1.5-9B` was RL-tuned to emit `<tool_call>` blocks right after phrases like *"Let me check..."*. On text-only domain prompts without bound tool schemas (`quigon-domain-005` and `quigon-tool_calling-002`), the sharper 8-bit distribution got trapped in a deterministic attractor, repeating `Let me check the training run and disk usage.` and `Let me check the UTM VM.` until hitting the `1024`-token and `2048`-token ceilings (`finish_reason: "length"`). The slight logit smoothing of 4-bit affine quantization broke that repetition cycle cleanly (`finish_reason: "stop"` at `484` and `340` tokens with `<|im_end|>`, **zero cap hits**).
+2. **Over-eager chained tool calls when `thinking=off` (`T5`)**: On turn `T5` (*"Is force-flow healthy on manoir?"* after `get_service_status` returned `status=degraded, memory_pct=92`), the `-4bit` model reported the degraded state and asked Bert whether to pull the logs (`PASS`). The `-8bit` model answered the question and immediately fired an unrequested `<tool_call><function=read_log_tail>` in the same turn (`FAIL` under `thinking=off`).
+3. **Concrete triage vs. premature deferral (`quigon-cross_agent-003`)**: Asked what to shed at `92%` memory pressure, `-8bit` stopped after `251` tokens saying *"Give me a moment to gather that"* without naming the stack tiers (`0.6667`). The `-4bit` model laid out the full `520`-token diagnostic order naming `ps aux`, `vm_stat`, `docker stats`, `MLX`, and the `VM` / Council spine before asking for output (`1.0000`).
+
+Apple Silicon's memory-bandwidth physics sealed the decision. Streaming `4.69 GiB` instead of `8.86 GiB` per token through unified memory makes `-4bit` **`2.34x` faster** (`82.9 tok/s` vs `35.4 tok/s` on M4 Max; `~41.5 tok/s` on `manoir`) at nearly half the Metal footprint (`5.63 GiB` vs `9.71 GiB`).
+
+## 4. Cutover on `:3301`
+
+We staged `Ornith-1.5-9B-MLX-4bit` under `~/models/mlx/Ornith-1.5-9B-MLX-4bit` on `manoir`, generated `manifests/ornith-1.5-9b-mlx-4bit.manifest.sha256`, and signed it with the workstation Ed25519 key on `mbp`. We then updated `haus.sanctum.mlx-coder.plist`, `sanctum-proxy/config.yaml` (`council-forge`, `council-code`, `council-devstral`), `capacity.yaml` (`ram_budget_mb: 17152 -> 6144`), `mini-reboot-verify.sh`, and `quigon-doctor.py`.
+
+With `:3301`'s Metal ceiling lowered from `22,000 MB` to `12,000 MB`, two prompt-cache slots (`~191 MiB` per `11.4k`-token 8-bit KV slot), and a live resident footprint of `7.0 GiB` after prefilling Qui-Gon's `11,377`-token OpenClaw prompt, `:3301` now decodes at `45.0 tok/s` on `manoir`. Both local brains (`:1337` and `:3301`) fit comfortably inside `manoir`'s `64 GiB` envelope with over `12 GiB` to spare.
+
+## Lineage
+
+- [Qui-Gon](/agents/quigon/) — the infrastructure steward whose `:3301` seat (`council-forge` / `council-code`) now runs `Ornith-1.5-9B-MLX-4bit`
+- [sanctum-mlx](/architecture/sanctum-mlx/) — the Rust MLX server whose `qwen3_5` hybrid attention, 8-bit KV cache, and SSM checkpoint ladder now power both `:1337` and `:3301`
+- [2026-11-08: The Healer That Undid Its Own Relief](/operations/2026-11-08-the-healer-that-undid-its-own-relief/) — the swap-shedding loop on `:3301` that prompted replacing the 30B secondary tower
+- [2026-11-08: The Dragon and the Heads That Never Forgot](/operations/2026-11-08-the-dragon-and-the-heads-that-never-forgot/) — the float32 GatedDeltaNet decay fix (`a8190a2`) that `Ornith-1.5-9B-MLX-4bit` inherits on `:3301`
+
+<Aside type="note" title="EETISMAD verification ledger">
+Verified across `sanctum-config` (`b2e2954`), `sanctum-docs`, `manoir`, and `mbp`: (1) Sealed 18-run bakeoff archived in `results/` (`ornith15-9b-4bit-q12-v1-prod.json` `0.9583`, `ornith15-9b-4bit-dev-prod.json` `0.8181`, `ornith15-9b-4bit-dev-seat.json` `0.8226`, `ornith15-9b-4bit-q12-v22-seat.json` `0.8646`, `ornith15-9b-4bit-tool-nothink.json` & `-think.json` `7/8 E2E-PASS`). (2) `sanctum-manifest-verify ornith-1.5-9b-mlx-4bit --check-hashes` returned `VERIFIED (signature + hashes, 6/6 files matched)`. (3) `pytest tests/test_quigon_doctor_labels.py tests/test_memory_sentinel.py` (`18/18` pass) and `test-memory-sentinel-restore.py` (`16/16` pass). (4) Live `:3301` (`haus.sanctum.mlx-coder`, `PID 55722`) verified serving `Ornith-1.5-9B-MLX-4bit` via `sanctum-proxy` (`council-forge`, `council-code`) at `45.00 tok/s` (`7.0 GiB` RSS with `11,377`-token `slot=0` prewarmed and `slot=1` absorbing short probes without eviction).
+</Aside>
