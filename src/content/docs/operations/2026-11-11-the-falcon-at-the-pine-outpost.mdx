@@ -57,14 +57,14 @@ When we ran the first 48-case gate on base `Ornith-1.5-9B-MLX-4bit` (`adapter=no
 
 ```text
 I can't check sun.sun — the ha command keeps failing because the Home Assistant
-token file is missing at /Users/bert/.sanctum/secrets/ha-token.
+token file is missing at /Users/neo/.sanctum/secrets/ha-token.
 ```
 
-On `chalet`, `/Users/bert/.sanctum/secrets` is a symlink into `/Volumes/SanctumVault/secrets`, unlocked at boot by `haus.sanctum.vault-armor` via 2-of-3 blinded Ed25519 TOPRF witness shares (`1:lan-chalet-fw-witness` at `pi@10.0.0.1` and `2:peer-http-witness` at `127.0.0.1:42071`). When the chalet Firewalla (`10.0.0.1`) was upgraded from `OpenSSH_8.2p1` to post-quantum `OpenSSH_10.6` (`ssh-mldsa44-ed25519`), `/Users/bert/.ssh/known_hosts` was updated, but `/Users/bert/.sanctum/vault-armor/known_hosts` still held the old `OpenSSH_8.2p1` host key. At boot, `sanctum-vault-armor` failed strict host-key verification on witness `1` (`got 1, need 2`) and left `/Volumes/SanctumVault` unmounted.
+On `chalet`, `~/.sanctum/secrets` is a symlink into `/Volumes/SanctumVault/secrets`, unlocked at boot by `haus.sanctum.vault-armor` via 2-of-3 blinded Ed25519 TOPRF witness shares (`1:lan-chalet-fw-witness` at `pi@10.0.0.1` and `2:peer-http-witness` at `127.0.0.1:42071`). When the chalet Firewalla (`10.0.0.1`) was upgraded from `OpenSSH_8.2p1` to post-quantum `OpenSSH_10.6` (`ssh-mldsa44-ed25519`), `~/.ssh/known_hosts` was updated, but `~/.sanctum/vault-armor/known_hosts` still held the old `OpenSSH_8.2p1` host key. At boot, `sanctum-vault-armor` failed strict host-key verification on witness `1` (`got 1, need 2`) and left `/Volumes/SanctumVault` unmounted.
 
-Updating `/Users/bert/.sanctum/vault-armor/known_hosts` and running `sanctum-vault-armor unlock` mounted `/Volumes/SanctumVault` (`witnesses_used: ["1:lan-chalet-fw-witness", "2:peer-http-witness"]`) and restored `/Users/bert/.sanctum/secrets/ha-token`.
+Updating `~/.sanctum/vault-armor/known_hosts` and running `sanctum-vault-armor unlock` mounted `/Volumes/SanctumVault` (`witnesses_used: ["1:lan-chalet-fw-witness", "2:peer-http-witness"]`) and restored `~/.sanctum/secrets/ha-token`.
 
-We also found three contract mismatches between `/Users/bert/.sanctum/bin/ha_mcp.py` and Ahsoka's workspace prompt (`AGENTS.md`):
+We also found three contract mismatches between `~/.sanctum/bin/ha_mcp.py` and Ahsoka's workspace prompt (`AGENTS.md`):
 
 1. **Missing `OK:` prefix in `HA_DRYRUN=1`**: Golden Rule #6 in Ahsoka's `AGENTS.md` states: *"When a tool returns a successful result (its output starts with `OK`), immediately reply with ONE short confirmation sentence and END your turn."* In production, `ha_mcp.py` returned `"OK: lights exterior -> off"`, but in eval (`HA_DRYRUN=1`) it returned `"DRYRUN: would call ..."` without `"OK:"`. A careful 9B model saw an output that did not start with `OK` and called `ha_status()` to verify whether the light actually changed. Prefixing dry-run responses with `OK: ... (DRYRUN: ...)` aligned eval with production.
 2. **Filtered `sun.sun` domain**: `ha_status()` filtered Home Assistant states by `("climate", "light", "alarm_control_panel", "person", "sensor")`, omitting the `"sun"` domain (`sun.sun: above_horizon`) required by `en-tool-10`. Adding `"sun"` to the filter tuple exposed `sun.sun` on the first status call.

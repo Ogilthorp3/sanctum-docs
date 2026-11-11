@@ -33,7 +33,7 @@ Windu generates a security briefing every morning. It covers new devices on the 
 | Capability | Details |
 |------------|---------|
 | Firewalla toolkit | Full access to `fw-*.sh` tools for network management |
-| Fleet threat watch | Daily CISA KEV JSON + RSS/CSAF + X feed synthesis (`windu-threat-watch.py`) and canary-gated auto-patching across `manoir`, `mbp`, `chalet`, `manoir-fw`, `chalet-fw`, `green` (Core, OS, add-ons with `--backup`), and `yoda` |
+| Fleet threat watch | Daily CISA KEV JSON + RSS/CSAF + X feed synthesis (`windu-threat-watch.py` via sandboxed `gemini-4-carbon-high`) and canary-gated auto-patching across `manoir`, `mbp`, `chalet`, `manoir-fw`, `chalet-fw`, `green` (Core, OS, add-ons with `--backup`), and `yoda` |
 | Same-major pin rolling | Rolls pinned security runtimes (`node`, `python@3.11..3.15`, `restic`, `uv`) across point/CVE releases with `HOMEBREW_NO_INSTALL_CLEANUP=1`, `brew linkage --test`, `--check-pins`, and dynamic `nodejs.org/dist/index.json` `security: true` floor tracking while keeping hypervisor pins (`lima`, `qemu`) untouched |
 | Airgap-safe VM & kernel hardening | Ephemeral loopback HTTP proxy allowlisting `http://ports.ubuntu.com/ubuntu-ports/*` over SSH `-R`, SHA-256-verified `/opt/node26` sync, `net.mptcp.enabled=0` sysctl enforcement across `yoda` and `manoir-fw`, and automatic Lima VM reboot when `linux-image-*-generic` advances past `uname -r` |
 | Hourly functional doctor | `windu-doctor.py` Curfew Canary, mTLS/gate exposure sentinel, Presidio PII scrub probe, rogue quarantine audit, macOS `SoftwareUpdate` verification, and runtime patch-level healing |
@@ -47,35 +47,38 @@ Windu generates a security briefing every morning. It covers new devices on the 
 | Property | Value |
 |----------|-------|
 | Agent ID | `windu` |
-| Host | VM (Ubuntu 24.04, Lima `vmType=vz`) |
+| Host | VM (Ubuntu 24.04, Lima `vmType=vz`) + `manoir` sentinels |
 | IP | 10.10.10.10 (shared VM) |
-| Primary model | `gemini/gemini-3.1-pro-preview` |
-| Model tier | `council-secure` |
+| Primary deliberation model | `gemini-4-carbon-high` (`Gemini 4 Carbon (High)` via `sanctum-agy-proxy` `:6543`) |
+| Model tier | `council-secure` (deliberation & spatial) · `council-local/council-agents` (OpenClaw MCP tool turns on `:1337` mTLS) |
 | Routing | **Tier 0 — never rerouted** |
-| Fallback chain | None. Gemini 3.1 Pro or nothing. |
+| Fallback chain | Subscription-or-local (`claude-best-pro` → `claude-cli-offline` → `grok-best` → `council-mlx`, never OpenRouter) |
 | Workspace | `~/.openclaw/workspace-windu/` |
 | Skills | `firewalla-toolkit`, `security-policy`, `spatial-analyzer` |
 
 <Aside type="danger">
-Windu runs on the `council-secure` tier, which means the [Sanctum Proxy's dynamic model routing](/architecture/dynamic-model-routing/) will **never** reroute his requests to a cheaper model. He uses **Gemini 3.1 Pro** exclusively to leverage its multimodal spatial reasoning abilities for analyzing blueprints and security footage. He will never be automatically downgraded to Gemini Flash or Qwen to save budget. His only safety net is the local Council MLX model, which is strictly a disaster recovery fallback in case the internet goes down. Security analysis does not get budget-optimized. If you change this, you deserve whatever Windu finds that a cheaper model would have missed.
+Windu's security deliberation and threat-watch lane runs on the `council-secure` tier, which means the [Sanctum Proxy's dynamic model routing](/architecture/dynamic-model-routing/) will **never** reroute his requests to a cheaper model or scrub them to a third-party paid API. He uses **Gemini 4 Carbon (High)** via `sanctum-agy-proxy` (`:6543`) for council deliberations, blueprint spatial reasoning, and daily CVE triage (`windu-threat-watch.py`), while interactive OpenClaw MCP tool turns run on `council-local/council-agents` (`:1337` mTLS) so Firewalla tool schemas execute inside the perimeter. Security analysis does not get budget-optimized. If you change this, you deserve whatever Windu finds that a cheaper model would have missed.
 </Aside>
 
 ## Configuration
 
-Windu's agent definition in `~/.openclaw/openclaw.json`:
+Windu's council seat in `~/.sanctum/sanctum-proxy/config.yaml` and OpenClaw runtime in `~/.openclaw/openclaw.json`:
 
 ```yaml
-# Agent definition (shown as YAML for readability)
+# ~/.sanctum/sanctum-proxy/config.yaml (council-secure deliberation & spatial lane)
+- name: council-secure
+  provider: local
+  api_base: http://127.0.0.1:6543
+  api_model: gemini-4-carbon-high
+  quality_tier: 0
+
+# ~/.openclaw/openclaw.json (VM MCP tool lane)
 agents:
-  list:
-    - id: windu
-      model: gemini/gemini-3.1-pro-preview
-      identity:
-        name: Windu
-        theme: >
-          Security guardian. Monitors network threats,
-          manages firewall rules, watches for intrusions,
-          and enforces security policies across the homelab.
+  entries:
+    windu:
+      model:
+        primary: council-local/council-agents
+        fallbacks: [council-tiered/council-code]
 ```
 
 ## Firewalla Integration
