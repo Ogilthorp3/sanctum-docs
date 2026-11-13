@@ -40,12 +40,21 @@ dnsmasq leases; each screen's hostname → current MAC gets pinned into
 `phonebook.json` under `_screens`, with a rolling 14-day history of previous
 MACs.
 
-<Aside type="danger" title="Correction (2026-08-09): phone pinning never worked">
-This page used to say columbo "already pinned family phones via Bonjour." It
-did not — not once, across 9,722 log lines. Phones are now pinned from the
-Firewalla's always-on view instead;
-[the full account](/operations/2026-08-09-everyone-says-theyre-alberts-iphone/)
-explains why the old path could never have worked.
+<Aside type="tip" title="Update (2026-11-13): both Bonjour paths are now live">
+This page noted on `2026-08-09` that local Bonjour phone pinning had never
+fired once across 9,722 log lines ([the earlier account](/operations/2026-08-09-everyone-says-theyre-alberts-iphone/)).
+Tracing a nameless curfew guest on `2026-11-13` exposed the two silent bugs
+behind that silence: `haus.sanctum.columbo-phonebook` invoked bare Homebrew
+`python3` (losing `zeroconf` on Python minor upgrades across 9,494 ticks), and
+`mac_for_ip()` called `arp -n <ip>` instead of `arp -an` on dual-NIC `manoir`,
+returning `-- no entry` for every `ifscope` ARP row even when iPads and phones
+were awake on Wi-Fi. Pinning `zeroconf==0.154.0` in `requirements-venv.txt`
+with venv self-re-exec plus a `/usr/bin/dns-sd` fallback, switching ARP lookup
+to `arp -an` with Firewalla host-table fallback, persisting all LAN Bonjour
+adverts (including guests) to `mdns-seen.json`, and blocking
+`columbo-identify-quarantine.py` from writing `device-*` / `Watch`
+placeholders into `device-canon.json` brought direct `mdns` pinning live
+alongside Firewalla's 24/7 view.
 </Aside>
 
 The engine enforces **static config ∪ live pins** at every site — curfew loop,
