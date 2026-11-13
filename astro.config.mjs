@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-13 — Two Beats on the Clocktower Spindle', slug: 'operations/2026-11-13-two-beats-on-the-clocktower-spindle' },
 								{ label: '2026-11-11 — Fourteen Seams in the Watchtower', slug: 'operations/2026-11-11-fourteen-seams-in-the-watchtower' },
 								{ label: '2026-11-11 — The Falcon at the Pine Outpost', slug: 'operations/2026-11-11-the-falcon-at-the-pine-outpost' },
 								{ label: '2026-11-10 — One Shaft, Two Escapements', slug: 'operations/2026-11-10-one-shaft-two-escapements' },
