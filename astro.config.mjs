@@ -327,6 +327,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-15 — The Compressor Under the Wrong Indent', slug: 'operations/2026-11-15-the-compressor-under-the-wrong-indent' },
 								{ label: '2026-11-13 — Two Beats on the Clocktower Spindle', slug: 'operations/2026-11-13-two-beats-on-the-clocktower-spindle' },
 								{ label: '2026-11-11 — Fourteen Seams in the Watchtower', slug: 'operations/2026-11-11-fourteen-seams-in-the-watchtower' },
 								{ label: '2026-11-11 — The Falcon at the Pine Outpost', slug: 'operations/2026-11-11-the-falcon-at-the-pine-outpost' },
