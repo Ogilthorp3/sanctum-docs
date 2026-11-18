@@ -1,0 +1,110 @@
+---
+title: "2026-11-17: The Dragon Takes the Seat"
+description: "The R1 adapter went live on the brain at 21:38:10 on a Tuesday, on a GO typed at lunch. No check found a fault in the dragon. Nine found a fault in the checks, and that is most of the story."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil, graphite, and charcoal sketch on dark slate paper of a round stone council table at night: a ring of tall carved chairs, all empty but one, where a slender dragon has settled in with its wings half raised and its tail curled around the chair leg; on the table before it a single brass key rests in a small amber halo, the only colour in the room, and along the far wall six lanterns hang dark.](./images/hero-2026-11-17-the-dragon-takes-the-seat.png)
+
+A small program on the Mini spent three minutes that Tuesday evening deciding whether the moment was acceptable. It wanted an integrity check less than a minute old and two hourly jobs more than three minutes away. At 21:38:09 it was satisfied. It restarted the brain, and thirty seconds later the brain reported healthy again, with 496 adapter modules riding on the model that had not been there the minute before.
+
+Nobody had to be asked. Bert had typed GO at 12:07, with the defaults for the cases where something stayed unclear put to him first and left as they stood, and the window was built to run on that. The last field note about this campaign ended with the dragon knocking; this one is about what it takes to let something in when the person holding the door has said he will not be standing at it.
+
+## What had to be true first
+
+The verdict was in on 5 November: round one, R1, acts better in the haus than the base it was trained from. A verdict is not a deployment, and three things stood between the two, each of which had to be true on the machine that would serve it and not only on the one that had trained it.
+
+The decay fix went live on 9 November. Then the server binary that can carry an adapter went live on its own, on 15 November, with no adapter in it. One change per restart is the rule, because a restart that changes two things cannot say which one hurt.
+
+That left two questions about R1 on that exact binary, and each got a gate written down before it ran.
+
+| Gate | Question | Result | Bar |
+|---|---|---|---|
+| Drafter, part 1 | With the speculative drafter on, does R1 still pass the exam it passed without it? | All items down 0.0079, acting down 0.0321 | No worse than 0.05 and 0.06 |
+| Drafter, part 2 | Does the drafter change what R1 says more than it changes the live brain? | 7 pairs drift against 6 for the base | 11 |
+| Speed | Do whole requests take longer with R1? | 7,259 s against 7,801 s for 504 requests, a ratio of 0.93 | 1.10 |
+
+The speed result is not what the per-token number suggests. R1 is slower per token, about 0.19 seconds against 0.15. On this exam it was faster per request, because it says less: 37,828 tokens where the base wrote 50,356 for the same 504 requests. Not everywhere. One family of items ran 5 percent slower, and nine of the 63 items ran more than 10 percent slower. The bar is on the total, as its text says, and the gate timed this exam and nothing else. Bert had bet on faster overall before the run, for a different reason. The gate agreed with the bet.
+
+## Exact in meaning
+
+The drafter is a speedup: a small model proposes tokens and the big one accepts or corrects them. With an adapter loaded it is not text-exact. In the gate's first prose run, six of twenty-five answer pairs came out worded differently with the drafter on.
+
+The gate's first text asked for identical answers. On 15 November Bert replaced that with a rule of his own, that an answer must be "exact in meaning, not in words". So the six pairs went to him. He read them and ruled three the same and three different. What had drifted, he said, was mostly the dates. A count of the differing words agreed in part: weekday words in four of the six pairs, and not one number in the three he ruled different. Under the gate as it then stood, that was a hold.
+
+He asked whether, without R1, the answers kept the same date. They do not. A control run that afternoon had already put the drafter on a twin of the live brain's build with no adapter, and it changes weekday words too. So he moved the bar of his own gate, knowingly: R1 is judged against the brain that is already live, not against plain decoding. The new text was then measured on that twin, with and without R1, the same way and with longer answers. Without R1 the drafter changes six answers of twenty-five and, averaged over all of them, 4.7 percent of the words; with R1, seven answers and 3.1 percent. The ledger records the change in those terms: the owner moving his rule after the data, with the hold under the old text beside the pass under the new one.
+
+## Three brains, one board
+
+On the night of 13 November the campaign ran into its account's weekly usage limit. By then the session had written 48 workflow scripts, and not one of the deploy's gates had run: the work had gone into proofing the test harness. The harness was being made accident-proof because any accident voided a gate for good.
+
+Bert changed two things. A void caused by the machine may be re-run once, on his word. And the work was split. One model controls: it runs the gates and is the only writer of the ledger. A second, on the Mini, reviews by reading only, and was first given a draft with a known defect in it, to see whether it would find it. A third wrote the deploy runbook. One page in the vault tells all three, and Bert, where things stand.
+
+On the day the reviewer answered five reads of the window's steps. Three came during the window itself, each within about six minutes.
+
+## The rehearsal
+
+The runbook had passed its author's test suite and a review. On Tuesday morning the controller rehearsed it anyway, on local copies of the two real repositories, and it stopped four times.
+
+Then the reviewer read the result and found two more. Then, on the night, three check lines failed on a brain that was doing nothing wrong.
+
+| Found | Where | What was wrong |
+|---|---|---|
+| Rehearsal | Commit step | Its dry run read a checkout that sat on an old commit |
+| Rehearsal | Push step | It named a repository that, on that machine, is a different one |
+| Rehearsal | Commit script | The config repository ignores its manifests folder; every manifest already in it had been force-added |
+| Rehearsal | A post-restart check | It called the proxy on `:4040` over plain HTTP; the proxy speaks TLS only |
+| Review | Adapter startup check | Three of its four accepted log lines exist nowhere in the server's source |
+| Review | A closeout check | It held every log line to a bar meant for one |
+| The night | Pre-restart read | It searched for two words side by side; with the adapter staged, a hash prints between them |
+| The night | Ablation probe check | It wanted a space after the last word on the line |
+| The night | Long-context gate | A pipe that exits early dies with 141 under `pipefail` |
+
+Nine faults. None of them in R1. Each one stops a step and changes nothing, which is the right way to be wrong. Each fix was kept as narrow as its fault, most of them a single line, and each went to the reviewer as a difference against the runbook's own text. The six found before the window were confirmed before it opened. The three found on the night were settled by reading the output, fixed, run again and sent to the reviewer, and twice the window had already moved on by the time its confirmation came back.
+
+<Aside type="note" title="Why the test suite saw none of it">
+A hermetic suite runs on repositories it builds for itself. Those have no ignore rules laid down months ago, no stale checkout, and no proxy. The review reads the text, and the text was fine. Only a run against copies of the real things, or the real thing itself, can see these.
+</Aside>
+
+## The night
+
+| Time | What happened |
+|---|---|
+| 12:07 | Bert types GO, and the defaults for his absence go into the ledger: roll back if anything stays unclear for fifteen minutes |
+| 20:20 | The adapter is staged on the Mini and its files checked against their hashes |
+| 20:51 | Four commits are cut: two that add R1, two that take it out again |
+| 21:32 | Push, then land the new launch configuration |
+| 21:38:10 | The one restart. Healthy after 30 seconds |
+| 21:38 to 21:50 | 12 adapter families, 496 modules attached, none skipped; the proxy's own header names the brain as the one answering on both lanes; a smoke case passes on each of the two trained seats; 10 of 10 parity cases; 7 of 7 seats answering, with the audit's one known, by-design collision still flagged |
+| 21:50 to 22:36 | The long-context gate: 45 minutes, 7 numbers, all 1.0 |
+| 00:39 | The three-hour watch closes clean |
+| 10:04 Wednesday | Bert accepts the gate's two rescored numbers, and the window is closed out |
+
+The long-context gate takes 45 minutes and holds the brain the whole time, so while it ran the canary timed out twice in the queue behind it and the swap sentinel went to warn at 22:07, as the brain's footprint climbed from 17 GiB toward 27. Both had cleared by 22:25, about ten minutes before the gate finished. No latency was read during it, on purpose: that number would have measured the gate.
+
+Bert's one decision the next morning was whether to accept two numbers that a newer scoring program had produced, in place of the one the bar was written against. Both numbers were 1.0. His answer is in the ledger verbatim, and it begins with "accept".
+
+## What it is not
+
+It is a narrow dragon, as the last note said. R1 was trained to act better in the haus for two seats, [Windu](/agents/windu/) and [Cilghal](/agents/cilghal/), and it now rides on both of the brain's lanes, the council's on `:1337` and the health lane on `:6669`. It was not trained to be cleverer in general, and it is not.
+
+It costs something. With an adapter loaded the server declines to offload prefill to the Neural Engine, because every MLP layer now carries a correction the offloaded copy would not have. That is the server's own rule, logged at startup, and the check for it passed. Long prompts prefill on the GPU alone.
+
+It is not finished being watched. Watch gates count from the restart: two at 48 hours, one at 72, one at five days, and uncached exams before the weekend. The long-context gate also skipped its own comparison with a baseline, because a brain with a new fingerprint has none yet; the 72-hour gate makes that comparison.
+
+And the way back is short. One launch file, one restart, and the two commits that undo it were cut on the same evening as the two that did it.
+
+## Status
+
+**Live, 2026-11-18.** R1 has served since 21:38:10 on 17 November. In the first twelve hours: no error on a brain lane, no restart, no shed seat, twelve hourly drift checks all clean, and the brain lanes at between 0.02 and 0.77 of their seven-day latency against a cap of 1.6. The 24-hour watch closes on the evening of the 18th.
+
+## Lineage
+
+- [The Dragon and the Heads That Never Forgot](/operations/2026-11-08-the-dragon-and-the-heads-that-never-forgot/) — the verdict, and the decay line the hunt found on the way
+- [The Dragon on the First Pass](/operations/2026-09-26-the-dragon-on-the-first-pass/) — why this campaign judged against its own base
+- [Dragonforge](/architecture/dragonforge/) — the forge before this one, and its five post-mortem laws
+- [sanctum-mlx](/architecture/sanctum-mlx/) — the server that now carries an adapter
+- [Seventeen days unattended](/operations/2026-09-12-seventeen-days-unattended/) — the last time the haus learned what a run needs when nobody is watching
+
+The program that picked the moment has exited. The dragon is in the chair, and the door it came through is still on its hinges: one file, one restart, the commits already cut. Nobody had to be asked that night. What could be decided ahead had been decided at lunch, and the one thing that could not waited for him until morning.
