@@ -93,6 +93,7 @@ if [ "$(uname -m)" != "arm64" ]; then
     exit 1
 fi
 ok "macOS on Apple Silicon (uname=$(uname -m))"
+detail "macOS 15 or later. The local brain needs 32 GB; the rest installs on less."
 
 # ── Homebrew ─────────────────────────────────────────────────────────────
 step "Homebrew"
