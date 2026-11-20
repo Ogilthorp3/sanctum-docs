@@ -1,0 +1,71 @@
+---
+title: "2026-11-20: A Hundred Seams and One Closed Door"
+description: "Closing 100 audited findings and four live regressions across Waves 1–3 under EETISMAD, isolating laya, unifying on FSL-1.1-Apache-2.0, and staging Wave 4 behind Sunday's Dragon watch."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil, graphite, and charcoal sketch on dark slate paper of an iron-bound stone vault corridor lined with freshly riveted bronze seam plates and brass bolts leading to one heavy bolted chamber door sealed by a softly glowing teal halo, while Tommy the Abyssinian sits calmly before the closed threshold beside a small amber watch lantern.](./images/hero-2026-11-20-a-hundred-seams-and-one-closed-door.png)
+
+A full audit turned up one hundred findings and four live regressions across the haus. Eighteen were Critical. Forty-six were High, twenty-five Medium, and eleven Low. Every seam sat on disk in plain sight, waiting for a hostile reader to tug on it before Sanctum `1.0` went public.
+
+One constraint shaped the week. On `manoir`, the primary brain stood midway through its five-day Dragon `R1` soak after Tuesday's [cutover](/operations/2026-11-17-the-dragon-takes-the-seat/) and Wednesday's [24-hour watch](/operations/2026-11-19-three-brains-and-the-twenty-four-hour-watch/). Nobody restarts a watched brain to prove a security patch. So the council split the campaign across four waves with the operator. Waves 1 through 3 shipped live to full EETISMAD under [Windu](/agents/windu/), [Qui-Gon](/agents/quigon/), and [Jocasta](/agents/jocasta/). Wave 4 stays unit-tested and staged behind a locked door until Sunday night.
+
+## Wave one: edges, locks, and a quiet silo
+
+We started at the glass facing the network. In `command-center` (`5c7f2b4`), WebAuthn challenges are now bound to their exact registration or authentication purpose. `/register/verify` checks `registrationAllowed`, `/v1/messages` sits behind an auth gate, `originGuard` fails closed, and port `:1111` listens on the tailnet alone.
+
+Wildcard CORS had to go next. Across `health-center` (`d470713`), `sanctum-bridge` (`daec9eb`), `the-holocron` (`362271e`), `jocasta-mcp` (`10f58f0`), and `Claude_Code` (`780a22a`), we stripped open origins, added constant-time Bearer checks, sanitized the C launcher environment, and gated `sanctum-presence`. Each boundary now refuses strangers instead of trusting localhost folklore.
+
+Host permissions and three live regressions landed in the same sweep. Under `CRIT-14`, host secrets tightened to `0600` and `0400` in place; offline key moves stay staged for operator confirmation rather than deleting keys blindly. `sanctum-backup.sh` gained an explicit trap alongside `all-quiet.sh` PID liveness so an early exit never leaves a wedged lock behind, `sanctum-backup-deadman` (`3ec6eb1`) moved to a fail-closed heartbeat check, and both `vm-autostart` exit-code retention and the unretried VM identity sweep closed cleanly.
+
+Internal tool boundaries tightened too. `council-autoresearch` (`24d71bd`, `CRIT-08`), `openclaw-skills` (`8c2623b`, `CRIT-09` case-insensitive `.git` guard on APFS), and `sanctum-haus-ops-mcp` (`6526718`, `CRIT-11` repo allowlist and `git diff --` barrier) all stopped trusting loose paths. Inside `sanctum-crm` (`0af8c2f`, `CRIT-12` plus the `--work` silo), an iterative `O(N)` RFC-5322 header parser cleared **`441` pytest tests**, lockfiles moved to `0600`, and a hash anti-join SQL rewrite cut live work overview latency from over `30 s` to `242 ms` — a speedup past **`400x`**.
+
+## Wave two: the stranger's terminal
+
+Wave two guarded the first three minutes a stranger spends installing Sanctum. `public/install.sh` (`e37231d`, `CRIT-03`) now anchors both `codesign` and `pkgutil` signature checks, enforces strict `SHASUMS256` validation, cleans its temporary `WORK_DIR` through a `trap`, and reads prompts from `/dev/tty` when piped through `curl | bash`. Both published checksum sidecars (`install.sh.sha256` and `install.sh.sha256.txt`) match its live SHA-256 (`6a15663bcdbeb865dca8f3760909cad2dce6d236bc83ee5b575140ed1598ace5`).
+
+[`sanctum-cli`](/architecture/sanctum-cli/) (`778b398`) absorbed the deepest CLI sweep to date. We closed `CRIT-01` (`setup` CSRF), `CRIT-02` (shared R2 and B2 `restic_env_for_repo` across `onboard`, `status`, `doctor`, and `backup`), and `CRIT-04` (root `.pkg` symlink privilege escalation), alongside `H-CLI-2` through `H-CLI-9`, `M-CLI-1` through `M-CLI-6`, and `L-CLI-1`. The suite clears **`2,247` pytest tests**, `ruff` `0`, `mypy` `0` across `134` files, and zero personal leaks.
+
+Packaging stopped phoning out mid-build. In [homebrew-sanctum](https://github.com/Ogilthorp3/homebrew-sanctum) (`f0b413f`, `H-CLI-1`), the formula pins `66` hashed `resource` blocks — `47` runtime dependencies matching `uv.lock` one-to-one plus `19` PEP 517 build backends. An offline source build ran `67/67` pip calls with zero PyPI traffic, and a kernel network-denied `sandbox-exec` check passed cleanly.
+
+License drift ended here as well. Every public code repository — [sanctum-cli](https://github.com/Ogilthorp3/sanctum-cli), `sanctum-rs`, `install.sh`, and [homebrew-sanctum](https://github.com/Ogilthorp3/homebrew-sanctum) — standardizes on **`FSL-1.1-Apache-2.0`**. Meanwhile [sanctum-docs](https://github.com/Ogilthorp3/sanctum-docs) remains `CC-BY-4.0` for prose and artwork plus `MIT` for site code.
+
+## Wave three: twenty-three daemons and the runaway bundle
+
+In `sanctum-rs` (`350707e`), merging `PR #45` (`russh 0.65.1`) turned `cargo deny` green across advisories, bans, sources, and licenses. Across 23 non-brain crates, **`1,266` tests passed** with `clippy -D warnings` clean.
+
+Every control-plane daemon took its turn under the wrench. [Castellan](/architecture/the-castellan/) closed `CRIT-13` with explicit Jetsam bands, `sanctum-watchdog` closed `CRIT-15` with Samskara verification, and `sanctum-pressure-valve` closed `CRIT-18` with a corrected macOS `ps` parser. IPC authentication and reliability tightened across `sanctum-chitti`, `msg-bus`, `thalamus`, `force-flow`, `chi`, and `idle`. At [sanctum-proxy](/architecture/proxy/), we landed `CRIT-07` (`/{*path}` normalization), stripped `x-api-key`, and hardened Presidio and mTLS handling with zero circuit-breaker drift. Downstream, `sanctum-presidio` fixed span sorting, UTF-8 boundaries, and SSN/SIN/IPv6 matching; `sanctum-memory` closed `CRIT-10` by decoupling `:18097`; and `memory-vault-mcp`, [Vault Armor](/architecture/vault-armor/), `sanctum-server`, `sanctum-stt` (`CRIT-17` `sample_rate`), and `sanctum-tts` (`verify.rs`) all landed green.
+
+Beside the main workspace, `sanctum-vault` (`f27f08d`) cleared **`251` tests**. Release builds ship zero `MockSeGate` symbols, write `0600` atomically, scrub secrets with `ZeroizeOnDrop`, and enforce Argon2id bounds.
+
+Live regression #1 was the loudest ghost on the host. `haus.sanctum.laya` on `:1989` had spun through a `68,468`-run crash loop over a shared `mlx.metallib` ABI clash. Touching the primary brain's metallib was forbidden. So we gave `laya` its own isolated bundle carrying its own `mlx.metallib`. On first launch (`runs=1`), it cleared **`54/54` `bfloat16` bit-exact parity** in `52.32 ms` without altering a single byte under the primary brain. We also archived `19` stale `.bak*` binaries (`214 MB`), verified and codesigned `24/24` live binary manifests, and staged the root-owned LaunchDaemon cutover for operator `sudo`.
+
+| Wave | Surface | Verified Receipts | Gate Posture |
+|---|---|---|---|
+| Wave 1 | Edge, host perms, backup lock, ops, CRM | `5c7f2b4`, `0af8c2f` (`441` pytest, `400x+` SQL), `3ec6eb1`, 8 repo merges | Live EETISMAD |
+| Wave 2 | `install.sh`, `sanctum-cli`, Homebrew, licenses | `e37231d`, `778b398` (`2,247` pytest), `f0b413f` (`66` offline resources) | Live EETISMAD |
+| Wave 3 | 23 Rust crates, `sanctum-vault`, `laya`, manifests | `350707e` (`1,266` Rust), `f27f08d` (`251` vault), `laya` `54/54`, `24/24` manifests | Live EETISMAD (`sudo` cutover staged) |
+| Wave 4 | Primary-brain MLX inference stack | Branch `wave4/primary-brain-hardening` (unit-tested, zero live deploy) | Staged — held for `Sun 2026-11-22 21:38 EST` |
+
+## The door left closed
+
+Wave 4 owns the primary inference server, so Wave 4 does not touch production today. Every fix sits implemented, unit-tested, and staged on branch `wave4/primary-brain-hardening`, waiting behind Dragon `R1`'s five-day watch ending **`Sun 2026-11-22 21:38 EST`**.
+
+The staged branch closes the remaining primary-brain items: `CRIT-16` (ANE donor/sharer `Arc`/`shared_ptr` use-after-free), `CRIT-17` (`max_tokens` cap), `:6669` authentication with fail-closed multimodal checks, `DefaultBodyLimit` plus `--timeout-secs`, manifest TOCTOU verification, `/debug/memory` Metal cache synchronization, five prompt-cache fixes, and hardening across `qwen3_5`, `sampling.rs`, and Prometheus metrics.
+
+Not one byte of the running primary brain changed during this entire campaign. Its launch configuration and `R1` adapter stayed untouched, its rollback trees stayed intact, and synchronized `v1.0.0` public release tags stay held until Wave 4 rolls out after Sunday's watch closes.
+
+<Aside type="note" title="Why the door stays shut until Sunday">
+Deploying security patches onto a watched model mid-soak spoils two proofs at once: if latency shifts, nobody can tell whether `R1` drifted or the patch moved the floor. Waiting forty-eight hours buys a clean five-day watch and a clean Wave 4 rollout on Monday.
+</Aside>
+
+## Lineage
+
+- [2026-11-19: Three Brains and the Twenty-Four-Hour Watch](/operations/2026-11-19-three-brains-and-the-twenty-four-hour-watch/) — the active Dragon `R1` five-day soak protecting the primary brain
+- [2026-11-17: The Dragon Takes the Seat](/operations/2026-11-17-the-dragon-takes-the-seat/) — the `R1` cutover that set Sunday's watch clock running
+- [Roadmap](/operations/roadmap/) — `1.0` readiness scorecard, `FSL-1.1-Apache-2.0` alignment, and the held `v1.0.0` release gate
+- [sanctum-cli](/architecture/sanctum-cli/) — the `2,247`-test CLI front door and offline-verified Homebrew tap
+- [Year One](/year-one/) — the six-act arc from March's cascade to November's release gate
+
+Three waves closed a hundred seams in live production, yet the hardest discipline of the week was the single branch we refused to deploy. Windu's perimeter is shut, Qui-Gon's runaway bundle sits quiet at `runs=1`, and the last bolted door opens on Sunday night once the five-day watch has earned its silence.

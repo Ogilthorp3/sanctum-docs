@@ -328,6 +328,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-20 — A Hundred Seams and One Closed Door', slug: 'operations/2026-11-20-a-hundred-seams-and-one-closed-door' },
 								{ label: '2026-11-19 — Three Brains and the Twenty-Four-Hour Watch', slug: 'operations/2026-11-19-three-brains-and-the-twenty-four-hour-watch' },
 								{ label: '2026-11-17 — The Dragon Takes the Seat', slug: 'operations/2026-11-17-the-dragon-takes-the-seat' },
 								{ label: '2026-11-15 — The Compressor Under the Wrong Indent', slug: 'operations/2026-11-15-the-compressor-under-the-wrong-indent' },
