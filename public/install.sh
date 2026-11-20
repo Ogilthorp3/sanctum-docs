@@ -42,12 +42,24 @@ step()   { printf '\n%s◆%s %s%s%s\n' "$AMBER" "$RESET" "$BOLD" "$*" "$RESET"; 
 verify_node_codesign() {
     local node_path="$1"
     local sign_info
-    sign_info="$(codesign -dvv "$node_path" 2>&1 || true)"
+    [ -f "$node_path" ] && [ ! -L "$node_path" ] || return 1
+    case "$node_path" in
+        *$'\n'*) return 1 ;;
+    esac
     codesign --verify --strict "$node_path" 2>/dev/null || return 1
-    case "$sign_info" in
-        *"TeamIdentifier=HX7739G8FX"*) return 0 ;;
+    sign_info="$(codesign -dvv "$node_path" 2>&1)" || return 1
+    case $'\n'"$sign_info"$'\n' in
+        *$'\n'"TeamIdentifier=HX7739G8FX"$'\n'*) ;;
         *) return 1 ;;
     esac
+    case $'\n'"$sign_info"$'\n' in
+        *$'\n'"Authority=Developer ID Application: Node.js Foundation (HX7739G8FX)"$'\n'*) ;;
+        *) return 1 ;;
+    esac
+    case $'\n'"$sign_info"$'\n' in
+        *$'\n'"Signature=adhoc"$'\n'*|*$'\n'"TeamIdentifier=not set"$'\n'*) return 1 ;;
+    esac
+    return 0
 }
 
 # ── Preflight ────────────────────────────────────────────────────────────
@@ -104,7 +116,7 @@ else
     detail "Homebrew is the macOS package manager. It installs into /opt/homebrew/"
     detail "and is what we use to ship sanctum-cli + its dependencies."
     printf "\n"
-    BREW_INSTALL_SCRIPT="$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    BREW_INSTALL_SCRIPT="$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 180 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
     /bin/bash -c "$BREW_INSTALL_SCRIPT"
     if [ -x /opt/homebrew/bin/brew ]; then
         eval "$(/opt/homebrew/bin/brew shellenv)"
@@ -129,7 +141,7 @@ else
     detail "then re-run this installer."
     printf "\n"
     xcode-select --install || true
-    fail "Re-run: curl -fsSL --proto '=https' --tlsv1.2 https://sanctum.run/install.sh | bash"
+    fail "Re-run: curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://sanctum.run/install.sh | bash"
     exit 1
 fi
 
@@ -181,7 +193,7 @@ else
     curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 60 -o "$SHASUMS_PATH" "$SHASUMS_URL"
     curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 180 -o "$PKG_PATH" "$PKG_URL"
 
-    EXPECTED_SHA="$(awk -v fn="$PKG_FILE" '{ gsub(/\r$/, "") } $2 == fn && $1 ~ /^[0-9a-fA-F]{64}$/ { sha=$1; count++ } END { if (count != 1) exit 1; print tolower(sha) }' "$SHASUMS_PATH" || true)"
+    EXPECTED_SHA="$(awk -v fn="$PKG_FILE" '{ gsub(/\r$/, "") } $2 == fn { fn_count++; if (NF == 2 && $1 ~ /^[0-9a-f]{64}$/) { sha=$1; valid_count++ } } END { if (fn_count != 1 || valid_count != 1) exit 1; print sha }' "$SHASUMS_PATH" || true)"
     if [ -z "$EXPECTED_SHA" ]; then
         fail "Could not locate valid SHA-256 for $PKG_FILE in SHASUMS256.txt"
         exit 1
@@ -199,13 +211,26 @@ else
         fail "Installer signature verification failed for $PKG_FILE"
         exit 1
     fi
-    case "$PKG_SIG_OUT" in
-        *"Developer ID Installer: Node.js Foundation (HX7739G8FX)"*) ;;
-        *)
-            fail "Installer signature for $PKG_FILE does not match Node.js Foundation (HX7739G8FX)"
-            exit 1
-            ;;
-    esac
+    pkg_has_status=0
+    pkg_has_cert=0
+    while IFS= read -r pkg_line; do
+        pkg_line="${pkg_line#"${pkg_line%%[![:space:]]*}"}"
+        pkg_line="${pkg_line%"${pkg_line##*[![:space:]]}"}"
+        case "$pkg_line" in
+            "Status: signed by a developer certificate issued by Apple for distribution")
+                pkg_has_status=1
+                ;;
+            "1. Developer ID Installer: Node.js Foundation (HX7739G8FX)")
+                pkg_has_cert=1
+                ;;
+        esac
+    done <<EOF
+$PKG_SIG_OUT
+EOF
+    if [ "$pkg_has_status" -ne 1 ] || [ "$pkg_has_cert" -ne 1 ]; then
+        fail "Installer signature for $PKG_FILE does not match Node.js Foundation (HX7739G8FX)"
+        exit 1
+    fi
     ok "Verified Apple Developer ID Installer signature (HX7739G8FX)"
 
     say "Opening the Apple Installer — accept the prompts."
