@@ -1,0 +1,63 @@
+---
+title: "2026-11-19: Three Brains and the Twenty-Four-Hour Watch"
+description: "Sunday's binary-only W-L cutover, the pre-cutover bugs the Three-Brain Council caught, why 0.69x tokens finished in 0.93x wall time, and the 24-hour WA2 closeout."
+---
+
+![A technical pencil, graphite, and charcoal sketch on dark slate paper of three stone watchtowers on a cliff overlooking a dark harbor, linked by survey lines to a brass astrolabe and a pocket watch glowing in a small amber halo while Tommy the Abyssinian keeps watch on the parapet.](./images/hero-2026-11-19-three-brains-and-the-twenty-four-hour-watch.png)
+
+At 21:39:38 on Wednesday, 18 November, the 24-hour `WA2` watch closed clean across twenty hourly reads. Zero errors. Across 572 requests and 377,995 tokens on `manoir`, the brain never restarted, shed a seat, or broke its cap.
+
+That quiet day depended on two rules from the operator and the council. Change one thing per restart. Never let one brain grade its own homework. Tuesday's [cutover field note](/operations/2026-11-17-the-dragon-takes-the-seat/) recorded the nine faults on restart night and the 45-minute long-context gate at hour zero. Here sits the full ledger behind it: Sunday's bare binary proving run, the pre-cutover traps caught by the council, the speed mechanism, and the 24-hour and 48-hour watches.
+
+## One change on Sunday night
+
+Build `G2` (`02e3937`, merged to `main` as `f335528`) went live alone on Sunday, 15 November, during window `W-L` with adapter `R1` off. First, the operator retired a runaway HomeKit mDNS reflector (`43632cc` at 15:33:46). It had grown to 246 child processes and 842 numbered LAN names; retiring it left 2 `dns-sd` processes and 11 names. A fresh rollback copy stayed at `~/.sanctum/backups/sanctum-mlx-rollback-2f1dfa9-20261115-190854` beside `sanctum-config` `9ee0fda`.
+
+The build pushed swap to warning at 19:08:31. A 19:30:24 doctor check shed the coder seat, which auto-restored at 21:31:44 on the new binary (`866a8757c6fd02f2`, metallib `32cb16a0`). Then a 92-minute dialog freeze missed two earlier slots. At 21:40:59 the brain restarted and reported healthy 50 seconds later with identical parity fingerprints. By 00:41 on Monday, all six 30-minute watch reads, four ablation probes, and 10 of 10 parity tests passed.
+
+Even clean code surfaced check defects. Ruling 122 cleared a `1.57x` coder p90 alert across ten rows without rollback. Cold 11,377-token prewarms finished in 31.4–32.3 seconds on `G2` versus 32.7 seconds on the old binary—both under the 40.9-second trigger. Three live check defects (`rulings 119–121`) also misfired:
+
+- **`WL2` (ruling 119):** grepped `event="ok"` against JSON `"event": "ok"`.
+- **Step 16 (ruling 120):** tailed only 40 lines of the coder log, matching the prior 21:32:06 start and probing a one-second-old seat.
+- **`WL8` (ruling 121):** `council_audit.py` exited `1` on the standing by-design `COLLISION: CILGHAL, JOCASTA` alongside 7 of 7 live seats.
+
+## Three brains in adversarial formation
+
+After hitting a weekly quota ceiling on 13 November, the operator split the campaign across three seats. Claude ran as controller on the laptop and wrote the ledger. Grok served as read-only auditor on the Mini, while Gemini authored the `W-L` and `WA2` runbooks and checked production preconditions. Neither Mini seat could run GPU inference or place restricted inference strings in shell arguments.
+
+Grok earned its seat the hard way. It missed a planted defect on `R0` at 11:33, stayed disqualified until it caught the flaw in `R1` at 12:14, and audited every diff from `R4` through `R30`. Gemini verified all 50 shell variables across 18 bash blocks against macOS `/usr/bin/python3` (3.9.6) and `set -u`.
+
+Beyond the nine rehearsal and restart items in [The Dragon Takes the Seat](/operations/2026-11-17-the-dragon-takes-the-seat/), the council caught six pre-cutover traps that unit suites missed:
+
+- **Prefix parser (`R17`):** `rg-prose.py` checked `startswith("SAME")`, letting `"SAME except the number changed"` pass until tightened to exact `SAME` or `DIFFERENT`.
+- **Wrong speed clock (`R18`):** `rg-speed.py` stamped `RG-S` green from a 3-prompt decode ratio instead of `rg-exam.py`'s 504-request wall-clock `time_word`.
+- **Unbound variables (`R19`):** Step 3 printed `$DRIFT_MIN_SEC` and `$DOCTOR_MIN_SEC` without saving `state.env`, which would have aborted Step 7 under `set -u` before restart.
+- **Python 3.9.6 timestamp crash (`R19b`):** `WW5_LATENCY_A_PY` called `datetime.fromisoformat()`, which breaks on `Z` and `-0500` offsets and returned `exit 1`. That would have tripped `RB-WA2-a` rollback on a healthy deploy; a regex parser now separates `WW5_RC=2` tool stops from `WW5_RC=10` breaches across 81,767 live rows.
+- **Credential touch (`R22`):** an `item10a` dry run opened the brain's TLS certificate and key files silently, fixed with a read guard before Grok `R22` cleared it.
+- **Phantom ANE strings (`R23`):** `step-08.sh` expected four strings absent from `server.rs` while missing `ANE prefill declined:`, and `step-14c.sh` needed a 120-second window around the hourly drift tick.
+
+## Why slower tokens finished first
+
+With the harness trusted, `R1F`, `RG-D`, and `RG-S` exposed the physical tradeoff inside `R1`. Because `R1` loads as an unmerged LoRA across 496 modules (`~2,500–3,000` ops per step), `x @ lora_a` on 17,408-wide `down_proj` runs on one GPU thread group in 0.19 ms. Per-token decode slows to `0.69x` of base with the drafter active (`0.63x` plain).
+
+Quality rose anyway. On [Windu](/agents/windu/)'s 504-request exam (`63 × 8`), `R1 + drafter` scored **`0.7004`** overall (`0.7714` acting) against **`0.7083`** (`0.8036` acting) plain. The live base server without `R1` scored **`0.5198`** (`0.5107` acting, `7` unsafe tries). At `94 W`, `R1 + drafter` finished all 504 requests in **`7,259.1 s`** versus **`7,800.7 s`** for `base + drafter`: a **`0.9306x`** raw ratio (`0.941x` adjusted). It won on wall time because `R1` wrote **25% tighter answers** (`37,828` tokens against `50,356`), so the operator shipped `R1` Tuesday and deferred kernel speed work until after the watch.
+
+## Twenty-four hours and the follow-on gates
+
+Across all twenty hourly `WW5` checks from Tuesday night into Wednesday evening, `WA2` posted `WW5_RESULT PASS`. Zero brain `5xx`. Zero coder `5xx`. Peak latency ratio held at **`0.854`** against the `1.6` cap. At the `21:39:38` close (`[L:4345]`), [Cilghal](/agents/cilghal/) and [Windu](/agents/windu/) seat ratios spanned **`0.018`–`0.767`** (coder `0.818`), uptime reached **`86,446 s`**, parity smoke scored **`10/10`**, integrity logged **`288` `ok`** ticks beside **`24` `drift_ok`** ticks, and **`6/6`** ablation probes held. One swap warning (`20:33–20:43`) came from the coder reaching 6 GiB while the brain stayed at `17.0 GiB`. Quiet window `Q-A` ended at `21:40:14`, landing `sanctum-config` `8ee3942` beside `sanctum-rs` `5ef60a0`.
+
+Thursday brought the follow-on watch gates. On 19 November morning, both 48-hour gates passed on `94 W` AC: **`DG7`** (`R27b`, `9/10` parity smoke, canary present, `11/11` drafter acceptance) and **`DG5`** (`R28c`, `5/5` identity rows identical, `3/3` ablation rows diverged, `154` heartbeats with max 2-second gap). That night (`21:52–23:31`), 72-hour gate **`DG9` Run 1** recorded **`HOLD`**. Six of seven metrics scored `1.0`, while `niah.32k` read `0.6667` (`2/3`) after one probe hit the `1200 s` timeout when the laptop switched to battery mid-drive. Every answered probe scored `1.0`. That prompted the audited `R29c` power-watch wrapper (`must-fix 0`) and `R30` `DG11`/`DG12` kit (`must-fix 0`) before a fresh AC run.
+
+## Status
+
+**Five-day soak active through `Sun 2026-11-22 21:38 EST`.** `R1` (`qwen-haus-dragon-193d2d7407ec`) remains live on `manoir` under [Castellan](/architecture/the-castellan/) and [Qui-Gon](/agents/quigon/), `DG7` and `DG5` are `PASS`, `DG9` Run 2 on AC awaits operator go, and `DG10` (five-day closeout) plus uncached `DG11`/`DG12` remain open. No `v1.0.0` public release tags have been cut.
+
+## Lineage
+
+- [2026-11-17: The Dragon Takes the Seat](/operations/2026-11-17-the-dragon-takes-the-seat/) — Tuesday's cutover, the nine rehearsal and restart faults, and the drafter-bar call
+- [2026-11-08: The Dragon and the Heads That Never Forgot](/operations/2026-11-08-the-dragon-and-the-heads-that-never-forgot/) — the `R1` training verdict and float32 decay fix
+- [2026-11-15: The Compressor Under the Wrong Indent](/operations/2026-11-15-the-compressor-under-the-wrong-indent/) — `lean-ctx` fleet convergence before the freeze window
+- [Dragonforge](/architecture/dragonforge/) — the five post-mortem laws behind the harness
+- [sanctum-mlx](/architecture/sanctum-mlx/) — the native Rust and Metal server carrying `R1`
+
+The 24-hour watch proved that one narrow adapter can serve a whole haus calmly when three minds refuse to trust an untested check. Tommy still sleeps beside the Mac Mini while the five-day soak counts toward Sunday night, and the rollback commits remain one config edit away if the final gate ever asks for them.

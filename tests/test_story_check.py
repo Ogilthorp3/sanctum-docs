@@ -113,6 +113,151 @@ def test_mail_account_label_rule_fires_and_role_names_pass():
         assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
 
 
+# ── contrib-check: no-leak hardening regressions ────────────────────────────
+
+def test_tailnet_ip_catches_backticked_and_allows_cidr_and_placeholder():
+    """Backticked Tailscale CGNAT IPs must be caught; RFC6598 CIDR and
+    100.0.0.X placeholders must remain allowed, and 'IANA' in a table row
+    must not bypass leak detection."""
+    cc = _load_contrib()
+    fire = [
+        "host `100.95.147.70` answered",
+        "port `100.65.184.97:3456`",
+        "bare 100.120.85.55",
+        "| Tailnet | `100.64.0.1` | IANA |",
+    ]
+    hold = [
+        "Tailscale CGNAT (`100.64.0.0/10`) block",
+        "placeholder `100.0.0.X` and `100.0.0.25`",
+        "| Tailnet | `100.0.0.X` | IANA placeholder |",
+    ]
+    for text, should_fire in [(t, True) for t in fire] + [(t, False) for t in hold]:
+        rep = cc.Report()
+        cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+        fired = any("tailnet-IP" in e for e in rep.errors)
+        assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
+def test_user_path_catches_bare_and_tilde_and_preserves_neo_and_shared():
+    """Bare `/Users/<name>`, `~/.bert`, and `/Users/neo-real` must be caught;
+    `/Users/neo`, `/Users/Shared`, and `/Users/*` (including sentence-ending
+    periods like `/Users/neo.` and `/Users/Shared.`) must stay allowed."""
+    cc = _load_contrib()
+    fire = [
+        "hardcoded `/Users/bert` in script",
+        "/Users/bert/bin",
+        "/Users/neo-real/foo",
+        "/Users/neo.bak",
+        "path to `~/.bert/Library/Mail`",
+        "bare `~/.bert` path",
+        "backup `~/.bert.bak/keys`",
+        "stale `~/.bert-old`",
+        "user `~/.bertrand`",
+    ]
+    hold = [
+        "`/Users/neo`",
+        "Home is /Users/neo.",
+        "/Users/neo/.sanctum",
+        "`/Users/Shared`",
+        "Dir is /Users/Shared.",
+        "/Users/*",
+    ]
+    for text, should_fire in [(t, True) for t in fire] + [(t, False) for t in hold]:
+        rep = cc.Report()
+        cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+        fired = any("real username in path" in e for e in rep.errors)
+        assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
+def test_nepveu_domain_label_and_ssid_caught_without_false_positives():
+    """Real domains (`*.nepveu.*`, `name.nepveu.*`, including underscore labels)
+    and SSID (`Nepveu-6G`) must be caught while preserving `Manoir Nepveu` and
+    `Bertrand Nepveu`."""
+    cc = _load_contrib()
+    fire = [
+        "`bridge.nepveu.name`",
+        "https://bridge.nepveu.name/_health",
+        "`name.nepveu.sanctum-bridge`",
+        "/Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist",
+        "/Library/LaunchDaemons/name.nepveu.sanctum_bridge.plist",
+        "connected to Nepveu-6G Wi-Fi",
+        "ssh berts-mbp.local",
+        "ping Bert-Studio.local",
+    ]
+    hold = [
+        "Manoir Nepveu. Fifteen years.",
+        "Bertrand Nepveu (GJ994MN2YF)",
+    ]
+    for text, should_fire in [(t, True) for t in fire] + [(t, False) for t in hold]:
+        rep = cc.Report()
+        cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+        fired = any("real hostname" in e for e in rep.errors)
+        assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
+def test_worklane_emails_and_paths_caught_without_false_positives():
+    """Work-lane emails, bare `@triptyq.vc`, paths, modules, and SharePoint
+    library names must be caught while keeping `import triptyq`, `Triptyq`,
+    `Triptyq-Capital` (including sentence-ending `Triptyq-Capital.`), and
+    `SANCTUM_TQ_*` allowed."""
+    cc = _load_contrib()
+    fire = [
+        "`charles@triptyq.vc`",
+        "restricted to `@triptyq.vc`",
+        "`triptyq-tearsheets`",
+        "~/.openclaw/logs/triptyq-file-mail.log",
+        "`triptyq/bin/file-mail`",
+        "`~/.triptyq/bin/file-mail`",
+        '"$HOME/.triptyq"',
+        "Wraps `triptyq.generator.render_tearsheet`",
+        "rewrote `_editable_impl_triptyq.pth`",
+        "`Documents Triptyq` library",
+        "Triptyq-Capital.json",
+        "https://github.com/triptyq-capital/private-tools",
+        "Triptyq-Capital/work-bot",
+    ]
+    hold = [
+        "`import triptyq` must resolve to this repo.",
+        "The firm's name, Triptyq, is not a secret.",
+        "Ogilthorp3 and Triptyq-Capital",
+        "Org is Triptyq-Capital.",
+        "lowercase triptyq-capital alone",
+        "`SANCTUM_TQ_KEY_BITS`",
+    ]
+    for text, should_fire in [(t, True) for t in fire] + [(t, False) for t in hold]:
+        rep = cc.Report()
+        cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+        fired = any("work-lane identifier" in e for e in rep.errors)
+        assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
+def test_frontmatter_no_leak_catches_description_domain():
+    """Frontmatter must be scanned by check_no_leak via check_page."""
+    import tempfile, os
+    cc = _load_contrib()
+    page = (
+        "---\n"
+        'title: "Gateway Runbook"\n'
+        'description: "Ops for bridge.nepveu.name gateway."\n'
+        "template: splash\n"
+        "hero:\n"
+        "  image:\n"
+        "    dark: ./x.png\n"
+        "---\n\n"
+        "Body text.\n"
+    )
+    with tempfile.NamedTemporaryFile("w", suffix=".mdx", delete=False,
+                                    dir=str(ROOT / DOCS)) as fh:
+        fh.write(page)
+        tmp = Path(fh.name)
+    try:
+        rep = cc.Report()
+        cc.check_page(tmp, rep)
+        assert any("no-leak" in e and ":3:" in e and "bridge.nepveu.name" in e for e in rep.errors), rep.errors
+    finally:
+        os.unlink(tmp)
+
+
 def test_steps_item_counts_as_framing_for_a_code_block():
     """A numbered <Steps> item frames the block it introduces. Steps items
     parse as "bullet"; requiring prose flagged every Steps-based guide, which

@@ -21,8 +21,8 @@ Three modules are live and HMAC-scoped — `sharepoint` (writes), `m365`
 
 <Aside type="caution" title="Naming">
   This is the *gateway* whose code lives at
-  [`Ogilthorp3/sanctum-gateway`](https://github.com/Ogilthorp3/sanctum-gateway)
-  and serves traffic at `bridge.nepveu.name`. The unrelated SQLite proxy
+  `Ogilthorp3/sanctum-gateway`
+  and serves traffic at `bridge.sanctum.haus`. The unrelated SQLite proxy
   documented in [SanctumBridge](/architecture/sanctum-bridge/) shares no
   code, no traffic, and no install path with this gateway.
 </Aside>
@@ -46,7 +46,7 @@ rejection is captured by the audit middleware before it leaves. We walk
 them from the edge inward.
 
 ```
-                 https://bridge.nepveu.name
+                 https://bridge.sanctum.haus
                             │
               ┌─────────────▼─────────────┐
               │    Cloudflare Access      │   service-token gate (90d)
@@ -84,7 +84,7 @@ our code.
 
 ### Layer A — Cloudflare Access (edge)
 
-`bridge.nepveu.name` sits behind a CF Access app whose only policy is
+`bridge.sanctum.haus` sits behind a CF Access app whose only policy is
 `non_identity → service_token`. Claude's sandbox carries
 `CF-Access-Client-Id` + `CF-Access-Client-Secret`; without them the
 request 403s at the edge, never touching the Mini. Token TTL is 90 days;
@@ -92,7 +92,7 @@ rotation is automatic (see Operations).
 
 ### Layer B — Cloudflared tunnel (token-managed)
 
-A token-based tunnel forwards `bridge.nepveu.name` → `localhost:8443` on
+A token-based tunnel forwards `bridge.sanctum.haus` → `localhost:8443` on
 the Mini. Its UUID, account id, and routing live in the CF Zero Trust
 dashboard, not `~/.cloudflared/config.yml` — no local `cert.pem`, no
 config to drift — and it shares the tunnel that already terminates
@@ -206,7 +206,7 @@ layer survive?
 - Claude itself being prompt-injected into a malicious upload — mitigated
   at the skill layer with the explicit-list allowlist
   (`work-skills/sharepoint-structure.yaml`), the hard-coded
-  `@triptyq.vc` suffix on `m365` reads, and — once Slack is live —
+  `@work.vc` suffix on `m365` reads, and — once Slack is live —
   per-channel webhook scoping.
 
 ## Modules
@@ -221,7 +221,7 @@ app `SharePoint MCP Server`. Scopes: `Sites.ReadWrite.All`,
 `Files.ReadWrite.All`. Token cached in-process, refreshed at 80 % TTL.
 
 The site ID and a specific drive ID both live in `secrets.yaml`. Triptyq
-has multi-library sites (`Documents` and `Documents Triptyq` on one
+has multi-library sites (`Documents` and `Documents Work` on one
 `/sites/<work-site>` URL), so the gateway honors the configured drive
 explicitly rather than calling `/sites/{id}/drive` blindly.
 
@@ -248,7 +248,7 @@ Upload behavior:
 Graph mail `$search` over a partner mailbox so a partner Mac can run
 `tq scan-mail` without holding the SOPS age key locally, reusing the
 SharePoint app registration's credentials with `Mail.Read` granted. Two
-guards reject before Graph is touched: a hard-coded `@triptyq.vc` suffix
+guards reject before Graph is touched: a hard-coded `@work.vc` suffix
 check (deliberately *not* env-configurable, so a typo'd allowlist edit
 can't pivot to an outside address) and a `MailboxAllowlist` of current
 partners. The `needle` is hashed, never logged — partners search the
@@ -256,13 +256,13 @@ names of confidential deals, so the audit line carries only its sha256.
 
 ### `tearsheets`
 
-Wraps `triptyq.generator.render_tearsheet` so the portal's Render button
+Wraps `work_cli.generator.render_tearsheet` so the portal's Render button
 produces a `.docx` byte-identical to the CLI's. `POST /tearsheets/render`
 takes a `slug` + `quarter` (regex-validated), reads the matching
 `<slug>_<quarter>.yaml` from the CLI checkout, and returns
 `<slug>_tearsheet_<quarter>.docx` base64-encoded. No secrets — the data
 is on disk — so `build()` returns `None` only when the checkout or the
-`triptyq.generator` import is missing, which keeps canary hosts clean.
+`work_cli.generator` import is missing, which keeps canary hosts clean.
 Being CPU-bound, it runs in a worker thread so the event loop stays
 answerable.
 
@@ -299,7 +299,7 @@ Day-to-day lives in the
 ### Process supervision
 
 A single LaunchDaemon at
-`/Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist` runs
+`/Library/LaunchDaemons/haus.sanctum.bridge.plist` runs
 `/opt/sanctum/bridge/.venv/bin/python -m sanctum_bridge` as user `neo`
 (via `UserName/GroupName`). `KeepAlive=true`, `RunAtLoad=true`,
 `ThrottleInterval=30` so a bad `secrets.yaml` or code deploy can't
@@ -355,10 +355,10 @@ first red row is what to fix.
 
 ## Repos
 
-- [`Ogilthorp3/sanctum-gateway`](https://github.com/Ogilthorp3/sanctum-gateway) — gateway code, secrets.yaml (encrypted), launchd plists, newsyslog conf.
+- `Ogilthorp3/sanctum-gateway` — gateway code, secrets.yaml (encrypted), launchd plists, newsyslog conf.
 - `work-skills` (private work repo) — skill helpers, sharepoint-structure.yaml, sync-bridge-manifest.py.
 - [`Ogilthorp3/sanctum-cli`](https://github.com/Ogilthorp3/sanctum-cli) — `sanctum bridge {health,whoami,manifest,folder,upload,doctor}`.
-- [`Ogilthorp3/sanctum-backup-config`](https://github.com/Ogilthorp3/sanctum-backup-config) — restic + canary scripts on manoir.
+- `Ogilthorp3/sanctum-backup-config` — restic + canary scripts on manoir.
 
 ## Resolved decisions
 

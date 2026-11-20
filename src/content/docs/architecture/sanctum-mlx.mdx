@@ -136,7 +136,7 @@ Eval cadence trades a sliver of latency for throughput:
 | Streaming | Every 4 tokens | Every 8 tokens | Halves GPU sync overhead. Adds ~80ms latency at 13 tok/s — imperceptible in chat. |
 | Non-streaming | Every 32 tokens | Every 64 tokens | Larger graph batches for throughput. The GPU prefers big meals. |
 
-Optimization 5 hurt to get right. Slice 1 of TurboQuant rebuilt the entire dequantized V tensor every decode step on the CPU — `O(T²)` work and a forced GPU sync per layer. The replacement, `sdpa_dequant_v` (in [`turboquant/attention_kernel.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/attention_kernel.rs)), takes Q + materialized K + the compressed V state (indices, scales, zeros) and runs SDPA with V dequantized inline in registers — no full V tensor ever materializes:
+Optimization 5 hurt to get right. Slice 1 of TurboQuant rebuilt the entire dequantized V tensor every decode step on the CPU — `O(T²)` work and a forced GPU sync per layer. The replacement, `sdpa_dequant_v` (in `sanctum-rs` `services/sanctum-mlx/src/turboquant/attention_kernel.rs`), takes Q + materialized K + the compressed V state (indices, scales, zeros) and runs SDPA with V dequantized inline in registers — no full V tensor ever materializes:
 
 ```
 Grid: (32, 1, B*H_q*L_q)   Threadgroup: (32, 1, 1)

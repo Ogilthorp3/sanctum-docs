@@ -1,6 +1,6 @@
 ---
 title: Sanctum Gateway runbook
-description: "Day-to-day ops for the bridge.nepveu.name gateway: bring-up on a fresh Mac, secret rotation, recovering from a wedged daemon, debugging a 401, restoring from backup."
+description: "Day-to-day ops for the bridge.sanctum.haus gateway: bring-up on a fresh Mac, secret rotation, recovering from a wedged daemon, debugging a 401, restoring from backup."
 ---
 
 import { Aside } from '@astrojs/starlight/components'
@@ -8,7 +8,7 @@ import { Aside } from '@astrojs/starlight/components'
 
 ![Sanctum Gateway runbook — an operator's workbench laid out like a clockmaker's table: a brass key-rotation rig, a magnifier hovering over a debug receipt, a coil of backup tape, and a tiny cartoon of a door that refuses to close.](./images/hero-sanctum-gateway-runbook.png)
 
-It's 2 a.m. The tunnel is up, DNS resolves, and `bridge.nepveu.name`
+It's 2 a.m. The tunnel is up, DNS resolves, and `bridge.sanctum.haus`
 answers every request with the same flat 401. Nothing is on fire —
 something is just quietly wrong, which is worse. Tommy the Abyssinian
 would tell you the door that won't close is a human problem, and he
@@ -53,8 +53,8 @@ SOPS_AGE_KEY_FILE=/opt/sanctum/keys/age.key sops -d secrets.yaml | head -3
 
 # 4. Install launchd jobs
 sudo install -m 644 -o root -g wheel \
-    launchd/name.nepveu.sanctum-bridge.plist /Library/LaunchDaemons/
-sudo launchctl load -w /Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist
+    launchd/haus.sanctum.bridge.plist /Library/LaunchDaemons/
+sudo launchctl load -w /Library/LaunchDaemons/haus.sanctum.bridge.plist
 cp launchd/sanctum-bridge-rotate ~/.sanctum/bin/
 cp launchd/sanctum-bridge-canary ~/.sanctum/bin/
 cp launchd/com.sanctum.bridge-rotate.plist ~/Library/LaunchAgents/
@@ -154,9 +154,9 @@ SOPS_AGE_KEY_FILE=/opt/sanctum/keys/age.key \
     '["sharepoint"]["client_secret"]' '"<new value>"'
 security add-generic-password -s sanctum-bridge-sp-client-secret \
     -a client_secret -w '<new value>' -U
-op item edit 74gcslibchm5ru5nsf352tdu3a \
+op item edit "$SHAREPOINT_APP_ITEM_ID" \
     "credential[concealed]=<new value>"
-sudo launchctl kickstart -k system/name.nepveu.sanctum-bridge
+sudo launchctl kickstart -k system/haus.sanctum.bridge
 ```
 
 ### Age master key
@@ -182,7 +182,7 @@ sudo launchctl list | grep sanctum-bridge   # PID column should be a number
 tail -50 /var/log/sanctum/bridge.err.log
 
 # 3. Bounce
-sudo launchctl kickstart -k system/name.nepveu.sanctum-bridge
+sudo launchctl kickstart -k system/haus.sanctum.bridge
 sleep 5
 sanctum bridge doctor
 ```
@@ -191,7 +191,7 @@ If the daemon's log shows a SOPS decrypt failure, the age key got moved
 or its mode changed. `chmod 600 /opt/sanctum/keys/age.key` and bounce.
 
 If the daemon refuses to bootstrap (`launchctl bootstrap` returns EIO),
-fall back to `sudo launchctl load -w /Library/LaunchDaemons/name.nepveu.sanctum-bridge.plist`
+fall back to `sudo launchctl load -w /Library/LaunchDaemons/haus.sanctum.bridge.plist`
 — the legacy load path works around a launchd domain transition issue.
 
 ## Tunnel debugging
@@ -205,10 +205,10 @@ launchctl list | grep -i cloud
 ps aux | grep cloudflared | grep -v grep
 
 # 2. Does DNS still point at CF Anycast?
-dig +short bridge.nepveu.name @1.1.1.1   # 172.64.x.x or 104.x.x.x
+dig +short bridge.sanctum.haus @1.1.1.1   # 172.64.x.x or 104.x.x.x
 
 # 3. Does CF Access front the hostname?
-curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://bridge.nepveu.name/_health
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' https://bridge.sanctum.haus/_health
 # expect 403 without service-token headers
 
 # 4. Hit local /_health directly

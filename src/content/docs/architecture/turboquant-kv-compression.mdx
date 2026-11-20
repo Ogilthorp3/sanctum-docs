@@ -32,7 +32,7 @@ incoming K,V tensor  [1, H_kv, L, D]
              ever materializes
 ```
 
-Both halves live in [`services/sanctum-mlx/src/turboquant/`](https://github.com/Ogilthorp3/sanctum-rs/tree/main/services/sanctum-mlx/src/turboquant) and hand off to a `CompressedKVCache` implementing `mlx_lm::cache::KeyValueCache` — a drop-in for stock `ConcatKeyValueCache`, routed via the `KeyValueCache::fused_attention` trait method.
+Both halves live in `sanctum-rs` `services/sanctum-mlx/src/turboquant/` and hand off to a `CompressedKVCache` implementing `mlx_lm::cache::KeyValueCache` — a drop-in for stock `ConcatKeyValueCache`, routed via the `KeyValueCache::fused_attention` trait method.
 
 The production `com.sanctum.mlx` LaunchAgent passes `--turboquant` against Qwen3.6-35B-A3B-4bit, and the server log emits a `turboquant ... ratio=1.32x` line for each of the 10 full-attention layers (3, 7, 11, … 39) on every request.
 
@@ -94,7 +94,7 @@ About 20 runs total; ~10 seconds each on an M4 Max once the model is cached.
 
 ### 3. Reproducibility
 
-Every run appends one line to [`services/sanctum-mlx/bench/turboquant_sweep.jsonl`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/turboquant_sweep.jsonl):
+Every run appends one line to `sanctum-rs` `services/sanctum-mlx/bench/turboquant_sweep.jsonl`:
 
 ```json
 {
@@ -122,7 +122,7 @@ The **text SHA** is the comparability key — different text means a different r
 
 ### 4. One knob at a time
 
-Never change two variables between runs. The harness reads the five `SANCTUM_TQ_*` knobs (see reference below) into a `OnceLock` before the model loads — no recompile between runs. The shell driver [`bench/tune.sh`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/tune.sh) orchestrates the staircase; individual stages (`ablation`, `key`, `value`, `group`, `qjl`) run in isolation.
+Never change two variables between runs. The harness reads the five `SANCTUM_TQ_*` knobs (see reference below) into a `OnceLock` before the model loads — no recompile between runs. The shell driver `services/sanctum-mlx/bench/tune.sh` orchestrates the staircase; individual stages (`ablation`, `key`, `value`, `group`, `qjl`) run in isolation.
 
 <Aside type="caution" title="This harness lives on a branch">
   The full `SANCTUM_TQ_*` knob harness, `tune.sh`, the `bench/` tree, and the `BypassMode` short-circuits below live on the `feat/turboquant-kv-slice-1` branch — the measurement scaffold. After the Slice 4a-final pivot deleted the CPU key path, `main` kept only the trimmed `turboquant_ppl` regression test, which reads just `SANCTUM_MLX_TEST_MODEL` (and optionally `SANCTUM_MLX_TEST_TEXT_FILE`). Check out that branch to reproduce the sweep commands.
@@ -234,7 +234,7 @@ We added `BypassMode::{IdentityPassthrough, BridgeOnly}` — short-circuits that
 | A0 | IdentityPassthrough (raw concat) | **0.0000** PASS |
 | A0.5 | BridgeOnly (f32 round-trip, no quant) | **+20.62** FAIL |
 
-**Bisected in two runs**: the f32 Array↔CPU bridge, not quantization. MLX Arrays from `transpose_axes([0, 2, 1, 3])` are strided views, and `as_slice::<T>()` reads the raw buffer, ignoring logical layout. Without `flatten()` to force materialization, a logical `[B, H, L, D]` view yielded pre-transpose `[B, L, H, D]` bytes — heads and tokens permuted before any quantization ran. Fix: three lines in [`turboquant/cache.rs`](https://github.com/Ogilthorp3/sanctum-rs/blob/main/services/sanctum-mlx/src/turboquant/cache.rs), `flatten` before `as_slice`.
+**Bisected in two runs**: the f32 Array↔CPU bridge, not quantization. MLX Arrays from `transpose_axes([0, 2, 1, 3])` are strided views, and `as_slice::<T>()` reads the raw buffer, ignoring logical layout. Without `flatten()` to force materialization, a logical `[B, H, L, D]` view yielded pre-transpose `[B, L, H, D]` bytes — heads and tokens permuted before any quantization ran. Fix: three lines in `sanctum-rs` `services/sanctum-mlx/src/turboquant/cache.rs`, `flatten` before `as_slice`.
 
 <Aside type="tip" title="The protocol earned its keep">
   Without the ablate-first rule, we'd have chased bit-budget symptoms and concluded "TurboQuant doesn't work on MLX." Instead: two runs, a three-line fix. Principle 1 isn't bureaucracy — it's the fastest path to the bug.
@@ -344,7 +344,7 @@ That sets the forward slices:
 | **G** | Gemma-4 Rust loader | upstream Python `gemma4` support AND Slice 1d passing |
 | **Q2** | Qwen2 Rust loader — unlocks Qwen2.5-Coder in production | adjacent practice for Slice G |
 
-Details in [`bench/ANALYSIS.md`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/ANALYSIS.md) and the raw JSON at [`bench/qwen25coder_kvq_validation.json`](https://github.com/Ogilthorp3/sanctum-rs/blob/feat/turboquant-kv-slice-1/services/sanctum-mlx/bench/qwen25coder_kvq_validation.json).
+Details in `services/sanctum-mlx/bench/ANALYSIS.md` and the raw JSON at `services/sanctum-mlx/bench/qwen25coder_kvq_validation.json` (on `sanctum-rs` `feat/turboquant-kv-slice-1`).
 
 ## What we carry forward
 

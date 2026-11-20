@@ -13,11 +13,11 @@ The cathedral's coder was at 24.1 tok/s. The plan for the night was modest — c
 
 Two passes, same shape. Both apply to any pair-or-triple of independent quantized linear projections that share an input — which is the [cathedral's](/architecture/sanctum-mlx/) hottest inner loop.
 
-**Phase 1A — fused QKV.** [`sanctum-rs 8da9d33`](https://github.com/Ogilthorp3/sanctum-rs/commit/8da9d33) concatenates `q_proj`, `k_proj`, `v_proj` weight tensors on the output axis, does one `quantized_matmul` over the combined `[q_out + 2·kv_out, hidden/8]` weight, splits the result back into Q, K, V on axis -1. Replaces three matmul kernel launches per attention layer with one. For Qwen2.5-Coder-14B-4bit that's 96 saved launches per decode step — roughly 3 ms at the M4 Pro's ~30 µs/launch.
+**Phase 1A — fused QKV.** `sanctum-rs 8da9d33` concatenates `q_proj`, `k_proj`, `v_proj` weight tensors on the output axis, does one `quantized_matmul` over the combined `[q_out + 2·kv_out, hidden/8]` weight, splits the result back into Q, K, V on axis -1. Replaces three matmul kernel launches per attention layer with one. For Qwen2.5-Coder-14B-4bit that's 96 saved launches per decode step — roughly 3 ms at the M4 Pro's ~30 µs/launch.
 
-**Phase 1B — fused gate+up MLP.** [`sanctum-rs adfbf76`](https://github.com/Ogilthorp3/sanctum-rs/commit/adfbf76) applies the same recipe to SwiGLU's `gate_proj` and `up_proj` (the two parallel matmuls before SiLU+multiply). Same launch-count savings, slightly cleaner code because there's no additive bias path to handle.
+**Phase 1B — fused gate+up MLP.** `sanctum-rs adfbf76` applies the same recipe to SwiGLU's `gate_proj` and `up_proj` (the two parallel matmuls before SiLU+multiply). Same launch-count savings, slightly cleaner code because there's no additive bias path to handle.
 
-Both pieces shipped in [PR #16](https://github.com/Ogilthorp3/sanctum-rs/pull/16) and merged together — the LoRA Phase 4/5 stack on the same feature branch came along for the ride. The live coder cathedral on `:1338` was reloaded with the merged binary and started serving at 35–50 tok/s on freeform completions of 256 tokens. That is where a lesser night would have stopped.
+Both pieces shipped in `sanctum-rs` `PR #16` and merged together — the LoRA Phase 4/5 stack on the same feature branch came along for the ride. The live coder cathedral on `:1338` was reloaded with the merged binary and started serving at 35–50 tok/s on freeform completions of 256 tokens. That is where a lesser night would have stopped.
 
 ## The trap that ate three hours
 
@@ -49,7 +49,7 @@ The essay number is above the pure-decode ceiling because prompt-lookup decoding
 
 The other half of the title. The qwen3_5_moe model on the Mini (Qwen3.6-35B-A3B-4bit on `:1337`) is a hybrid: 10 layers of standard `FullAttention` with RoPE, 38 layers of `LinearAttention` running an SSM scan via the existing `gated_delta_kernel`. Only the FullAttention layers have the q/k/v projection pattern that Phase 1A targets.
 
-[`sanctum-rs 865bc24`](https://github.com/Ogilthorp3/sanctum-rs/commit/865bc24) ports `FusedQkvProj` to `vendor/mlx-rs/mlx-lm/src/models/qwen3_5.rs`. The math is identical; the only twist is that qwen3_5's `q_proj` has output `n_heads · head_dim · 2` (queries + output gate combined), so the Q half of the fused output is twice the size you'd expect. The downstream code that splits Q into `queries` and `gate` operates on the fused output unchanged.
+`sanctum-rs 865bc24` ports `FusedQkvProj` to `vendor/mlx-rs/mlx-lm/src/models/qwen3_5.rs`. The math is identical; the only twist is that qwen3_5's `q_proj` has output `n_heads · head_dim · 2` (queries + output gate combined), so the Q half of the fused output is twice the size you'd expect. The downstream code that splits Q into `queries` and `gate` operates on the fused output unchanged.
 
 The bisect, `services/sanctum-mlx/src/bin/moe_qkv_fuse_bisect.rs`, runs the same 20-step decode-with-populated-cache test against the 35B's `Qwen3_5MoeInnerModel.forward`. It passed byte-for-byte on all 20 steps — the trap that took three hours to find on the 14B did not need re-finding on the 35B. The pattern transferred clean. That is what a good bisect buys you: the second time, you pay nothing.
 
@@ -57,7 +57,7 @@ Yoda's cathedral was reloaded with the new binary and `SANCTUM_MLX_FUSED_QKV=1`.
 
 ## The kernel that worked and the kernel that won't
 
-The natural next step after Phase 1A+1B is a custom Metal kernel that does split+materialize in one launch, eliminating the three `+ zero` arithmetic kernels. The work is on the [`feat/cathedral-phase2-fused-rope`](https://github.com/Ogilthorp3/sanctum-rs/tree/feat/cathedral-phase2-fused-rope) branch.
+The natural next step after Phase 1A+1B is a custom Metal kernel that does split+materialize in one launch, eliminating the three `+ zero` arithmetic kernels. The work is on the `sanctum-rs` `feat/cathedral-phase2-fused-rope` branch.
 
 The kernel is correct in isolation (bisect's `DIRECT kernel sanity check` is byte-exact) and live-correct *if* an `eval` barrier is placed after every call. The barrier is the problem: MLX's lazy graph doesn't auto-track custom-kernel outputs as dependencies, so without `eval` the downstream `reshape → transpose → RoPE` reads stale memory. With it, the forced sync costs more than the two saved launches buy back — net -10 tok/s versus the `+ zero` path that MLX was already overlapping with other GPU work. The elegant kernel loses to the ugly one because the ugly one lets the scheduler breathe.
 

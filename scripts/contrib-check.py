@@ -65,14 +65,19 @@ LEAK_IP_PATTERNS = [
     # "tailnet-shaped" without being a real tailnet addr.
     (re.compile(r"\b100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.\d{1,3}\.\d{1,3}\b"), "tailnet-IP"),
 ]
+ALLOWED_TAILNET_CIDR_RE = re.compile(r"100\.64\.0\.0/10\b")
 
 # MAC addresses not in the FA:CE:DE:CA:CA:XX documentation block.
 # Locally-administered, unicast; spells "face de caca" per the Haus joke.
 LEAK_MAC_RE = re.compile(r"\b([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}\b")
 ALLOWED_MAC_PREFIX = "FA:CE:DE:CA:CA:"
 
-# Real-username + home-path detector. Any /Users/<name>/ that isn't neo is a leak.
-LEAK_USER_PATH_RE = re.compile(r"/Users/(?!neo\b)[A-Za-z][A-Za-z0-9._-]{0,31}/")
+# Real-username + home-path detector. Any /Users/<name> (with or without
+# trailing slash) that isn't neo or Shared, or ~/.bert, is a leak.
+# Sentence-ending dots after /Users/neo. or /Users/Shared. are allowed.
+LEAK_USER_PATH_RE = re.compile(
+    r"(?:/Users/(?!(?:neo|Shared)(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-]))[A-Za-z][A-Za-z0-9._-]{0,31}/?|~/\.bert)"
+)
 
 # Personal handles — real first names or surnames tied to the operator.
 # Service accounts (ubuntu@, operator@, root@) are allowed — generic.
@@ -88,9 +93,13 @@ ALLOWED_PHONE_PREFIX = "+1555555"
 # Real hostnames. Allow the `.local` placeholders and nothing else.
 LEAK_HOSTNAME_RES = [
     # Device naming pattern that exposes the owner's first name.
-    re.compile(r"\bBerts?-[A-Za-z0-9-]+\.local\b"),
+    re.compile(r"\bBerts?-[A-Za-z0-9-]+\.local\b", re.IGNORECASE),
     # Surname in an instance slug (e.g. "firstname-surname").
     re.compile(r"\b[A-Za-z]+-nepveu\b", re.IGNORECASE),
+    # Real domains & reverse-DNS launchd labels containing the surname.
+    re.compile(r"\b(?:[A-Za-z0-9_-]+\.)*nepveu\.[A-Za-z0-9._-]*[A-Za-z0-9]\b", re.IGNORECASE),
+    # Home Wi-Fi SSID containing the surname.
+    re.compile(r"\bNepveu-6G\b", re.IGNORECASE),
 ]
 ALLOWED_LOCAL_HOSTS = {"haus.local", "satellite.local", "yoda.local"}
 
@@ -111,12 +120,27 @@ LEAK_TAILNET_DNS_RE = re.compile(r"\b[a-z0-9-]*tail[0-9a-z]{6,}\.ts\.net\b", re.
 LEAK_WORKLANE_RES = [
     (re.compile(r"\b[a-z0-9-]*triptyq[a-z0-9-]*\.1password\.com\b", re.I), "work 1Password tenant — use work.1password.com"),
     (re.compile(r"\bTRIPTYQ_[A-Z0-9_]+"), "work credential env var — use WORK_*"),
-    (re.compile(r"\btriptyq-(cli|skills|affinity[a-z0-9-]*)\b", re.I), "work repo/credential name — use work-*"),
+    (re.compile(r"(?:[A-Za-z0-9._%+-]+)?@[A-Za-z0-9.-]*triptyq[A-Za-z0-9.-]*\.[A-Za-z]{2,}\b", re.I),
+     "work email address or domain — use <colleague@work> / @work.vc"),
+    (re.compile(r"\btriptyq-(?!Capital(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-]))[A-Za-z0-9._-]+\b", re.I),
+     "work repo/credential/file name — use work-*"),
+    (re.compile(r"(?<![A-Za-z0-9_])\.triptyq(?:/[A-Za-z0-9._-]+)*", re.I),
+     "work-lane directory/path — use ~/.work"),
+    (re.compile(r"\btriptyq/[A-Za-z0-9._/-]+", re.I),
+     "work-lane path — use work/*"),
+    (re.compile(r"\btriptyq_[A-Za-z0-9._-]+\b", re.I),
+     "work-lane identifier — use work_*"),
+    (re.compile(r"\btriptyq\.[A-Za-z0-9._-]+\b", re.I),
+     "work-lane module/domain — use work_cli.*"),
+    (re.compile(r"_triptyq\b", re.I),
+     "work-lane suffix — use _work"),
+    (re.compile(r"\bDocuments Triptyq\b", re.I),
+     "work SharePoint library — use Documents Work"),
     # Both the legacy `com.triptyq.*` and the reverse-DNS `vc.triptyq.*` that
     # replaced it (migration 2026-08-24). Matching only the old prefix would
     # have let every renamed label leak the day the migration landed.
     (re.compile(r"\b(com|vc)\.triptyq\.[a-z0-9.-]*", re.I), "work launchd label — use vc.work.*"),
-    (re.compile(r"\bTriptyq-Capital/[A-Za-z0-9._-]+"), "private work GitHub path — use <work-org>/work-*"),
+    (re.compile(r"\bTriptyq-Capital/[A-Za-z0-9._-]+", re.I), "private work GitHub path — use <work-org>/work-*"),
     (re.compile(r"/sites/Triptyq[A-Za-z0-9]*", re.I), "work SharePoint site — use /sites/<work-site>"),
     (re.compile(r"\b\d{2}_Triptyq[A-Za-z0-9 ]*", re.I), "verbatim fund document path — use 02_<Fund>"),
     # Fund taxonomy cannot be detected generically — "is this folder name real?"
@@ -282,20 +306,10 @@ def check_placeholders(path, rel, body, body_line_offset, report):
 def check_no_leak(path, rel, body, body_line_offset, report):
     """Enforce the No-Leak rule from CONTRIBUTING.md."""
     for i, line in enumerate(body.splitlines(), start=body_line_offset):
-        # Skip lines that are clearly teaching the rule itself (they quote the
-        # sensitive pattern inside backticks for illustration). A backtick-wrapped
-        # occurrence is fine; a bare prose occurrence isn't.
-        stripped = line.strip()
-        if stripped.startswith(("| ", "|")) and "IANA" in line:
-            continue  # canonical-placeholder table row
-
         for rx, kind in LEAK_IP_PATTERNS:
             for m in rx.finditer(line):
                 hit = m.group(0)
-                # Allow inside inline code.
-                before = line[: m.start()]
-                after = line[m.end():]
-                if before.count("`") % 2 == 1 and after.count("`") >= 1:
+                if ALLOWED_TAILNET_CIDR_RE.match(line, m.start()):
                     continue
                 report.err(
                     rel, i, "no-leak",
@@ -814,6 +828,7 @@ def check_page(path, report):
     check_hero(path, rel, body, body_line_offset, report, fm_m.group(1))
     check_emojis(path, rel, body, body_line_offset, report)
     check_placeholders(path, rel, body, body_line_offset, report)
+    check_no_leak(path, rel, fm_m.group(1), 2, report)
     check_no_leak(path, rel, body, body_line_offset, report)
     check_mdx_tag_chars(path, rel, body, body_line_offset, report)
     check_table_pipe_tokens(path, rel, body, body_line_offset, report)

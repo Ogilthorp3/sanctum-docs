@@ -24,13 +24,13 @@ The HTTP server is a sibling coroutine in the same process. It felt nothing. `/h
 | R2D2 (10 min) | No | No | Zero liveness detectors among its 23; its "force-flow" heals aim at the `:1984` bridge |
 | Windu's Curfew Canary | **Yes** | No — by charter | Escalate-biased, `heal=None` on every check; its page is where this story starts |
 | Force Flow failsafe (60 s) | No | Wrong domain | Probed `/health` — the one signal that lies; logged `ok` every minute, all day |
-| Qui-Gon doctor (hourly) | False positive | Wrong domain | Bert-scoped `lsof` can't see a sanctum-user socket, so it "healed" a phantom outage into `gui/501` — where the plist is `.disabled-wave1`. Three no-op heals, all converged:false |
+| Qui-Gon doctor (hourly) | False positive | Wrong domain | Operator-scoped `lsof` can't see a sanctum-user socket, so it "healed" a phantom outage into `gui/501` — where the plist is `.disabled-wave1`. Three no-op heals, all converged:false |
 
 One layer could see. Different layers could act. No layer could do both, and the layers that acted were aiming at a launchd domain that no longer held the service. A signal/actuator split, installed by the migration and invisible until the first real stall.
 
 ## The fix is a ladder, not a patch
 
-Permissions came first — scoped, not sprayed: the state files and their directories opened to group `sanctum`; the git metadata, the config-repo root, and everything a root or bert process executes stayed closed. Then each rung got rebuilt:
+Permissions came first — scoped, not sprayed: the state files and their directories opened to group `sanctum`; the git metadata, the config-repo root, and everything a root or neo process executes stayed closed. Then each rung got rebuilt:
 
 - **In-process:** the loop now runs under a fail-loud supervisor. A death gets a CRITICAL traceback and a 60-second restart — never again an unread exception in a bare task.
 - **Failsafe (60 s):** probes `/screen/liveness` — the PII-free dead-man — on every tick. Persistent staleness earns a kickstart at five ticks and a P0 page at eight.
@@ -38,7 +38,7 @@ Permissions came first — scoped, not sprayed: the state files and their direct
 - **Qui-Gon (hourly):** port probes are TCP connects now; `lsof` blindness is retired.
 - **Windu:** unchanged. Family safety still does not improvise; he pages.
 
-Restart authority is the interesting part. The wave-1 daemons live in launchd's **system domain**, and every healer runs as bert. The bridge across is `/etc/sudoers.d/sanctum-kickstart`: three exact-match NOPASSWD lines, kickstart only, no wildcards. Installing that file is not plumbing — it is the haus deliberately granting heal authority across the privilege boundary. Until Bert ran `visudo -cf` and `install`, every healer could only detect and page. After it, the failsafe's `sudo -n` goes through. The boundary stays; the door has one key, and the key has one shape.
+Restart authority is the interesting part. The wave-1 daemons live in launchd's **system domain**, and every healer runs as neo. The bridge across is `/etc/sudoers.d/sanctum-kickstart`: three exact-match NOPASSWD lines, kickstart only, no wildcards. Installing that file is not plumbing — it is the haus deliberately granting heal authority across the privilege boundary. Until Bert ran `visudo -cf` and `install`, every healer could only detect and page. After it, the failsafe's `sudo -n` goes through. The boundary stays; the door has one key, and the key has one shape.
 
 ## The review that bit its author
 
