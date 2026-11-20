@@ -11,28 +11,51 @@
 # ╚══════════════════════════════════════════════════════════════════════╝
 set -euo pipefail
 
+WORK_DIR=""
+cleanup() {
+    if [ -n "${WORK_DIR:-}" ] && [ -d "$WORK_DIR" ]; then
+        rm -rf "$WORK_DIR"
+    fi
+    WORK_DIR=""
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 # ── Colors & Typography ──────────────────────────────────────────────────
-BOLD="\033[1m"
-DIM="\033[2m"
-RESET="\033[0m"
-AMBER="\033[38;5;214m"
-GREEN="\033[38;5;77m"
-RED="\033[38;5;203m"
-BLUE="\033[38;5;110m"
-WHITE="\033[97m"
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+RESET=$'\033[0m'
+AMBER=$'\033[38;5;214m'
+GREEN=$'\033[38;5;77m'
+RED=$'\033[38;5;203m'
+WHITE=$'\033[97m'
 
 # ── Helpers ──────────────────────────────────────────────────────────────
-say()    { printf "${WHITE}${BOLD}%s${RESET}\n" "$*"; }
-detail() { printf "${DIM}  %s${RESET}\n" "$*"; }
-ok()     { printf "${GREEN}  ✓${RESET} %s\n" "$*"; }
-warn()   { printf "${AMBER}  !${RESET} %s\n" "$*"; }
-fail()   { printf "${RED}  ✗${RESET} %s\n" "$*"; }
-step()   { printf "\n${AMBER}◆${RESET} ${BOLD}%s${RESET}\n" "$*"; }
+say()    { printf '%s%s%s%s\n' "$WHITE" "$BOLD" "$*" "$RESET"; }
+detail() { printf '%s  %s%s\n' "$DIM" "$*" "$RESET"; }
+ok()     { printf '%s  ✓%s %s\n' "$GREEN" "$RESET" "$*"; }
+warn()   { printf '%s  !%s %s\n' "$AMBER" "$RESET" "$*"; }
+fail()   { printf '%s  ✗%s %s\n' "$RED" "$RESET" "$*"; }
+step()   { printf '\n%s◆%s %s%s%s\n' "$AMBER" "$RESET" "$BOLD" "$*" "$RESET"; }
+
+verify_node_codesign() {
+    local node_path="$1"
+    local sign_info
+    sign_info="$(codesign -dvv "$node_path" 2>&1 || true)"
+    codesign --verify --strict "$node_path" 2>/dev/null || return 1
+    case "$sign_info" in
+        *"TeamIdentifier=HX7739G8FX"*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
 # ── Preflight ────────────────────────────────────────────────────────────
-clear
+if [ -t 1 ] && [ -n "${TERM:-}" ] && [ "${TERM:-}" != "dumb" ] && command -v clear >/dev/null 2>&1; then
+    clear || true
+fi
 printf "\n"
-printf "${AMBER}"
+printf '%s' "$AMBER"
 cat << 'LOGO'
     ◇
    ╱ ╲
@@ -41,8 +64,8 @@ cat << 'LOGO'
    ╲ ╱
     ◇
 LOGO
-printf "${RESET}\n"
-printf "${DIM}  sanctum.run installer  •  about a minute, no commitments${RESET}\n\n"
+printf '%s\n' "$RESET"
+printf '%s  sanctum.run installer  •  about a minute, no commitments%s\n\n' "$DIM" "$RESET"
 
 # Refuse to run on anything other than macOS Apple Silicon.
 if [ "$(uname -s)" != "Darwin" ]; then
@@ -62,15 +85,35 @@ ok "macOS on Apple Silicon (uname=$(uname -m))"
 # ── Homebrew ─────────────────────────────────────────────────────────────
 step "Homebrew"
 
-if command -v brew &>/dev/null; then
-    ok "Homebrew already installed ($(brew --version 2>/dev/null | head -1))"
+BREW_BIN=""
+if command -v brew >/dev/null 2>&1; then
+    BREW_BIN="$(command -v brew)"
+elif [ -x /opt/homebrew/bin/brew ]; then
+    BREW_BIN="/opt/homebrew/bin/brew"
+elif [ -x /usr/local/bin/brew ]; then
+    BREW_BIN="/usr/local/bin/brew"
+fi
+
+if [ -n "$BREW_BIN" ]; then
+    eval "$("$BREW_BIN" shellenv)"
+    BREW_VER="$("$BREW_BIN" --version 2>/dev/null || true)"
+    BREW_VER="${BREW_VER%%$'\n'*}"
+    ok "Homebrew already installed (${BREW_VER:-unknown})"
 else
     say "Installing Homebrew — Apple will ask for your password once."
     detail "Homebrew is the macOS package manager. It installs into /opt/homebrew/"
     detail "and is what we use to ship sanctum-cli + its dependencies."
     printf "\n"
-    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-    eval "$(/opt/homebrew/bin/brew shellenv)"
+    BREW_INSTALL_SCRIPT="$(curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+    /bin/bash -c "$BREW_INSTALL_SCRIPT"
+    if [ -x /opt/homebrew/bin/brew ]; then
+        eval "$(/opt/homebrew/bin/brew shellenv)"
+    elif [ -x /usr/local/bin/brew ]; then
+        eval "$(/usr/local/bin/brew shellenv)"
+    else
+        fail "Homebrew installation finished but brew binary was not found."
+        exit 1
+    fi
     ok "Homebrew installed"
 fi
 
@@ -85,8 +128,8 @@ else
     detail "open an installer dialog — accept it, wait for the install (~2 min),"
     detail "then re-run this installer."
     printf "\n"
-    sudo xcode-select --install || true
-    fail "Re-run: curl -fsSL https://sanctum.run/install.sh | bash"
+    xcode-select --install || true
+    fail "Re-run: curl -fsSL --proto '=https' --tlsv1.2 https://sanctum.run/install.sh | bash"
     exit 1
 fi
 
@@ -111,7 +154,7 @@ fi
 step "Node.js Foundation .pkg"
 
 if [ -f /usr/local/bin/node ]; then
-    if codesign -dvv /usr/local/bin/node 2>&1 | grep -q HX7739G8FX; then
+    if verify_node_codesign /usr/local/bin/node; then
         ok "/usr/local/bin/node is the Node.js Foundation .pkg install"
         detail "Team ID HX7739G8FX — the TCC-stable identity for the haus services."
     else
@@ -127,15 +170,54 @@ else
     detail "churns on every upgrade, retriggering permission prompts. The"
     detail ".pkg install puts node at a fixed path with a stable Team ID."
     printf "\n"
-    TMPDIR=$(mktemp -d)
+    WORK_DIR="$(mktemp -d)"
     PKG_URL="https://nodejs.org/dist/v26.0.0/node-v26.0.0.pkg"
+    SHASUMS_URL="${PKG_URL%/*}/SHASUMS256.txt"
+    PKG_FILE="${PKG_URL##*/}"
+    SHASUMS_PATH="$WORK_DIR/SHASUMS256.txt"
+    PKG_PATH="$WORK_DIR/$PKG_FILE"
+
     say "Downloading $PKG_URL"
-    curl -sL -o "$TMPDIR/node.pkg" "$PKG_URL"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 60 -o "$SHASUMS_PATH" "$SHASUMS_URL"
+    curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 180 -o "$PKG_PATH" "$PKG_URL"
+
+    EXPECTED_SHA="$(awk -v fn="$PKG_FILE" '{ gsub(/\r$/, "") } $2 == fn && $1 ~ /^[0-9a-fA-F]{64}$/ { sha=$1; count++ } END { if (count != 1) exit 1; print tolower(sha) }' "$SHASUMS_PATH" || true)"
+    if [ -z "$EXPECTED_SHA" ]; then
+        fail "Could not locate valid SHA-256 for $PKG_FILE in SHASUMS256.txt"
+        exit 1
+    fi
+    ACTUAL_SHA="$(shasum -a 256 "$PKG_PATH")"
+    ACTUAL_SHA="${ACTUAL_SHA%% *}"
+    if [ "$ACTUAL_SHA" != "$EXPECTED_SHA" ]; then
+        fail "SHA-256 mismatch for $PKG_FILE (expected $EXPECTED_SHA, got $ACTUAL_SHA)"
+        exit 1
+    fi
+    ok "Verified SHA-256 for $PKG_FILE"
+
+    PKG_SIG_OUT=""
+    if ! PKG_SIG_OUT="$(pkgutil --check-signature "$PKG_PATH" 2>&1)"; then
+        fail "Installer signature verification failed for $PKG_FILE"
+        exit 1
+    fi
+    case "$PKG_SIG_OUT" in
+        *"Developer ID Installer: Node.js Foundation (HX7739G8FX)"*) ;;
+        *)
+            fail "Installer signature for $PKG_FILE does not match Node.js Foundation (HX7739G8FX)"
+            exit 1
+            ;;
+    esac
+    ok "Verified Apple Developer ID Installer signature (HX7739G8FX)"
+
     say "Opening the Apple Installer — accept the prompts."
-    open -W "$TMPDIR/node.pkg"
-    rm -rf "$TMPDIR"
+    open -W "$PKG_PATH" || true
+    cleanup
     if [ -f /usr/local/bin/node ]; then
-        ok "Node.js Foundation .pkg installed"
+        if verify_node_codesign /usr/local/bin/node; then
+            ok "Node.js Foundation .pkg installed"
+        else
+            warn "/usr/local/bin/node exists after .pkg step, but signature verification (HX7739G8FX) failed"
+            detail "See: https://sanctum.run/architecture/tcc-identity-anchors/"
+        fi
     else
         warn ".pkg install was cancelled or failed — continuing without it"
         detail "You can re-run this installer later, or run only the .pkg leg manually."
@@ -153,14 +235,26 @@ detail "  • run a dry-run + first real backup"
 detail "  • restore a known file as a canary to prove the round-trip"
 printf "\n"
 
-read -r -p "$(printf "${WHITE}  Run ${BOLD}sanctum onboard --recipe family${RESET}${WHITE} now? ${DIM}[Y/n]${RESET}: ")" answer
-if [[ "${answer:-y}" =~ ^[Yy] ]]; then
-    exec sanctum onboard --recipe family
+ONBOARD_PROMPT="$(printf '%s  Run %ssanctum onboard --recipe family%s now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
+if [ -t 0 ]; then
+    read -r -p "$ONBOARD_PROMPT" answer || answer="n"
+    if [[ "${answer:-y}" =~ ^[Yy] ]]; then
+        cleanup
+        exec sanctum onboard --recipe family
+    fi
+elif (: < /dev/tty) 2>/dev/null; then
+    read -r -p "$ONBOARD_PROMPT" answer < /dev/tty || answer="n"
+    if [[ "${answer:-y}" =~ ^[Yy] ]]; then
+        cleanup
+        exec sanctum onboard --recipe family < /dev/tty
+    fi
+else
+    detail "Non-interactive shell detected (no TTY) — skipping onboarding prompt."
 fi
 
 # ── Manual hand-off ──────────────────────────────────────────────────────
 printf "\n"
-printf "${AMBER}"
+printf '%s' "$AMBER"
 cat << 'DONE'
     ◇
    ╱ ╲
@@ -169,7 +263,7 @@ cat << 'DONE'
    ╲ ╱
     ◇
 DONE
-printf "${RESET}\n"
+printf '%s\n' "$RESET"
 
 say "You're ready. When you have a moment, run:"
 printf "\n"
