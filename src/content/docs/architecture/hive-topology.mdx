@@ -7,7 +7,7 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 ![Two identical glass houses on separate islands, linked by a single teal nerve of light that carries names not cables](./images/hero-hive-topology.png)
 
-You open a shell on the road and type `ssh manoir`. It works. Two weeks later you type the same string from the chalet Mini and it works again. Nobody renumbered a subnet. Nobody published a Tailscale subnet route. The laptop did not need a special VPN profile for "vacation mode." The string was the product.
+You open a shell on the road and type `ssh manoir`. It works. Two weeks later you type the same string on the same laptop at the chalet and it works again. Nobody renumbered a subnet. Nobody published a Tailscale subnet route. The laptop did not need a special VPN profile for "vacation mode." The string was the product.
 
 The failure mode this chapter exists to prevent is the opposite story: one flat `10.0.0.0/24` fantasy spanning two basements, a Firewalla that advertises the wrong site as a mesh, and a fine-tuned model that hardcodes "the Mini is always `.10`" as if there were only one Mini in the world. Multi-site Sanctum is **a fleet of complete organisms**, not one organism with two basements.
 
@@ -184,6 +184,27 @@ sanctum node route inference --prefer primary
 sanctum node route local_inference --prefer local
 ```
 
+## Satellites reach the vault through the hub
+
+The [Memory Vault](/guides/memory-vault/) lives on the primary hub. The laptop's vault wrappers SSH to it; a satellite's cannot, because the tailnet policy rejects SSH from `tag:satellite` to the hub. That supersedes the diagnosis in [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/), which blamed DNS and the peer path when `vault.sh who` failed on chalet. The wall was the policy. So the hub carries the satellite's vault traffic.
+
+On the primary hub, the LaunchAgent `haus.sanctum.vault-relay` runs `~/.sanctum/scripts/vault-relay-hub.sh` every 60 s. Each pass:
+
+- pulls the satellite's queued writes from `~/.sanctum/vault-relay/outbox` over the hub's automation SSH lane;
+- runs only the allowlisted `vault.sh` writes (`send`, `ack`, `seen`, `board set`, `board clear`), so `vault.sh`'s own validation applies, and appends `(relayed from chalet by the hub vault relay)` to every relayed note;
+- delivers each request once, keyed by its request id, and rejects a write that `vault.sh` still refuses after 5 attempts;
+- pushes back a mirror: the live inbox messages for `claude-code`, `grok` and `agy`, plus `who`, the board and a result for every request.
+
+On the satellite, `grok-vault.sh`, `agy-vault.sh` and the Claude `UserPromptSubmit` hook switch to relay mode when `~/.sanctum/vault-relay/ENABLED` exists. Writes queue for the hub; reads come from the mirror. Full-vault search and read stay on the hub and the laptop. Delivery takes about a minute, and the wrappers and the Claude hook warn when the mirror is more than 5 minutes old.
+
+```bash
+~/.sanctum/scripts/vault-relay-smoke.sh          # offline self-test, live mirror, wrapper checks
+~/.sanctum/scripts/vault-relay-smoke.sh --live   # plus a ping round-trip through the hub
+python3 ~/.sanctum/scripts/lib/vault_relay.py status
+```
+
+The `--live` ping lands in `inbox/relay-smoke`, a folder no hook reads, so the smoke never shows up in an agent's inbox.
+
 ## Multi-hub (peer join)
 
 Exactly one **primary** hub (config SoT, vault authority, adopt authority). Additional **peer** hubs keep the same body map and join the hive by name — no renumbering, no LAN merge.
@@ -242,4 +263,5 @@ If plan invents renames forever, the stem comparison regressed (FQDN vs short na
 - [Naming](/operations/naming/) — place layer + retired ledger  
 - [Engineering discipline](/architecture/engineering-discipline/) — EETISMAD shipping bar  
 - [Satellite setup](/guides/satellite-setup/) — adopt flow  
+- [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/) — the vault kit on every node; its DNS diagnosis is superseded above  
 - [Home Assistant](/guides/home-assistant/) — Green at design `.3` on the hub site  

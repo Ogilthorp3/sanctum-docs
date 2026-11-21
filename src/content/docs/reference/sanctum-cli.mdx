@@ -74,7 +74,7 @@ sanctum self-test --only cathedral
 | 3 | sanctum config valid | `~/.sanctum/instance.yaml` parses and validates | CLI |
 | 4 | recent backup snapshot | a restic snapshot exists and is recent (n/a on a fresh install) | CLI |
 | 5 | vault armor unlocked | the volume named in `~/.sanctum/vault-armor/manifest.json` reads `Locked: No` (n/a where Vault Armor isn't set up) | CLI |
-| 6 | satellite local brain | `{url}/models` answers HTTP 200 for the `router.default` backend | satellite |
+| 6 | satellite local brain | `{url}/models` on the `router.default` backend answers HTTP 200, or 401/403 from a server that wants a key | satellite |
 | 7 | Yoda cathedral (`:1337`) | TLS port reachable | haus |
 | 8 | Coder cathedral (`:3301`) | TLS port reachable | haus |
 | 9 | proxyd routing (`:4040`) | service alive (an HTTP 401 counts — it answered) | haus |
@@ -86,14 +86,16 @@ sanctum self-test --only cathedral
 | 15 | R2D2 supervisor heartbeat | the auto-fix supervisor is beating, with a sane success rate | haus |
 | 16 | audit log within budget | the audit log is under its size cap | haus |
 
-The five **CLI-tier** probes run everywhere. The ten **haus-tier** probes only mean something once the haus services are up; on a CLI-only box they return `n/a`, not `fail`, and `n/a` doesn't count. The **satellite** probe runs only on a satellite and reads `n/a` everywhere else.
+The five **CLI-tier** probes run everywhere. The ten **haus-tier** probes only mean something once the haus services are up; on a CLI-only box they return `n/a`, not `fail`, and `n/a` doesn't count. On a machine whose `instance.role` is `hub` ([`sanctum init --role hub`](#sanctum-init)), every haus-tier probe is required, whatever is installed. The **satellite** probe runs only on a satellite and reads `n/a` everywhere else.
 
 ### The satellite profile
 
-A machine whose `instance.yaml` says `instance.role: satellite` (written by [`sanctum init --role satellite`](#sanctum-init)) reports the `satellite` tier. Every haus-tier probe prints `n/a` there: the cathedrals, proxyd and its key, Force Flow, chitti, R2D2, the TCC grants and the service user run on the hub, not on the satellite. Two probes carry the profile instead:
+A machine whose `instance.yaml` says `instance.role: satellite` (written by [`sanctum init --role satellite`](#sanctum-init)) reports the `satellite` tier. Every haus-tier probe prints `n/a` there: the cathedrals, proxyd and its key, Force Flow, chitti, R2D2, the TCC grants, the service user and the audit log run on the hub, not on the satellite. Two probes carry the profile instead:
 
-- **satellite local brain** resolves `router.default` to its entry under `router.backends`, GETs `{url}/models`, presenting `ca_cert_path`, `client_cert_path` and `client_key_path` when the backend sets them for a mutual-TLS server, and passes on HTTP 200. A satellite has no council to fall back on, so this brain is the one it thinks with.
+- **satellite local brain** resolves `router.default` to its entry under `router.backends` and GETs `{url}/models` directly: no proxy, no redirects, so a 3xx fails. Over `https` it verifies the server against `ca_cert_path` (else the system trust store) and presents `client_cert_path` and `client_key_path` to a server that demands a client certificate; those paths on an `http` url fail the probe. `api_key_env` names an environment variable whose value goes out as a bearer token. HTTP 200 passes, and so do 401 and 403, which prove that a server wanting a key is up. A satellite has no council to fall back on, so this brain is the one it thinks with.
 - **vault armor unlocked** passes when the volume named in `~/.sanctum/vault-armor/manifest.json` reads `Locked: No`. Locked after boot means the witness unlock has not collected its shares yet, and whatever lives on the volume is unavailable until it does.
+
+Outside the self-test, `sanctum onboard` and `sanctum service-user` report the hub's service principal as `n/a` on a satellite, and `sanctum service-user install` refuses to run there.
 
 The satellite profile and both probes ship in sanctum-cli 1.0. The [Satellite Setup guide](/guides/satellite-setup/) shows the router block the brain probe reads.
 
@@ -130,12 +132,12 @@ Run bare, it prompts for an instance name and offers one derived from the hostna
 |------|----------|
 | `--name` | Instance name; skips the prompt |
 | `--yes` / `-y` | Accept the hostname-derived name; no prompts |
-| `--role` | `hub` or `satellite`, written as `instance.role`. `satellite` switches `sanctum self-test` to the [satellite profile](#the-satellite-profile) |
-| `--force` | Rewrite the whole file from scratch. Every other block, `router:` included, goes with it |
+| `--role` | `hub` or `satellite`, written as `instance.role`. `satellite` switches `sanctum self-test` to the [satellite profile](#the-satellite-profile); `hub` grades the machine as the hub, so every haus-tier probe becomes required |
+| `--force` | Replace the whole file and drop every other block, the `router:` block too. The old file is kept as `instance.yaml.bak` |
 
 ### On an existing file
 
-Without `--force`, `init` never replaces a file that already exists. It adds or updates just `instance.name` and `instance.role` (the slug of an existing block never changes), keeps every other block and comment, and saves the previous version as `instance.yaml.bak`. A file that already has an `instance:` block and gets neither `--name` nor `--role` is left as it is.
+Without `--force`, `init` never replaces a file that already exists. It adds an `instance:` block (name, slug and any `--role`) to a file that has none, or updates just `instance.name` and `instance.role` in an existing block; an existing slug never changes. Either way it keeps every other block and comment, re-parses the result before writing, and saves the previous version as `instance.yaml.bak`. A file it cannot edit safely stays untouched; `init` prints the lines to add by hand and exits `1`. An existing block with neither `--name` nor `--role` is left as it is.
 
 <Aside type="note">
 `--role` and the in-place update ship in sanctum-cli 1.0. Release 0.15.5 knows only `--name`, `--yes` and `--force`, and it rejects a hand-written `instance.role` with `Extra inputs are not permitted`, so upgrade before you give a Mac a role.
@@ -308,7 +310,7 @@ curl -X POST http://127.0.0.1:4077/screen/override \
 ```
 
 <Aside type="tip">
-Full curfew schema in the [Screen Time docs](/screen-time/). To change the standing schedule rather than grant a one-off, edit the `curfew` block in `devices.yaml`.
+Full curfew schema in the [Screen Time docs](/architecture/screen-time/). To change the standing schedule rather than grant a one-off, edit the `curfew` block in `devices.yaml`.
 </Aside>
 
 ---

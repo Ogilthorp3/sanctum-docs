@@ -20,7 +20,7 @@ What you're looking at is a multi-site distributed system. The kind of thing a m
     The full-stack primary node. Runs the Mac Mini host with the Ubuntu VM, all AI agents, the Home Assistant gateway, inference servers, and the complete service catalog. There is exactly one **primary** hub per Sanctum instance; additional **peer** hubs (`tier: peer`) may join the hive later without merging LANs — see [Hive Topology](/architecture/hive-topology/).
   </Card>
   <Card title="Satellite" icon="laptop">
-    A lighter deployment at a secondary haus. Runs a subset of services (typically a gateway, Home Assistant, and a small local model). Syncs configuration and state with the hub over Tailscale.
+    A lighter deployment at a secondary haus. Runs a subset of services (typically a gateway, Home Assistant, and a small local model). The hub reaches it over Tailscale.
   </Card>
   <Card title="Mobile" icon="star">
     A MacBook Pro or similar portable device. Connects to the hub remotely via Tailscale for agent access, SSH, and API calls. Runs a small set of persistent guardrail daemons (see "Persistent Services Across Hosts" below) but no user-facing primary services.
@@ -53,40 +53,41 @@ source ~/.sanctum/lib/config.sh
 
 NODE=$(sanctum_whoami)                          # "manoir"
 TYPE=$(sanctum_node_get "$NODE" type)            # "hub"
-IP=$(sanctum_node_get "$NODE" tailscale_ip)      # "100.0.0.20"
+NAME=$(sanctum_node_get "$NODE" tailscale_name)  # "manoir"
 ```
 
 The node *key* (`manoir`) is the machine's name; its `type` (`hub`) is its role. Two different words for the same box — a distinction that earns its keep the day you have two hubs.
 
 ## Node Definitions in instance.yaml
 
-On the hub, every node is declared under the `nodes` key with its network addresses, SSH user, node type, and the list of services it runs:
+On the hub, every node is declared under the `nodes` key; chalet's row below is exactly what `sanctum node adopt` writes:
 
 ```yaml
 nodes:
   manoir:
     type: hub
+    tier: primary
     host: 192.0.2.10
-    tailscale_ip: 100.0.0.20
+    tailscale_name: manoir
     ssh_user: neo
     vm:
       host: 10.10.10.10           # agent VM over the host bridge
       ssh_user: ubuntu
 
-  chalet:
+  chalet:                          # written by sanctum node adopt
     type: satellite
-    host: ""                       # off the haus LAN; reached over Tailscale
-    tailscale_ip: 100.0.0.30
+    tier: edge
     ssh_user: neo
-    services:
-      home_assistant: { enabled: true, port: 8123 }   # container on the Mini
-      agent:        { enabled: true, name: ahsoka }
-      local_model:  { enabled: true, port: 6502 }     # Ornith-1.5-9B-MLX-4bit, mTLS
+    host: chalet                   # the MagicDNS name adopt was given
+    adopted: '2026-07-18'
+    tailscale_name: chalet
 
   mbp:
     type: mobile
+    tier: edge
     host: 192.0.2.111              # DHCP on the haus LAN; varies elsewhere
-    tailscale_ip: 100.0.0.40
+    tailscale_name: mbp
+    tailscale_ip: 100.0.0.40       # optional cache; resolve live instead
     ssh_user: neo
     services:
       autoresearch: { enabled: true }
@@ -97,14 +98,18 @@ nodes:
 | Field | Required | Description |
 |-------|----------|-------------|
 | `type` | Yes | One of `hub`, `satellite`, `mobile`, `sensor` |
-| `host` | No | LAN IP address. Empty string (`""`) if off the haus network or DHCP-assigned. |
-| `tailscale_ip` | Yes | Stable Tailscale IP for cross-network access |
-| `ssh_user` | Yes | Username for SSH connections to this node |
-| `services` | No | Map of services this node runs (`name: { enabled, port, ... }`). The hub omits it — by definition it runs the full catalog. |
+| `tier` | No | `primary` for the hub that holds the roster, `peer` for a future second hub, `edge` for satellites and mobiles. Adopt writes `edge`. |
+| `ssh_user` | Yes | Username for SSH connections to this node (readers also accept the legacy `user`) |
+| `host` | No | LAN address or MagicDNS name; adopt writes the name it was given. Empty string (`""`) if off the haus network or DHCP-assigned. |
+| `tailscale_name` | No | MagicDNS stem, the name `sanctum node resolve` prefers. Adopt writes it when `host` is a bare name. |
+| `tailscale_ip` | No | Optional cached Tailscale IP. It can go stale; `sanctum node resolve` asks the tailnet instead. |
+| `adopted` | No | ISO date `sanctum node adopt` registered the satellite |
+| `vm` | No | Hub only: the agent VM's `host` and `ssh_user` |
+| `services` | No | Map of services this node runs (`name: { enabled, port, ... }`). Adopt does not write it. The hub omits it — by definition it runs the full catalog. |
 
 ## Hub Node
 
-The hub is the authoritative node. It runs every service, hosts the VM with the agent cluster, and is the source that satellites sync from. In organizational terms, this is the head office, the server room, and the IT department -- all running on a machine the size of a hardcover book.
+The hub is the authoritative node. It runs every service, hosts the VM with the agent cluster, and reaches into every satellite. In organizational terms, this is the head office, the server room, and the IT department -- all running on a machine the size of a hardcover book.
 
 ### Hub Responsibilities
 
@@ -112,7 +117,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 - Hosts the command center dashboard
 - Manages the Cloudflare tunnel for external access
 - Runs inference servers (`sanctum-mlx`, `sanctum-mlx-devstral`, Sanctum TTS) and the `sanctum-server` router that fronts them
-- Acts as the Git and rsync origin for skill updates
+- Feeds the VM its skill updates
 - Keeps the roster in its `instance.yaml`
 
 ### Hub-Only Services
@@ -182,19 +187,18 @@ The [Satellite Setup guide](/guides/satellite-setup/) walks the whole procedure 
   The visit and the pairing of on-site devices (cameras, sensors, smart switches) need someone at the satellite location. You cannot configure Blink cameras or discover Sonos speakers from 200 kilometers away. We tried.
 </Aside>
 
-### Satellite Sync
+### The Hub Reaches In
 
-Satellites pull updates from the hub over Tailscale:
+A satellite never opens a connection to the hub; the tailnet policy rejects its SSH. The hub reaches in: `sanctum node adopt`, its automation SSH lane and the [Memory Vault relay](/architecture/hive-topology/#satellites-reach-the-vault-through-the-hub). Skills fast-forward from their Git origin.
 
 ```
-Hub (manoir)                          Satellite (chalet)
-    |                                       |
-    +-- skills repo    ---- Tailscale ---->  skills repo (rsync)
-    +-- agent config   ---- Tailscale ---->  agent config
+manoir ─── adopt, SSH lane, relay ───▶ chalet
+manoir ◀─────────── never ──────────── chalet
+Git origin ── skills, fast-forward ──▶ chalet
 ```
 
 <Aside type="tip">
-  Once running, satellites operate independently when the Tailscale connection to the hub is unavailable. Local services (Home Assistant, gateway, local model) continue to function offline. The haus doesn't stop being a haus just because the internet is down. That was a design requirement, not a feature. A [Vault-Armored](/architecture/vault-armor/) satellite is the exception: its cold boot waits for the hub's witness, and the vault stays locked until the hub is reachable.
+  Once running, a satellite carries on when the hub is out of reach: Home Assistant, the gateway and the local model all work offline. The haus doesn't stop being a haus because the internet is down. That was a design requirement, not a feature. A [Vault-Armored](/architecture/vault-armor/) satellite is the exception: its cold boot waits, vault locked, until the hub's witness tunnel reaches it.
 </Aside>
 
 ## Mobile Node
@@ -241,8 +245,11 @@ source ~/.sanctum/lib/config.sh
 sanctum_whoami                                    # "manoir"
 
 # Get a field from any node
-sanctum_node_get chalet tailscale_ip              # "100.0.0.30"
+sanctum_node_get chalet tailscale_name            # "chalet"
 sanctum_node_get mbp ssh_user                     # "neo"
+
+# A live address comes from the tailnet, not the roster
+sanctum node resolve chalet                       # chalet → 100.0.0.30 (tailscale:tailscale_name, online)
 ```
 
 ```typescript
@@ -250,7 +257,7 @@ import { whoami, nodeGet, getNodesByType } from './lib/config';
 
 const me = whoami();                              // "manoir"
 const satellites = getNodesByType('satellite');    // ["chalet"]
-const chaletIp = nodeGet('chalet', 'tailscale_ip'); // "100.0.0.30"
+const chaletName = nodeGet('chalet', 'tailscale_name'); // "chalet"
 ```
 
 ## Network Diagram
