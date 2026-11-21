@@ -76,7 +76,7 @@ sanctum node scan                          # chalet shows up as a tailnet peer, 
 sanctum node adopt chalet --name chalet
 ```
 
-The first `chalet` says where to reach the Mac. Give it the MagicDNS name: adopt records a bare name as both `host` and `tailscale_name`, while a Tailscale IP lands in `host` alone. `--name` says what to register it as, and it must equal the `.node_id` the satellite gets in step 4. Leave it off and adopt files the Mac under its own hostname, a key nothing else uses. Adopt waits up to 90 seconds for SSH (`--wait` takes another number of seconds, `0` for a single probe), then runs an **honest-verify scorecard**: reach, key authentication, identity, key hygiene, headless posture, registration. Each line comes from a real check on the machine, and headless posture can only warn. **Only** if the first four layers pass does the roster row land in the hub's `instance.yaml`, and adopt reads it back before it claims success:
+The first `chalet` says where to reach the Mac. Give it the bare MagicDNS name, `chalet`, not the full tailnet FQDN: adopt records a bare name as both `host` and `tailscale_name`, while an FQDN or a Tailscale IP lands in `host` alone. `--name` says what to register it as, and it must equal the `.node_id` the satellite gets in step 4. Leave it off and adopt files the Mac under its own hostname, a key nothing else uses. Adopt waits up to 90 seconds for SSH (`--wait` takes another number of seconds, `0` for a single probe), then runs an **honest-verify scorecard**: reach, key authentication, identity, key hygiene, headless posture, registration. Each line comes from a real check on the machine, and headless posture can only warn. **Only** if the first four layers pass does the roster row land in the hub's `instance.yaml`, and adopt reads it back before it claims success:
 
 ```yaml
 nodes:
@@ -93,7 +93,7 @@ Adopt rewrites the hub's whole `instance.yaml` to add that row, and the rewrite 
 
 ## Step 4 — Give it the satellite profile
 
-From here on, work on the satellite: at its keyboard, or over SSH from the hub. Plain `ssh chalet` asks for the satellite account's password, because the automation key the installer authorized is for sanctum's own commands, not for your shell.
+From here on, work on the satellite: at its keyboard, or over SSH from the hub. Plain `ssh chalet` does not use sanctum's automation key (`~/.ssh/sanctum_automation`, its passphrase in the hub's Keychain), so it asks for the satellite account's password.
 
 ```bash
 brew install ogilthorp3/sanctum/sanctum-cli
@@ -102,7 +102,7 @@ sanctum init --name chalet --role satellite
 echo chalet > ~/.sanctum/.node_id
 ```
 
-The satellite profile needs **sanctum-cli 1.0** or later. Earlier releases have no `--role` and reject `instance.role` outright, so `brew upgrade ogilthorp3/sanctum/sanctum-cli` any older install first. `init` writes a minimal `~/.sanctum/instance.yaml`, just the instance name, slug and role. A satellite keeps its own small file; its roster row lives on the hub. Re-run `init` with `--name` or `--role` and it updates only `instance.name` and `instance.role`, never the slug, keeps every other block and comment, and saves the old file as `instance.yaml.bak`. `--force` replaces the whole file and drops every other block, the router block too; the old file is kept as `instance.yaml.bak`.
+The satellite profile needs **sanctum-cli 1.0** or later. Earlier releases have no `--role` and reject `instance.role` outright, so `brew upgrade ogilthorp3/sanctum/sanctum-cli` any older install first. `init` writes a minimal `~/.sanctum/instance.yaml`, just the instance name, slug and role. A satellite keeps its own small file; its roster row lives on the hub, where `type: satellite` records from the hub's side what `role: satellite` declares here. Re-run `init` with `--name` or `--role` and it updates only `instance.name` and `instance.role`, keeps every other block and comment, and saves the old file as `instance.yaml.bak`. An existing slug never changes; a block without one gets a slug derived from its name, even with no flags. A block that has a slug and gets neither flag is left as it is. A file that parses but fails the schema exits `5` with the schema error. `--force` replaces the whole file and drops every other block, the router block too; the old file is kept as `instance.yaml.bak`.
 
 The role is what makes `sanctum self-test` grade this Mac as a satellite, not as a hub missing half its services.
 
@@ -121,7 +121,7 @@ router:
       client_key_path: ~/.sanctum/certs/clients/canary.key
 ```
 
-`router.default` names a key under `router.backends`, and `url` is the server's OpenAI base URL, ending in `/v1`. The three `*_path` keys are for an `https` server that demands a client certificate, as chalet's does. For a plain HTTP server on the same Mac, set only `url`, for example `http://127.0.0.1:8080/v1`, the default of `mlx_lm.server`, and leave the three paths out. Minting a CA and client certificate like chalet's is operator-only for now.
+`router.default` names a key under `router.backends`, and `url` is the server's OpenAI base URL, ending in `/v1`. `ca_cert_path` names the CA behind an `https` server's certificate; `client_cert_path` and `client_key_path` are for a server that demands a client certificate, as chalet's does. If a block still uses the pre-release names `ca`, `client_cert` or `client_key`, `sanctum self-test` names the key that replaced each. For a plain HTTP server on the same Mac, set only `url`, for example `http://127.0.0.1:8080/v1`, the default of `mlx_lm.server`, and leave the three paths out. Minting a CA and client certificate like chalet's is operator-only for now.
 
 Home Assistant runs on-site, next to the devices it drives. On chalet it is a container on the Mini at `:8123`; a Home Assistant Green on the site's LAN works just as well.
 
@@ -131,7 +131,7 @@ Home Assistant runs on-site, next to the devices it drives. On chalet it is a co
 sanctum self-test
 ```
 
-On a satellite it reports the `satellite` tier. The hub probes (the cathedrals, proxyd and its key, Force Flow, chitti, R2D2, TCC grants, the service user, the audit log) print `n/a`, because those run on the hub. `satellite local brain` must get HTTP 200 from `{url}/models` on the `router.default` backend, or a 401 or 403 from a server that wants a key, and `vault armor unlocked` reads `n/a` until Vault Armor exists. Every applicable probe green and exit `0` means the satellite is done. The full probe list is in the [CLI reference](/reference/sanctum-cli/#sanctum-self-test).
+On a satellite it reports the `satellite` tier. The hub probes (the cathedrals, proxyd and its key, Force Flow, chitti, R2D2, TCC grants, the service user, the audit log) print `n/a`, because those run on the hub. `satellite local brain` must get HTTP 200 from `{url}/models` on the `router.default` backend, or a 401 or 403 from a server that wants a key, and `vault armor unlocked` reads `n/a` until Vault Armor exists. Every applicable probe green and exit `0` means the satellite is done. Outside the self-test, `sanctum onboard --recipe operator` and `sanctum service-user` report the hub's service principal as `n/a`, and `sanctum service-user install` refuses to run. The full probe list is in the [CLI reference](/reference/sanctum-cli/#sanctum-self-test).
 
 <Aside type="caution" title="Vault Armor is operator-only for now">
 [Vault Armor](/architecture/vault-armor/) can seal a satellite's secrets in an encrypted volume, but no first-user installer ships yet; chalet's boot daemon, witness and tunnel are hand-built. Know the trade before you ask for it. A Vault-Armored satellite holds only its LAN share locally, and share 3 is offline break-glass, so a cold boot waits for the hub's witness, and the vault stays locked until the hub's tunnel reaches it.
@@ -139,7 +139,7 @@ On a satellite it reports the `satellite` tier. The hub probes (the cathedrals, 
 
 ## What a satellite runs
 
-Not the hub's stack. A 16 GB Mac can't and shouldn't run the cathedrals or the council. After this page it runs the tailnet daemon, the SSH door and headless settings from the installer, `sanctum-cli` with its own small `instance.yaml`, a local brain behind `router.default`, and Home Assistant. Its roster row and the heavy inference stay on the hub. Where it sits in the larger picture is the [node topology](/architecture/node-topology/).
+Not the hub's stack. A 16 GB Mac can't and shouldn't run the cathedrals or the council, and the CLI knows it: on a declared satellite, `sanctum council`, `chat`, `brainstorm`, `endocrine`, `bridge` and bare `sanctum` print the "needs a full Sanctum haus" banner instead of starting. After this page it runs the tailnet daemon, the SSH door and headless settings from the installer, `sanctum-cli` with its own small `instance.yaml`, a local brain behind `router.default`, and Home Assistant. Its roster row and the heavy inference stay on the hub. Where it sits in the larger picture is the [node topology](/architecture/node-topology/).
 
 ## On-site devices
 

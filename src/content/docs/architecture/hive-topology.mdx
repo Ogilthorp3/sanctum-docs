@@ -186,21 +186,29 @@ sanctum node route local_inference --prefer local
 
 ## Satellites reach the vault through the hub
 
-The [Memory Vault](/guides/memory-vault/) lives on the primary hub. The laptop's vault wrappers SSH to it; a satellite's cannot, because the tailnet policy rejects SSH from `tag:satellite` to the hub. That supersedes the diagnosis in [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/), which blamed DNS and the peer path when `vault.sh who` failed on chalet. The wall was the policy. So the hub carries the satellite's vault traffic.
+The [Memory Vault](/guides/memory-vault/) lives on the primary hub. The laptop's vault wrappers SSH to it; a satellite's cannot, because the tailnet policy rejects SSH from `tag:satellite` to the hub. That supersedes the diagnosis in [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/), which blamed DNS and the peer path when `vault.sh who` failed on chalet. The wall was the policy. So the hub carries the satellite's vault traffic and decides what the satellite may write.
 
-On the primary hub, the LaunchAgent `haus.sanctum.vault-relay` runs `~/.sanctum/scripts/vault-relay-hub.sh` every 60 s. Each pass:
+On manoir, the LaunchAgent `haus.sanctum.vault-relay` runs every 60 s and makes two fixed calls over the hub's automation SSH lane. `vault_relay.py export` on the satellite returns at most 20 queued requests as bounded JSON lines. `vault_relay.py apply` swaps in the new mirror. Passes never overlap, and each request is recorded as soon as it is delivered.
 
-- pulls the satellite's queued writes from `~/.sanctum/vault-relay/outbox` over the hub's automation SSH lane;
-- runs only the allowlisted `vault.sh` writes (`send`, `ack`, `seen`, `board set`, `board clear`), so `vault.sh`'s own validation applies, and appends `(relayed from chalet by the hub vault relay)` to every relayed note;
-- delivers each request once, keyed by its request id, and rejects a write that `vault.sh` still refuses after 5 attempts;
-- pushes back a mirror: the live inbox messages for `claude-code`, `grok` and `agy`, plus `who`, the board and a result for every request.
+The satellite asks. The hub applies its own rules:
 
-On the satellite, `grok-vault.sh`, `agy-vault.sh` and the Claude `UserPromptSubmit` hook switch to relay mode when `~/.sanctum/vault-relay/ENABLED` exists. Writes queue for the hub; reads come from the mirror. Full-vault search and read stay on the hub and the laptop. Delivery takes about a minute, and the wrappers and the Claude hook warn when the mirror is more than 5 minutes old.
+| Request | What the hub allows |
+|---------|---------------------|
+| `send` | Only into `inbox/claude-code`, `inbox/grok`, `inbox/agy` or `inbox/relay-smoke`, as the satellite's namespaced identity: the sender is recorded as `chalet.claude-<sid>`. The first body line reads `[relayed from chalet; sender identity asserted by the satellite]`, and a body holds at most 8 KB |
+| `ack` | Only a message addressed to one of the satellite's own sessions |
+| `seen`, and broadcasts | Stay on the satellite: it never marks a shared message seen for everyone |
+| `board` | Claims only under the satellite's namespace |
+| Volume | At most 20 writes per pass, and 50 live notes per satellite |
+| Retries | Only a permanent refusal (bad arguments, no such message) counts toward rejection, which comes after 5 attempts |
+
+The mirror carries only broadcasts, messages addressed to the satellite's sessions and its own sends, plus the board. It does not carry `who`: on the satellite, `who` lists its own sessions. Freshness is measured on the satellite's own clock, from `received_at`.
+
+On the satellite, `grok-vault.sh`, `agy-vault.sh` and the Claude `UserPromptSubmit` hook work through the relay. Writes queue for the hub; reads come from the mirror. Full-vault search and read stay on the hub and the laptop. Delivery takes about a minute. The hook warns when the mirror is more than 5 minutes old, and when the relay looks down, a queued write says `queued, not yet delivered`.
 
 ```bash
-~/.sanctum/scripts/vault-relay-smoke.sh          # offline self-test, live mirror, wrapper checks
-~/.sanctum/scripts/vault-relay-smoke.sh --live   # plus a ping round-trip through the hub
-python3 ~/.sanctum/scripts/lib/vault_relay.py status
+~/.sanctum/scripts/vault-relay-smoke.sh          # offline self-test through a fake SSH, live mirror, wrapper checks
+~/.sanctum/scripts/vault-relay-smoke.sh --live   # plus a ping round-trip into inbox/relay-smoke
+~/.sanctum/scripts/vault-relay-smoke.sh --hub    # on manoir: the LaunchAgent and its last pass
 ```
 
 The `--live` ping lands in `inbox/relay-smoke`, a folder no hook reads, so the smoke never shows up in an agent's inbox.

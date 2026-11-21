@@ -27,26 +27,30 @@ instance:
   timezone: "America/Montreal"
 ```
 
-Only `instance.name` and `instance.slug` are required; `timezone` is optional. Everything else in this reference is a key you add *under* `cli:` to override a default. Skip the `cli:` block entirely and you get Claude routing, telemetry on, and the built-in `family` and `operator` backup recipes — which, after watching one long cloud outage in real time, is a defensible place to start.
+Only `instance.name` and `instance.slug` are required; `timezone` and `role` are optional. Everything else in this reference is a key you add *under* `cli:` to override a default. Skip the `cli:` block entirely and you get Claude routing, telemetry on, and the built-in `family` and `operator` backup recipes — which, after watching one long cloud outage in real time, is a defensible place to start.
 
 ---
 
 ## instance (metadata the CLI reads)
 
-The CLI pulls three fields out of the `instance:` block; the rest of that block (users, network, services, nodes) belongs to other tools and the CLI ignores it without complaint. `slug` is the URL-safe identifier; `name` shows up in `sanctum status` and alerts.
+The CLI pulls four fields out of the `instance:` block; the rest of the file (users, network, services, nodes) belongs to other tools, and the CLI ignores it without complaint. `slug` is the URL-safe identifier; `name` shows up in `sanctum status` and alerts; `role` says what kind of machine this is.
 
 | Key | Type | Required | Description |
 |-----|------|----------|-------------|
 | `name` | `string` | Yes | Human-readable instance name. Surfaced in `sanctum status` and alert subjects. |
 | `slug` | `string` | Yes | URL-safe identifier. Lowercase, no spaces — used in paths and hostnames. |
 | `timezone` | `string` | No | IANA zone, e.g. `America/Montreal`. Used for schedule and report timestamps. |
+| `role` | `hub \| satellite` | No | What this machine declares itself to be. `sanctum self-test` grades a satellite on the satellite profile and requires every haus-tier probe on a hub; without a role, the tier follows what is installed. Written by `sanctum init --role`. |
 
 ```yaml
 instance:
   name: "Manoir Sanctum"
   slug: "manoir-sanctum"
   timezone: "America/Montreal"
+  role: hub
 ```
+
+`instance.role` is what this machine declares about itself. The hub's roster keeps its own record of every node, as `nodes.<node_id>.type` in the hub's [`instance.yaml`](/reference/instance-yaml/#nodes). Set both consistently: the hub is `role: hub` and `type: hub`, and a satellite that declares `role: satellite` is `type: satellite` in the hub's roster.
 
 <Aside type="tip">
 The slug becomes part of file paths and hostnames. Choose something short, lowercase, and easy to type. The renaming surface is small but non-zero; doing it once is cheaper than doing it twice.
