@@ -40,14 +40,14 @@ sanctum doctor --json
 | Providers | Reachability + latency for each configured model provider (`claude`, `gemini`, `mlx_local`) |
 | Backup repos | `restic snapshots` against each configured repo (local SSD + cloud) |
 
-It's **brevity-gated**: one `OK` line when green, the full tables only on a `DEGRADED` or `FAILED` row or with `--full`. `--json` emits the whole report, for the menu-bar plugin and CI.
+It's **brevity-gated**: one summary line when green, the full tables only on a `DEGRADED` or `FAILED` row or with `--full`. `--json` emits the whole report, for the menu-bar plugin and CI.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | Nothing worse than `OPERATIONAL` |
-| `1` | At least one subsystem is `DEGRADED` or `FAILED` (or `instance.yaml` is missing) |
+| `0` | The report printed, whatever it found: a `DEGRADED` or `FAILED` row leaves the exit code at `0`, so a script reads `overall` from `--json` |
+| `5` | `instance.yaml` is missing or does not load |
 
 <Aside type="tip">
 A `DEGRADED` LaunchAgent row is usually a non-zero `last exit` on a job *meant* to exit non-zero on a quiet night: drift sentinels, parity smoke. The row names the label; `sanctum logs <service>` tells you whether to care.
@@ -101,7 +101,7 @@ A machine whose `instance.yaml` says `instance.role: satellite` (written by [`sa
 | `client_cert_path`, `client_key_path` | Presents this certificate and key to a server that demands a client certificate |
 | `api_key_env` | Names an environment variable whose value goes out as a bearer token |
 | any `*_path` key on an `http` url | Fails the probe |
-| `ca`, `client_cert`, `client_key` | Pre-release names: the probe names the key that replaced each |
+| `ca`, `client_cert`, `client_key` | Pre-release names; the probe fails and names the replacements (`ca_cert_path`, `client_cert_path`, `client_key_path`); rename them |
 
 **vault armor unlocked**: locked after boot means the witness unlock has not collected its shares yet, and whatever lives on the volume waits until it does.
 
@@ -109,7 +109,8 @@ Beyond the self-test:
 
 | Command | On a satellite |
 |---------|----------------|
-| `sanctum council`, `chat`, `brainstorm`, `endocrine`, `bridge`, and bare `sanctum` | Print the "needs a full Sanctum haus" banner instead of starting. An environment override exists for testing |
+| `sanctum council`, `chat`, `code`, `brainstorm`, `endocrine` and `bridge` | Print the "needs a full Sanctum haus" banner instead of starting, and exit `0`. `SANCTUM_HAUS_ON_SATELLITE=1` lifts the rule on a satellite that can reach the hub's council and bridge; the banner names it |
+| Bare `sanctum` | Prints its status line and does not open the council chamber; it prints no banner. The same override lifts this |
 | `sanctum onboard --recipe operator`, `sanctum service-user status` and `check` | Report the hub's service principal as `n/a` |
 | `sanctum service-user install` | Refuses to run and exits `5` |
 
@@ -484,7 +485,7 @@ Global options; everything else routes to the command.
 | `-h`, `--help` | Print the usage banner and exit `0` |
 
 ```bash
-sanctum --version    # → sanctum 0.10.2
+sanctum --version    # → sanctum and the installed version
 sanctum --help       # → command roster
 ```
 
@@ -494,10 +495,12 @@ sanctum --help       # → command roster
 
 | Code | Meaning |
 |------|---------|
-| `0` | Success (`--help` and `--version` included) |
-| `1` | Command-level failure (a probe failed, a prereq is missing, a file wasn't found) |
-| `2` | Usage error (unknown command, missing required argument) |
-| `5` | Configuration error, such as an `instance.yaml` that fails the schema, or a command the machine's role rules out |
+| `0` | OK (`--help` and `--version` included) |
+| `1` | User error: bad input. `self-test` also exits `1` when a probe fails, and `init` when it cannot read or safely edit the file |
+| `2` | Provider error: a rate limit, a rejected key, a model that is unavailable. Typer's usage errors (an unknown command, a missing argument) also exit `2` |
+| `3` | Network error: a DNS lookup or a connection that fails |
+| `4` | Local error: Keychain, disk, a missing dependency, or a `sanctum` binary on a world-writable path |
+| `5` | Configuration error: an `instance.yaml` that is missing, cannot be read or fails the schema, or `sanctum service-user install` on a satellite |
 
 ---
 
