@@ -3,9 +3,9 @@ title: Node Topology
 description: How Sanctum manages hub, satellite, mobile, and sensor nodes across multiple locations.
 ---
 
-import { Card, CardGrid, Aside, Steps } from '@astrojs/starlight/components';
+import { Card, CardGrid, Aside } from '@astrojs/starlight/components';
 
-Sanctum is designed to run across multiple physical locations. A primary **hub** at your main haus coordinates with **satellite** nodes at secondary properties, **mobile** nodes on laptops, and **sensor** nodes for lightweight IoT devices (the RuView door cameras are the first). All nodes share a single `instance.yaml` configuration and communicate over Tailscale.
+Sanctum is designed to run across multiple physical locations. A primary **hub** at your main haus coordinates with **satellite** nodes at secondary properties, **mobile** nodes on laptops, and **sensor** nodes for lightweight IoT devices (the RuView door cameras are the first). The hub's `instance.yaml` holds the roster; a satellite keeps a minimal one of its own. Everything talks over Tailscale.
 
 The multi-site **contract** — isomorphic local design maps, name-only hive plane, no L3 merge — lives in [Hive Topology](/architecture/hive-topology/). Read that when adding a site or fine-tuning models that must share one mental map.
 
@@ -46,7 +46,7 @@ cat ~/.sanctum/.node_id
 
 One file. One word. The machine's entire sense of self lives in a text file smaller than a tweet. And yet if you delete it, everything stops knowing where it is. Identity is fragile -- even for computers.
 
-The identity string must match a key in the `nodes` section of `instance.yaml`. Scripts and services use this to determine which configuration block applies to the current machine.
+The identity string must match a key in the `nodes` section of the hub's `instance.yaml`, the roster. On the hub, scripts and services use it to pick the block that applies to a machine. A satellite's own file has no roster; its row lives on the hub.
 
 ```bash
 source ~/.sanctum/lib/config.sh
@@ -60,7 +60,7 @@ The node *key* (`manoir`) is the machine's name; its `type` (`hub`) is its role.
 
 ## Node Definitions in instance.yaml
 
-Every node is declared under the `nodes` key with its network addresses, SSH user, node type, and the list of services it runs:
+On the hub, every node is declared under the `nodes` key with its network addresses, SSH user, node type, and the list of services it runs:
 
 ```yaml
 nodes:
@@ -75,13 +75,13 @@ nodes:
 
   chalet:
     type: satellite
-    host: ""                       # Set during on-site install
+    host: ""                       # off the haus LAN; reached over Tailscale
     tailscale_ip: 100.0.0.30
     ssh_user: neo
     services:
-      home_assistant: { enabled: true, port: 8123 }
-      agent:        { enabled: false, name: ahsoka }  # reserved seat, not yet deployed
-      local_model:  { enabled: false }                # picked at install for the on-site hardware
+      home_assistant: { enabled: true, port: 8123 }   # container on the Mini
+      agent:        { enabled: true, name: ahsoka }
+      local_model:  { enabled: true, port: 6502 }     # Ornith-1.5-9B-MLX-4bit, mTLS
 
   mbp:
     type: mobile
@@ -113,7 +113,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 - Manages the Cloudflare tunnel for external access
 - Runs inference servers (`sanctum-mlx`, `sanctum-mlx-devstral`, Sanctum TTS) and the `sanctum-server` router that fronts them
 - Acts as the Git and rsync origin for skill updates
-- Stores the canonical copy of `instance.yaml`
+- Keeps the roster in its `instance.yaml`
 
 ### Hub-Only Services
 
@@ -176,20 +176,10 @@ Think of it as a field office. It can operate independently, make local decision
 
 ### Satellite Setup
 
-<Steps>
-1. On the hub, `sanctum node bootstrap-script` builds a signed `.pkg`; AirDrop and double-click it to enable SSH and the hub key. Join Tailscale.
-2. On the satellite, `brew install ogilthorp3/sanctum/sanctum-cli`, then `sanctum init --name chalet --role satellite`. The role makes `self-test` skip hub services.
-3. Set `.node_id` to the satellite's name (`chalet`).
-4. Home Assistant is the Green appliance at `10.0.0.3`, not a Mini container.
-5. Install a local model the hardware holds (chalet: Ornith-1.5-9B-MLX-4bit, mTLS on `:6502`) and point `router.default` at it, with `ca`, `client_cert`, `client_key`.
-6. If it holds secrets, add [Vault Armor](/architecture/vault-armor/); its boot daemon must retry (`KeepAlive={SuccessfulExit=false}`) until the hub witness is up.
-7. `sanctum self-test` on the satellite: all applicable probes green.
-8. On the hub, `sanctum node adopt <satellite>` checks L1–L5 (reach, auth, identity, keys, headless) and registers it (L6).
-9. Configure on-site integrations (cameras, sensors, smart devices).
-</Steps>
+The [Satellite Setup guide](/guides/satellite-setup/) walks the whole procedure with chalet as the example: an installer from `sanctum node bootstrap-script`, one visit to join the tailnet and open it, `sanctum node adopt chalet --name chalet` on the hub, then `sanctum init --name chalet --role satellite`, a local brain, Home Assistant and `sanctum self-test` on the satellite.
 
 <Aside type="caution">
-  Steps 1 and 9 require physical presence at the satellite location. You cannot configure Blink cameras or discover Sonos speakers from 200 kilometers away. We tried.
+  The visit and the pairing of on-site devices (cameras, sensors, smart switches) need someone at the satellite location. You cannot configure Blink cameras or discover Sonos speakers from 200 kilometers away. We tried.
 </Aside>
 
 ### Satellite Sync
@@ -199,13 +189,12 @@ Satellites pull updates from the hub over Tailscale:
 ```
 Hub (manoir)                          Satellite (chalet)
     |                                       |
-    +-- instance.yaml  ---- Tailscale ---->  instance.yaml (subset)
     +-- skills repo    ---- Tailscale ---->  skills repo (rsync)
     +-- agent config   ---- Tailscale ---->  agent config
 ```
 
 <Aside type="tip">
-  Satellites operate independently when the Tailscale connection to the hub is unavailable. Local services (Home Assistant, gateway, local model) continue to function offline. The haus doesn't stop being a haus just because the internet is down. That was a design requirement, not a feature.
+  Once running, satellites operate independently when the Tailscale connection to the hub is unavailable. Local services (Home Assistant, gateway, local model) continue to function offline. The haus doesn't stop being a haus just because the internet is down. That was a design requirement, not a feature. A [Vault-Armored](/architecture/vault-armor/) satellite is the exception: its cold boot waits for the hub's witness, and the vault stays locked until the hub is reachable.
 </Aside>
 
 ## Mobile Node
@@ -276,7 +265,7 @@ const chaletIp = nodeGet('chalet', 'tailscale_ip'); // "100.0.0.30"
     [Mac Mini M4 Pro]            [Mac Mini M1]           [MacBook Pro M4 Max]
     +-- Lima vz VM (Ubuntu)      +-- Gateway              (guardrail daemons)
     +-- 5 AI Agents              +-- Home Assistant       +-- castellan (pending)
-    +-- Full service catalog     +-- Local model (reserved) +-- claude-max-proxy
+    +-- Full service catalog     +-- Local brain (:6502)  +-- claude-max-proxy
     +-- HA gateway
     +-- sanctum-mlx + devstral
     +-- sanctum-server router

@@ -14,7 +14,7 @@ import { Aside } from '@astrojs/starlight/components';
 sanctum <command> [args]
 ```
 
-Most commands read `~/.sanctum/instance.yaml` and fail blunt when it's missing or invalid. The errors are deliberately curt — Sanctum is for technical-friend haushelds, and we trust you with the real line.
+Most commands read `~/.sanctum/instance.yaml` and fail blunt when it's missing or invalid; [`sanctum init`](#sanctum-init) writes a minimal one. The errors are deliberately curt — Sanctum is for technical-friend hausholds, and we trust you with the real line.
 
 <Aside type="note">
 No global `--verbose` — for the few commands that need it the flag is `--traceback`. If you want more than `sanctum doctor` and `sanctum logs <service>` give you, the source is one short Python file per command under `sanctum_cli/commands/`.
@@ -57,7 +57,7 @@ A `DEGRADED` LaunchAgent row is usually a non-zero `last exit` on a job *meant* 
 
 ## sanctum self-test
 
-The canonical health suite — tells you whether the install is still good after an update, a reboot, or a drift suspicion. Twelve probes, two tiers:
+The canonical health suite — tells you whether the install is still good after an update, a reboot, or a drift suspicion. Sixteen probes, three tiers:
 
 ```bash
 sanctum self-test
@@ -65,7 +65,7 @@ sanctum self-test --json
 sanctum self-test --only cathedral
 ```
 
-### The twelve probes
+### The sixteen probes
 
 | # | Probe | Verifies | Tier |
 |---|-------|----------|------|
@@ -73,29 +73,73 @@ sanctum self-test --only cathedral
 | 2 | node binary identity | `/usr/local/bin/node` is the signed Node.js Foundation binary | CLI |
 | 3 | sanctum config valid | `~/.sanctum/instance.yaml` parses and validates | CLI |
 | 4 | recent backup snapshot | a restic snapshot exists and is recent (n/a on a fresh install) | CLI |
-| 5 | Yoda cathedral (`:1337`) | TLS port reachable | haus |
-| 6 | Coder cathedral (`:3301`) | TLS port reachable | haus |
-| 7 | proxyd routing (`:4040`) | service alive (an HTTP 401 counts — it answered) | haus |
-| 8 | Force Flow (`:4077`) | listening | haus |
-| 9 | chitti samskara (`:2188`) | listening | haus |
-| 10 | TCC grants | the expected automation grants are present | haus |
-| 11 | R2D2 supervisor heartbeat | the auto-fix supervisor is beating, with a sane success rate | haus |
-| 12 | audit log within budget | the audit log is under its size cap | haus |
+| 5 | vault armor unlocked | the volume named in `~/.sanctum/vault-armor/manifest.json` reads `Locked: No` (n/a where Vault Armor isn't set up) | CLI |
+| 6 | satellite local brain | `{url}/models` answers HTTP 200 for the `router.default` backend | satellite |
+| 7 | Yoda cathedral (`:1337`) | TLS port reachable | haus |
+| 8 | Coder cathedral (`:3301`) | TLS port reachable | haus |
+| 9 | proxyd routing (`:4040`) | service alive (an HTTP 401 counts — it answered) | haus |
+| 10 | proxy key provisioned | the council's proxyd key is set (environment or Keychain), not the fallback | haus |
+| 11 | Force Flow (`:4077`) | listening | haus |
+| 12 | service user wave-1 | the wave-1 control plane runs as the `sanctum` service user | haus |
+| 13 | chitti samskara (`:2188`) | listening | haus |
+| 14 | TCC grants | the expected automation grants are present | haus |
+| 15 | R2D2 supervisor heartbeat | the auto-fix supervisor is beating, with a sane success rate | haus |
+| 16 | audit log within budget | the audit log is under its size cap | haus |
 
-The four **CLI-tier** probes run everywhere. The eight **haus-tier** probes only mean something once the haus services are up; on a CLI-only box they return `n/a`, not `fail`, and `n/a` doesn't count.
+The five **CLI-tier** probes run everywhere. The ten **haus-tier** probes only mean something once the haus services are up; on a CLI-only box they return `n/a`, not `fail`, and `n/a` doesn't count. The **satellite** probe runs only on a satellite and reads `n/a` everywhere else.
+
+### The satellite profile
+
+A machine whose `instance.yaml` says `instance.role: satellite` (written by [`sanctum init --role satellite`](#sanctum-init)) reports the `satellite` tier. Every haus-tier probe prints `n/a` there: the cathedrals, proxyd and its key, Force Flow, chitti, R2D2, the TCC grants and the service user run on the hub, not on the satellite. Two probes carry the profile instead:
+
+- **satellite local brain** resolves `router.default` to its entry under `router.backends`, GETs `{url}/models`, presenting `ca_cert_path`, `client_cert_path` and `client_key_path` when the backend sets them for a mutual-TLS server, and passes on HTTP 200. A satellite has no council to fall back on, so this brain is the one it thinks with.
+- **vault armor unlocked** passes when the volume named in `~/.sanctum/vault-armor/manifest.json` reads `Locked: No`. Locked after boot means the witness unlock has not collected its shares yet, and whatever lives on the volume is unavailable until it does.
+
+The satellite profile and both probes ship in sanctum-cli 1.0. The [Satellite Setup guide](/guides/satellite-setup/) shows the router block the brain probe reads.
 
 ### Pass rule
 
 No percentage threshold. The suite exits `0` iff **every applicable probe passes**; one real failure exits `1`. `n/a` probes are skipped either way.
 
 ```
-  [ 6/12] Coder cathedral (:3301)    ···· fail   no response on :3301
+  [ 8/16] Coder cathedral (:3301)    ···· fail   no response on :3301
 
-  1 probe(s) failed.  11/12 applicable probes passed in 185 ms. Each red
+  1 probe(s) failed.  14/15 applicable probes passed in 185 ms. Each red
   line above has the actionable detail.
 ```
 
 `sanctum logs self-test` has the full transcript if a red line's own detail isn't enough. `--only <substr>` narrows to matching probe names; `--json` feeds the soak harness. Run it after install, a macOS major upgrade, or a reboot you're unsure of, and weekly as hygiene — `sanctum update` runs it as the gate.
+
+---
+
+## sanctum init
+
+Writes the smallest `~/.sanctum/instance.yaml` the CLI accepts, an instance name and its slug, so a fresh Mac can run every other command. On a satellite it also records the role.
+
+```bash
+sanctum init
+sanctum init --yes
+sanctum init --name chalet --role satellite
+```
+
+Run bare, it prompts for an instance name and offers one derived from the hostname; the slug is derived from the name. It honours `$SANCTUM_INSTANCE_FILE`, like the rest of the CLI.
+
+### Flags
+
+| Flag | Behavior |
+|------|----------|
+| `--name` | Instance name; skips the prompt |
+| `--yes` / `-y` | Accept the hostname-derived name; no prompts |
+| `--role` | `hub` or `satellite`, written as `instance.role`. `satellite` switches `sanctum self-test` to the [satellite profile](#the-satellite-profile) |
+| `--force` | Rewrite the whole file from scratch. Every other block, `router:` included, goes with it |
+
+### On an existing file
+
+Without `--force`, `init` never replaces a file that already exists. It adds or updates just `instance.name` and `instance.role` (the slug of an existing block never changes), keeps every other block and comment, and saves the previous version as `instance.yaml.bak`. A file that already has an `instance:` block and gets neither `--name` nor `--role` is left as it is.
+
+<Aside type="note">
+`--role` and the in-place update ship in sanctum-cli 1.0. Release 0.15.5 knows only `--name`, `--yes` and `--force`, and it rejects a hand-written `instance.role` with `Extra inputs are not permitted`, so upgrade before you give a Mac a role.
+</Aside>
 
 ---
 
@@ -418,7 +462,8 @@ sanctum --help       # → command roster
 |---------|---------|
 | `sanctum status` | Host vital signs — one line with `--oneline` |
 | `sanctum doctor` | Are the LaunchAgents, providers, and backups healthy? |
-| `sanctum self-test` | Run the twelve canonical probes |
+| `sanctum self-test` | Run the sixteen canonical probes |
+| `sanctum init` | Write a minimal `instance.yaml`; `--role satellite` on a satellite |
 | `sanctum update` | `brew upgrade` + self-test as the gate |
 | `sanctum uninstall` | Remove operational artifacts (preserve data by default) |
 | `sanctum uninstall --purge` | Also remove the `~/.sanctum/` data dirs |
