@@ -40,13 +40,13 @@ sanctum doctor --json
 | Providers | Reachability + latency for each configured model provider (`claude`, `gemini`, `mlx_local`) |
 | Backup repos | `restic snapshots` against each configured repo (local SSD + cloud) |
 
-It's **brevity-gated**: one summary line when green, the full tables only on a `DEGRADED` or `FAILED` row or with `--full`. `--json` emits the whole report, for the menu-bar plugin and CI.
+It's **brevity-gated**: one summary line when green (on a hub, after a `Service principal (wave-1)` line), the full tables only on a `DEGRADED`, `UNKNOWN` or `FAILED` row or with `--full`. `--json` emits the whole report, for the menu-bar plugin and CI.
 
 ### Exit codes
 
 | Code | Meaning |
 |------|---------|
-| `0` | The report printed, whatever it found: a `DEGRADED` or `FAILED` row leaves the exit code at `0`, so a script reads `overall` from `--json` |
+| `0` | The report printed, whatever it found: a `DEGRADED`, `UNKNOWN` or `FAILED` row leaves the exit code at `0`, so a script reads `overall` from `--json`. A row reads `UNKNOWN` when its probe could not run: a provider with no key in the Keychain, a restic probe that timed out |
 | `5` | `instance.yaml` is missing or does not load |
 
 <Aside type="tip">
@@ -109,7 +109,7 @@ Beyond the self-test:
 
 | Command | On a satellite |
 |---------|----------------|
-| `sanctum council`, `chat`, `code`, `brainstorm`, `endocrine` and `bridge` | Print the "needs a full Sanctum haus" banner instead of starting, and exit `0`. `SANCTUM_HAUS_ON_SATELLITE=1` lifts the rule on a satellite that can reach the hub's council and bridge; the banner names it |
+| `sanctum council`, `chat`, `code`, `brainstorm`, and the `endocrine` and `bridge` subcommands (such as `sanctum bridge health`) | Print the "needs a full Sanctum haus" banner instead of starting, and exit `0`. Bare `sanctum endocrine` or `sanctum bridge` prints Typer's usage and exits `2`, as a missing subcommand does on any machine. `SANCTUM_HAUS_ON_SATELLITE=1` lifts the rule on a satellite that can reach the hub's council and bridge; the banner names it |
 | Bare `sanctum` | Prints its status line and does not open the council chamber; it prints no banner. The same override lifts this |
 | `sanctum onboard --recipe operator`, `sanctum service-user status` and `check` | Report the hub's service principal as `n/a` |
 | `sanctum service-user install` | Refuses to run and exits `5` |
@@ -496,10 +496,10 @@ sanctum --help       # → command roster
 | Code | Meaning |
 |------|---------|
 | `0` | OK (`--help` and `--version` included) |
-| `1` | User error: bad input. `self-test` also exits `1` when a probe fails, and `init` when it cannot read or safely edit the file |
-| `2` | Provider error: a rate limit, a rejected key, a model that is unavailable. Typer's usage errors (an unknown command, a missing argument) also exit `2` |
+| `1` | User error: bad input. Also a check the command ran that failed: `self-test` with a failing probe, `service-user check` with wave-1 expected and unhealthy, `update` when Homebrew is missing, `brew` fails or the self-test gate fails; and `init` when it cannot read or safely edit the file |
+| `2` | Provider error: a rate limit, a rejected key, a model that is unavailable. Typer's usage errors (an unknown command, a missing argument or subcommand) also exit `2` |
 | `3` | Network error: a DNS lookup or a connection that fails |
-| `4` | Local error: Keychain, disk, a missing dependency, or a `sanctum` binary on a world-writable path |
+| `4` | Local error: Keychain, disk, `restic` missing for `sanctum backup`, or a `sanctum` binary on a world-writable path |
 | `5` | Configuration error: an `instance.yaml` that is missing, cannot be read or fails the schema, or `sanctum service-user install` on a satellite |
 
 ---
