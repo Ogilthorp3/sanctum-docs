@@ -177,17 +177,19 @@ Think of it as a field office. It can operate independently, make local decision
 ### Satellite Setup
 
 <Steps>
-1. Install macOS on the satellite Mac and join it to Tailscale.
-2. Copy the install bundle (synced via iCloud) and run the setup scripts.
-3. Set the `.node_id` file to the satellite's name (e.g., `satellite`).
+1. On the hub, `sanctum node bootstrap-script` builds a signed `.pkg`; AirDrop and double-click it to enable SSH and the hub key. Join Tailscale.
+2. On the satellite, `brew install ogilthorp3/sanctum/sanctum-cli`, then `sanctum init --name chalet --role satellite`. The role makes `self-test` skip hub services.
+3. Set `.node_id` to the satellite's name (`chalet`).
 4. Home Assistant is the Green appliance at `10.0.0.3`, not a Mini container.
-5. Install a local model the satellite hardware can hold — the chalet's M1 16 GB fits a ~10 GB 4-bit model for the on-site agent (`ahsoka`, reserved, not yet deployed). Or route to the hub's `:3301` Devstral coder seat when the link is reliable.
-6. Configure on-site integrations (cameras, sensors, smart devices).
-7. Update the satellite's `host` field in `instance.yaml` on the hub.
+5. Install a local model the hardware holds (chalet: Ornith-1.5-9B-MLX-4bit, mTLS on `:6502`) and point `router.default` at it, with `ca`, `client_cert`, `client_key`.
+6. If it holds secrets, add [Vault Armor](/architecture/vault-armor/); its boot daemon must retry (`KeepAlive={SuccessfulExit=false}`) until the hub witness is up.
+7. `sanctum self-test` on the satellite: all applicable probes green.
+8. On the hub, `sanctum node adopt <satellite>` checks L1–L5 (reach, auth, identity, keys, headless) and registers it (L6).
+9. Configure on-site integrations (cameras, sensors, smart devices).
 </Steps>
 
 <Aside type="caution">
-  Steps 6 and 7 require physical presence at the satellite location. You cannot configure Blink cameras or discover Sonos speakers from 200 kilometers away. We tried.
+  Steps 1 and 9 require physical presence at the satellite location. You cannot configure Blink cameras or discover Sonos speakers from 200 kilometers away. We tried.
 </Aside>
 
 ### Satellite Sync
