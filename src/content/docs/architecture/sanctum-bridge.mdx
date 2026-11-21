@@ -9,30 +9,31 @@ import { Aside } from '@astrojs/starlight/components';
 
 There's a class of macOS databases that nothing should ever need to touch directly — `chat.db`, `Calendar.sqlitedb`, `ChatStorage.sqlite`, `AddressBook-v22.abcddb`. Apple's TCC framework guards them behind Full Disk Access, the most powerful single grant on the system. Granting FDA to your terminal is a rite of passage and, like every rite of passage, the kind of thing you eventually stop questioning. SanctumBridge is the answer to "why are we granting FDA to terminal at all?"
 
-It's a single `.app` bundle running on `127.0.0.1:4078` whose entire job is to read four SQLite files and answer `POST /bridge/query` over loopback HTTP. Every other process — Jocasta, the council agents, Yoda's tool calls — gets to be FDA-clean. They just speak HTTP to the bridge.
+It's a single notarized `.app` bundle running on `127.0.0.1:4444` (Sanctum 1.0 "One Door") whose entire job is to answer authenticated, read-only queries against Apple's protected local stores over loopback HTTP. Every other process — Jocasta, the council agents, Yoda's tool calls — gets to be FDA-clean. They just speak Bearer-authenticated HTTP to the bridge.
 
 ## Why a `.app` bundle and not a script
 
-TCC attaches Full Disk Access to a *signed code identity*. Granting FDA to `Terminal.app` extends to every shell child it spawns. But that scope is wider than it looks, and easily lost when the shell host changes — iTerm vs Terminal vs a `tmux` reattach. An app bundle with its own `CFBundleIdentifier` carries its own TCC entry, so the grant survives reboots, shell reorganizations, and Homebrew updates that swap node versions.
+TCC attaches Full Disk Access and Calendar access to a *signed code identity*. Granting FDA to `Terminal.app` extends to every shell child it spawns. But that scope is wider than it looks, and easily lost when the shell host changes — iTerm vs Terminal vs a `tmux` reattach. An app bundle with its own `CFBundleIdentifier` carries its own TCC entry, so the grant survives reboots, shell reorganizations, and Homebrew updates that swap node versions.
 
-The bundle is a 94-line C launcher (`launcher/main.c`, ~56 lines once you strip the header comment) that `posix_spawn`s Node against `Resources/bridge/server.js`. The launcher itself links only `libSystem` + `Foundation` — but its code identity isn't the whole story, because it `exec`s `/usr/local/bin/node`, and that path is the load-bearing decision. `/usr/local/bin/node` is the Node.js Foundation `.pkg` install: signed, notarized, and pinned to a path that never moves. Homebrew node was retired from the bridge on 2026-05-21 precisely because TCC keys the FDA grant to a binary path, and brew's versioned Cellar path churns on every upgrade. The `.pkg` path stays put forever, so the grant does too.
+The bundle is a signed, notarized C launcher (`launcher/main.c`) that `posix_spawn`s `/usr/local/bin/node --disable-sigusr1` (closing Node's SIGUSR1 inspector attach vector) against `Resources/bridge/server.js`. `/usr/local/bin/node` is the Node.js Foundation `.pkg` install: signed, notarized, and pinned to a path that never moves. Homebrew node was retired from the bridge on 2026-05-21 precisely because TCC keys grants to a binary identity, and brew's versioned Cellar path churns on every upgrade. The `.pkg` path stays put forever, so the grant does too.
 
 ## API
 
 ```http
 POST /bridge/query
+Authorization: Bearer <bridge-token>
 Content-Type: application/json
 
-{"db": "imessage|whatsapp|contacts|calendar", "sql": "...", "params": []}
+{"db": "imessage|whatsapp|contacts|notes|photos|mail|calendar_live", "sql": "...", "params": []}
 ```
 
-Returns `{"rows": [...], "count": N, "elapsed_ms": M}` or `{"error": "..."}`. SELECT and PRAGMA only — anything that mutates data is rejected at the server, not at the database. The bridge is read-only by construction.
+Returns `{"rows": [...], "count": N, "elapsed_ms": M}` or `{"error": "..."}`. SELECT and PRAGMA only — anything that mutates data is rejected at the server, not at the database, and every call is logged with `consumer` and `store`. The bridge is read-only and Bearer-authenticated by construction.
 
 ```http
 GET /health
 ```
 
-Returns `{"status": "ok", "service": "sanctum-bridge", "version": "1.0", "port": <n>, "started_at": "<iso>", "uptime_s": <n>, "pid": <n>}`.
+Returns `{"status": "ok"}` on loopback (`127.0.0.1:4444`).
 
 <Aside type="note">
   Write operations — sending iMessages, creating Notes, scheduling Calendar events — still use the AppleScript/osascript pipeline directly. The bridge is read-only. If you need to send a PagerDuty text at 3 AM, that still goes through `osascript`, not HTTP.
@@ -51,19 +52,19 @@ The contacts resolver picks by file size on purpose. macOS keeps one folder per 
 
 ## Calendar is special
 
-The on-disk `Calendar.sqlitedb` on macOS Sequoia (15) and Tahoe (16) is a *stale* snapshot, not an *empty* one — which is the more dangerous of the two. It holds thousands of rows: subscribed holiday calendars stretching out to 2037, a fossil layer of old personal events, the usual scatter of birthdays. What it does *not* hold is anything recently synced — query it for today and you get nothing, because the live event store routes through the EventKit XPC service and stopped writing to this file generations of macOS ago. Jocasta-mcp solves this with a separate Swift bridge (`~/.sanctum/bin/jocasta-eventkit`) that calls `EKEventStore.predicateForEvents` — SanctumBridge isn't involved in the calendar path on modern macOS, even though it can technically open `Calendar.sqlitedb`. Querying `calendar` through the bridge returns that stale layer in full conviction. That's deliberately noisy: the freshness defect lives in Apple's storage layer, not in the bridge, and an answer that's obviously a decade out of date is safer than a plausible one the model might smooth over.
+The on-disk `Calendar.sqlitedb` on macOS Sequoia (15) and Tahoe (26) is a *stale* snapshot, not an *empty* one — which is the more dangerous of the two. It holds thousands of rows of subscribed holidays and old events, while live calendar events route through Apple's EventKit XPC service. In Sanctum 1.0 One Door (`2026-11-21`), SanctumBridge holds the Calendars TCC grant (`responsible = haus.sanctum.bridge`) and exposes a `calendar_live` store directly, so `jocasta_read_calendar` routes through the bridge instead of keeping a separate Calendar-privileged helper on disk.
 
 ## Source
 
-`Ogilthorp3/sanctum-bridge` — `make build` produces the `.app` bundle from `launcher/main.c` and `bridge/server.js`. `make install` drops it into `~/Applications/`. Bundle ID stays `ai.openclaw.denchclaw` so the existing TCC FDA grant carries across rebuilds.
+`Ogilthorp3/sanctum-bridge` — `make build` produces the notarized `.app` bundle from `launcher/main.c` and `bridge/server.js`. `make install` drops it into `~/Applications/`.
 
-The repo was reconstructed 2026-04-28 from the live deployed bundle. The original source had been inline-edited into the `.app` and never committed — the running binary on the Mac Mini was the only artifact, not on either Mac's filesystem, in any restic snapshot, on any external drive, or in any Trash. The launcher was reverse-engineered from its `strings(1)` output — a binary that strips down to a single-digit handful of strings doesn't hide much — and the legacy bash launcher (preserved as `launcher/SanctumBridge.bash.legacy`); the `bridge/server.js` is the live production code with the contacts-resolver fix folded in.
+The repo was reconstructed 2026-04-28 from the live deployed bundle. The original source had been inline-edited into the `.app` and never committed — the running binary on the Mac Mini was the only artifact, not on either Mac's filesystem, in any restic snapshot, on any external drive, or in any Trash. The launcher was reverse-engineered from its `strings(1)` output — a binary that strips down to a single-digit handful of strings doesn't hide much — and the legacy bash launcher (preserved as `launcher/SanctumBridge.bash.legacy`); the `bridge/server.js` is the live production code with the contacts-resolver fix and One Door store isolation folded in.
 
-The bundle is also now in the restic backup paths (`~/Backups/sanctum-backup.sh`) so a future inline-edit incident has somewhere to recover from.
+The bundle is also now in the restic backup paths (`~/.sanctum/scripts/sanctum-backup.sh`) so a future inline-edit incident has somewhere to recover from.
 
 ## Configuration
 
-The bridge reads `SANCTUM_BRIDGE_PORT` from the environment (default `4078`). The LaunchAgent at `~/Library/LaunchAgents/com.sanctum.bridge.plist` doesn't hardcode the port — it shells out through `~/.sanctum/bin/sanctum-bridge.sh`, which resolves the port via `sanctum_get services.sanctum_bridge.port` from `~/.sanctum/instance.yaml`. Single source of truth, doctrine-clean.
+The bridge reads `SANCTUM_BRIDGE_PORT` from the environment (default `4444` in Sanctum 1.0; `:4078` now hosts the PQ TLS terminator). The LaunchAgent at `~/Library/LaunchAgents/haus.sanctum.bridge.plist` doesn't hardcode the port — it resolves `services.sanctum_bridge.port` from `~/.sanctum/instance.yaml`. Single source of truth, doctrine-clean.
 
 The jocasta-mcp client side mirrors this: `SANCTUM_BRIDGE_URL` is set by `~/.sanctum/bin/jocasta-mcp-stdio.sh` from the same YAML key. Changing the port is one edit to `instance.yaml`, then `launchctl kickstart -k` and the openclaw-gateway restart — no plist edits, no source code changes.
 

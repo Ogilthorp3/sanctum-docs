@@ -16,9 +16,9 @@ The unattended layer is the part that already earned its keep. Everything in thi
 | Layer | Status | Notes |
 |---|---|---|
 | Power-cycle recovery | live | `autorestart=1`, `womp=1`, `autoLogin=neo`, `kcpassword` present; 14 system-domain LaunchDaemons + all cathedrals `KeepAlive=true` |
-| Cathedrals (Yoda 35B :1337 + Coder-14B :1338) | live | mTLS-only, plain-bridges on :1339 + :1234 for proxyd; smoke-tested HTTP 200 in 15ms |
+| Cathedrals (Dragon 27B :1337 + Coder :3301) | live | mTLS-only on `:1337`, plain-bridges for proxyd; smoke-tested HTTP 200 in 15ms |
 | proxyd routing + autoheal | live | OpenRouter rotate-key + dual-mgmt-key failover, SOPS drift heal at 09:30 daily, model audit weekly |
-| R2D2 v0.4 supervisor | live | 11-layer safety stack, cycle bookends, chitti heartbeat, Force Flow escalation, audit log rotates at 50 MB. In classifier-only soak. |
+| R2D2 v0.5+ supervisor | live | 11-layer safety stack, cycle bookends, chitti heartbeat, Force Flow escalation, audit log rotates at 50 MB. Active self-healing live. |
 | TLS certs | live | 9 mTLS certs expire 2027 (yoda) / 2031 (rest) — years of headroom |
 | TCC permission stability | live | 7 brew formulas pinned (node, python@3.{11,12,14}, uv, restic, lima) so versioned-path re-prompts stop |
 | SSH unattended path | live | `~/.ssh/sanctum_automation_ed25519` + `restrict` constraint + `Host manoir-automation` alias |
@@ -33,7 +33,7 @@ The unattended layer is the part that already earned its keep. Everything in thi
 **Update — 2026-07-03 (beta-blocker sweep):** a deep audit enumerated **28**
 beta blockers into a machine-checkable ledger (`~/.sanctum/state/beta-blockers.yaml`),
 read by the readiness ruler. As of this sweep: **19 fixed and merged, 4 staged**
-behind one `sudo launchctl kickstart -k system/com.sanctum.proxyd`, **0 open, 5
+behind one `sudo launchctl kickstart -k system/haus.sanctum.proxyd`, **0 open, 5
 deferred** with written reasons (two cathedral inference-hot-path edges held for
 the parity harness; two Force Flow findings that are working-as-designed
 tradeoffs; net-heal owned by another session). The full arc — including the
@@ -65,8 +65,8 @@ public tag is held until the post-Dragon Wave 4 rollout closes.
 | GitHub Tier 0 (free private repo per host) | shipped |
 | iCloud Photos auto-exclude | shipped |
 | Two-step installer (`curl -sSfL https://sanctum.run/install.sh \| bash`) | **shipped** — hosted on `sanctum.run/install.sh` |
-| Brew formula (`brew install ogilthorp3/sanctum/sanctum-cli`) | **shipped** — `Formula/sanctum-cli.rb` in tap repo, points at `v0.15.5` tarball |
-| Sigstore signing on binaries | pending — keyless OIDC signing via cosign in a GitHub Action, not yet wired |
+| Brew formula (`brew install ogilthorp3/sanctum/sanctum-cli`) | **shipped** — `Formula/sanctum-cli.rb` in tap repo (`66` hashed offline resources), points at `v0.15.5` until Tuesday `v1.0.0` reveal |
+| Sigstore signing on binaries | **shipped** — keyless OIDC `cosign` bundles + SLSA build provenance (`actions/attest-build-provenance`) in `sanctum-cli/.github/workflows/release.yml` |
 | Public release on Ogilthorp3/sanctum-cli | **shipped** — repo public, `v0.15.5` tag, `v1.0.0` tag held for Wave 4 |
 | Onboarding splash + personalized completion | shipped (commit 5b17c05) |
 | Smoke-tested "fresh Mac to working R2 backup in 5 min" recipe | verified |
@@ -104,16 +104,13 @@ Runbook: `runtime/docs/doctrine/runbooks/mbp-automation-key-setup.md`. ~3 minute
 
 Further down the impact order — three of these four turned out to be already shipped when someone actually went to check.
 
-### 5. SanctumBridge.app code-signed bundle wrapper
+### 5. SanctumBridge.app One Door & code-signed bundle wrapper
 
-**Status as of 2026-05-22**: closed via the maximum-effort TCC sweep. SanctumBridge.app launcher rebuilt (`NODE_BIN` → `/usr/local/bin/node`) and re-signed with Bertrand's `Developer ID Application: Bertrand Nepveu (GJ994MN2YF)`. Bundle ID `ai.openclaw.denchclaw` is stable; child node process inherits from the Node.js Foundation `.pkg` install (Team ID `HX7739G8FX`).
+**Status as of 2026-11-21**: hardened to **Sanctum 1.0 One Door**. `SanctumBridge.app` (`haus.sanctum.bridge` on `127.0.0.1:4444`, notarized, signed with `Developer ID Application: Bertrand Nepveu (GJ994MN2YF)`) now launches `/usr/local/bin/node --disable-sigusr1` (closing the Node SIGUSR1 inspector), enforces Bearer auth, and serves all 7 macOS data stores — including `calendar_live` via EventKit — through one audited door.
 
-Two TCC identity anchors are now in place (council-approved 2026-05-22 — vault topic `federate-vs-two-anchors-decision`):
-
-- **Anchor A** — Node.js Foundation `.pkg` (`HX7739G8FX`) → `/usr/local/bin/node` → 9 vanilla node services. 13 TCC categories pre-granted via `~/.sanctum/scripts/sanctum-grant-tcc.sh`.
-- **Anchor B** — SanctumBridge.app (`GJ994MN2YF`, bundle `ai.openclaw.denchclaw`) → C launcher spawns `/usr/local/bin/node` → iMessage / WhatsApp / Calendar / Contacts SQLite bridge.
-
-The council deliberately did NOT federate everything under one umbrella bundle — TCC's responsible-process attribution doesn't flow from launchd to its children, so a single-anchor architecture would have carried federation costs (rebuild cycles, more complex plists) for zero TCC benefit on the launchd-spawned majority.
+- **One Door data plane**: `jocasta-mcp` routes every store read (iMessage, WhatsApp, Contacts, Notes, Photos, Mail, Calendar) through `SanctumBridge` on `127.0.0.1:4444` with `consumer=jocasta` (no direct SQLite fallback), and disables high-blast-radius tools (`jocasta_agent_browser`, `jocasta_read_syslog`, `jocasta_read_keychain`, `jocasta_read_file`) in Sanctum 1.0.
+- **Root-owned Messages reader**: `/usr/local/libexec/sanctum/sanctum-messages-reader` (signed, pinned) replaced the old user-space reader.
+- **Final TCC/FDA lockdown**: scheduled Monday night `2026-11-23` post-Dragon, revoking FDA from `ssh`, `bash`, `Terminal`, and `iTerm` on the hub so only `SanctumBridge`, the messages reader, and Triptyq Messages retain it.
 
 ### 6. Family Pass (1.0-ready)
 
@@ -127,7 +124,7 @@ The council deliberately did NOT federate everything under one umbrella bundle �
 | Phase 2 `sanctum` CLI dispatcher + commands | **shipped** via `sanctum-cli v0.15.5` (`39` top-level commands: `onboard`, `doctor`, `status`, `setup`, `node`, `mesh`, `tailnet`, `service-user`, `vault-armor`, `self-test`, `upgrade`, `uninstall`, `keys`, etc.) |
 | Phase 3 `install.sh` (hash-verified bootstrap) | **shipped** (`https://sanctum.run/install.sh`) |
 | Phase 4 Per-haushold setup runbook in sanctum-docs | shipped via Quick Start + `installation.mdx` + `installation-family-pass.mdx` |
-| Phase 5 Acid Test on a clean Mac user | tracked in E2E + post-Dragon `v1.0.0` release gate |
+| Phase 5 Acid Test on a clean Mac user | **verified** — clean-`HOME` isolated venv (`init`, `config validate`, `backup estimate`, restic backup/restore bit-exact round-trip, `CRIT-01` world-writable refusal, `uninstall --dry-run`), `install.sh` + `.sha256` verification, and network-denied Homebrew tap sandbox build |
 
 ### 7. Screen-time Layer 2 (reconciler + reaper)
 
@@ -147,10 +144,10 @@ Realistic profile: a single technical friend with a Mac, willing to follow a wri
 
 **Current posture (`v0.15.5`, 1.0-ready):** Items 1–8 and `install.sh` are shipped. A new user installs via `curl -sSfL https://sanctum.run/install.sh | bash` or `brew install ogilthorp3/sanctum/sanctum-cli` and runs `sanctum onboard --recipe family` against their own haushold.
 
-Remaining work before cutting `v1.0.0` public tags:
-- Post-Dragon Wave 4 primary-brain rollout (`wave4/primary-brain-hardening`, held until `Sun 2026-11-22 21:38 EST`) + final closeout (Waves 1–3 live EETISMAD complete in [A Hundred Seams and One Closed Door](/operations/2026-11-20-a-hundred-seams-and-one-closed-door/))
-- Sigstore keyless OIDC release signing in CI
-- Recorded install walkthrough (screencast) — 1 evening
+Remaining work before cutting `v1.0.0` public tags on Tuesday `2026-11-24`:
+- Post-Dragon Wave 4 primary-brain rollout (`wave4/primary-brain-hardening`, held until `Sun 2026-11-22 21:38 EST`) + Monday night hub FDA lockdown (Waves 1–3 live EETISMAD complete in [A Hundred Seams and One Closed Door](/operations/2026-11-20-a-hundred-seams-and-one-closed-door/))
+- Execute the rehearsed `v1.0.0` tag + Sigstore-signed GitHub Release + Homebrew formula bump (`sanctum-1-0-reveal.sh --execute`)
+- Recorded install walkthrough (screencast — post-reveal polish)
 
 <Aside type="note">
 The gap between "I run it" and "they run it" lives in writing, scripting, and trust gates — not in the infrastructure. Power-cycle, autoheal, log rotation, the safety stack — those are all done. What remains is the productization wrap and the validation harness. Both are crisp pieces of work with no architectural unknowns.

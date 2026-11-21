@@ -21,16 +21,14 @@ The MCP operates through two unified streams:
 1. **The MCP Server (`index.ts`)**: For autonomous LLM agents speaking standard `.stdio` RPC.
 2. **The Terminal CLI (`cli.ts`)**: For SSH automation and bare Bash scripting (`pnpm sanctum-jocasta <command>`).
 
-### SanctumBridge (Port 4078)
+### SanctumBridge — One Door (Port 4444)
 
-As of April 2026, Jocasta's read connectors for **iMessage**, **WhatsApp**, **Contacts**, and **Calendar** route queries through SanctumBridge — a lightweight HTTP proxy running on the host with Full Disk Access. This means jocasta-mcp itself no longer needs FDA granted. One less thing that can silently break after a macOS update.
+In Sanctum 1.0 ("One Door", deployed `2026-11-20` / `2026-11-21`), **every** Apple store read — **iMessage**, **WhatsApp**, **Contacts**, **Notes**, **Photos**, **Mail**, and live **Calendar** (`calendar_live`) — routes exclusively through SanctumBridge on `127.0.0.1:4444` with Bearer auth and `consumer=jocasta`. There is no direct SQLite fallback: `jocasta-mcp` itself stays completely FDA-clean, and every read lands in SanctumBridge's audit log.
 
-The bridge accepts `POST /bridge/query` with a body of `{"db": "imessage|whatsapp|contacts|calendar", "sql": "...", "params": []}` and returns `{"rows": [...], "count": N}`. Every refactored connector attempts the bridge first. If the bridge is unreachable (crashed, not started, port blocked), the connector falls back to direct SQLite access — which still works if the node process has FDA. Graceful degradation, not graceful surrender.
-
-The bridge listens on `127.0.0.1:4078` and is overridable via the `SANCTUM_BRIDGE_URL` env var; both ends resolve the port from `~/.sanctum/instance.yaml` (`services.sanctum_bridge.port`) so changing it is one YAML edit. See [SanctumBridge](/architecture/sanctum-bridge/) for the full architecture, API, and the story of why it's a `.app` bundle instead of a script.
+The bridge listens on `127.0.0.1:4444` (overridable via `SANCTUM_BRIDGE_URL`; both ends resolve `services.sanctum_bridge.port` from `~/.sanctum/instance.yaml`). See [SanctumBridge](/architecture/sanctum-bridge/) for the full architecture, API, and notarized `.app` bundle design.
 
 <Aside type="note">
-  Write operations — sending iMessages, creating Notes, scheduling Calendar events — still use the AppleScript/osascript pipeline directly. The bridge is read-only. If you need to send a PagerDuty text at 3 AM, that still goes through `osascript`, not HTTP.
+  Write operations — sending iMessages, creating Notes, scheduling Calendar events — still use the AppleScript/osascript pipeline directly. The bridge is read-only. In Sanctum 1.0, four high-blast-radius read/shell tools (`jocasta_agent_browser`, `jocasta_read_syslog`, `jocasta_read_keychain`, and `jocasta_read_file`) are explicitly disabled and return `"off in Sanctum 1.0"`.
 </Aside>
 
 ### Health Check
@@ -44,13 +42,13 @@ The `jocasta_health` tool reports server status and bridge connectivity in one c
     Reads the `Envelope Index` under `~/Library/Mail/V*/MailData` to map sender aliases and subjects. Timestamps are Unix epoch seconds here, not Apple's 2001 epoch — a one-line off-by-31-years bug if you forget.
   </Card>
   <Card title="Messages & Protocols" icon="comment">
-    Parses `chat.db` for iMessage and SMS, reads **Telegram** straight from its `postbox/db/db.sqlite`, and reaches **WhatsApp** through its own store. iMessage and WhatsApp route through SanctumBridge (:4078) by default, with direct DB fallback. Signal is the holdout: it decodes the `config.json` master key and opens its SQLCipher `sql/db.sqlite` directly, because the bridge doesn't speak encrypted databases.
+    Parses `chat.db` for iMessage and SMS and reaches **WhatsApp** through **SanctumBridge (`127.0.0.1:4444`)** with `consumer=jocasta` (no direct SQLite fallback in Sanctum 1.0), and reads **Telegram** from its store. Signal decodes its `config.json` master key to open SQLCipher `sql/db.sqlite`.
   </Card>
   <Card title="Electron Bundles" icon="warning">
     **Slack** and **Discord** data is heavily blocked due to Electron's use of LevelDB packet chunks (`Local Storage/leveldb`). Those tools respond with graceful failures for now.
   </Card>
   <Card title="Apple Core Data" icon="apple">
-    Jocasta pulls **Apple Notes** previews from the `ZSNIPPET` column of `NoteStore.sqlite` (the full bodies live in compressed `ZDATA` packets, untouched for now), reads **Calendar** events through the EventKit Swift helper at `~/.sanctum/bin/jocasta-eventkit` (the on-disk `Calendar Cache` is stale by design on modern macOS, so it's only the fallback), and parses `AddressBook-v22.abcddb` for the [**CRM correlation**](/agents/jocasta/) of cell numbers to names. Calendar and Contacts route through SanctumBridge by default; Notes stays on direct SQLite — the bridge doesn't serve it yet.
+    Jocasta pulls **Apple Notes** previews (`ZSNIPPET`), live **Calendar** events (`calendar_live`), **Photos** metadata, **Apple Mail** headers, and **Contacts** (`AddressBook-v22.abcddb` for [**CRM correlation**](/agents/jocasta/)) all through SanctumBridge (`127.0.0.1:4444`) under One Door.
   </Card>
   <Card title="Offline Knowledge" icon="open-book">
     `jocasta_search_kiwix` pings a local `kiwix-serve` on `:8080` and confirms the offline `.zim` archive is reachable. Article extraction isn't wired yet — the tool returns "reached, here's how to parse me," not the article. An honest stub beats a pretty lie.
@@ -67,23 +65,9 @@ Reads go through `sqlite3.OPEN_READONLY` (or the bridge, for the four bridged da
 - **`jocasta_send_imessage`**: hands the message to the Messages daemon to send as iMessage/SMS.
   - *Primary use case*: the pager. When a service drops, the alert gets texted to your own phone — the one channel that lights up the lock screen whether or not you're at the terminal. Handing this tool to [Mon Mothma's council seat](/agents/mothma/) is the plan; today her tool belt stops at status, doctor, and logs.
 
-## Web Browsing (Agent-Browser)
+## Disabled High-Privilege Tools (Off in Sanctum 1.0)
 
-Rather than embed a Playwright container in the Node runtime, Jocasta shells out to the user's global `agent-browser` (Chrome via CDP).
-- **Tool**: `jocasta_agent_browser`
-- It passes the command string straight through (e.g. `open https://github.com && snapshot -i`), so DOM inspection and ref-based file downloads work exactly as they do from the CLI.
-- **Security Check**: the connector sets `AGENT_BROWSER_ALLOWED_DOMAINS` to a fixed allowlist (currently `github.com`) before launching. Navigation off the list is blocked by agent-browser itself, which is the cheap way to keep a prompt-injected page from steering the browser somewhere it shouldn't go.
-
-<Aside type="caution">
-  **The Keychain Risk**: `jocasta_read_keychain` shells out to `security find-generic-password` / `find-internet-password`, so the first read on a given item throws the macOS Keychain access dialog — the "Allow / Always Allow" prompt for whatever process (here, `node`) is asking. Handing an LLM a plaintext password is inherently dangerous. Where possible, use the `agent-browser auth login` vault pattern instead, so the secret never reaches the model's context.
-</Aside>
-
-## Document Parsing and Telemetry (Anti-Sith Army)
-
-For systems failure tracking and massive unstructured document ingest:
-
-1. **Jocasta Sysmon** (`jocasta_read_syslog` & `jocasta_read_process_list`): Exposes macOS Unified Logs (`log show --predicate`) and raw process state (`ps -ax -r`, sorted hot-CPU-first). To protect the LLM context window, both are hard-truncated — syslog to the last 500 log lines, the process list to the top 50 processes. Fifty hot processes tells you what's pinning the box; line 51 onward is just the idle tail.
-2. **Universal Files** (`jocasta_read_file`): Equipped with `pdf-parse` and `mammoth`, Jocasta can slice through generic `.docx`, `.pdf`, `.md`, and `.csv` items downloaded into iCloud.
+Four earlier experimental tools — `jocasta_agent_browser` (Chrome CDP browsing), `jocasta_read_keychain` (macOS Keychain lookups), `jocasta_read_syslog` (Unified Logs), and `jocasta_read_file` (arbitrary local document reads) — are **turned off in Sanctum 1.0** (`842bf94`) and immediately return `"off in Sanctum 1.0"` so an untrusted prompt cannot pivot Jocasta into browsing, Keychain reads, or host filesystem access. `jocasta_read_process_list` remains available for bounded top-50 CPU telemetry.
 
 ## Package Manager
 
