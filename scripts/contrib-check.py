@@ -15,6 +15,7 @@ Usage:
 """
 
 import hashlib
+import os
 import re
 import sys
 from collections import defaultdict
@@ -117,38 +118,55 @@ LEAK_TAILNET_DNS_RE = re.compile(r"\b[a-z0-9-]*tail[0-9a-z]{6,}\.ts\.net\b", re.
 # the work lane, which is the gap 36 live mentions fell through on 2026-08-24.
 # Two-lane doctrine cuts both ways: haus infra must not hold work secrets, and
 # public haus docs must not map work systems.
+#
+# This public file holds only shapes built from the firm's name, so the linter
+# does not itself publish the systems map it guards (2026-11-22, before 1.0).
+# Any identifier that glues the name to a dot, dash, underscore, slash or @
+# fires: a domain or tenant, an env var, a repo, a launchd label, a path, a
+# document folder. The exact shapes that the name alone cannot catch (a library
+# title, real folder names) live in a private file, read when present:
+# $SANCTUM_DOCS_WORKLANE_PATTERNS, else ~/.config/sanctum-docs/worklane-patterns.txt
+# (one regex per line, case-insensitive, optional TAB then hint, # comments).
 LEAK_WORKLANE_RES = [
-    (re.compile(r"\b[a-z0-9-]*triptyq[a-z0-9-]*\.1password\.com\b", re.I), "work 1Password tenant — use work.1password.com"),
-    (re.compile(r"\bTRIPTYQ_[A-Z0-9_]+"), "work credential env var — use WORK_*"),
+    (re.compile(r"\b[A-Za-z0-9-]*triptyq[A-Za-z0-9-]*\.[A-Za-z0-9][A-Za-z0-9._-]*", re.I),
+     "the firm's name in a domain, tenant or module — use work.example / work_cli.*"),
+    (re.compile(r"\b[A-Za-z0-9-]+\.triptyq\b", re.I),
+     "the firm's name inside a dotted name, such as a launchd label — use vc.work.*"),
     (re.compile(r"(?:[A-Za-z0-9._%+-]+)?@[A-Za-z0-9.-]*triptyq[A-Za-z0-9.-]*\.[A-Za-z]{2,}\b", re.I),
      "work email address or domain — use <colleague@work> / @work.vc"),
     (re.compile(r"\btriptyq-(?!Capital(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-]))[A-Za-z0-9._-]+\b", re.I),
      "work repo/credential/file name — use work-*"),
+    (re.compile(r"\btriptyq_\w+", re.I),
+     "work credential or identifier — use WORK_* / work_*"),
+    (re.compile(r"_triptyq", re.I),
+     "the firm's name after an underscore, such as a document folder — use _work / 02_<Fund>"),
     (re.compile(r"(?<![A-Za-z0-9_])\.triptyq(?:/[A-Za-z0-9._-]+)*", re.I),
      "work-lane directory/path — use ~/.work"),
-    (re.compile(r"\btriptyq/[A-Za-z0-9._/-]+", re.I),
-     "work-lane path — use work/*"),
-    (re.compile(r"\btriptyq_[A-Za-z0-9._-]+\b", re.I),
-     "work-lane identifier — use work_*"),
-    (re.compile(r"\btriptyq\.[A-Za-z0-9._-]+\b", re.I),
-     "work-lane module/domain — use work_cli.*"),
-    (re.compile(r"_triptyq\b", re.I),
-     "work-lane suffix — use _work"),
-    (re.compile(r"\bDocuments Triptyq\b", re.I),
-     "work SharePoint library — use Documents Work"),
-    # Both the legacy `com.triptyq.*` and the reverse-DNS `vc.triptyq.*` that
-    # replaced it (migration 2026-08-24). Matching only the old prefix would
-    # have let every renamed label leak the day the migration landed.
-    (re.compile(r"\b(com|vc)\.triptyq\.[a-z0-9.-]*", re.I), "work launchd label — use vc.work.*"),
-    (re.compile(r"\bTriptyq-Capital/[A-Za-z0-9._-]+", re.I), "private work GitHub path — use <work-org>/work-*"),
-    (re.compile(r"/sites/Triptyq[A-Za-z0-9]*", re.I), "work SharePoint site — use /sites/<work-site>"),
-    (re.compile(r"\b\d{2}_Triptyq[A-Za-z0-9 ]*", re.I), "verbatim fund document path — use 02_<Fund>"),
-    # Fund taxonomy cannot be detected generically — "is this folder name real?"
-    # is not machine-decidable — so the two real document roots are pinned by
-    # name. Keep examples generic (01_Fund Admin, 03_Pipeline) and this stays
-    # quiet; paste the real library structure back and it fires.
-    (re.compile(r"\b\d{2}_(Gestion|Occasions)\b", re.I), "real fund document root — keep taxonomy generic"),
+    (re.compile(r"\btriptyq[A-Za-z0-9-]*/[A-Za-z0-9._/-]+", re.I),
+     "work-lane path or private GitHub path — use work/* or <work-org>/work-*"),
+    (re.compile(r"/[A-Za-z0-9._-]*triptyq", re.I),
+     "the firm's name as a path component — use /sites/<work-site> or ~/.work"),
 ]
+
+
+def _private_worklane_res() -> list[tuple[re.Pattern[str], str]]:
+    """Exact work-lane shapes from the private file, or none when it is absent."""
+    raw = os.environ.get("SANCTUM_DOCS_WORKLANE_PATTERNS", "")
+    path = Path(raw).expanduser() if raw else Path.home() / ".config/sanctum-docs/worklane-patterns.txt"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        rx, _, hint = line.partition("\t")
+        out.append((re.compile(rx, re.I), hint.strip() or "private work-lane shape — keep it generic"))
+    return out
+
+
+LEAK_WORKLANE_RES += _private_worklane_res()
 
 # MAIL-ACCOUNT labels. The haus names its mailboxes after the people and the
 # firms behind them, so a label maps whose mail the haus reads, and a count

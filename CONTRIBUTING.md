@@ -118,15 +118,18 @@ Docs ship to a public repo. Assume a hostile reader. The following never appear 
 - **UUIDs tied to real accounts** — Apple notarization IDs, App Store Connect IDs, hardware UUIDs, anything that could be cross-referenced with a leak elsewhere.
 - **Email addresses** — use `<owner@haus>`.
 - **WORK-LANE SYSTEMS** — the firm's *name* is not a secret; its *systems map*
-  is. Never publish where work secrets live (`triptyq.1password.com`), what
-  they are called (`TRIPTYQ_*`, `triptyq-affinity-api-key`), which private work
-  repos exist (`Triptyq-Capital/*`), work launchd labels (`com.triptyq.*`, `vc.triptyq.*`), or
-  verbatim paths into fund documents (`/sites/…`, `02_… I SEC/`). Two-lane
+  is. Never publish where work secrets live (the work password-manager
+  tenant), what they are called (work credential variables and keychain
+  items), which private work repos exist, work launchd labels, or verbatim
+  paths into fund documents. Write `work.1password.com`, `WORK_*`, `work-*`,
+  `<work-org>/work-*`, `vc.work.*` and `02_<Fund>` instead. Two-lane
   doctrine cuts both ways: haus infrastructure must not hold work secrets, and
   public haus docs must not map work systems. **This clause was added
   2026-08-24 after 36 such mentions were found live on sanctum.run** — the rule
   above covered haus identifiers exhaustively and had never contemplated the
-  work lane. All seven patterns are now enforced by `contrib-check.py`.
+  work lane. `contrib-check.py` enforces it: its public patterns are built from
+  the firm's name alone, and the exact shapes live in a private file it reads
+  when present.
 - **Mail-account labels and their counts** — the haus names its mailboxes
   after the people and the firms behind them, so a label maps whose mail the
   haus reads, and a count beside it measures someone's inbox. Describe an
