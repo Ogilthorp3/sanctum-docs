@@ -195,14 +195,15 @@ def test_nepveu_domain_label_and_ssid_caught_without_false_positives():
         assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
 
 
-def test_worklane_emails_and_paths_caught_without_false_positives():
-    """Work-lane emails, bare `@triptyq.vc`, paths, modules, and SharePoint
-    library names must be caught while keeping `import triptyq`, `Triptyq`,
-    `Triptyq-Capital` (including sentence-ending `Triptyq-Capital.`), and
-    `SANCTUM_TQ_*` allowed."""
+def test_worklane_emails_and_paths_caught_without_false_positives(monkeypatch, tmp_path):
+    """Work-lane emails, bare `@triptyq.vc`, paths, modules, env vars, labels
+    and document folders must be caught by the PUBLIC patterns alone (no private
+    file, as in CI) while keeping `import triptyq`, `Triptyq`, `Triptyq-Capital`
+    (including sentence-ending `Triptyq-Capital.`), and `SANCTUM_TQ_*` allowed."""
+    monkeypatch.setenv("SANCTUM_DOCS_WORKLANE_PATTERNS", str(tmp_path / "absent.txt"))
     cc = _load_contrib()
     fire = [
-        "`charles@triptyq.vc`",
+        "`colleague@triptyq.vc`",
         "restricted to `@triptyq.vc`",
         "`triptyq-tearsheets`",
         "~/.openclaw/logs/triptyq-file-mail.log",
@@ -211,10 +212,12 @@ def test_worklane_emails_and_paths_caught_without_false_positives():
         '"$HOME/.triptyq"',
         "Wraps `triptyq.generator.render_tearsheet`",
         "rewrote `_editable_impl_triptyq.pth`",
-        "`Documents Triptyq` library",
         "Triptyq-Capital.json",
         "https://github.com/triptyq-capital/private-tools",
         "Triptyq-Capital/work-bot",
+        "`TRIPTYQ_EXAMPLE_KEY`",
+        "the `vc.triptyq.example` label",
+        "under `04_Triptyq Example/`",
     ]
     hold = [
         "`import triptyq` must resolve to this repo.",
@@ -229,6 +232,26 @@ def test_worklane_emails_and_paths_caught_without_false_positives():
         cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
         fired = any("work-lane identifier" in e for e in rep.errors)
         assert fired == should_fire, f"{text!r} -> errors={rep.errors}"
+
+
+def test_worklane_private_patterns_file_is_read_when_present(monkeypatch, tmp_path):
+    """Shapes the firm's name cannot catch (a library title, real folder names)
+    come from a private file; without it they are not checked, and nothing else
+    changes."""
+    text = "the Example Library Zeta folder"
+    patterns = tmp_path / "worklane-patterns.txt"
+    patterns.write_text("# private\n\n\\bExample Library Zeta\\b\tprivate shape hint\n", encoding="utf-8")
+    monkeypatch.setenv("SANCTUM_DOCS_WORKLANE_PATTERNS", str(patterns))
+    cc = _load_contrib()
+    rep = cc.Report()
+    cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+    assert any("work-lane identifier" in e and "private shape hint" in e for e in rep.errors), rep.errors
+
+    monkeypatch.setenv("SANCTUM_DOCS_WORKLANE_PATTERNS", str(tmp_path / "absent.txt"))
+    cc = _load_contrib()
+    rep = cc.Report()
+    cc.check_no_leak(None, "fixture.mdx", text, 1, rep)
+    assert not any("work-lane identifier" in e for e in rep.errors), rep.errors
 
 
 def test_frontmatter_no_leak_catches_description_domain():
