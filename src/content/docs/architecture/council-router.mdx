@@ -19,10 +19,12 @@ The council lives across four nodes, each hosting a subset of agents. Routing is
 |------|------|----------|--------|------|
 | `hub` (MM64) | `10.10.10.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
 | `vm` (Manoir VM) | `10.10.10.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
-| `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — reserved; node offline, Ahsoka not yet deployed |
+| `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — closed to council messages since 2026-11-21 |
 | `mobile` (MBP128) | `192.0.2.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
 
 Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invoked as `agent --agent main` on the VM, Windu as `--agent windu`, and so on. The router knows all of this, so you don't have to.
+
+The satellite is closed by design. Its node carries `"council": "closed"`, and `send.sh` refuses any message to or from a closed node with exit 3, before it resolves a host, so a refused send never reaches SSH. `broadcast.sh` and `council-session.sh` deliver through `send.sh` and inherit the refusal. Hub agents reach the chalet only through lanes the hub opens itself, and nothing Ahsoka writes reaches a hub agent through the router ([field note](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/)).
 
 ## Agents & Domains
 
@@ -43,8 +45,11 @@ Bert is not in the table. Bert is the escalation target, not an agent.
 ```
 send.sh <from> <to> <type> <priority> <message>
   │
-  ├─ Look up <to>'s node in nodes.json
-  ├─ Look up local node (Darwin → hub, Linux → vm)
+  ├─ Look up <from>'s and <to>'s nodes in nodes.json
+  ├─ Look up local node (send.sh: Darwin → mac, Linux → vm)
+  │
+  ├─ Either node closed (the satellite)?
+  │    └─ refuse with exit 3: no SSH, no delivery
   │
   ├─ Local node == target node?
   │    └─ invoke <cli> agent --agent <flag> --message <structured>
@@ -52,11 +57,11 @@ send.sh <from> <to> <type> <priority> <message>
   ├─ Direct route exists (hub ↔ vm)?
   │    └─ ssh <user>@<host> '<cli> agent --agent <flag> --message <structured>'
   │
-  └─ Indirect route (satellite ↔ vm, mobile ↔ vm)?
+  └─ Indirect route (mobile ↔ vm)?
        └─ relay through hub (see relay_rules)
 ```
 
-The router never silently invents a path. If the relay rule is missing, the send fails loudly. An agent that thinks it sent a message and didn't is exactly the kind of silent-failure the council was built to stop.
+When no relay rule matches, `send.sh` delivers directly over SSH; it does not refuse. A node that must never be reached is closed explicitly with `"council": "closed"` in `nodes.json`, which `send.sh` checks before any delivery. Two quirks to know: `send.sh` names a Mac `mac`, which matches no node id, so on the hub every send takes the SSH path; and the `local_node_detection` block in `nodes.json` is not read by `send.sh`.
 
 ## Message Format
 
@@ -118,7 +123,7 @@ Sessions write to `~/.openclaw/workspace/council/sessions/session-<YYYYMMDD-HHMM
 ./scripts/health-check.sh --json   # machine output
 ```
 
-Returns per-node `SSH: OK/UNREACHABLE` plus `CLI: OK/MISSING`, and per-agent `AVAILABLE/UNAVAILABLE`. It's a reachability check, not a séance: `AVAILABLE` means the node answers SSH and the CLI binary is on disk, not that the agent answered. It's the first thing any other script runs before trusting a route.
+Returns per-node `SSH: OK/UNREACHABLE` plus `CLI: OK/MISSING`, and per-agent `AVAILABLE/UNAVAILABLE`. A closed node is skipped, never probed: it prints `closed to council messages (hub-pull doctrine): skipped`. It's a reachability check, not a séance: `AVAILABLE` means the node answers SSH and the CLI binary is on disk, not that the agent answered. It's the first thing any other script runs before trusting a route.
 
 ## Escalation Protocol
 

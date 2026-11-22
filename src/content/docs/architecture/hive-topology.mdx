@@ -7,7 +7,7 @@ import { Aside, Card, CardGrid } from '@astrojs/starlight/components';
 
 ![Two identical glass houses on separate islands, linked by a single teal nerve of light that carries names not cables](./images/hero-hive-topology.png)
 
-You open a shell on the road and type `ssh manoir`. It works. Two weeks later you type the same string from the chalet Mini and it works again. Nobody renumbered a subnet. Nobody published a Tailscale subnet route. The laptop did not need a special VPN profile for "vacation mode." The string was the product.
+You open a shell on the road and type `ssh manoir`. It works. Two weeks later you type the same string on the same laptop at the chalet and it works again. Nobody renumbered a subnet. Nobody published a Tailscale subnet route. The laptop did not need a special VPN profile for "vacation mode." The string was the product.
 
 The failure mode this chapter exists to prevent is the opposite story: one flat `10.0.0.0/24` fantasy spanning two basements, a Firewalla that advertises the wrong site as a mesh, and a fine-tuned model that hardcodes "the Mini is always `.10`" as if there were only one Mini in the world. Multi-site Sanctum is **a fleet of complete organisms**, not one organism with two basements.
 
@@ -184,6 +184,81 @@ sanctum node route inference --prefer primary
 sanctum node route local_inference --prefer local
 ```
 
+## The hub opens every lane
+
+A satellite is a dependent of the hub, never its peer, and since 2026-11-21 the tailnet enforces that. Four rules hold the line:
+
+| Rule | How it holds |
+|------|--------------|
+| `tag:satellite` reaches no tailnet node | No policy rule has a satellite as its source, so a satellite cannot open a connection to a hub, an admin machine or another satellite. The policy's tests assert deny for 14 ports across the three, and its SSH tests deny a satellite any login; Tailscale runs them on every save. Hubs and admin machines still reach satellites |
+| The hub opens every lane | Every connection to a satellite starts on the hub. The rule for a lane: SSH the hub opens, a key for that one purpose, and on the satellite a forced command that pins what an unattended key may run. Whatever comes back is data the hub checks, never an instruction |
+| Host keys are pinned | The hub keeps each satellite's host key in `~/.sanctum/hive/known_hosts`, written only when the hub's existing trust and the fingerprint computed on the satellite agree |
+| No council mail | [Council Router](/architecture/council-router/) refuses any message to or from a satellite, and its health check skips the node |
+
+Two lanes follow that rule today, each with its own key:
+
+| Lane | Hub key | Forced command on the satellite | What crosses |
+|------|---------|----------------------------------|--------------|
+| Screen | `~/.ssh/screen-lane/<site>_ed25519` | `/usr/local/libexec/sanctum/screen-gate`, as `_sanctumgate` | One request line out; one JSON line back, checked against a pinned schema and rendered as a fixed sentence |
+| Fleet | `~/.ssh/fleet/<site>_ed25519` | `/usr/local/libexec/sanctum/fleet-receiver`, as the operator | Status: one JSON line back. Apply: the hub's build out, a proved result back |
+
+### Fleet parity
+
+A satellite runs the hub's exact [Force Flow](/architecture/force-flow/) build, byte for byte, and the hub keeps it that way. The build has four parts, each read off the hub's own running deployment: the Rust front door `sanctum-force-flow` (its sha256 against its manifest and the running process), the screen-time engine commit (the live tree's `HEAD` against `/screen/status`), the worker that hosts the engine, and its Python packages, under one digest over every file. Nothing syncs while the hub itself has drifted.
+
+`fleet_sync.py` in `sanctum-config` `scripts/fleet/` pushes that build over the fleet lane. The receiver checks every sha256, imports the new engine under the production interpreter in a scratch worktree, and copies `usage.db` aside. Then it switches and restarts through a one-command sudoers envelope. It keeps the new build only when the new process proves it: the right binary on the port, the right engine and digests, no target gone, no hold released, a fresh tick. Anything else restores the exact prior node.
+
+`haus.sanctum.fleet-parity` runs `fleet_sync.py heal` on the hub every 15 minutes. On drift it applies, never forced, so a curfew defers it, and a rollback pages. A satellite's own data (its registry, usage database and tokens) never moves. A satellite's Force Flow pages no one: its launcher aims Home Assistant and Sonos at a closed loopback port.
+
+One flow starts on the satellite, as a documented exception: after a reboot, a [Vault-Armored](/architecture/vault-armor/) satellite asks the hub's witness to evaluate its share through the reverse tunnel the hub opened, and the hub can cut that tunnel at any time. The night the rule went live, with its proofs, is [Thirteen Knocks From the Pine Outpost](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/).
+
+## Satellites and the vault
+
+<Aside type="caution" title="Held for 1.0.1">
+The relay this section describes is built and self-tested, and it does not run in 1.0. It was held back on 2026-11-21: its hub hook would print up to 10 relayed satellite notes, topic and first body line included, into every Claude Code prompt on the hub and the laptop, so text a satellite chose would reach hub models that have tools. It ships in 1.0.1 once the hub's hook and dashboard print only a count line the hub writes, Yoda's vault path and every unattended agent on the hub skip relayed notes, and the mirror carries only notes addressed to the satellite's own sessions. Until then no relay runs, and a satellite has no designed path to the vault.
+</Aside>
+
+The [Memory Vault](/guides/memory-vault/) lives on the primary hub. The laptop's vault wrappers SSH to it; a satellite's cannot, because the tailnet policy gives `tag:satellite` no outbound to any tailnet node. That supersedes the diagnosis in [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/), which blamed DNS and the peer path when `vault.sh who` failed on chalet. The wall was the policy. So the relay turns it around: the hub reaches the satellite, carries its vault traffic, treats everything the satellite sends as untrusted, and decides what it may write. The satellite never opens a connection to the hub.
+
+Once deployed, the LaunchAgent `haus.sanctum.vault-relay` on manoir runs a pass every 60 s, with two fixed calls over the hub's automation SSH lane. `vault_relay.py export` on the satellite returns the 20 oldest queued requests that are not backing off or waiting, as bounded JSON lines. The hub runs the writes it accepts through its own `vault.sh`, then `vault_relay.py apply` hands the satellite its new mirror and the finished requests. Passes never overlap, each request is recorded as soon as it is delivered, and an idle pass sends `unchanged` instead of the whole mirror.
+
+The satellite asks. The hub applies its own rules:
+
+| Request | What the hub allows |
+|---------|---------------------|
+| `send` | Only into `inbox/claude-code`, `inbox/grok` or `inbox/agy`, from a session identity (`claude-`, `grok-` or `agy-` and 8 hex digits) that no other node uses: no notes from it on the hub in 14 days, no board claim under it, no Claude session open on the hub. The note is recorded as `chalet.<session>` (for example `chalet.claude-<sid>`), and `to: all` as `to: chalet.all`, so it reaches that inbox's agent sessions and no unattended agent |
+| Provenance | The body opens with a heading that names the relay and the request id, `# [relayed from chalet as request <id>; sender identity asserted by the satellite]`, and the line `type: relayed`, so the satellite sets neither the title nor the type that `vault.sh list` and search show |
+| Content | A topic is at most 120 characters of plain text and never carries a session identity, in any spelling the vault would turn into one, because it becomes part of the note's name. A body holds at most 8 KB and may contain newlines and tabs, but no other control characters, line or paragraph separators, bidi marks or invisible characters; the zero-width joiner and presentation selector that emoji need are kept |
+| Volume | At most 100 sends per rolling 24 h; beyond that a send waits, in order. At most 40 of the satellite's notes stay live: a send past that first retires the satellite's oldest note into `read/`, where search still finds it, and the hub logs which. Nothing retires by age, so a handoff left on a Sunday is still there the next weekend |
+| `inbox/relay-smoke` | Only the fixed smoke ping (`--from relay-smoke --to nobody --topic ping`, a short plain body), recorded as `chalet.relay-smoke`: a new ping replaces the live one, 48 a day (a ping beyond that waits), deleted after 10 minutes, outside the budget and the live count |
+| `ack` | Only one exact note in those three inboxes, addressed to one of the satellite's sessions (`chalet.<session>`) |
+| `seen` | Stays on the satellite: its broadcasts are marked seen there (an ack of one is refused), so the satellite never marks a shared message seen for everyone. The hub's seen marks reach it, so a broadcast the hub's sessions of an agent have seen is not shown again to that agent there |
+| `board` | Claims only under the satellite's namespace, for identities no other node uses: at most 10 claims and 200 changes a day, notes of printable ASCII without runs of blanks, 8 hex digits in a row or session identities, cleared after 2 h |
+| Retries | A request the hub's rules refuse (anything outside the rows above, or a malformed request) is rejected on its first pass. A write that keeps failing for a temporary reason backs off, up to an hour between tries, and is never rejected for it; once any write goes through, the others try again on the next pass. Of `vault.sh`'s failures, only "no live message" for an ack counts toward rejection, after 5 attempts. A request still queued 7 days after it was written is rejected, waiting or not |
+
+## The mirror and relay mode
+
+The mirror carries notes addressed to the satellite's sessions, its own sends, broadcasts from the last 14 days (at most 300 notes or 2 MB per inbox) and the hub's seen marks for them, plus only the satellite's own board claims and a count of the others. It does not carry `who`: on the satellite, `who` lists its own sessions. Freshness is measured on the satellite's own clock, from `received_at`.
+
+Relay mode needs `~/.sanctum/vault-relay/ENABLED` on the satellite, and it never applies where the authoritative vault lives. With the file in place, `grok-vault.sh`, `agy-vault.sh` and the Claude `UserPromptSubmit` hook work through the relay: writes queue for the hub, reads come from the mirror, and full-vault search and read stay on the hub and the laptop. Without it, the hub's `export` and `apply` calls refuse to run, and the pass fails with an error that names the file. Delivery takes about a minute. The wrappers and the hook warn when the mirror is older than 5 minutes. When the relay looks down, or the hub would hold a write, the queued write says it is not yet delivered. `python3 ~/.sanctum/scripts/lib/vault_relay.py status` shows mirror age, budget, live count, queue and recent results.
+
+The relay also changes the vault's own readers:
+
+| Reader | In the relay as built |
+|--------|---------------------------|
+| Dashboards on the hub and the laptop | The Claude hook's Haus dashboard and the Grok and agy brief count only bare session identities, so a relayed note can never pose as a hub session's announcement. Each line prints the exact note name to read |
+| Claude hook on the hub and the laptop | Local notes and broadcasts come first, all of them, then at most 10 relayed notes (those addressed to a session there first, then the newest) and a count of the rest. This is the row that held the relay: in 1.0.1 the hook prints only a count line the hub writes |
+| Grok and agy brief | Local notes come ahead of relayed ones, and the brief says when its vault check timed out |
+| Claude hook and wrappers on the satellite | Sessions there see each other's notes. The hook lists at most 30: notes to the calling session first, then the hub's and the laptop's, then the satellite's own, leaving out the caller's own sends, and it gives the session its address on the hub, `chalet.claude-<sid>`. `check --mark` marks seen on the satellite only |
+
+```bash
+~/.sanctum/scripts/vault-relay-smoke.sh          # offline self-test; on a relay-enabled satellite also the live mirror, wrappers, hook, refusals, backlog
+~/.sanctum/scripts/vault-relay-smoke.sh --live   # plus a ping into inbox/relay-smoke
+~/.sanctum/scripts/vault-relay-smoke.sh --hub    # on manoir: the LaunchAgent, its last pass, no failure since, nothing stuck on a retry, vault.sh answering, the mirror taken, no send waiting past the budget
+```
+
+The `--live` ping lands in `inbox/relay-smoke`, a folder no hook reads, so the smoke never shows up in an agent's inbox.
+
 ## Multi-hub (peer join)
 
 Exactly one **primary** hub (config SoT, vault authority, adopt authority). Additional **peer** hubs keep the same body map and join the hive by name — no renumbering, no LAN merge.
@@ -208,7 +283,7 @@ A model fine-tuned for Sanctum may **assume**:
 1. Every site has the design roles above (when the gear exists).  
 2. Local `.10` is **this** site’s Mini; other brains are **named** hubs/satellites.  
 3. Cross-site actions use **node names**, never guessing which `10.0.0.0/24` is which.  
-4. Offline satellite prefers **local** metal; online hive may route to primary/peer capacity.  
+4. A satellite runs on its **local** metal; online, the hub may route work to primary or peer capacity. A satellite never calls out to the hub.  
 5. Vault authority lives on the **primary** hub unless a capability says otherwise.
 
 Site-specific facts (room names, people, Nuheat zones) belong in **memory / RAG**, not in weights that hardcode one haus’s LAN quirks.
@@ -242,4 +317,6 @@ If plan invents renames forever, the stem comparison regressed (FQDN vs short na
 - [Naming](/operations/naming/) — place layer + retired ledger  
 - [Engineering discipline](/architecture/engineering-discipline/) — EETISMAD shipping bar  
 - [Satellite setup](/guides/satellite-setup/) — adopt flow  
+- [Three Nodes, One Inbox](/operations/2026-08-20-three-nodes-one-inbox/) — the vault kit on every node; its DNS diagnosis is superseded above  
+- [Thirteen Knocks From the Pine Outpost](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/) — the night satellites lost every outbound path, and why the relay waits  
 - [Home Assistant](/guides/home-assistant/) — Green at design `.3` on the hub site  

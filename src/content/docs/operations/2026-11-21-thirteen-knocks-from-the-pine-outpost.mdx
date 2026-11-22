@@ -1,0 +1,138 @@
+---
+title: "2026-11-21: Thirteen Knocks From the Pine Outpost"
+description: "The night the chalet lost every road out and gained one lane in: the tailnet gives satellites no outbound, manoir drops three unused chalet keys, council-router closes to satellites, and Yoda commands the chalet's screen time through a hub broker and a forced-command gate. The proofs, three findings, and what waits for 1.0.1 and the operator."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A technical pencil, graphite, and charcoal sketch on dark slate paper of a snowbound log cabin among tall pines behind a pointed palisade studded with iron ring knockers, all hanging still, while a single taut cable runs across a dark valley from the one lit tower of a stone manor on the far peak to a small locked hatch in the palisade, the only thing ringed by a soft teal halo.](./images/hero-2026-11-21-thirteen-knocks-from-the-pine-outpost.png)
+
+From the chalet, `boundary-probe.py` knocked on thirteen doors at the manoir and on the MBP. None of them answered. Not one sent back a reset: each door gave three seconds of silence, logged as `DROPPED`, and after the thirteenth the script printed `BOUNDARY-HOLDS`.
+
+That silence was the evening's work. A probe that runs on the satellite proves nothing alone, because a compromised satellite prints whatever it likes, so the knocks were the last of three proofs, and the weakest. The strongest came from Tailscale itself. All three describe the same wall, built so that the pine outpost answers the manoir and never calls it.
+
+## The rule, in three clauses
+
+The rule is the operator's. [Yoda](/agents/yoda/), on the hub, commands the satellites. A satellite can never compromise the hub. And a satellite talks to the hub only as data, which the hub pulls when it chooses and checks before it believes any of it.
+
+Each clause turns into plumbing. Every connection between hub and satellite starts on the hub. The pattern for a lane is SSH the hub opens, one key per purpose, with a forced command on the satellite that pins what an unattended key may run. Whatever comes back is data, never an instruction.
+
+Two pieces of the old arrangement broke the rule. The tailnet still let the chalet open `:1949` (Presence) and `:4077` (Force Flow) on the manoir, and the manoir's `authorized_keys` still listed three chalet keys. Nothing depended on either. Both are gone.
+
+## The wall and its three proofs
+
+The tailnet policy is `tailnet-toolkit/acl.hujson` in `openclaw-skills`, and the change landed as `89cf15d`. It deletes the only rule that had a satellite as its source, so `tag:satellite` now has no outbound to any tailnet node: not a hub, not an admin machine, not another satellite. Hubs and admin machines still reach satellites. That is the direction every lane opens in.
+
+The same commit removes the `funnel` node attribute. Its comment said "disabled", yet the attribute granted Tailscale Funnel to admin machines, hosts and satellites alike. Without it, no node can publish a local service to the internet, and a satellite cannot expose the witness tunnel's port.
+
+The policy's tests now assert deny for fourteen ports a satellite might want: `22`, `1337`, `1949`, `1984`, `2189`, `4077`, `4078`, `5900` and `42071` on hosts, `22`, `5900` and `8788` on admin machines, `22` and `6502` on other satellites. SSH tests refuse a satellite a login, as the owner or as root, on all three. One accept test proves that host to satellite `:22` stays open.
+
+| Proof | What it shows | Result |
+|---|---|---|
+| Tailscale's own tests | every deny and accept row, run on Tailscale's servers at `validate` and on every save | `validate` passed; a policy that fails its tests cannot be saved |
+| Parsed live comparison | what Tailscale now enforces, read back and set against the repository file | the same policy once both are parsed |
+| Boundary probe | what the chalet can actually reach | 13 of 13 `DROPPED`, then `BOUNDARY-HOLDS` |
+
+Only the first is a trust anchor. A byte-for-byte diff, which the plan called for, can never match, because Tailscale stores a reformatted copy of the file. Parsed, the two are identical. The probe tried nine hub ports by tailnet address, Force Flow once more by its MagicDNS name, and three ports on the MBP. The comparison and the probe are evidence for the operator, not proof for the hub.
+
+`apply-acl.sh`, repaired in the same commit, did tonight's push. It now finds the policy from its own location, takes its credentials through `lib/ts-auth.sh`, counts a validation as passed only on an empty answer or `{}`, and refuses to push without a backup of the live policy. Tonight's backup sits in `~/.sanctum/state/tailnet-acl-backups/`. The toolkit's own tag table now says it too: satellites have no outbound.
+
+## Three keys that opened nothing
+
+The manoir's `authorized_keys` held three chalet keys, each pinned `from=` the chalet's tailnet address: the chalet account's own key, `ahsoka-hub-heartbeat` and `ahsoka-hub-sync`. Only the tailnet policy had kept the chalet from using them. Now they are gone. The file went from ten entries to seven, no line names the chalet's address, the old file stays as `authorized_keys.bak-boundary-20261121`, and an MBP session into the manoir still works.
+
+On the chalet, neither the service account's `.ssh` nor root's holds a hub key, only `known_hosts`.
+
+Trust now runs one way, and the hub writes it down. The manoir pins the chalet's host key in `~/.sanctum/hive/known_hosts`, as `chalet ssh-ed25519 …`. It was written only after the manoir's existing trust and the fingerprint computed on the chalet itself agreed.
+
+## The council stops at the treeline
+
+[Council Router](/architecture/council-router/) used to deliver messages to and from [Ahsoka](/agents/ahsoka/) on the chalet, and two relay rules, `satellite->vm` and `vm->satellite`, sent them through the hub. Commit `635a204` in `openclaw-skills` deletes both rules and marks the satellite node `"council": "closed"` in `nodes.json`. `send.sh` refuses any message to or from a closed node with exit 3, before it resolves a host, so a refused send makes no SSH call. `health-check.sh` skips the node instead of probing it. `broadcast.sh` and `council-session.sh` deliver through `send.sh`, so they inherit the refusal.
+
+`tests/test-satellite-closed.sh` runs both scripts against stub `ssh`, `openclaw` and `sanctum` binaries that only record their arguments. It passes 10 of 10 on the new code and fails on the old, the control that proves it can fail. It also checks that hub agents still reach each other.
+
+The closure is mutual on purpose. A hub agent no longer types into Ahsoka's prompt, and nothing Ahsoka writes lands in a hub agent's. Anything the hub needs from the chalet comes through a lane the hub opened.
+
+## The one door left open
+
+One flow still starts on the chalet, and it is written down as the exception. After a reboot, the chalet's [Vault Armor](/architecture/vault-armor/) asks the manoir's witness to evaluate its share at `127.0.0.1:42071`, inside the reverse tunnel the manoir opens to it. The hub opened that tunnel and can cut it at any time. The request is one fixed-size curve point, and the reply is checked by DLEQ verification.
+
+The tunnel did not notice the new policy. After the change, the chalet's `127.0.0.1:42071` was still listening.
+
+## What the evening turned up
+
+Three findings came out of the checks.
+
+- **Funnel had published nothing.** Every Serve entry read "tailnet only", so removing the attribute took nothing away. It closed a door nobody had walked through.
+- **Presence had one chalet visitor.** In all of Presence's log, the chalet appears once: a `GET /health` on 20 November at 20:08.
+- **Yoda's Signal channel settings were reviewed.** Direct messages need pairing; one group-chat setting is on the follow-up list, to narrow who can address Yoda there.
+
+## Yoda commands the chalet
+
+The wall had one more job that evening: letting the right knock through. [Yoda](/agents/yoda/) can now give the chalet's screens extra time, block, unblock, pause and resume them, and read their status, health and history, from a message on Signal. Every one of those requests starts on the hub, as the first clause says it must.
+
+A request crosses four hands, and none takes the previous one's word. In the VM, `screen.sh --site chalet` only builds the request. It reaches the manoir through the entry the VM's SSH gate keeps for screen time, `screen.sh --stdin-json`. There the hub broker, `screen_lane.py`, runs as the operator, outside the VM and outside any model. It finds the device among the hub's own names for the chalet (`sites/chalet.json`), bounds the minutes, checks who asked, a rate limit and a nightly cap, and only then opens SSH.
+
+That SSH is pinned at both ends. The broker presents one key minted for this lane, accepts only the host key the manoir already wrote into `~/.sanctum/hive/known_hosts`, and insists on a post-quantum hybrid key exchange, `mlkem768x25519-sha256`. The chalet accepts the key only from the manoir's tailnet address, only for `_sanctumgate`, a hidden account with no password, and only to run one program: the key line carries `restrict`, a forced `command=` and an expiry of 1 December 2027.
+
+That program is the gate, `/usr/local/libexec/sanctum/screen-gate`, owned by root like the policy it reads. It knows nine verbs and refuses everything else, rejects replayed or stale requests, keeps the nightly cap's ledger and an audit log, and talks to the chalet's [Haus-Control](/architecture/screen-time/) engine on `127.0.0.1:4077`. It answers with one line of JSON. The broker checks that line against a closed schema whose hash it pins, against the hub's clock and against the request it sent, then prints a fixed sentence built from the hub's own names. Nothing the chalet writes reaches Yoda as words. Its answer is data, which is the third clause at work.
+
+| Check | Result |
+|---|---|
+| Gate tests | 201 of 201, including a 4,000-case grammar fuzzer and a 98-pair contract matrix |
+| Broker tests | 85 of 85 on the manoir, the real gate end to end among them; self-test green |
+| Before the gate existed | the broker's pre-flight was refused at SSH (`transport:auth_denied`, exit 5), and nothing changed |
+| Install | the operator ran the kit with `sudo` on the chalet; it reported the gate and policy hashes the hub expects, and an independent read-back came back clean |
+| First calls, from the manoir | health in 1.0 s: running, enforcing, and "its gate matches what the hub installed"; status; a one-minute override of the TV that lapsed on its own at 21:05 |
+| From inside Yoda's VM | after the skills push fast-forwarded the VM to `cb01779`, `screen.sh --site chalet status` came back through every hop in 0.75 s |
+
+## The same build at both houses
+
+Late in the evening the operator asked whether the chalet ran the hub's Force Flow. It did not. The manoir had moved to the Rust front door, `sanctum-force-flow`, at 20:00. The chalet still ran a bare Python host on an engine commit three weeks old, checked out from a feature branch, and nothing in Sanctum compared the two.
+
+Now something does. The hub reads its own running build and pushes exactly that, over a lane of its own, to a receiver on the chalet. The receiver keeps the new build only if the new process proves it, and rolls back otherwise. The chalet switched at 23:30, during a curfew by the operator's choice, in 22 seconds, and every hold stayed held. A sentinel on the hub checks every 15 minutes; [Hive Topology](/architecture/hive-topology/#fleet-parity) has the mechanism.
+
+## Who may ask
+
+Who may ask is the last lock. The chalet starts in `sender` mode: a change needs a Signal sender, and the broker records a salted hash of it. After the operator's first change from Signal, that sender becomes a named parent and the chalet moves to `enforce`, where only a named parent changes anything. Reads need no parent. Tonight the gate reaches the engine over loopback without a token; its own service token arrives with the chalet hardening.
+
+## What waits
+
+Seven things stay undone on purpose, each for a reason.
+
+The vault relay is the largest. It would let sessions on the chalet use the [Memory Vault](/guides/memory-vault/), with the hub pulling their requests and handing back a mirror. The kit is frozen and its self-test passes all 128 checks, and it was not deployed. Its patched hub hook would print up to ten relayed notes, each with its topic and first body line, into every Claude Code prompt on the manoir and the MBP, and tell those sessions to read them. That is text a satellite chose, reaching hub models that have tools. The second clause forbids exactly that.
+
+It ships in 1.0.1 once four preconditions hold, each with its own test:
+
+1. The hub hook and the Haus dashboard print only a line the hub writes, a count of relayed notes marked untrusted, never a topic, sender or body the satellite chose.
+2. Yoda's vault path and every unattended agent on the manoir skip relayed notes entirely.
+3. The mirror the hub sends back carries only notes addressed to that satellite's own sessions, never hub broadcasts.
+4. The kit is frozen again, its new fingerprint recorded off the chalet, and it lands from a hub or MBP session.
+
+| Waits | Why | Whose move |
+|---|---|---|
+| Claude Desktop's scheduled tasks on the manoir | The task folder syncs through iCloud Drive, so a synced file could become an instruction the hub runs. Both tasks in it are dormant, but the switches come from the Claude account: a local edit reverts at the next app start. Remote Control, which lets any device signed in to the same account drive the manoir's Desktop app, is an account setting too | The operator, in Claude Desktop's settings: an account-wide choice |
+| Chalet hardening | sshd, sudo, the root watchdog, the screen-time launcher and the Home Assistant VM's mounts all get tightened, and then the chalet is rebuilt as an appliance. Parts of that reinstall or touch `sanctum-mlx`, which nothing touches until the brain's DG10 soak closes | After DG10, with the operator's sudo on the chalet |
+| Per-site Firewalla keys | The two sites' Firewalla bridges still share one key | Account work: a new key for each site |
+| Hub secrets in iCloud Drive | Some hub secrets still sit in iCloud Drive, where the chalet's Apple ID can read them | Account work: rotate them, then move them out |
+| Tailnet Lock | Not enabled. The tailnet's control plane and its identity provider remain trust roots for this whole wall | Optional; if enabled, only the manoir and the MBP sign, never a satellite |
+| A satellite role for Force Flow | On the chalet the Rust front door pages nobody: Home Assistant and Sonos aim at a closed port. It works, but its `/health` reads `degraded`, because a Home Assistant token sits on the box. A satellite role in `sanctum-rs` ends that, and the fleet sentinel carries it to the chalet by itself | The next hub deploy of Force Flow |
+
+<Aside type="note" title="Why the relay waits and the wall does not">
+The wall removed paths nothing used, so it could go in the same evening it was proven. The relay adds a path, and the one it adds ends in the prompts of models that can act on the hub. A path like that ships only after its tests show those prompts get a count from the satellite, never its words.
+</Aside>
+
+## Status
+
+**Live, 2026-11-21.** The policy (`89cf15d`) is live, the council closure (`635a204`) is committed and pushed to `openclaw-skills`, the manoir trusts no chalet key, and the witness tunnel is up. Yoda's chalet lane (`cb01779` in `openclaw-skills`, its hub configuration in `sanctum-config`) answers from the VM, and the gate is installed on the chalet. The chalet runs the hub's exact Force Flow build, and the fleet sentinel (`sanctum-config` `b5c01e8`) keeps it there. The vault relay is held for 1.0.1, and every row in the last table waits on the operator or on DG10.
+
+## Lineage
+
+- [2026-04-26: Borders and Edges](/operations/2026-04-26-borders-and-edges/) — the tag model, and the narrow satellite grant that tonight removed
+- [2026-11-11: The Falcon at the Pine Outpost](/operations/2026-11-11-the-falcon-at-the-pine-outpost/) — Ahsoka's brain at the same outpost
+- [2026-11-19: Three Brains and the Twenty-Four-Hour Watch](/operations/2026-11-19-three-brains-and-the-twenty-four-hour-watch/) — the soak the chalet hardening waits behind
+- [Hive Topology](/architecture/hive-topology/) — the rule as the hive keeps it, and the relay as built
+- [Vault Armor](/architecture/vault-armor/) — the witness tunnel, the one flow a satellite starts
+- [Haus-Control](/architecture/screen-time/) — the screen-time engine the chalet's gate drives
+
+Thirteen knocks went out from the pine outpost, and none came back. The manoir still knocks the other way whenever it likes, and since 21:04 one of those knocks carries a parent's word to the chalet's TV. That asymmetry is the whole design: the hub opens the doors, the satellite answers through them, and silence in the other direction is the sound of the rule holding.
