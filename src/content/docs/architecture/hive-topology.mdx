@@ -195,6 +195,21 @@ A satellite is a dependent of the hub, never its peer, and since 2026-11-21 the 
 | Host keys are pinned | The hub keeps each satellite's host key in `~/.sanctum/hive/known_hosts`, written only when the hub's existing trust and the fingerprint computed on the satellite agree |
 | No council mail | [Council Router](/architecture/council-router/) refuses any message to or from a satellite, and its health check skips the node |
 
+Two lanes follow that rule today, each with its own key:
+
+| Lane | Hub key | Forced command on the satellite | What crosses |
+|------|---------|----------------------------------|--------------|
+| Screen | `~/.ssh/screen-lane/<site>_ed25519` | `/usr/local/libexec/sanctum/screen-gate`, as `_sanctumgate` | One request line out; one JSON line back, checked against a pinned schema and rendered as a fixed sentence |
+| Fleet | `~/.ssh/fleet/<site>_ed25519` | `/usr/local/libexec/sanctum/fleet-receiver`, as the operator | Status: one JSON line back. Apply: the hub's build out, a proved result back |
+
+### Fleet parity
+
+A satellite runs the hub's exact [Force Flow](/architecture/force-flow/) build, byte for byte, and the hub keeps it that way. The build has four parts, each read off the hub's own running deployment: the Rust front door `sanctum-force-flow` (its sha256 against its manifest and the running process), the screen-time engine commit (the live tree's `HEAD` against `/screen/status`), the worker that hosts the engine, and its Python packages, under one digest over every file. Nothing syncs while the hub itself has drifted.
+
+`fleet_sync.py` in `sanctum-config` `scripts/fleet/` pushes that build over the fleet lane. The receiver checks every sha256, imports the new engine under the production interpreter in a scratch worktree, and copies `usage.db` aside. Then it switches and restarts through a one-command sudoers envelope. It keeps the new build only when the new process proves it: the right binary on the port, the right engine and digests, no target gone, no hold released, a fresh tick. Anything else restores the exact prior node.
+
+`haus.sanctum.fleet-parity` runs `fleet_sync.py heal` on the hub every 15 minutes. On drift it applies, never forced, so a curfew defers it, and a rollback pages. A satellite's own data (its registry, usage database and tokens) never moves. A satellite's Force Flow pages no one: its launcher aims Home Assistant and Sonos at a closed loopback port.
+
 One flow starts on the satellite, as a documented exception: after a reboot, a [Vault-Armored](/architecture/vault-armor/) satellite asks the hub's witness to evaluate its share through the reverse tunnel the hub opened, and the hub can cut that tunnel at any time. The night the rule went live, with its proofs, is [Thirteen Knocks From the Pine Outpost](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/).
 
 ## Satellites and the vault
