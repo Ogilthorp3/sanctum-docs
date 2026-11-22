@@ -93,7 +93,7 @@ port: 4040
 
 models:
   - name: claude-opus-max
-    provider: local                 # via the Claude Max bridge on :3456
+    provider: local                 # via the local Claude seat on :3456
     api_model: claude-opus-4        # unpinned alias — Max resolves it to the latest Opus (4.8 today)
     api_base: http://127.0.0.1:3456
     quality_tier: 0                  # never reroute
@@ -122,7 +122,7 @@ budget:
 
 The `smart_route` flag is a scar from v0.1. The original code kept a hardcoded list of routable tiers buried in `route.rs`; config said one thing, code did another, and the config lost quietly for weeks while everyone wondered why tier 2 models weren't routing. Now `smart_route: bool` lives in the YAML where it belongs -- therapy for software.
 
-The practical split matters more. `council-brain` is the default brain -- Claude Opus on the Max subscription -- served not from a metered Anthropic key but natively: the proxy intercepts the extracted Claude Max OAuth session token and hits the Developer API via `Authorization: Bearer`, so the subscription pays without a CLI wrapper. From there the router triages:
+The practical split matters more. `council-brain` is the default brain -- Claude Opus on the Max subscription -- served not from a metered Anthropic key: it uses the vendor's own CLI login, so the subscription pays. From there the router triages:
 
 | Task | Seat | Routes to |
 |------|------|-----------|
@@ -140,7 +140,7 @@ Claude Code is not trusted to have valid auth or fail quietly; that failure mode
 | Piece | Role |
 |-------|------|
 | `ANTHROPIC_BASE_URL` at `https://127.0.0.1:4040` | Claude Code's entry point; proxyd speaks HTTPS with mTLS, so the session trusts the Sanctum CA via `NODE_EXTRA_CA_CERTS=~/.sanctum/certs/ca.crt` |
-| `com.sanctum.proxyd` | the proxy runs as this system LaunchDaemon, launched through `~/.sanctum/bin/proxyd-launch`, which injects the Gemini, OpenRouter, and Claude Max OAuth Session tokens from `~/.sanctum/secrets/` |
+| `com.sanctum.proxyd` | the proxy runs as this system LaunchDaemon, launched through `~/.sanctum/bin/proxyd-launch`, which injects the provider credentials from `~/.sanctum/secrets/` |
 | `~/.local/bin/claude-wrapper` | wraps the local `claude` command |
 | `tools/claude_session_preflight.sh` | the wrapper runs it before executing the real Claude binary |
 
