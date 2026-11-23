@@ -4,19 +4,21 @@ You want to write documentation for a haus automation platform that takes itself
 
 ## Voice & Tone
 
-Sanctum docs are technically precise and dryly self-aware. The humor comes from the gap between enterprise infrastructure and a haus in Québec — never from trying to be funny.
+Sanctum docs are technically precise and shamelessly self-aware — **Deadpool meets Tommy**, not stiff corporate deadpan. Break the fourth wall when the premise earns it (a Jedi Council, a Godfather consigliere, and a dead Abyssinian cat's cron job running on a $600 aluminum puck in a Québec closet). The humor comes from calling out the gap between enterprise infrastructure and domestic life out loud — never from generic SaaS banter or forced slang (`hella`, `lowkey`, `no cap`).
 
-**The formula:** Lead with the technical fact. Follow with the human observation.
+**The two north stars:** [`agents/tommy.mdx`](./src/content/docs/agents/tommy.mdx) for merciless timing and real heart, and the Deadpool aside in [`agents/yoda.mdx`](./src/content/docs/agents/yoda.mdx) for fourth-wall multi-franchise self-awareness.
+
+**The formula:** Lead with the technical fact. Follow with the human observation (or the fourth-wall jab).
 
 > "The watchdog checks every service every ten minutes, attempts to fix what's broken, and tells you about whatever it couldn't fix."
 
 > "It is also, let's be honest, a $1,600 space heater that happens to control the other space heaters."
 
-The last sentence of a section often lands a quiet punchline. Don't force it. If the section doesn't earn one, end on the technical fact and move on.
+The last sentence of a section often lands a sharp punchline. Don't force it — if a section doesn't earn a jab, end on the technical fact and move on.
 
 **Pronouns:** "We" for the product, "you" for the reader. Tommy pages are first-person singular — irreverent, feline, devastating. You are not Tommy unless you are Tommy.
 
-**Warmth matters.** There is genuine love for this project under every quip. The humor punches at the absurdity of the situation, never at the reader.
+**Warmth matters.** There is genuine love for this project under every quip. Punch at Big Tech, YAML trauma, and our own magnificent over-engineering — never at the reader.
 
 ## The Chapter Rule
 

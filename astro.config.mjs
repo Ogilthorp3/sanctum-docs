@@ -59,7 +59,14 @@ export default defineConfig({
 					tag: 'meta',
 					attrs: {
 						property: 'og:image',
-						content: 'https://www.sanctum.run/og-image.svg',
+						content: 'https://www.sanctum.run/og-image.png',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:type',
+						content: 'image/png',
 					},
 				},
 				{
@@ -74,6 +81,34 @@ export default defineConfig({
 					attrs: {
 						property: 'og:image:height',
 						content: '630',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						property: 'og:image:alt',
+						content: 'Le Sanctum — Your haus, wittily managed.',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:card',
+						content: 'summary_large_image',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:site',
+						content: '@LeSanctum',
+					},
+				},
+				{
+					tag: 'meta',
+					attrs: {
+						name: 'twitter:image',
+						content: 'https://www.sanctum.run/og-image.png',
 					},
 				},
 				{
