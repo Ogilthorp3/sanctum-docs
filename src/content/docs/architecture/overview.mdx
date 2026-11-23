@@ -12,7 +12,7 @@ import networkTopology from './images/sanctum-network-topology.svg';
 
 At 02:47 on a Tuesday in April, an Xbox in the basement quietly joined the Wi-Fi. By 02:47:03, it was blocked at the router, a Signal message was sitting on a phone nine hundred kilometres away, a curfew violation was recorded in a SQLite database in a service named after the Sermon on the Mount, and a dashboard banner was already glowing amber. Nobody woke up. The haus, as of that moment, had noticed.
 
-That is Sanctum working correctly. Thirty-eight services, two machines, one private bridge, and an ethos that matters more than any individual technical choice: **we are building this like a body**, with an immune response that sometimes wakes you up gently and sometimes does not wake you up at all. The docs below are the anatomy chart.
+That is Sanctum working as intended. Thirty-eight services, two machines, one private bridge, and zero chill about bedtime. The ethos matters more than any single binary: **we are building this like a body**, complete with an immune system that decides whether an outage warrants waking a human or just silently assassinating an Xbox's Wi-Fi lease. (Yes, we over-engineered a family haus in Québec into an anatomical thriller. Maximum effort. Here is the autopsy chart.)
 
 ## The Shape
 
@@ -30,14 +30,15 @@ One more principle: **the Council is plural on purpose**. The current assignment
 
 The bones are written in Rust and live in the `sanctum-rs` workspace — the parts of the system that have stopped redesigning themselves. Once a service crosses into `sanctum-rs/services/` *and* is built and deployed as the running launchd unit, it becomes structural: a single deploy binary, compile-time guarantees on its interfaces, and a slot that either holds or doesn't.
 
-Two services meet that bar today:
+Three services meet that bar today:
 
 | Bone | Port | What It Holds Up |
 |------|-----:|------------------|
 | `sanctum-watchdog` | 2187 | The Living Force incarnate. Checks every service every ten minutes, self-heals the ones it can, escalates the ones it can't. Ships two binaries — `sanctum-watchdog` and the daemon `sanctumd` that launchd actually runs. |
 | `sanctum-proxy` | 4040 | The cloud-tier model router. Classifies requests, applies daily cost caps, falls back through a configured chain before giving up. |
+| `sanctum-firewalla` | 1984 | The Rust HTTP+SSH firewall bridge (`haus.sanctum.firewalla`), graduated to 1.0 with the encipher SDK quarantined inside a tiny co-located Node sidecar. |
 
-`sanctum-firewalla`'s Rust binary is compiled and waiting, but its live `:1984` listener is still the Node bridge — built is not deployed, so [`tools/rust_readiness.py`](/architecture/language-maturity/#tooling) parks it at `porting` with the only recommendation that matters: *cut the launchd unit over*. Bones must be earned, then occupied.
+Bones are never awarded for good intentions — every one of these three earned its launchd slot by matching the legacy path byte-for-byte under live shadow parity before cutting over. See [Language Maturity](/architecture/language-maturity/#tooling) for the scoreboard that decides which flesh calcifies next.
 
 <Aside type="note">
 Living Force is the doctrine; `sanctum-watchdog` is the vertebra — the system LaunchDaemon `com.sanctum.watchdog` runs the compiled `sanctumd` directly, no `living-force.sh` and no bash in the path.
@@ -47,7 +48,7 @@ Living Force is the doctrine; `sanctum-watchdog` is the vertebra — the system 
 
 ![The Flesh — a pencil-sketch anatomical plate of Sanctum's Python services drawn as musculature wrapped around the skeleton, a warm amber halo through the fibres showing active feature growth](./images/inline-sanctum-flesh.png)
 
-The flesh is Python — how we find out what a service *is* before we carve it in Rust. Everything in `~/.sanctum/force-flow/` or the `sanctum-screen-time` repo is there because its feature shape is still moving — new curfew edge cases, a homework mode that keeps acquiring exemptions.
+The flesh is Python — the messy evolutionary stage where we figure out what a service actually wants to be before pouring it into Rust concrete. Everything in `~/.sanctum/force-flow/` or the `sanctum-screen-time` repo lives here because its requirements refuse to hold still: new curfew loopholes, and a homework mode locked in a live arms race with teenagers who apparently missed their calling in red-team cybersecurity.
 
 | Muscle | Port | What It's Still Figuring Out |
 |--------|-----:|------------------------------|
@@ -65,7 +66,7 @@ Between bones and flesh runs a network of private pathways — `bridge100` on th
  Mac Mini  10.10.10.1
  ├─ 1111   command-center
  ├─ 1337   sanctum-mlx (mTLS)
- ├─ 1984   firewalla bridge (Node)
+ ├─ 1984   sanctum-firewalla (Rust + sidecar)
  ├─ 2187   sanctum-watchdog
  ├─ 3301   sanctum-mlx-devstral (coder)
  ├─ 4040   proxyd
@@ -86,7 +87,7 @@ Between bones and flesh runs a network of private pathways — `bridge100` on th
 Any external dependency — an Anthropic call, a git pull — leaves through a Mac-side proxy or a Tailscale tunnel: either excellent security architecture or the opening scene of a containment thriller. It has been both.
 
 <Aside type="caution">
-The bridge IP is set at boot by a `sudo ifconfig` in the VM-autostart LaunchAgent, allowed by a `sudoers.d/vmnet-bridge` entry; if it goes missing, the VM wakes with no bridge to anywhere — about as gracefully as you would.
+The bridge IP is set at boot by a `sudo ifconfig` in the VM-autostart LaunchAgent, blessed by a `sudoers.d/vmnet-bridge` entry. If that line ever goes missing, the VM wakes up completely cut off from the universe — basically trapped in a padded room screaming into loopback. You have been warned.
 </Aside>
 
 ## The Senses
@@ -102,7 +103,7 @@ Each agent is a specialized perception, routed by the Smart Router to the tier t
 | **Ki-Adi-Mundi** | Finance — Triptyq deal flow, personal treasury |
 | **Jocasta** | Archivist — CRM, communications, long memory |
 | **Mon Mothma** | Operations — Force Flow + Living Force orchestration |
-| **Ahsoka** | Satellite — the agent that will follow you when you leave the haus (reserved — chalet node, not yet deployed) |
+| **Ahsoka** | [Satellite](/agents/ahsoka/) — live at the chalet, running local 9B inference offline on `:6502` and real floor heating even when rural internet taps out |
 | **Tommy** | [Guardian Spirit](/agents/tommy/) — the dead cat with strong opinions about network segmentation |
 
 The routing rule is not democratic, and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) explains why a council of one model in seven robes is not a council at all. General chat can be downgraded mid-conversation; the privacy-bound seats cannot. The proxy's JSONL usage log is the ground truth for what actually ran — an agent doesn't always know which tier served its last turn.
