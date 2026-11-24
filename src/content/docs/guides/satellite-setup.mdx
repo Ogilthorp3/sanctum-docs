@@ -102,7 +102,19 @@ sanctum init --name chalet --role satellite
 echo chalet > ~/.sanctum/.node_id
 ```
 
-The satellite profile needs **sanctum-cli 1.0** or later. Earlier releases have no `--role` and reject `instance.role` outright, so `brew upgrade ogilthorp3/sanctum/sanctum-cli` any older install first. `init` writes a minimal `~/.sanctum/instance.yaml`, just the instance name, slug and role. A satellite keeps its own small file; its roster row lives on the hub, where `type: satellite` records from the hub's side what `role: satellite` declares here. Re-run `init` and it updates only the `instance:` block: the name, the role, and a slug when it has none. It keeps every other block and comment, and saves the old file as `instance.yaml.bak`. An existing slug never changes; a missing one is derived from the name, even with no flags, and a block that has a slug and gets neither `--name` nor `--role` is left as it is. A file that parses but fails the schema exits `5` with the schema error. `--force` replaces the whole file and drops every other block, the router block too; the old file is kept as `instance.yaml.bak`.
+The satellite profile needs **sanctum-cli 1.0** or later. Earlier releases have no `--role` and reject `instance.role` outright, so upgrade any older install first, under the stop rule below. `init` writes a minimal `~/.sanctum/instance.yaml`, just the instance name, slug and role. A satellite keeps its own small file; its roster row lives on the hub, where `type: satellite` records from the hub's side what `role: satellite` declares here. Re-run `init` and it updates only the `instance:` block: the name, the role, and a slug when it has none. It keeps every other block and comment, and saves the old file as `instance.yaml.bak`. An existing slug never changes; a missing one is derived from the name, even with no flags, and a block that has a slug and gets neither `--name` nor `--role` is left as it is. A file that parses but fails the schema exits `5` with the schema error. `--force` replaces the whole file and drops every other block, the router block too; the old file is kept as `instance.yaml.bak`.
+
+<Aside type="caution" title="The upgrade stop rule">
+On a satellite that keeps curfews, the Firewalla bridge and the screen-time worker run on Homebrew's `node` and `python@3.14`. Dry-run first, and stop if anything you did not ask for would move:
+
+```bash
+HOMEBREW_NO_AUTO_UPDATE=1 brew upgrade --dry-run ogilthorp3/sanctum/sanctum-cli
+# stop if python@3.12, openssl@3, sqlite, xz, readline, mpdecimal, node or python@3.14 would move
+HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew upgrade ogilthorp3/sanctum/sanctum-cli
+```
+
+Never run `sanctum update` on a satellite: it upgrades with no such guard.
+</Aside>
 
 The role is what makes `sanctum self-test` grade this Mac as a satellite, not as a hub missing half its services.
 
@@ -139,7 +151,7 @@ On a satellite it reports the `satellite` tier. The hub probes (the cathedrals, 
 
 ## What a satellite runs
 
-Not the hub's stack. A 16 GB Mac can't and shouldn't run the cathedrals or the council, and the CLI knows it: on a declared satellite, `sanctum council`, `chat`, `code`, `brainstorm`, and the `endocrine` and `bridge` subcommands (such as `sanctum bridge health`) print the "needs a full Sanctum haus" banner and exit `0` instead of starting. Bare `sanctum endocrine` or `sanctum bridge` prints Typer's usage and exits `2`, as a missing subcommand does on any machine. Bare `sanctum` prints its status line and does not open the council chamber; it prints no banner. `SANCTUM_HAUS_ON_SATELLITE=1` lifts the rule on a satellite that can reach the hub's council and bridge; the banner names it. After this page it runs the tailnet daemon, the SSH door and headless settings from the installer, `sanctum-cli` with its own small `instance.yaml`, a local brain behind `router.default`, and Home Assistant. Its roster row and the heavy inference stay on the hub. Where it sits in the larger picture is the [node topology](/architecture/node-topology/).
+Not the hub's stack. A 16 GB Mac can't and shouldn't run the cathedrals or the council, and the CLI knows it: on a declared satellite, `sanctum council`, `chat`, `code`, `brainstorm`, and the `endocrine` and `bridge` subcommands (such as `sanctum bridge health`) print the "needs a full Sanctum haus" banner and exit `0` instead of starting. Bare `sanctum endocrine` or `sanctum bridge` prints Typer's usage and exits `2`, as a missing subcommand does on any machine. Bare `sanctum` prints its status line and does not open the council chamber; it prints no banner. `SANCTUM_HAUS_ON_SATELLITE=1` lifts the rule on a satellite that can reach the hub's council and bridge; the banner names it. After this page it runs the tailnet daemon, the SSH door and headless settings from the installer, `sanctum-cli` with its own small `instance.yaml`, a local brain behind `router.default`, and Home Assistant. A satellite that keeps curfews also runs, from the hub, its exact Force Flow build, a screen gate, a root watchdog and Vault Armor, hardened by kits the operator runs with sudo ([Satellite Runtime](/architecture/satellite-runtime/)). Its roster row and the heavy inference stay on the hub. Where it sits in the larger picture is the [node topology](/architecture/node-topology/).
 
 ## On-site devices
 

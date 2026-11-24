@@ -190,6 +190,7 @@ export default defineConfig({
 						{ label: 'Beta Portability', slug: 'architecture/beta-portability' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Hive Topology', slug: 'architecture/hive-topology' },
+						{ label: 'Satellite Runtime: the Chalet', slug: 'architecture/satellite-runtime' },
 						{ label: 'Services', slug: 'architecture/services' },
 						{ label: 'Service Principal', slug: 'architecture/service-user' },
 						{ label: 'Port Summary', slug: 'architecture/port-summary' },
@@ -363,6 +364,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-22 — The Manor Knocked a Hundred and Seventy-Four Times', slug: 'operations/2026-11-22-the-manor-knocked-a-hundred-and-seventy-four-times' },
 								{ label: '2026-11-21 — Thirteen Knocks From the Pine Outpost', slug: 'operations/2026-11-21-thirteen-knocks-from-the-pine-outpost' },
 								{ label: '2026-11-20 — A Hundred Seams and One Closed Door', slug: 'operations/2026-11-20-a-hundred-seams-and-one-closed-door' },
 								{ label: '2026-11-19 — Three Brains and the Twenty-Four-Hour Watch', slug: 'operations/2026-11-19-three-brains-and-the-twenty-four-hour-watch' },

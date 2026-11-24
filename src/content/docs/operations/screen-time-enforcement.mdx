@@ -192,6 +192,22 @@ failures (bad MAC format, unknown target, bad HH:MM) return 400
 without snapshotting or kickstarting. The op log is the audit
 trail; the snapshot is the rollback path.
 
+## At the chalet: the ledger
+
+The chalet runs this same closed loop in the hub's exact build, with nobody on the hub watching each curfew as it falls. Since 2026-11-22 a root-owned watchdog does the watching: `/Library/Sanctum/libexec/chalet-watchdog.py`, run by `com.sanctum.chalet-watchdog` every 300 seconds. It reads the engine's liveness and `/screen/status` and the bridge's health, and writes one row per check, as it found things before any kick, to `/Library/Sanctum/state/enforcement-ledger.json`:
+
+| Field | What it records |
+|---|---|
+| `verdict` | `ok`, `degraded`, `down`, `vault_locked` or `unknown` |
+| `curfew_active`, `due` | whether a curfew was on, and how many targets were due |
+| `held`, `excused`, `unheld`, `unknown` | due targets blocked, released by an override, not blocked, or not said by the engine |
+| `engine`, `bridge` | `ready`, `not_ready` or `down`; `ok`, `down` or `unknown` |
+| `kick` | `none`, `engine`, `bridge`, `both` or `deferred` |
+
+The ledger keeps seven days, 2,016 rows, root-owned and replaced atomically. The kicks have brakes. A locked vault gets none, because the launchers are already waiting for it. During a curfew the engine and bridge are kicked only when the engine is down, and otherwise the kick is deferred so the hub can page on the verdict. Each service gets at most one kick per 15 minutes and 12 a day, and after every kick the watchdog re-reads the service, so a kickstart is never written down as a heal.
+
+"Held" is the engine's belief, its blocked flag, not a fresh read of the Firewalla. The closed-loop contract above is what makes that belief worth writing down. Yoda reads the summary over the chalet's screen lane with `curfews` and says it as a fixed sentence: the curfews held, so many checks since a given hour, every due curfew enforced, or which ones were not ([Satellite Runtime](/architecture/satellite-runtime/)).
+
 ## Rollback
 
 Layer by layer. Each step is reversible in one command.

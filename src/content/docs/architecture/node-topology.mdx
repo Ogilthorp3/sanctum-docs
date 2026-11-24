@@ -20,7 +20,7 @@ What you're looking at is a multi-site distributed system. The kind of thing a m
     The full-stack primary node. Runs the Mac Mini host with the Ubuntu VM, all AI agents, the Home Assistant gateway, inference servers, and the complete service catalog. There is exactly one **primary** hub per Sanctum instance; additional **peer** hubs (`tier: peer`) may join the hive later without merging LANs — see [Hive Topology](/architecture/hive-topology/).
   </Card>
   <Card title="Satellite" icon="laptop">
-    A lighter deployment at a secondary haus. Runs a subset of services (typically a gateway, Home Assistant, and a small local model). The hub reaches it over Tailscale.
+    Lighter, at a secondary haus: a gateway, Home Assistant, a small model and, at the chalet, the hub's screen-time build ([runtime](/architecture/satellite-runtime/)).
   </Card>
   <Card title="Mobile" icon="star">
     A MacBook Pro or similar portable device. Connects to the hub remotely via Tailscale for agent access, SSH, and API calls. Runs a small set of persistent guardrail daemons (see "Persistent Services Across Hosts" below) but no user-facing primary services.
@@ -128,7 +128,6 @@ These services only run on the hub and are not deployed to satellites:
 |---------|--------|
 | Council MLX (`sanctum-mlx`) | Qwen3.8-27B-4bit, about 21 GB resident in typical use, needs a Metal-class GPU |
 | Devstral MLX (`sanctum-mlx-devstral`) | Muse-Glimmer-30B-4bit on `:3301` as of 2026-10-05, after Devstral-Small-2-24B-Instruct-2512-4bit. (Superseded the Qwen2.5-Coder-14B coder seat on `:1338`, retired 2026-06-07 along with the LM Studio `:1234` bridge.) |
-| Firewalla Bridge | Direct LAN access to the primary router |
 | Cloudflare Tunnel | Single ingress point for the instance |
 | Orbi Bridge | Direct LAN access to the access point |
 | Sonos Bridge | Native SoCo control of LAN Sonos speakers |
@@ -189,12 +188,12 @@ The [Satellite Setup guide](/guides/satellite-setup/) walks the whole procedure 
 
 ### The Hub Reaches In
 
-A satellite never opens a connection to the hub; the tailnet policy denies it every port. The hub reaches in: `sanctum node adopt`, its automation SSH lane and, from 1.0.1, the [Memory Vault relay](/architecture/hive-topology/#satellites-and-the-vault). Skills fast-forward from their Git origin.
+A satellite never opens a connection to the hub; the tailnet policy denies it every port. The hub reaches in: `sanctum node adopt`, its automation SSH lane, the screen and fleet lanes, the witness tunnel and, from 1.0.1, the [Memory Vault relay](/architecture/hive-topology/#satellites-and-the-vault).
 
 ```
 manoir ─── adopt, SSH lane, tunnel ──▶ chalet
+manoir ─── screen, fleet lanes ──────▶ chalet
 manoir ◀─────────── never ──────────── chalet
-Git origin ── skills, fast-forward ──▶ chalet
 ```
 
 <Aside type="tip">
@@ -273,7 +272,7 @@ const chaletName = nodeGet('chalet', 'tailscale_name'); // "chalet"
     +-- Lima vz VM (Ubuntu)      +-- Gateway              (guardrail daemons)
     +-- 5 AI Agents              +-- Home Assistant       +-- castellan (pending)
     +-- Full service catalog     +-- Local brain (:6502)  +-- claude-max-proxy
-    +-- HA gateway
+    +-- HA gateway               +-- Force Flow (:4077)
     +-- sanctum-mlx + devstral
     +-- sanctum-server router
 ```

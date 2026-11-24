@@ -1,0 +1,145 @@
+---
+title: "Satellite Runtime: the Chalet"
+description: "What the chalet's Mac mini runs with nobody logged in: every job and its pin, the lanes the hub opens, a boot that waits for its witness, the hardening kits, and what Deployed means on a box the hub can only verify."
+heroImage: "./images/hero-satellite-runtime.png"
+heroPrompt: "A cutaway of a small observatory dome on a snowy pine ridge at night, opened like an architect's model to show a tidy engine room inside: a round vault door, a brass regulator clock, and one thin conduit leaving through the floor toward a distant amber glow on the far horizon; the conduit alone glows teal. Cinematic sci-fi concept art, dark background, volumetric lighting, teal and amber accent colors, no text, no words, no letters."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![The chalet's runtime as an observatory cut open on a snowy ridge: a vault door, a regulator clock, and one teal conduit running down the valley toward the manoir's amber light](./images/hero-satellite-runtime.png)
+
+Nobody logs in at the chalet. The Mac mini in the closet boots, waits for a key it cannot hold alone, and then keeps a family's curfews in a haus that is empty most of the week. Every job on it answers to the manoir. None of them can call it.
+
+[Hive Topology](/architecture/hive-topology/) holds the rule: the hub opens every lane, and a satellite answers as data. This chapter is the inventory under that rule. It says what runs, who installed it, how the hub proves the bytes are still its bytes, and what the operator does when the box goes quiet. The audit behind it is in [The Manor Knocked a Hundred and Seventy-Four Times](/operations/2026-11-22-the-manor-knocked-a-hundred-and-seventy-four-times/).
+
+## What runs
+
+These are the chalet's jobs, all under launchd with nobody logged in, beside [Ahsoka](/agents/ahsoka/)'s brain; the forced commands that answer the hub are in the lanes table below. The table shows the box as the kit sitting of 2026-11-22 left it. A row names the kit phase that shaped it, or the one it still waits for. The hardening table below gives each phase's state.
+
+| Label | User | Program | Repo@commit | Pin | Smoke | Log | Heal |
+|---|---|---|---|---|---|---|---|
+| `com.sanctum.screen-time` | `sanctum` | `screen-time-launch.sh engine`: the Rust front door `sanctum-force-flow` and its Python worker on `127.0.0.1:4077` | the hub's deployed build, on 2026-11-22 `sanctum-rs` `7c6d882` over `sanctum-screen-time` `c379757`; launcher from `sanctum-config` `f2810ff` | fleet manifest, re-read by the hub every 15 min | `fleet_sync.py status --site chalet`; lane `health` | `~sanctum/logs/screen-time.log` | KeepAlive (10 s); watchdog; fleet heal |
+| `com.sanctum.firewalla-bridge` | `sanctum` | the same launcher, `bridge`: Node runs `firewalla-bridge.js` on `127.0.0.1:1984` | none: a chalet-only fork | none | the watchdog's `/health` read | `~sanctum/logs/firewalla-bridge.log` | KeepAlive (10 s); watchdog |
+| `com.sanctum.chalet-watchdog` | root | `/Library/Sanctum/libexec/chalet-watchdog.py` every 300 s (K1 `p02`) | `sanctum-config` `fb63840` | K1 pin table | `~/.sanctum/chalet/satellite-mirror/watchdog/tests/run_tests.py`; lane `curfews` | `/Library/Logs/Sanctum/chalet-watchdog.log` | launchd interval |
+| `haus.sanctum.vault-armor` | root | `~/.sanctum/scripts/vault-armor-boot-unlock.sh`, then `sanctum-vault-armor unlock --wait 180`, both owned by the operator's account until K1 `p08` installs root-owned copies | `sanctum-config` `2ca5d39` | none until `p08` | `~/.sanctum/scripts/vault-armor-boot-smoke.sh`; `--drill` with sudo | `~/.sanctum/vault-armor-boot/` | KeepAlive on failure, once a minute |
+| `com.tailscale.tailscaled` | root | Homebrew `tailscaled` 1.104.7, run from the operator's Homebrew until K1 `p13` installs a root-owned copy, on site | Homebrew | none until `p13` | the hub's fleet pulls arrive | `/var/log/tailscaled.log` | KeepAlive (5 s) |
+| `com.sanctum.colima` | `neo` | `colima-stay.sh`: a Colima VM running Home Assistant 2026.7.2 on `:8123` | none: a `docker run` from July | none; the image tag floats | Home Assistant answers on `:8123` | `~/.sanctum/logs/colima-boot.log` | KeepAlive (60 s) |
+| `haus.sanctum.columbo` | `neo` | `columbo-run.sh` every 600 s: names devices on the chalet's Firewalla | a copy of the hub's `bin/columbo`, not pinned | none | none here; its naming suite stays on the hub | `~/.sanctum/state/columbo-daemon.log`, self-trimmed | launchd interval |
+| `haus.sanctum.columbo-phonebook` | `neo` | `phonebook.py` every 600 s, writing the `phonebook.json` the engine reads; a system job from K1 `p10` | `sanctum-screen-time` `deployed/columbo-phonebook.py` | equal to the repo file | `phonebook.json` age | `/Library/Logs/Sanctum/columbo-phonebook.log` | launchd interval |
+| `com.sanctum.ahsoka-brain` | `sanctum` | `sanctum-mlx`, mTLS on `:6502` | [Ahsoka](/agents/ahsoka/) | not yet | her 48-case gate | its own | launchd |
+
+The bridge is the row to watch. It is a chalet-only fork of the hub's Firewalla bridge, older than the hub's retry fixes of July and August, and nothing pins it. The next fleet kit makes it the sixth part of parity, so the hub's copy wins there too.
+
+Logs are half bounded. A root-owned `newsyslog` rule rotates the interval jobs' logs (K1 `p04`), but the four jobs that never let go of theirs still grow them until K2 brings a daily copy-then-truncate job.
+
+## The lanes, all opened by the hub
+
+Two lanes carry data through a forced command. The tunnels the hub dials each carry one narrow flow that starts on the satellite. A satellite still opens no connection of its own: the tailnet policy denies it every port.
+
+| Lane | The hub's side | The chalet's side | What crosses |
+|---|---|---|---|
+| Screen gate | `screen_lane.py`, key `~/.ssh/screen-lane/chalet_ed25519`, the pinned host key, a post-quantum key exchange | forced command `/usr/local/libexec/sanctum/screen-gate` as `_sanctumgate`; gate 1.1 from K1 `p03` | one request line out; one JSON line back, checked against a pinned schema and printed as a fixed sentence. Twelve verbs |
+| Fleet | `fleet_sync.py` every 15 min from `haus.sanctum.fleet-parity`, key `~/.ssh/fleet/chalet_ed25519` | forced command `/usr/local/libexec/sanctum/fleet-receiver`, and one sudoers line that restarts the engine | status as one JSON line; on drift, the hub's build out and a proved result back, or a rollback |
+| Witness tunnel | `haus.sanctum.chalet-witness-tunnel` dials `-R 127.0.0.1:42071` and redials after 300 s | Vault Armor's boot unlock asks the hub's witness through it | one fixed-size curve point and a DLEQ-checked answer |
+
+Gate 1.1 adds three verbs that only read. `devices` counts the chalet's devices by class and category since a given time, never a name or an address. `curfews` summarises the watchdog's enforcement ledger. `house` reports the Home Assistant doctor's verdict. Each answers `supported: false` until the file behind it exists, which is a refusal Yoda can say out loud.
+
+
+## A boot that waits
+
+1. launchd starts every system job. Nobody logs in, and with FileVault off no pre-boot prompt waits for a password.
+2. `tailscaled` rejoins the tailnet and `com.sanctum.colima` starts the Home Assistant VM.
+3. Vault Armor needs two witnesses: `chalet-fw` on the LAN, and the manoir's, through the tunnel the manoir dials. It retries once a minute until both answer. After the update reboot of 2026-11-22 the vault opened six and a half minutes after boot.
+4. The engine and bridge launchers stop on an unreadable token, and launchd restarts them every ten seconds until the vault opens. That morning took 38 and 37 starts; then both came up with their tokens.
+5. The watchdog records `vault_locked` in its ledger and kicks nothing while the vault is shut (K1 `p02`). Once the vault opens, its rows show the engine and the curfews again.
+6. On the hub, the fleet sentinel's next pull sees parity, and thirty minutes without an answer pages.
+   So do three curfew pulls in a row that find the engine answering while its loop has stopped or it reports enforcement not ready.
+
+Every step waits or retries, and none gives up. November taught that: a one-shot unlock gave up after a reboot and left the vault shut for eight days.
+
+## When it goes quiet
+
+| Symptom | First look, from the manoir | Then |
+|---|---|---|
+| Fleet page: unreachable for 30 minutes | `fleet_sync.py status --site chalet` | Power, Wi-Fi, the tailnet. The curfews hold locally; only Yoda's view and commands are gone |
+| Page: enforcement not ready during a curfew | lane `health`, then `curfews` | The bridge token the engine started with, its loop, then the watchdog's kicks in the ledger |
+| Vault still locked after a boot | the witness tunnel's log on the manoir; witness 1's host key | Let the tunnel dial in. On site, the boot smoke's `--drill` with sudo ([Vault Armor](/architecture/vault-armor/)) |
+| Floors `unavailable`, or `house` says `nuheat_reauth` | lane `house`, or the chalet's Home Assistant | Sign NuHeat in again in the chalet's Home Assistant; the link dies 30 days after each login |
+| A root-owned file looks wrong | K1-check `--check`, with sudo for the root rows | `--rollback <phase>`, or rerun the phase |
+
+<Aside type="caution" title="A kickstart is still not a heal">
+The old watchdog logged `HEAL: kickstarted` 3,659 times, including kicks into a locked vault that could not possibly have healed anything. Its replacement re-reads the service after every kick and records what it saw. If the ledger shows kicks with no recovery, believe the ledger, not the word "heal". [Kickstart Is Not a Heal](/architecture/kickstart-is-not-a-heal/) has the doctrine.
+</Aside>
+
+## Hardening and its kits
+
+The boundary design lists nine hardening steps, C1 to C9. They reach the chalet as kits: single Python files the hub emits from tracked sources, every payload pinned by sha256, run by the operator with sudo at the chalet. Every check runs before the first write, every phase backs up before it writes, and `--rollback <phase>` puts one phase back. Almost nothing goes on by hand. The exceptions are Home Assistant's loopback publication, at Monday's drill, and a few posture settings that need the GUI or a password.
+
+| Step | What it closes | Kit phase | State |
+|---|---|---|---|
+| C1 | An sshd floor, `000-sanctum-boundary.conf`, with the post-quantum key exchange written out | K1 `p05` | Waits |
+| C2 | Scoped sudo: the operator's blanket rule becomes a short list, installed last | K1 `p15` | Waits |
+| C3 | The root watchdog runs root-owned code and writes the ledger | K1 `p02` | In place |
+| C4 | Launchers fail closed on a missing token | fleet v1.1; K2 adds the wait loop | Partly in place |
+| C5 | The engine stops trusting loopback callers | 1.0.1 | Waits |
+| C6a | Home Assistant's VM mounts only its config | K1 `p11` stages it; the VM restart applies it | Waits |
+| C6b | Home Assistant answers on loopback only | Q15, by hand at Monday's drill | Waits |
+| C7 | Firewalla keys readable by the bridge only | K1 `p06` | In place |
+| C8a | Sticky bits, and the engine's files owned by the engine's account | K1 `p07` | In place |
+| C8b | The rest of the sticky bits, once the brain's write paths are checked | K2 | Waits |
+| C9 | Root runs only root-owned code: Vault Armor, `tailscaled`, no dangling third-party daemon | K1 `p08`, `p13` on site, `p09` | Partly in place |
+
+K1 is `chalet-kit-2026-11-22-install.py`, sha256 `b1a69fb6e840abd73219bed79d63df4036f4fb7967d33c418413aacd7993b59d`. Its verify-only twin, K1-check (`cd220ea9540260cb1815f4124370298b1585108a2c6d54aa30214cc8144bf962`), holds no write code. It ends `CLEAN pins=<hash>` or `DRIFT items=N`, and the hub keeps the pin hash, `c8d098a9b1dae784eaa0c888e2898a100dcb72d73d59749c7e6f577592ccf468` tonight. Until the fleet lane carries pins, K1-check after any OS update is the proof that root's files are still the kit's files. K2, this week, brings fleet v1.2, launcher v2 with the bridge under parity, the travelling screens and the floor reader.
+
+## Retired
+
+| Job | Why it goes | State |
+|---|---|---|
+| `com.sanctum.bootstrap` | Re-fired the heartbeat at boot, then ran a `sudo` check as an account with no sudo, and warned on every boot | Retired by K1 `p10` |
+| `com.sanctum.heartbeat` | Wrote a file nobody read, under the agent's name instead of the node's | Retired by K1 `p10` |
+| `com.sanctum.skills-sync` | Fetched a stale skills checkout that no lane uses, with a key a satellite should not hold | Retired by K1 `p10` |
+| `com.sanctum.upgrade-sentinel` | Reported `drift: 0` on a check that had failed, then pushed to a hub it cannot reach | Retired by K1 `p10` |
+| The old OpenClaw tunnel agent | Disabled since the summer; it pointed at the hub's VM | Retired by K1 `p10` |
+| The legacy Python host | Replaced by the hub's Force Flow build; nothing has run it since | Retired 2026-11-21 |
+
+With the operator's Q5, K1 `p10` boots each of the first five out and archives its plist with a manifest, one item at a time. The fleet lane's status replaces the heartbeat and the sentinel. The hub asks. Nothing on the satellite has to tell.
+
+## Exceptions, on purpose
+
+Four things here are wrong on purpose.
+
+| Exception | Why it stands |
+|---|---|
+| FileVault off | An unplanned reboot must not stop at a pre-boot prompt nobody is there to answer. The vault is its own encrypted volume; the data volume is not. Decided 2026-10-22, kept for 1.0 |
+| The manoir's Share 2 lives here | The off-site witness share of the manoir's vault sits on that unencrypted data volume. One share opens nothing, and keeping it here is the operator's choice |
+| Wi-Fi only | The Ethernet port has had no link, so every lane, the bridge and witness 1 ride Wi-Fi. Cabling it is an operator action on site |
+| Parachute disarmed | No service copy of the [Parachute](/architecture/the-parachute/)'s key is on the chalet, so a curfew set while the Firewalla cloud is down will not land. It arrives with per-site Firewalla keys |
+
+## What Deployed means on a satellite
+
+On the hub, Deployed means the live file is the repo file, through a symlink into a gitsync'd checkout ([Engineering Discipline](/architecture/engineering-discipline/#eetismad--the-shipping-bar)). The chalet cannot read it that way. It holds no checkout of the config repo and must hold no hub credential, and root-run code has to be root-owned: a symlink into the operator's checkout would hand root to whoever can write there.
+
+So the chalet uses a satellite reading, which still waits for the operator's sign-off. Every file the satellite runs is a byte-exact copy of a file at a named commit. Only a hub-built kit or fleet bundle installs it, pinned by sha256, and the hub re-checks it against digests it computes from that commit. A hand copy is not deployed, however right it looks. The check proves the absence of drift, not honesty: a compromised satellite can lie in its own checks, which is why the hub validates and the chalet only reports.
+
+Today the fleet build meets that letter in full, through the 15-minute sentinel. Root's files meet it through K1-check until K2 moves their pins into the fleet lane.
+
+## EETISMAD smoke
+
+| Letter | Proof for the chalet |
+|---|---|
+| **E**2E **T**ested | Gate suite `run_tests.py`, broker suite, `screen_lane.py selftest` and the alias test, `test_fleet.py`, the watchdog suite; K1-check `CLEAN`; `vault-armor-boot-smoke.sh --drill`; live: `fleet_sync.py status --site chalet` and lane `health` |
+| | The named live smoke, `bash ~/.sanctum/tests/test-chalet-satellite.sh`, read-only, ending in one word: `CHALET-GREEN` |
+| **i**n **S**anctum-**d**ocs | This chapter, [Hive Topology](/architecture/hive-topology/), [Yoda](/agents/yoda/), [Ahsoka](/agents/ahsoka/) |
+| **M**erged | `openclaw-skills` `7dbdaa5` (gate, broker, skill); `sanctum-config` `fb63840` (chalet mirror, kits, fleet, expected hashes) |
+| **A**nd **D**eployed | K1 `INSTALLED`, then K1-check `CLEAN pins=c8d098a9b1dae784eaa0c888e2898a100dcb72d73d59749c7e6f577592ccf468`; fleet `IN PARITY`; lane `health` says the gate matches what the hub installed |
+
+## Lineage
+
+- [Hive Topology](/architecture/hive-topology/) — the rule this box obeys, and the lanes as the hub sees them
+- [Vault Armor](/architecture/vault-armor/) — the witness that has to answer before anything here starts
+- [Satellite Setup](/guides/satellite-setup/) — how a Mac becomes a satellite in the first place
+- [Thirteen Knocks From the Pine Outpost](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/) — the night the lanes opened
+- [The Manor Knocked a Hundred and Seventy-Four Times](/operations/2026-11-22-the-manor-knocked-a-hundred-and-seventy-four-times/) — the audit, and the night this inventory landed
+
+Nobody logs in at the chalet, and nobody needs to. The box boots, waits for its witness and holds the curfews; every fifteen minutes the manoir knocks, reads what comes back and compares it with its own copy. When the two disagree, the manoir's copy wins, delivered by a kit with a sha256 on every byte.

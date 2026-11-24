@@ -199,7 +199,7 @@ Two lanes follow that rule today, each with its own key:
 
 | Lane | Hub key | Forced command on the satellite | What crosses |
 |------|---------|----------------------------------|--------------|
-| Screen | `~/.ssh/screen-lane/<site>_ed25519` | `/usr/local/libexec/sanctum/screen-gate`, as `_sanctumgate` | One request line out; one JSON line back, checked against a pinned schema and rendered as a fixed sentence |
+| Screen | `~/.ssh/screen-lane/<site>_ed25519` | `/usr/local/libexec/sanctum/screen-gate`, as `_sanctumgate` | One request line out; one JSON line back, checked against a pinned schema and rendered as a fixed sentence. Gate 1.1 (2026-11-22) adds three verbs that only read: `devices` (counts by class and category, never a name or an address), `curfews` (the satellite watchdog's enforcement ledger) and `house` (its Home Assistant doctor's verdict) |
 | Fleet | `~/.ssh/fleet/<site>_ed25519` | `/usr/local/libexec/sanctum/fleet-receiver`, as the operator | Status: one JSON line back. Apply: the hub's build out, a proved result back |
 
 ### Fleet parity
@@ -208,7 +208,19 @@ A satellite runs the hub's exact [Force Flow](/architecture/force-flow/) build, 
 
 `fleet_sync.py` in `sanctum-config` `scripts/fleet/` pushes that build over the fleet lane. The receiver checks every sha256, imports the new engine under the production interpreter in a scratch worktree, and copies `usage.db` aside. Then it switches and restarts through a one-command sudoers envelope. It keeps the new build only when the new process proves it: the right binary on the port, the right engine and digests, no target gone, no hold released, a fresh tick. Anything else, an exception or a kill signal included, restores the exact prior node.
 
-`haus.sanctum.fleet-parity` runs `fleet_sync.py heal` on the hub every 15 minutes. Parity counts the engine running and ticking, not only the bytes. On drift it applies, never forced, so a curfew defers it. It pages through the hub's own Force Flow on a rollback, on three refusals in a row, on an answer that fails the hub's checks, and when the satellite has been out of reach for 30 minutes: Yoda is blind up there, though the curfews hold locally. It pages again when the satellite is back. A switch cut off halfway, by a kill or a power cut, is put back first on the next run. A satellite's own data (its registry, usage database and tokens) never moves. A satellite's Force Flow pages no one: its launcher aims Home Assistant and Sonos at a closed loopback port.
+`haus.sanctum.fleet-parity` runs `fleet_sync.py heal` on the hub every 15 minutes. Parity counts the engine running and ticking, not only the bytes. On drift it applies, never forced, so a curfew defers it. It pages through the hub's own Force Flow:
+
+| The sentinel pages on | And again |
+|-----------------------|-----------|
+| A rollback, or an apply whose outcome is unknown and whose satellite then looks wrong | — |
+| Three refusals in a row | — |
+| An answer that fails the hub's checks | — |
+| 30 minutes without reaching the satellite: Yoda is blind up there, though the curfews hold locally | When the satellite is back |
+| Three curfew deferrals in a row, about 45 minutes, while the engine answers but its loop has stopped ticking or its `enforcement_ready` flag is false, which today says only that it holds no Firewalla bridge token. Nothing is applied during a curfew, so the page is the remedy. In Force Flow's quiet hours, 22:00 to 08:00, it is a silent push read in the morning, unless the site's `not_ready_night` is `wake`, which pierces Do-Not-Disturb | When it reports ready again |
+
+A bridge, SDK or Firewalla failure behind an engine that still ticks and reports ready pages nothing yet: the fleet status does not carry the satellite watchdog's verdict.
+
+A switch cut off halfway, by a kill or a power cut, is put back first on the next run. A satellite's own data (its registry, usage database and tokens) never moves. A satellite's Force Flow pages no one: its launcher aims Home Assistant and Sonos at a closed loopback port.
 
 One flow starts on the satellite, as a documented exception: after a reboot, a [Vault-Armored](/architecture/vault-armor/) satellite asks the hub's witness to evaluate its share through the reverse tunnel the hub opened, and the hub can cut that tunnel at any time. The night the rule went live, with its proofs, is [Thirteen Knocks From the Pine Outpost](/operations/2026-11-21-thirteen-knocks-from-the-pine-outpost/).
 
@@ -308,11 +320,18 @@ Subnet routes remain a **special feature** for dumb IoT that cannot run Tailscal
 | **M**erged | `openclaw-skills` tailnet-toolkit + SOPS store on Mini config repo |
 | **A**nd **D**eployed | `~/.sanctum/tailnet` symlink → toolkit; live MagicDNS stems |
 
-If plan invents renames forever, the stem comparison regressed (FQDN vs short name). If auth fails, re-seed OAuth into **SOPS** first, then keychain cache.
+| Lane | Named smoke | Deployed proof |
+|------|-------------|----------------|
+| Screen | Gate suite `screen-time/satellite/tests/run_tests.py`, broker suite `tests/test_screen_lane.py`, `screen_lane.py selftest`; live `screen_lane.py call --site chalet health` | The hub's expected gate and policy sha256 in `sanctum-config`; `health` says the gate matches what the hub installed |
+| Fleet | `scripts/fleet/tests/test_fleet.py`; live `fleet_sync.py status --site chalet` | The 15-minute sentinel reads parity, liveness and the receiver's own sha256 |
+| Boundary | Tailscale's policy tests on every save; `council-router/tests/test-satellite-closed.sh` | The live policy parses identical to `tailnet-toolkit/acl.hujson` |
+
+If `apply-hive-names plan` invents renames forever, the stem comparison regressed (FQDN vs short name). If auth fails, re-seed OAuth into **SOPS** first, then keychain cache.
 
 ## Related
 
 - [Node topology](/architecture/node-topology/) — hub / satellite / mobile roles  
+- [Satellite runtime](/architecture/satellite-runtime/) — every job on the chalet, its pin, its lanes and its kits  
 - [Endpoint resolution](/architecture/endpoint-resolution/) — discovery, no hardcoded IPs  
 - [Naming](/operations/naming/) — place layer + retired ledger  
 - [Engineering discipline](/architecture/engineering-discipline/) — EETISMAD shipping bar  
