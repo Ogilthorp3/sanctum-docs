@@ -121,6 +121,20 @@ export default defineConfig({
 			],
 			sidebar: [
 				{
+					label: 'Édition Québécoise ⚜️',
+					collapsed: true,
+					items: [
+						{ label: 'Accueil québécois', slug: 'index-qc' },
+						{ label: "C'est quoi, Le Sanctum?", slug: 'qc/cest-quoi-sanctum' },
+						{ label: 'Une journée dans la cabane', slug: 'qc/une-journee-dans-la-cabane' },
+						{ label: 'Le Conseil Jedi', slug: 'qc/le-conseil' },
+						{ label: 'Tommy — Esprit Gardien', slug: 'qc' },
+						{ label: 'Démarrage rapide (30 min)', slug: 'qc/demarrage-rapide' },
+						{ label: "L'Architecture en 5 minutes", slug: 'qc/architecture' },
+						{ label: 'Guide des parents', slug: 'parents-guide/qc' },
+					],
+				},
+				{
 					label: 'Getting Started',
 					items: [
 						{ label: 'What is Sanctum?', slug: 'getting-started/what-is-sanctum' },
