@@ -22,7 +22,7 @@ The last sentence of a section often lands a sharp punchline. Don't force it —
 
 **The Comic-Book Progression & The Line.** Read the site like a comic book, not a sanitized PG-13 brochure and not shock-value edgelording:
 - **Ramp into the persona.** Front doors (`index.mdx`, `index-qc.mdx`) start warm and a little spicy so a new reader wants to turn the page — save the heavier gags for inside the book, not panel 1 (e.g. no *"one throat to choke"* on the home page).
-- **Witty references carry the spice.** Cultural riffs (*Slap Shot*'s `"ostie de root beer"`, Bond's `"license to kill NXDOMAIN"`, *Game of Thrones*, horror-movie tropes, Quebec expressions like `"aller jouer dans le trafic"`), cheeky wit (`foreplay on a Tuesday`), and normal sysadmin idioms (`autopsy`, `kill-switch`, `lobotomizing`, `time bomb`) belong here — the reference makes the bite land as a laugh.
+- **Witty references carry the spice.** Cultural riffs (*Slap Shot*'s `"ostie de root beer"`, Bond's `"license to kill NXDOMAIN"`, *Game of Thrones*, *Friday the 13th* / Jason Voorhees, Quebec expressions like `"aller jouer dans le trafic"`), cheeky wit (`foreplay on a Tuesday`), and normal sysadmin idioms (`autopsy`, `kill-switch`, `lobotomizing`, `time bomb`) belong here — the reference makes the bite land as a laugh.
 - **Never vulgar just to be vulgar.** Vulgarity or edgy hyperbole earns its seat only when it makes the reader genuinely laugh, never when it's gratuitous or punches down. If a line might upset someone without paying off a real joke, tighten it into a smarter wink (like calling port `8008` *"the upside-down calculator classic"*).
 
 ## The Chapter Rule
