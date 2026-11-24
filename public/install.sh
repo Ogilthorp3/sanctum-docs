@@ -299,6 +299,6 @@ detail "  ${BOLD}sanctum status${RESET}                      ${DIM}— one-line 
 detail "  ${BOLD}sanctum doctor${RESET}                      ${DIM}— deep diagnostic${RESET}"
 printf "\n"
 detail "Quick start:  https://sanctum.run/getting-started/quick-start/"
-detail "Architecture: https://sanctum.run/architecture/"
+detail "Architecture: https://sanctum.run/architecture/overview/"
 detail "Source:       https://github.com/Ogilthorp3/sanctum-cli"
 printf "\n"
