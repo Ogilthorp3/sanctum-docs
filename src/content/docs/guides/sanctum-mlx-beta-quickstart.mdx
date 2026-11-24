@@ -1,6 +1,6 @@
 ---
 title: sanctum-mlx Beta Quickstart
-description: From a three-file cert envelope to a streamed response against the Council's brain — a Rust MoE inference server on one Mac Mini, mTLS-only, OpenAI-compatible, one request at a time.
+description: From a three-file cert envelope to a streamed response against the Council's brain — a Rust MLX inference server on one Mac Mini, mTLS-only, OpenAI-compatible, one request at a time.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -9,7 +9,7 @@ import { Aside } from '@astrojs/starlight/components';
 
 Someone hands you three PEM files, a hostname, and the number 1337. That is the whole onboarding ceremony for the smartest process in the haus. No login page, no API-key modal, no free tier — just a certificate and a Mac Mini in Quebec that will think hard about your question and answer exactly one at a time.
 
-`sanctum-mlx` is the Council's brain: a Rust HTTP server that loads a 35-billion-parameter mixture-of-experts model on a single Mac Mini and serves it over an OpenAI-compatible API. It is what every Jedi in the haus talks to when they need to think out loud — Yoda weighing strategy, Windu sizing up a threat, Mundi doing the arithmetic. You have been handed a beta key. Please be gentle with it.
+`sanctum-mlx` is the Council's brain: a Rust HTTP server that loads a 27-billion-parameter dense model (`Qwen3.8-27B-4bit`) on a single Mac Mini and serves it over an OpenAI-compatible API. It is what every Jedi in the haus talks to when they need to think out loud — Yoda weighing strategy, Windu sizing up a threat, Mundi doing the arithmetic. You have been handed a beta key. Please be gentle with it.
 
 This page is the shortest path from "I have a cert envelope" to "I have a streamed response." For the why — where this brain sits and who decides to call it — read the [Smart Router](/architecture/dynamic-model-routing/) and the [Living Force](/architecture/living-force/).
 
@@ -19,16 +19,16 @@ This page is the shortest path from "I have a cert envelope" to "I have a stream
 |---|---|
 | Endpoint | `https://<host>:1337/v1/chat/completions` |
 | Auxiliary | `https://<host>:1337/v1/models` |
-| Model you send | `qwen3.6-35b-a3b-4bit` (in the request body) |
+| Model you send | `Qwen3.8-27B-4bit` (in the request body) |
 | Model you get back | the snapshot hash — see below |
 | Auth | mutual TLS (no bearer, no API key) |
 | Transport | HTTP/1.1 over TLS 1.3; SSE for streams |
 | Concurrency | one in-flight request, GPU-dispatch mutex |
 
-The model is Qwen3.6-35B-A3B-4bit — a sparse MoE with about three billion active parameters per token (plus a Qwen3.6-27B-4bit secondary resident in the same process via dual-residency). The base is genuinely strong at reasoning; the Council's voice and refusal posture come from the system prompt each Jedi wears, not from a fine-tune baked into these weights.
+The model is `Qwen3.8-27B-4bit` — a hybrid dense 27B checkpoint paired with DFlash2 speculative decoding (succeeded the retired 35B MoE). The base is genuinely strong at reasoning; the Council's voice and refusal posture come from the system prompt each Jedi wears, not from a fine-tune baked into these weights.
 
 <Aside type="note">
-The `model` field is asymmetric. You send `qwen3.6-35b-a3b-4bit`; the response (and `/v1/models`) echoes the HuggingFace snapshot hash — a 40-character string like `38740b84…` — because the server names the model after the directory it loaded from, and that directory is `…/snapshots/<hash>`. The slug you sent is not validated against it; any string is accepted. Don't assert on `response.model` until the server learns to wear a friendly name.
+The `model` field is asymmetric. You send `Qwen3.8-27B-4bit`; the response (and `/v1/models`) echoes the model directory name or snapshot hash — a 40-character string like `38740b84…` — because the server names the model after the directory it loaded from. The slug you sent is not validated against it; any string is accepted. Don't assert on `response.model` until the server learns to wear a friendly name.
 </Aside>
 
 ## Step 1 — get a cert envelope
@@ -55,8 +55,8 @@ curl --cert ~/.sanctum-mlx-beta/client.crt \
      --cacert ~/.sanctum-mlx-beta/sanctum-ca.crt \
      -H "Content-Type: application/json" \
      -d '{
-       "model": "qwen3.6-35b-a3b-4bit",
-       "messages": [{"role":"user","content":"In one sentence: what is a mixture of experts?"}],
+       "model": "Qwen3.8-27B-4bit",
+       "messages": [{"role":"user","content":"In one sentence: what is speculative decoding?"}],
        "max_tokens": 256
      }' \
      https://<host>:1337/v1/chat/completions
@@ -71,7 +71,7 @@ Add `"stream": true` and consume the response as Server-Sent Events. The format 
 ```bash
 curl -N --cert ... --key ... --cacert ... \
      -H "Content-Type: application/json" \
-     -d '{"model":"qwen3.6-35b-a3b-4bit","stream":true,"messages":[...]}' \
+     -d '{"model":"Qwen3.8-27B-4bit","stream":true,"messages":[...]}' \
      https://<host>:1337/v1/chat/completions
 ```
 

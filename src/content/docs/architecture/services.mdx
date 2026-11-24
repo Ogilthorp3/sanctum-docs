@@ -75,9 +75,9 @@ This is where Apple Silicon earns its keep. The M4 Pro runs local inference, tex
 |---------|------|----------|-------------|-------------|
 | Coder MLX | `1338` | — | `com.sanctum.mlx-coder` (retired) | RETIRED 2026-06-07. Hosted `Qwen2.5-Coder-14B-Instruct-4bit` on a pure-Rust `sanctum-mlx-coder` server, having replaced the LM Studio app. Retired once Codestral 22B on `:3301` proved a sufficient single coder seat; GGUF archived, weights reclaimed, the `:1338` seat torn down. (The separate LM-Studio-era `:1234` socat bridge went with it — retired 2026-06-07; see the note below.) |
 | Council MLX | `1337` | leet — the local workhorse | `com.sanctum.mlx` | Pure-Rust `sanctum-mlx` server. Qwen3.8-27B-4bit, one model in one process that also serves Cilghal's ablated door on `:6669`, no adapter since 2026-10-02, mTLS-only. The 27B returned as a selectable secondary on 2026-07-15 — the prior `--draft-model` 27B (a backwards draft for the 3B-active MoE) and the Devstral `:1337` secondary were dropped, Devstral consolidated to its dedicated `:3301` seat (~14 GB reclaimed). The 27B-distilled era originally ended 2026-04-22 when the council moved to the 35B MoE. The 35B MoE, which ran with the TurboQuant Slice 4a fused Metal kernel, and the dual residency are retired; the brain has run Qwen3.8-27B since August. |
-| TTS Voice | `8008` | BOOB — Yoda's mouth | `com.sanctum.tts` | Rust post-quantum `sanctum-tts` front door (X25519MLKEM768/ML-DSA, signed, audited) proxying to the Chatterbox `cbx-yoda` engine on `8011` (`com.sanctum.yoda-tts-worker`). Migrated from Qwen3-TTS 2026-06-29; XTTS retired 2026-04-19. |
+| TTS Voice | `8008` | Calculator Classic — Yoda's mouth | `com.sanctum.tts` | Rust post-quantum `sanctum-tts` front door (X25519MLKEM768/ML-DSA, signed, audited) proxying to the Chatterbox `cbx-yoda` engine on `8011` (`com.sanctum.yoda-tts-worker`). Migrated from Qwen3-TTS 2026-06-29; XTTS retired 2026-04-19. |
 | Voice Agent | 1138 | — | `com.sanctum.yoda-agent` | Yoda voice interface (LiveKit agent). Integrates with Sonos speakers via the Sonos Bridge REST API on port 1969. |
-| Sanctum Proxy | `4040` | .40 caliber — the gateway | `com.sanctum.proxyd` | LLM routing proxy on port 4040 (binary: `proxyd`). System-domain LaunchDaemon — one of the W6/W7 six. Single Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. Not to be confused with `com.sanctum.server`, which serves an MLX model on :8900. |
+| Sanctum Proxy | `4040` | Double-404 — the gateway | `com.sanctum.proxyd` | LLM routing proxy on port 4040 (binary: `proxyd`). System-domain LaunchDaemon — one of the W6/W7 six. Single Rust binary handling tiered model routing, prompt caching, request sanitization, PII scrubbing, and automatic fallback. KeepAlive enabled. Not to be confused with `com.sanctum.server`, which serves an MLX model on :8900. |
 | Memory Vault | `42069` | Nice. | `com.sanctum.memory-vault` | Long-term memory store for agent context. SQLite vault at `~/.sanctum/memory/.vault.db`; consolidates nightly at 04:17 via `com.sanctum.memory-consolidate`. SSE transport for MCP clients. |
 | Jina Reranker | `42070` | The Pair Port | `com.sanctum.reranker` | Jina v2 reranking server. Companion to Memory Vault on 42069 — the two travel together by design. Improves RAG precision for long-context memory queries. |
 
@@ -109,10 +109,10 @@ The **Sanctum Proxy** (port 4040) intercepts all requests and applies a 7-step p
 
 ```yaml
 services:
-  mlx_devstral:
+  mlx_coder:
     enabled: true
-    port: 3301                         # CODER role — replaced mlx_coder :1338 (retired 2026-06-07)
-    model_path: ~/models/mlx/Devstral-Small-2-24B-Instruct-2512-4bit
+    port: 3301                         # CODER role — mTLS, replaced mlx_coder :1338 (retired 2026-06-07)
+    model_path: ~/models/mlx/Ornith-1.5-9B-MLX-4bit
   council_mlx:
     enabled: true
     port: 1337                         # mTLS
@@ -130,21 +130,21 @@ services:
 ```
 
 <Aside type="note">
-The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and the CODER role is now Devstral-Small-2-24B on `:3301` (`com.sanctum.mlx-devstral-rust`) — the `sanctum-mlx-coder` `:1338` seat retired 2026-06-07. The clean ending finally got clean: the `com.sanctum.lmstudio-bridge` job was booted out and nothing answers on `:1234` anymore (the plain-HTTP forward across the Mac↔VM bridge was retired 2026-06-07). `com.sanctum.council-guardian` is the one that stayed — still loaded, slimmed since, and watching the council rather than a retired app.
+The pre-2026-05-11 catalog had a `lm_studio: port: 1234` block here. LM Studio was first retired in favor of `sanctum-mlx-coder` once the pure-Rust path proved equal quality with stricter operational controls (mTLS, manifest verification, signed weights), and the CODER role now runs `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA on `:3301` (`haus.sanctum.mlx-coder`, succeeding Muse-Glimmer-30B and Devstral) — the `sanctum-mlx-coder` `:1338` seat retired 2026-06-07. The clean ending finally got clean: the `com.sanctum.lmstudio-bridge` job was booted out and nothing answers on `:1234` anymore (the plain-HTTP forward across the Mac↔VM bridge was retired 2026-06-07). `com.sanctum.council-guardian` is the one that stayed — still loaded, slimmed since, and watching the council rather than a retired app.
 </Aside>
 
 ## Network Services
 
 Bridges and tunnels. The unglamorous plumbing that connects a closet-mounted Mac Mini to a router, a mesh access point, a VM with no internet, and the wider world beyond the front door. If the core services are the organs, these are the nervous system -- delicate, invisible when they work, and the first thing you suspect when something goes wrong.
 
-Eight of them. One is an SSH tunnel. One is an mDNS broadcaster. One talks to the router by first authenticating through a cloud server three thousand miles away. One talks to Sonos speakers because Docker couldn't. Home networking in 2026 is the kind of helpful that gets people killed in horror movies.
+Eight of them. One is an SSH tunnel. One is an mDNS broadcaster. One talks to the router by first authenticating through a cloud server three thousand miles away. One talks to Sonos speakers because Docker couldn't. Home networking in 2026 is the kind of helpful that sends characters running upstairs in horror movies.
 
 | Service | Port | Codename | LaunchAgent | Description |
 |---------|------|----------|-------------|-------------|
 | SanctumBridge | `4078` | The FDA Neighbor | `com.sanctum.bridge` | Read-only HTTP proxy to FDA-protected SQLite databases (iMessage, WhatsApp, Contacts, Calendar). Jocasta-mcp queries through it so the MCP server itself doesn't need Full Disk Access. |
-| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `com.sanctum.firewalla-bridge-watchdog` | HTTP bridge to the Firewalla Gold Pro router P2P API (port 8833). Bound to `0.0.0.0` so the VM can reach it. KeepAlive enabled. The bare `com.sanctum.firewalla` one-shot plist is retired; the watchdog supervises the bridge now. |
+| Firewalla Bridge | `1984` | Orwell — Big Brother watches | `haus.sanctum.firewalla` | Pure-Rust [`sanctum-firewalla`](/architecture/sanctum-firewalla/) 1.0 bridge (+ internal SDK sidecar) to the Firewalla Gold Pro P2P API (port 8833). Loopback-bound (`127.0.0.1:1984`) with constant-time bearer auth and per-peer lockout. KeepAlive enabled. |
 | Sonos Bridge | `1969` | — | `com.openclaw.sonos-bridge` | Native Mac SoCo REST API for 10 Sonos speakers. Replaces HA's built-in Sonos integration. Handles TTS via the sanctum-tts dispatcher (Rust PQ front door on port 8008, Chatterbox `cbx-yoda` engine on 8011; migrated from Qwen3-TTS 2026-06-29), volume control, grouping, and announcements. KeepAlive enabled. |
-| Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (`192.0.2.X` ports 80 and 5000). KeepAlive enabled. |
+| Orbi Bridge | 18080 / 18085 | — | `com.sanctum.orbi-bridge` | Socat bridge forwarding traffic from the VM to the Orbi access point (`10.0.0.X` ports 80 and 5000). KeepAlive enabled. |
 | Cloudflare Tunnel | -- | — | `com.sanctum.tunnel` | Named tunnel `manoir-hub`, token-mode (`cloudflared tunnel run`, no local config.yml — the routes live in the Zero Trust dashboard, the token in Keychain as `cloudflare-tunnel-token`). Exposes `health.example.net` via Cloudflare Zero Trust. KeepAlive enabled. |
 | Network Control | `4007` | 007 — licensed to ping | Lima port-forward | Forwards `127.0.0.1:4007` to the VM for Home Assistant integrations. Used to be a dedicated SSH-tunnel LaunchAgent (`com.sanctum.ha-tunnel`, retired 2026-05-01); Lima/vz now provides the forward itself, so the agent was retired and never replaced. |
 | Health Ingester | `10101` | binary heartbeat | `com.sanctum.health-tunnel` | SSH tunnel forwarding port 10101 to the VM for the health data ingester. KeepAlive enabled. |

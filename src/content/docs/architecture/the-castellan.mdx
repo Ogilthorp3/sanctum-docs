@@ -7,11 +7,11 @@ description: A Rust LaunchDaemon that programs macOS's own memory arbiter — je
 
 The Temple holds the kyber. The Council reaches for it through seven Jedi. But somebody has to keep the building — open its doors, ring its bell, and decide who eats first when the larder runs low. That officer is the **Castellan**.
 
-His launchd label is `haus.sanctum.castellan`. His codename — used in the spec, the commits, and the lore — is **Gollum**, because he counts the precious memory all day and assigns it to its rightful keeper. The codename matters. Gollum the character is a warning about the precious: he had it, it consumed him, he could not put it down. The Castellan is the deliberate inversion. He has no authority his death can revoke and no information his death can lose. He was built so the precious cannot consume him.
+His launchd label is `haus.sanctum.castellan`. His codename — used in the spec, the commits, and the lore — is **Gollum**, because he counts the precious memory all day and assigns it to its rightful keeper. The codename matters. Gollum the character is a warning about the precious: he had it, it consumed him, he could not put it down. The Castellan is the deliberate inversion. He has no authority an outage can revoke and no information a crash can lose. He was built so the precious cannot consume him.
 
 ## Why the haus hired him
 
-A 64 GB Mac Mini hosts the Temple's kyber — Cilghal, the 35-billion-parameter MoE, 21 GB resident at idle and 41 GB at peak under a full 32K-token context. It also hosts an on-call code seat — Devstral Small 2 24B, 13 GB when she's serving and effectively zero when she's idle. Plus a Lima VM and the apps the operator actually uses. The arithmetic doesn't work unless somebody keeps watch.
+A 64 GB Mac Mini hosts the Temple's kyber — the `Qwen3.8-27B-4bit` council brain on `:1337`, ~21 GB resident in typical service. It also hosts the dedicated code seat — `Ornith-1.5-9B-MLX-4bit` on `:3301` (`haus.sanctum.mlx-coder`), capped at 12 GB Metal memory with 2 GB wired. Plus a Lima VM and the apps the operator actually uses. The arithmetic doesn't work unless somebody keeps watch.
 
 For four months that watch was a trio — `sanctum-admit`, `sanctum-pressure-valve`, and `ram-sentinel`. They all measured the wrong metric. RSS reported Cilghal as 45 megabytes. They argued with each other. The pressure-valve shed; the admit-controller admitted; the sentinel restarted a desktop app because it had the highest RSS in the table. None of them could see what was actually using the box.
 
@@ -23,9 +23,9 @@ macOS exposes the truth through `libproc.proc_pid_rusage(RUSAGE_INFO_V6).ri_phys
 
 | Process | RSS | `phys_footprint` |
 |---|---|---|
-| Cilghal (sanctum-mlx, 35B-A3B-4bit) | 45 MB | 21 GB current, 41 GB lifetime peak |
-| Devstral (sanctum-mlx-devstral, 24B-4bit) | 17 MB | 13 GB current |
-| Lima VM (sanctum-vm) | 2.4 GB | 2.4 GB |
+| Council brain (`haus.sanctum.mlx`, Qwen3.8-27B-4bit) | 45 MB | ~21 GB typical |
+| Coder seat (`haus.sanctum.mlx-coder`, Ornith-1.5-9B-MLX-4bit) | 17 MB | ~7–12 GB active |
+| Lima VM (`sanctum-vm`) | 2.4 GB | 2.4 GB |
 
 ## What he does — and what he does not
 
@@ -33,22 +33,22 @@ He does NOT arbitrate memory. The kernel already has an arbiter — compression 
 
 He runs as a root LaunchDaemon — `/Library/LaunchDaemons/haus.sanctum.castellan.plist`, executing a root-owned copy at `/usr/local/libexec/sanctum/castellan` — because programmatic cross-process jetsam adjustment is a privileged operation on macOS. From that vantage he uses two kernel-mediated levers:
 
-- **`memorystatus_control`** sets per-PID jetsam priority bands. Cilghal goes to `CRITICAL` (190); Devstral to `IDLE` (band 0, first to die); the Lima VM to `HOME`; the Castellan himself to `CRITICAL` so the keeper of the Temple cannot be the first thing the kernel kills.
-- **`metal-wired-limit-mb`** at each seat's launch — Cilghal's 18 GB of weights are wired and unswappable; Devstral's 2 GB are wired with the rest pageable, so her pages yield first under pressure.
+- **`memorystatus_control`** sets per-PID jetsam priority bands. The council brain goes to `CRITICAL` (190); the coder seat to `IDLE` (band 0, first to yield); the Lima VM to `HOME`; the Castellan himself to `CRITICAL` so the keeper of the Temple cannot be the first thing the kernel evicts.
+- **`metal-wired-limit-mb`** at each seat's launch — the council brain's 18 GB of weights are wired and unswappable; the coder seat's 2 GB are wired with the rest pageable, so its pages yield first under pressure.
 
-Each seat's plist also carries a `JetsamPriority` integer — Cilghal `190`, Devstral `0` — so the band is correct from the moment `launchd` spawns the process, before the Castellan's first loop tick. The active loop re-asserts it every two seconds; the plist value is the birth floor.
+Each seat's plist also carries a `JetsamPriority` integer — council brain `190`, coder seat `0` — so the band is correct from the moment `launchd` spawns the process, before the Castellan's first loop tick. The active loop re-asserts it every two seconds; the plist value is the birth floor.
 
 He then runs a quiet two-second loop: re-measure, consider idle-bootouts of the on-call seat, write a heartbeat that another small process will read in a moment.
 
 ## The three doctrines
 
-1. **Kernel-as-arbiter.** He never decides who dies. The kernel does. He only configures policy. The active loop does only what the kernel cannot do declaratively — load, unload, and refuse.
+1. **Kernel-as-arbiter.** He never decides what gets evicted. The kernel does. He only configures policy. The active loop does only what the kernel cannot do declaratively — load, unload, and refuse.
 2. **Typical, not worst case.** He plans each seat at what it typically holds while serving, measured — not at its peak (Bert's call, 2026-10-03). Transients belong to the safety floor and to macOS compression; what he watches live is the kernel's own available figure, swap depth and pressure. A request that does not fit queues, falls through to a cloud upstream, or refuses — it never evicts the brain.
 3. **Deadman-timed everything.** Every SIGSTOP he sends gets a tombstone file under `/Library/Application Support/Sanctum/Castellan/run/stopped/` named for the PID. A companion process — `castellan-deadman`, a separate root LaunchDaemon — watches his heartbeat at `/Library/Application Support/Sanctum/Castellan/run/heartbeat`. If the heartbeat goes stale for more than sixty seconds, the companion SIGCONTs every process the Castellan left stopped and clears the tombstones.
 
-## When the Castellan dies
+## When the Castellan goes offline
 
-The protection lives in *kernel state*, not in his RAM. Jetsam bands set by `memorystatus_control` persist until reboot or explicit change. Wired Metal limits persist until the seat process exits. If the Castellan crashes, gets killed, or wedges, the bands hold, the wired pages hold, jetsam continues to shelter Cilghal and shed Devstral correctly without him. `launchd` restarts him on `KeepAlive` and he rebuilds his view from `phys_footprint` on boot. He carries no state worth saving.
+The protection lives in *kernel state*, not in his RAM. Jetsam bands set by `memorystatus_control` persist until reboot or explicit change. Wired Metal limits persist until the seat process exits. If the Castellan crashes, gets evicted, or wedges, the bands hold, the wired pages hold, and jetsam continues to shelter the council brain and shed the coder seat correctly without him. `launchd` restarts him on `KeepAlive` and he rebuilds his view from `phys_footprint` on boot. He carries no state worth saving.
 
 Two hard rules make this real. First, the Cathedral's critical path never goes through him — Cilghal does not call him, proxyd's council-mlx route does not call him, and only the optional `council-code` ensure-loaded hook does, and on a non-200 it falls through to the next upstream rather than wedging the request. Second, every SIGSTOP is deadman-timed: a stopped process the Castellan never SIGCONTs is undone within ninety seconds — by the companion — without him.
 

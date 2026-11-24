@@ -41,15 +41,15 @@ router:
       url: https://127.0.0.1:1337/v1         # mTLS-only
       models: [yoda, mothma, windu, cilghal, mundi, jocasta, quigon,
                council-secure, council-ops, council]
-      description: "Qwen3.6-35B-A3B - haus default (0.957 on Olympics)"
+      description: "Qwen3.8-27B-4bit - haus default brain (:1337 mTLS)"
       fallback_urls: [https://100.0.0.55:8903/v1, http://127.0.0.1:8901/v1]
       ca_cert_path:  ~/.sanctum/certs/ca.crt
       client_cert_path: ~/.sanctum/certs/clients/sanctum-server.crt
       client_key_path:  ~/.sanctum/certs/clients/sanctum-server.key
     coder:
-      url: http://127.0.0.1:3301/v1          # sanctum-mlx-devstral-rust, native MLX seat
+      url: https://127.0.0.1:3301/v1         # haus.sanctum.mlx-coder, native MLX seat (mTLS)
       models: [coder, code-*, "*coder*", ahsoka]
-      description: "Devstral-Small-2-24B-Instruct-2512-4bit - pure code + Ahsoka (chalet 16 GB)"
+      description: "Ornith-1.5-9B-MLX-4bit + Qui-Gon LoRA - pure code + compact local lane"
     cloud:
       url: http://100.0.0.55:3456/v1         # Claude Max bridge
       models: [opus, claude-opus-max, claude-*, cloud, escalation]
@@ -64,26 +64,26 @@ router:
   default: council-secure
 ```
 
-Two things in that block earn a second look. The `cloud` backend's primary `url` is the **Claude Max bridge** — a small proxy on `:3456` that fronts the Max subscription — with metered OpenRouter as the *fallback*, not the other way around. And `quigon` lives under `council-secure`, not `coder`: the `quigon` **model alias** resolves to the local 35B. Qui-Gon-the-*agent* still gets Devstral, but he gets there through the agent layer (`council-code`), not by anyone typing `model: "quigon"`. More on that two-layer split below.
+Two things in that block earn a second look. The `cloud` backend's primary `url` is the **Claude Max bridge** — a small proxy on `:3456` that fronts the Max subscription — with metered OpenRouter as the *fallback*, not the other way around. And `quigon` lives under `council-secure`, not `coder`: the `quigon` **model alias** resolves to the local 27B brain. Qui-Gon-the-*agent* still gets `Ornith-1.5-9B-MLX-4bit`, reaching it through the agent layer (`council-code`), not by anyone typing `model: "quigon"`. More on that two-layer split below.
 
 ## Jedi → backend assignments
 
-This table reflects the **post-2026-04-28 routing**, when the Council went heterogeneous. Every Jedi now starts on a different model family by default and falls back to the local Qwen3.6 if the primary path fails. The **Primary** column is the agent-layer assignment — the model each Jedi *gets* when you talk to them through `openclaw agent` — which is the routing that matters day to day. (The Smart Router's `model`-alias resolution differs for a couple of seats; see the two-layer note below.) See [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for why we did this and what it bought us.
+This table reflects the heterogeneous Council routing. Every Jedi starts on a different model family by default and falls back to the local `Qwen3.8-27B-4bit` brain if the primary path fails. The **Primary** column is the agent-layer assignment — the model each Jedi *gets* when you talk to them through `openclaw agent` — which is the routing that matters day to day. (The Smart Router's `model`-alias resolution differs for a couple of seats; see the two-layer note below.) See [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for why we did this and what it bought us.
 
 | Jedi | Primary | Fallback | Why |
 |---|---|---|---|
 | **Yoda** | **cloud — Claude Opus (Max, latest)** (Max sub via `<MINI>:3456`) | council-secure | Synthesis, council coordination, novel reasoning; the seat where one wrong call is expensive |
-| **Mundi** | **cloud — Claude Opus (Max, latest)** (Max sub) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
-| **Qui-Gon** | **coder — Devstral-Small-2-24B-Instruct-2512-4bit** (`sanctum-mlx-devstral-rust` native MLX `<MINI>:3301`, via the agent-layer `council-code` alias) | council-secure | Dense code gen, infrastructure pragmatism. (Was Qwen2.5-Coder-14B on `:1338` until 2026-06-07; that seat — and the LM Studio `:1234` socat bridge — are now retired, weights deleted, and every model is served by a native MLX seat.) |
-| **Windu** | **spatial — Gemini 3.1 Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
-| **Cilghal** | **council-secure — Qwen3.6-35B-A3B** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
-| **Mothma** | council-secure — Qwen3.6-35B-A3B | council-secure | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — local-only by mandate |
-| **Jocasta** | council-secure — Qwen3.6-35B-A3B | council-secure | Email / CRM; privacy-first |
-| **Ahsoka** | coder — Devstral-Small-2-24B-Instruct-2512-4bit (when reachable on the haus `:3301` seat) | — | Runs on a Mac Mini M1 16 GB at the chalet; 35B won't fit, and Devstral won't fit there either — the chalet's own local coder is an open decision (last config: Qwen2.5-Coder-14B, offline) |
+| **Mundi** | **cloud — Claude Opus / Grok** (Max sub / OpenRouter) | council-secure | Fund decisions, tax / FBAR edge cases, financial reasoning |
+| **Qui-Gon** | **coder — `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA** (`haus.sanctum.mlx-coder` native MLX `<MINI>:3301`, via the agent-layer `council-code` alias) | council-secure | Dense code gen, infrastructure pragmatism. (Succeeded Muse-Glimmer-30B, Devstral-Small-2-24B, and the retired `:1338` Qwen2.5-Coder-14B / `:1234` LM Studio bridge — every local model now rides native MLX.) |
+| **Windu** | **spatial — Gemini Pro** (Google AI Studio Ultra) | council-secure | Spatial reasoning is Gemini's strongest discipline — perimeter, network topology, zone maps |
+| **Cilghal** | **council-secure — `Qwen3.8-27B-4bit`** (sanctum-mlx, mTLS-only) | (no remote fallback) | Health data is privacy-critical; stays in the haus, always |
+| **Mothma** | council-secure — `Qwen3.8-27B-4bit` | council-secure | SystemdLog 0.94, LaunchAgent 0.88 on Olympics — local-only by mandate |
+| **Jocasta** | council-secure — `Qwen3.8-27B-4bit` | council-secure | Email / CRM; privacy-first |
+| **Ahsoka** | local chalet seat (`Qwen2.5-7B-Instruct-4bit` on chalet `:1338`) | — | Runs on a Mac Mini M1 16 GB at the chalet; sized to fit cleanly inside 16 GB unified memory |
 
 Cloud Opus runs through the Claude Max subscription bridge at `<MINI>:3456`, not the metered Anthropic API. Routine Council questions consume zero API credits. Bring-out-the-good-china reasoning happens for the price of the monthly subscription, not per-token.
 
-The Olympics (2026-04-23) informed this lineup: Qwen3.6-35B-A3B at 0.957 is still the haus default for any seat without a domain-specific upgrade — Mothma/Jocasta/Cilghal stay there because their work is privacy-critical or local-by-mandate. Coder-14B (0.929) held the coding bench back then; it has since been retired outright, coding-specific work goes to Devstral on `:3301`, and the chalet's local coder is an open decision. Claude Opus (Max, latest) and Gemini 3.1 Pro now sit at the head of two seats each, not as escalations. See [Model Comparison](./model-comparison) for the full per-task score breakdown and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for the doctrine that made this routing the default rather than the escalation.
+The Olympics (2026-04-23) started this heterogeneous lineup, and subsequent head-to-head exams rolled the local seats forward: `Qwen3.8-27B-4bit` holds the `:1337` brain seat for Mothma/Jocasta/Cilghal because their work is privacy-critical or local-by-mandate, while `Ornith-1.5-9B-MLX-4bit` (+ Qui-Gon LoRA) holds `:3301` for coding after outscoring Muse-Glimmer-30B and Devstral in a 9B footprint. Claude Opus (Max, latest) and Gemini Pro sit at the head of the cloud seats. See [Model Comparison](./model-comparison) for the benchmark history and [(Neuro)diversity is Paramount](./neurodiversity-doctrine.mdx) for the doctrine that made this routing the default rather than the escalation.
 
 ## Two routing layers, one Council
 
@@ -96,7 +96,7 @@ There are now two routers in front of every Council request, and they answer dif
 
 The agent layer chooses the model from the agent's role. The Smart Router chooses the backend from the model name. They compose: an agent call resolves to a model alias on the agent side, then the Smart Router (or proxyd, the per-tier router) maps that alias to a backend. The flow `openclaw agent --agent main → council-max-thinking → :3456 (Claude Max bridge) → latest Opus` is the canonical path for Yoda after 2026-04-28.
 
-This is exactly why Qui-Gon reads two ways depending on the door you knock on. `openclaw agent --agent quigon` resolves to `council-code` and lands on Devstral at `:3301` — the agent layer knows Qui-Gon writes code. But hit the Smart Router with `model: "quigon"` and you get the local 35B on `council-secure`, because there "quigon" is just a persona alias, and personas live with the Council. Same name, two layers, two brains — and knowing which door you used is half of debugging a response that doesn't sound right.
+This is exactly why Qui-Gon reads two ways depending on the door you knock on. `openclaw agent --agent quigon` resolves to `council-code` and lands on `Ornith-1.5-9B-MLX-4bit` at `:3301` — the agent layer knows Qui-Gon writes code. But hit the Smart Router with `model: "quigon"` and you get the local 27B brain on `council-secure`, because there "quigon" is just a persona alias, and personas live with the Council. Same name, two layers, two brains — and knowing which door you used is half of debugging a response that doesn't sound right.
 
 To verify the agent-layer routing is healthy:
 

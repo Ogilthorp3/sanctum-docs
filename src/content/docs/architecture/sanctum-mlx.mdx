@@ -18,19 +18,19 @@ The active inference layer is the cathedral fork at `~/Projects/sanctum-rs-cathe
 | Binary | Port | Model | Role |
 |--------|------|-------|------|
 | `sanctum-mlx` | mTLS `:1337` | Qwen3.8-27B-4bit (dense, model_type `qwen3_5`), no adapter since 2026-10-02 | Council seats (yoda, mothma, windu, cilghal, mundi, jocasta, quigon) |
-| `sanctum-mlx` (label `haus.sanctum.mlx-coder`) | `:3301` | Muse-Glimmer-30B-4bit as of 2026-10-05 (Devstral-Small-2-24B before it) | Coder seat + Qui-Gon's code path |
+| `sanctum-mlx` (label `haus.sanctum.mlx-coder`) | mTLS `:3301` | `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA as of 2026-11-10 (succeeded Muse-Glimmer-30B and Devstral-Small-2-24B) | Coder seat + Qui-Gon's code path |
 
 The seats differ in exactly the ways their threat models differ:
 
 | Seat | Manifest gate | Binds | Listener |
 |------|---------------|-------|----------|
 | Council `:1337` | ed25519-signed (`ed25519` over `shasum -a 256`) | loopback, the Mini's Tailscale IP, bridge100 `10.10.10.1` (Lima VM path) | mTLS-only (`--no-plain`) — no plain-HTTP or bearer path left to bypass |
-| Devstral `:3301` | plain SHA-256 (no `.sig` shipped for it yet) | loopback only, `127.0.0.1:3301` | local by design; the VM and MBP reach it through the council router, not directly |
+| Coder `:3301` | ed25519-signed (`ed25519` over `shasum -a 256`) | loopback `127.0.0.1:3301` + bridge100 `10.10.10.1` | mTLS-only (`--no-plain`) — runs `Ornith-1.5-9B-MLX-4bit` + `quigon-ornith-9b-v8-svd-r16` |
 | **Ahsoka satellite `:1338` (chalet)** | optional (warn-only until signed) | loopback `127.0.0.1:1338` | **plain HTTP** for openclaw; Qwen2.5-7B-Instruct-4bit via **qwen2** path; runs as user `sanctum` |
 
 The satellite seat is the same binary family (`sanctum-mlx` + colocated `mlx.metallib`), not a third fork. Field note: [Ahsoka cathedral on the edge](/operations/2026-08-07-ahsoka-cathedral-on-the-edge/).
 
-A disaster fallback, `com.sanctum.mlx-py-fallback`, sits promote-only on `:8901` — the same Qwen3.6-35B-A3B-4bit as `:1337` but an independent Python mlx-lm stack, so a corrupt or missing Rust binary (which kills both seats, since they share one binary file) still leaves a different-stack server able to take over at full parity. It is not always-warm: a resident 35B would sit ~20 GB on top of the live Rust 35B and push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken agent to free RAM, then kickstarting the Python seat. Transient failover is handled a layer up, in proxyd routing (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust seats run under launchd (`com.sanctum.mlx`, `com.sanctum.mlx-devstral-rust`) with KeepAlive, load weights from disk, and never bind `0.0.0.0`.
+A disaster fallback, `com.sanctum.mlx-py-fallback`, sits promote-only on `:8901` — an independent Python mlx-lm stack, so a corrupt or missing Rust binary (which takes down both seats, since they share one binary file) still leaves a different-stack server able to take over at parity. It is not always-warm: a second resident 27B/35B would push the 64 GB Mini deep into swap, so `council-integrity-check` promotes it only on unrecoverable Rust-binary failure — booting the broken agent to free RAM, then kickstarting the Python seat. Transient failover is handled a layer up, in proxyd routing (`council-mlx` to `council-code` to `claude-cli-offline`). Both Rust seats run under launchd (`haus.sanctum.mlx`, `haus.sanctum.mlx-coder`) with KeepAlive, load weights from disk, and never bind `0.0.0.0`.
 
 The `sanctum-server` smart router on `:8055` (BOSS, [Smart Router Cathedral](/architecture/smart-router-cathedral/)) fronts both binaries with four backends (`council-secure`, `coder`, `spatial`, `cloud`) and five tiers of defense: breaker, budget, latency EMA, quality detectors. Retired plumbing — the old `:1338` coder seat, the socat `:1234` bridges, all of LM Studio — is in the file map below.
 
@@ -60,9 +60,9 @@ The server exposes an OpenAI-compatible `/v1/chat/completions` endpoint, hot-swa
 |--------------|--------|-------|
 | `qwen3_5_moe` | Reference | Qwen3.6-35B-A3B-4bit MoE, production on `:1337` before the dense 27B returned. Native multimodal (vision canary live 2026-05-10). |
 | `qwen2` | Retired | Was Qwen2.5-Coder-14B-Instruct-4bit on `:1338` (YaRN factor=4 RoPE scaling). Retired 2026-06-07; the coder role moved to Codestral-22B-v0.1-4bit on `:3301`. |
-| `qwen3_5` (dense) | Production | Qwen3.8-27B-4bit on `:1337` (48 of 64 layers linear attention) with the DFlash2 draft model, as of 2026-10-05. The original v0.2.0 path, back in the seat. |
-| `mistral`, `mistral3` | Reference | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only), on `:3301` until Muse-Glimmer-30B took the seat. The `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
-| `muse_glimmer` | Production | Muse-Glimmer-30B-4bit on `:3301`, the backup brain, as of 2026-10-05. |
+| `qwen3_5` (dense) | Production | `Qwen3.8-27B-4bit` on `:1337` (48 of 64 layers linear attention, DFlash2 draft model) and `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA on `:3301` (`haus.sanctum.mlx-coder`, since 2026-11-10). |
+| `mistral`, `mistral3` | Reference | Devstral-Small-2-24B-Instruct-2512-4bit (Mistral-arch dense, text-only), previously on `:3301`. The `"mistral"` arm rebuilds the dense `ModelInput` from the shared fields — no linear-attention/SSM slots. |
+| `muse_glimmer` | Reference | Former `:3301` backup brain (2026-10-05 to 2026-11-10); retired when `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA outscored it in a 9B footprint. |
 | Mixtral (sparse MoE) | Not yet supported | The loader handles dense `mistral` but has no Mixtral expert-grid arm yet. Any other `model_type` is refused outright with a message naming the six it does load. |
 
 Two cross-request tricks keep it fast and honest:
@@ -70,7 +70,7 @@ Two cross-request tricks keep it fast and honest:
 | Trick | Detail |
 |-------|--------|
 | LCP prompt-cache reuse | Matched on longest common prefix, capped at `len - 2` so the suffix is always `T_q ≥ 2` — MLX's decode- and prefill-kernel SDPA diverge when the suffix is exactly one token, giving byte-different responses to byte-identical prompts; the two-token margin makes the cache byte-identical (commit `0123773`) |
-| PLD self-speculation | On by default on `:1337` via `SANCTUM_MLX_PLD_MAX_LOOKUP=5` and `SANCTUM_MLX_PLD_NGRAM_SIZE=3`; uses the prompt as its own draft model — no second model, no `flash-attn` wheel-build dance. Devstral sets no PLD env vars, so the coder seat runs the code default |
+| PLD self-speculation | On by default on `:1337` via `SANCTUM_MLX_PLD_MAX_LOOKUP=5` and `SANCTUM_MLX_PLD_NGRAM_SIZE=3`; uses the prompt as its own draft model — no second model, no `flash-attn` wheel-build dance. The `:3301` coder seat runs with its own lightweight Metal caps |
 
 The fusion work that got the throughput here is tracked as shipped phases:
 
@@ -399,7 +399,7 @@ All paths are in the cathedral fork at `~/Projects/sanctum-rs-cathedral/`. The o
 | `services/sanctum-mlx/deploy/` | Versioned plist + guardian + canary + drift agents; canonical copies for drift check |
 | `services/sanctum-mlx/test_e2e_sanctum_mlx.sh` | End-to-end mTLS canary battery |
 | `~/Library/LaunchAgents/haus.sanctum.mlx.plist` | Council `:1337` runtime config — mTLS-only (`--no-plain`, `--tls-host` ×3), `SANCTUM_MLX_FUSED_QKV=1`, `FUSED_MLP=1`, PLD env vars, prewarm file, ed25519-signed manifest paths |
-| `~/Library/LaunchAgents/com.sanctum.mlx-devstral-rust.plist` | Coder `:3301` runtime config (Devstral-Small-2-24B-Instruct-2512-4bit) — `--host 127.0.0.1` loopback-only, plain SHA-256 manifest (no `.sig`), no PLD env vars |
+| `~/Library/LaunchAgents/haus.sanctum.mlx-coder.plist` | Coder `:3301` runtime config (`Ornith-1.5-9B-MLX-4bit` + `quigon-ornith-9b-v8-svd-r16` LoRA) — mTLS-only (`--no-plain`), ed25519-signed manifest, `--metal-memory-limit-mb 12000`, `--metal-wired-limit-mb 2048` |
 | `~/Library/LaunchAgents/com.sanctum.mlx-coder.plist` | RETIRED 2026-06-07 — was the coder `:1338` runtime config (`YARN` factor=4, fused QKV/MLP, same PLD knobs); removed when the coder role moved to Codestral |
 | `~/Library/LaunchAgents/com.sanctum.coder-plain-bridge.plist` | RETIRED 2026-06-07 — was the `socat` plain-HTTP `:1234` → mTLS `:1338` shim for legacy callers; gone with the LM Studio decommission |
 | `~/Library/LaunchAgents/com.sanctum.lmstudio-bridge.plist` | RETIRED — the orphan `socat` LISTEN `10.0.0.1:1234` → `127.0.0.1:1234` (dead backend) that outlived the LM Studio decommission; now unloaded, and `:1234` is closed |

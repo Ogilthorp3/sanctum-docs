@@ -67,7 +67,7 @@ nodes:
   manoir:
     type: hub
     tier: primary
-    host: 192.0.2.10
+    host: 10.0.0.10
     tailscale_name: manoir
     ssh_user: neo
     vm:
@@ -85,7 +85,7 @@ nodes:
   mbp:
     type: mobile
     tier: edge
-    host: 192.0.2.111              # DHCP on the haus LAN; varies elsewhere
+    host: 10.0.0.111               # DHCP on the haus LAN; varies elsewhere
     tailscale_name: mbp
     tailscale_ip: 100.0.0.40       # optional cache; resolve live instead
     ssh_user: neo
@@ -116,7 +116,7 @@ The hub is the authoritative node. It runs every service, hosts the VM with the 
 - Runs the reasoning agent cluster (5 Jedi on the VM: Yoda, Cilghal, Mundi, Qui-Gon, Windu; Jocasta runs Mac-side and Mon Mothma on manoir, making seven council seats in all)
 - Hosts the command center dashboard
 - Manages the Cloudflare tunnel for external access
-- Runs inference servers (`sanctum-mlx`, `sanctum-mlx-devstral`, Sanctum TTS) and the `sanctum-server` router that fronts them
+- Runs inference servers (`sanctum-mlx` on `:1337`, `haus.sanctum.mlx-coder` on `:3301`, Sanctum TTS) and the `sanctum-server` router that fronts them
 - Feeds the VM its skill updates
 - Keeps the roster in its `instance.yaml`
 
@@ -127,7 +127,7 @@ These services only run on the hub and are not deployed to satellites:
 | Service | Reason |
 |---------|--------|
 | Council MLX (`sanctum-mlx`) | Qwen3.8-27B-4bit, about 21 GB resident in typical use, needs a Metal-class GPU |
-| Devstral MLX (`sanctum-mlx-devstral`) | Muse-Glimmer-30B-4bit on `:3301` as of 2026-10-05, after Devstral-Small-2-24B-Instruct-2512-4bit. (Superseded the Qwen2.5-Coder-14B coder seat on `:1338`, retired 2026-06-07 along with the LM Studio `:1234` bridge.) |
+| Coder MLX (`haus.sanctum.mlx-coder`) | `Ornith-1.5-9B-MLX-4bit` + Qui-Gon LoRA on `:3301` (mTLS) as of 2026-11-10, after Muse-Glimmer-30B-4bit and Devstral-Small-2-24B. (Superseded the Qwen2.5-Coder-14B coder seat on `:1338`, retired 2026-06-07 along with the LM Studio `:1234` bridge.) |
 | Cloudflare Tunnel | Single ingress point for the instance |
 | Orbi Bridge | Direct LAN access to the access point |
 | Sonos Bridge | Native SoCo control of LAN Sonos speakers |
@@ -150,7 +150,7 @@ Historical context: in the QEMU+Colima era the Mini ran two VMs competing for `s
 The Mac Mini starts every service — including the agent VM — without a GUI login. No auto-login, no Touch ID removal, no compromises. The boot graph runs through a small set of system LaunchDaemons in `/Library/LaunchDaemons/` and the usual user LaunchAgents:
 
 1. **Phase 1: Guest containers** — Lima VM docker brings Outline/Matrix up inside `sanctum-vm`; host socat forwards `:3100` / `:6167`.
-2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.8-27B-4bit) and `sanctum-mlx-devstral` (`:3301`, Muse-Glimmer-30B-4bit as of 2026-10-05, in the coder seat that took over when the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8055` (BOSS) come up to front them. Both MLX seats load as **user** LaunchAgents (`haus.sanctum.mlx`, `haus.sanctum.mlx-coder`; `com.sanctum.*` before the 2026-08-19 rename), not system daemons.
+2. **Phase 2: Inference + routing** — `sanctum-mlx` (`:1337`, mTLS, Qwen3.8-27B-4bit) and `haus.sanctum.mlx-coder` (`:3301`, mTLS, `Ornith-1.5-9B-MLX-4bit` as of 2026-11-10, in the coder seat that succeeded Muse-Glimmer-30B and Devstral after the `:1338` Qwen coder + `:1234` LM Studio bridge were retired 2026-06-07) load. `proxyd` on `:4040` and `sanctum-server` on `:8055` (BOSS) come up to front them. Both MLX seats load as **user** LaunchAgents (`haus.sanctum.mlx`, `haus.sanctum.mlx-coder`; `com.sanctum.*` before the 2026-08-19 rename), not system daemons.
 3. **Phase 3: Agent VM** — Lima starts the Ubuntu VM; the `vmnet` bridge is set up via `socket_vmnet`; the host IP is pinned to `10.10.10.1`; the boot path waits for VM SSH before declaring success.
 4. **Phase 4: SSH + bridges** — `apple-post-boot.sh` loads SSH keys from Keychain via `ssh-add --apple-load-keychain`; socat proxies stitch VM-side requests to Mac-side services (Firewalla, MLX coder, SanctumBridge).
 
@@ -273,7 +273,7 @@ const chaletName = nodeGet('chalet', 'tailscale_name'); // "chalet"
     +-- 5 AI Agents              +-- Home Assistant       +-- castellan (pending)
     +-- Full service catalog     +-- Local brain (:6502)  +-- claude-max-proxy
     +-- HA gateway               +-- Force Flow (:4077)
-    +-- sanctum-mlx + devstral
+    +-- sanctum-mlx (:1337 + :3301)
     +-- sanctum-server router
 ```
 

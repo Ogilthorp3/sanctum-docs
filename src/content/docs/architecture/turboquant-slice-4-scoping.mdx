@@ -1,13 +1,13 @@
 ---
 title: TurboQuant Slice 4 — GPU Dequantization Scoping
-description: How we kill the O(T²) CPU dequant cost in the current TurboQuant implementation and unlock `--turboquant` as a production default. Three tiers from "MLX ops only" to "custom Metal kernel", with LOC estimates and risk bands.
+description: How we eliminate the O(T²) CPU dequant cost in the current TurboQuant implementation and unlock `--turboquant` as a production default. Three tiers from "MLX ops only" to "custom Metal kernel", with LOC estimates and risk bands.
 ---
 
 import { Aside, Card, CardGrid, Tabs, TabItem } from '@astrojs/starlight/components';
 
 ![TurboQuant Slice 4 — three machinists under one lamp working the same crystalline component: a hand-file, then a precision lathe, then a particle-beam etcher, escalating from MLX ops to a custom Metal kernel.](./images/hero-turboquant-slice-4.png)
 
-The flag works. Slices 1 through 1f dragged TurboQuant from "doesn't compile" to "ships 21× better quality at 4× compression," and every one of those numbers is earned. What the flag cannot yet be is a **default** — and the thing standing in the way is embarrassingly boring. Dequant runs on the CPU. Fine for correctness validation, unshippable for production. This page is where we scoped the kill: Slice 4.
+The flag works. Slices 1 through 1f dragged TurboQuant from "doesn't compile" to "ships 21× better quality at 4× compression," and every one of those numbers is earned. What the flag cannot yet be is a **default** — and the thing standing in the way is embarrassingly boring. Dequant runs on the CPU. Fine for correctness validation, unshippable for production. This page is where we scoped the fix: Slice 4.
 
 <Aside type="tip" title="4a landed — 2026-04-19, then got rebuilt from the ground up 2026-04-24">
 The original 4a (Lloyd-Max key dequant ported to MLX ops, `21f230f` + `b469c52`) measured 9.4× per-fetch versus the CPU reference — but end-to-end on the production Qwen3.6-35B-A3B MoE the win didn't translate, eaten by per-step kernel-launch overhead and concat-grow cost. So we threw it away. The **2026-04-24 rebuild** flipped the premise: stop compressing keys entirely (~4 MB/layer of bf16 K at T=2048 is nothing on a 64 GB Mini) and hand-write a fused Metal kernel that dequantizes V inline during attention, so V never materializes. It ships as `sdpa_dequant_v` in `services/sanctum-mlx/src/turboquant/attention_kernel.rs`, and on the MBP M4 Max bench (vanilla MoE) lifts the dev-grade Slice-1 path from 62.38 to 75.64 tok/s (+21.2%), ~5% under the 79.42 no-TurboQuant baseline. The flag stayed **off** until a confirmed winner earned the flip — `--turboquant` now ships **on** in the production plist, per the [shipped-architecture page](/architecture/turboquant-kv-compression/). This page is the planning-time record; the architecture that shipped lives there.

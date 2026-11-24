@@ -20,7 +20,7 @@ The council lives across four nodes, each hosting a subset of agents. Routing is
 | `hub` (MM64) | `10.10.10.1` | `neo` | jocasta, codex, claude, gemini | Mac Mini — intelligence, CRM, the bridge between the haus and the world |
 | `vm` (Manoir VM) | `10.10.10.10` | `ubuntu` | yoda, windu, quigon, cilghal, mundi | Ubuntu 24.04 on Lima/vz — the Council proper |
 | `satellite` (MM16) | `100.0.0.32` | `neo` | ahsoka | Chalet Mac — closed to council messages since 2026-11-21 |
-| `mobile` (MBP128) | `192.0.2.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
+| `mobile` (MBP128) | `10.0.0.2` | `neo` | gemini, claude | MacBook Pro, when docked on Thunderbolt |
 
 Each node has a CLI binary (`openclaw`) and a per-agent flag table: Yoda is invoked as `agent --agent main` on the VM, Windu as `--agent windu`, and so on. The router knows all of this, so you don't have to.
 
@@ -33,7 +33,7 @@ The satellite is closed by design. Its node carries `"council": "closed"`, and `
 | **Yoda** | vm (main) | Grand Master | Routing, delegation, council sessions, daily digest |
 | **Jocasta** | hub (main) | Intelligence | Email, calendar, CRM, deal flow, Messages archive |
 | **Windu** | vm | Security | Auth logs, Firewalla, Tailscale, intrusion detection, drift sentinel |
-| **Qui-Gon** | vm | Infrastructure | Disk, Lima VM, `sanctum-mlx` + `sanctum-mlx-devstral`, gateways, backups |
+| **Qui-Gon** | vm | Infrastructure | Disk, Lima VM, `sanctum-mlx` (`:1337` + `:3301` coder), gateways, backups |
 | **Cilghal** | vm | Health | Apple Watch, sleep, HRV, activity |
 | **Mundi** | vm | Finance | Fund models, cap tables, portfolio telemetry |
 | **Ahsoka** | satellite | Remote | Chalet network, haus automation (phase 3) |
@@ -149,10 +149,10 @@ Not every council call is worth an Opus invocation.
 
 | Tier | Model | Who routes here |
 |------|-------|-----------------|
-| Free / local ops | Devstral-Small-2-24B-Instruct-2512-4bit on `sanctum-mlx-devstral` `:3301` (native MLX seat) | Qui-Gon, Ahsoka, coding sub-tasks |
-| Free / local secure | Qwen3.6-35B-A3B-4bit on sanctum-mlx `:1337` | Cilghal, Mundi (private data stays local) |
-| Cloud | Opus 4.8 (`claude-opus-4`, best subscription) via sanctum-cloud-proxy `:4040`; cathedral fallback, never metered OpenRouter | Windu, Jocasta, Yoda digest |
-| Smart-routed | `council-brain` (Jocasta, Mon Mothma) and `council-max-thinking` (Yoda, Mundi) on `:4040` | `council-max-thinking` rides Opus 4.8; `council-brain` stays local on the cathedral (`qwen3.6-35b-a3b-4bit`) — no OpenRouter spill |
+| Free / local ops | `Ornith-1.5-9B-MLX-4bit` on `haus.sanctum.mlx-coder` `:3301` (native MLX seat, mTLS) | Qui-Gon, Ahsoka, coding sub-tasks |
+| Free / local secure | `Qwen3.8-27B-4bit` on `sanctum-mlx` `:1337` (mTLS) | Cilghal, Mundi (private data stays local) |
+| Cloud | Claude Opus (best subscription) via sanctum-cloud-proxy `:4040`; cathedral fallback, never metered OpenRouter | Windu, Jocasta, Yoda digest |
+| Smart-routed | `council-brain` (Jocasta, Mon Mothma) and `council-max-thinking` (Yoda, Mundi) on `:4040` | `council-max-thinking` rides Opus; `council-brain` stays local on the cathedral (`Qwen3.8-27B-4bit`) — no OpenRouter spill |
 
 The router doesn't pick the tier; the receiving agent does. But because the router carries the `from/to/type/priority` header, the agent's model-selection logic has everything it needs to refuse Opus for a level-0 `briefing`. The target is ~10-15 Opus calls per day across the whole council. Most days it holds.
 
@@ -204,7 +204,7 @@ Test fails
 
 Remediation is opt-in (`--remediate`); the scheduled 05:00 run reports without auto-fixing. When you do pass the flag, nine tests have deterministic auto-fixes today: expected services, OrbStack container health, LM Studio models, log-file size, Signal-proxy health, skill-sync freshness, Tailscale status, Signal delivery, and the Council MLX server. The security-class tests — SSH hardening, auth-log anomalies, listening-port audits, and their kin — skip straight to agent escalation, because there is no correct script-only answer for "there is a new SSH key in `authorized_keys`."
 
-Escalated investigations run on the native MLX seat `sanctum-mlx` (Qwen3.6-35B-A3B-4bit on `:1337`) locally, so the remediation layer itself has no marginal API cost.
+Escalated investigations run on the native MLX seat `sanctum-mlx` (`Qwen3.8-27B-4bit` on `:1337`) locally, so the remediation layer itself has no marginal API cost.
 
 ## Legacy: Council Bridge
 

@@ -111,7 +111,7 @@ If you find yourself typing the words "Yoda on Opus" or "Windu on Gemini" in any
 
 Docs ship to a public repo. Assume a hostile reader. The following never appear in a docs page, in any commit, in any git branch:
 
-- **Real IP addresses** — no tailnet (`100.x.x.x`), no LAN (`192.168.x.x`), no VM bridge (`10.10.10.x`), no public IPs. Use the documentation ranges below.
+- **Real IP addresses** — no tailnet (`100.64.x.x`), no public IPs, no external targets. Use the `10.0.0.X` / `10.10.10.X` RFC 1918 private examples and `100.0.0.X` tailnet placeholders below.
 - **Real MAC addresses** — every one enables device fingerprinting. Use the `AA:BB:CC:DD:EE:xx` block, which is IANA-reserved for documentation.
 - **Real hostnames** — no `Firstname-Mac-Model.local` patterns, no instance slugs tied to the owner (`<firstname>-nepveu` etc.), no `*.local` that actually resolves on the owner's tailnet. Use the host placeholders.
 - **Real usernames** — the canonical owner handle is **`neo`**. Paths use `/Users/neo/` or `~/`, never the operator's actual login name.
@@ -150,9 +150,9 @@ Canonical placeholder registry:
 | The Mini (server) | `<MINI>` or `manoir.local` | "manoir" is the slug; `.local` is an mDNS placeholder, not a real resolvable host. |
 | The MacBook (road warrior) | `<MBP>` or `satellite.local` | |
 | The VM (OpenClaw / Yoda) | `<VM>` or `yoda` (as the `ssh` alias) | |
-| Mac ↔ VM bridge | `10.0.0.1` / `10.0.0.10` | RFC 5737 documentation range — never resolves, never routes. |
+| Mac ↔ VM bridge | `10.10.10.1` / `10.10.10.10` | RFC 1918 private host-only bridge — unroutable on the internet. |
 | Tailnet address | `100.0.0.X` | Visually obvious placeholder; Tailscale's real range is 100.0.0.0/10. |
-| Home LAN address | `192.0.2.X` | RFC 5737 TEST-NET-1. |
+| Home LAN address | `10.0.0.X` | RFC 1918 `10.0.0.0/24` — unroutable on the internet, matches Sanctum's home LAN convention. |
 | MAC address | `AA:BB:CC:DD:EE:XX` | Use `:01`, `:02`, `:03` for distinct devices. IANA documentation prefix. |
 | Phone number | `+15555550100` | 555-0100 through 555-0199 is the fictional-use block. |
 | Signal account | `+15555550100` | Same block. |

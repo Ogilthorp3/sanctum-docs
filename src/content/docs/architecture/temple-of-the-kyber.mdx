@@ -1,6 +1,6 @@
 ---
 title: The Temple of the Kyber
-description: A 30 MB Rust binary on a Mac Mini in Montréal serves a 35-billion-parameter language model under mTLS. The Council's five Jedi route their reasoning across three model families — Anthropic, Google, and the local kyber — and fall back to the Temple when the cloud doesn't answer. The Temple holds the local kyber.
+description: A 30 MB Rust binary on a Mac Mini in Montréal serves a 27-billion-parameter language model under mTLS. The Council's five Jedi route their reasoning across multiple model families — Anthropic, Google, xAI, and the local kyber — and fall back to the Temple when the cloud doesn't answer. The Temple holds the local kyber.
 ---
 
 import { Aside } from '@astrojs/starlight/components';
@@ -10,27 +10,27 @@ import CouncilRoster from '../../../components/CouncilRoster.astro';
 
 The fibre drops. Opus stops answering; Gemini times out. Most stacks would stall right here — a spinner, a 503, a page that never loads. This one reaches into a closet in Montréal instead.
 
-Two characters do most of the dramatic work in the Sanctum mythology, and almost every page in this section is a footnote on one of them. The first is the **Temple of the Kyber** — a Rust binary on a Mac Mini in Montréal that serves a 35-billion-parameter language model under mTLS. The kyber it holds is the model itself: a 4-bit-quantised Qwen3.6 MoE checkpoint, 20 GB on disk, attuned to whichever Jedi reaches for it. The second is the **Council** — seven seats led by five specialised Jedi who route their reasoning through three different model providers and return to the Temple when those providers don't answer (with Jocasta keeping the records and Mon Mothma keeping the lights on).
+Two characters do most of the dramatic work in the Sanctum mythology, and almost every page in this section is a footnote on one of them. The first is the **Temple of the Kyber** — a Rust binary on a Mac Mini in Montréal that serves a 27-billion-parameter language model under mTLS. The kyber it holds is the model itself: a 4-bit-quantised `Qwen3.8-27B` dense checkpoint, ~21 GB resident, attuned to whichever Jedi reaches for it. The second is the **Council** — seven seats led by five specialised Jedi who route their reasoning through distinct model providers and return to the Temple when those providers don't answer (with Jocasta keeping the records and Mon Mothma keeping the lights on).
 
 This page is the narrative entrypoint. The technical detail lives in [Sanctum MLX](./sanctum-mlx.mdx), [Council Router](./council-router.mdx), [Agents Architecture](./agents.mdx), and the per-Jedi pages under **Agents** in the sidebar. Read those when you need the wiring. Read this when you need the story.
 
 ## The Temple
 
-A thirty-megabyte Rust binary called `sanctum-mlx`, running on a 64 GB Mac Mini under launchd, serving Qwen3.6-35B-A3B-4bit-text on `:1337` mTLS-only (plus a Qwen3.6-27B-4bit secondary via dual-residency). There is one inference in flight at a time, on purpose. There is no plain HTTP listener, also on purpose. There is a vision tower armed in the same process that can describe an image you POST as base64. There is no Python.
+A thirty-megabyte Rust binary called `sanctum-mlx`, running on a 64 GB Mac Mini under launchd, serving `Qwen3.8-27B-4bit` on `:1337` mTLS-only (with `Ornith-1.5-9B-MLX-4bit` on the dedicated `:3301` coder seat). There is one inference in flight at a time, on purpose. There is no plain HTTP listener, also on purpose. There is a vision tower armed in the same process that can describe an image you POST as base64. There is no Python.
 
 The Temple holds the kyber. A kyber crystal is the singular component a Jedi carries that lets them act in the world — without it, the saber is a hilt. The Temple's kyber is the local model checkpoint: when the cloud doesn't answer, the Council still has somewhere to reach. Slower than Opus or Gemini. Reachable from a closet.
 
-The metaphor is load-bearing. When fibre is up and the API budget is not yet exhausted, most of the Council reaches for cloud sabers — Anthropic's Opus 4.8, Google's Gemini Pro. When either of those goes dark, every Jedi can still attune to the kyber here and receive an answer in seconds. Operationally the binary is sometimes still nicknamed *the cathedral* in chat and commit messages — that nickname is older than this page; the kyber framing is the canonical one.
+The metaphor is load-bearing. When fibre is up and the API budget is not yet exhausted, most of the Council reaches for cloud sabers — Anthropic's Opus, Google's Gemini Pro, xAI's Grok. When any of those goes dark, every Jedi can still attune to the kyber here and receive an answer in seconds. Operationally the binary is sometimes still nicknamed *the cathedral* in chat and commit messages — that nickname is older than this page; the kyber framing is the canonical one.
 
 | Layer | What |
 |---|---|
 | Stone | `sanctum-mlx` Rust binary, vendored `mlx-rs` + mlx C++ 0.32.4 (since 2026-10-31) |
-| Kyber | `~/.cache/huggingface/hub/models--mlx-community--Qwen3.6-35B-A3B-4bit` (20 GB on disk, ~16 GB resident at startup) |
-| Vestments | TurboQuant KV compression (1.32× ratio) and a Carmack-passed vision tower (333 tensors, depth 27) |
+| Kyber | `~/models/mlx/Qwen3.8-27B-4bit` (~21 GB resident at startup; succeeded the retired 35B MoE) |
+| Vestments | DFlash2 speculative decoding, TurboQuant KV compression, and a Carmack-passed vision tower (333 tensors, depth 27) |
 | Doors | mTLS on three TLS hosts: `127.0.0.1`, the Tailscale address, and `10.10.10.1` (the bridge to the OpenClaw VM). No door without a client cert. |
 | Discipline | A dedicated `mlx-inference` executor thread owns every text-path inference — one OS thread, one durable GPU stream, jobs queued FIFO with the dispatch lock held inside each un-cancellable job. Multimodal handlers serialize against it through the same lock. One inference at a time, by construction. |
 | Vows | `KeepAlive=true` under launchd, plus a 60-second supervision check, plus a restart-forensics capture, plus a Sunday 04:00 perf-hygiene cron |
-| Witnesses | A vision-canary every 60 seconds probes `/v1/models` and a 1×1 PNG multimodal request. On three consecutive 1h SLO breaches it flips a kill-switch that downgrades vision in the next restart. |
+| Witnesses | A vision-canary every 60 seconds probes `/v1/models` and a 1×1 PNG multimodal request. On three consecutive 1h SLO breaches it flips a circuit-breaker that downgrades vision in the next restart. |
 
 For the implementation detail — TurboQuant, the fused Metal kernel, the Carmack vision-tower wins — start at [Sanctum MLX](./sanctum-mlx.mdx). For the request-tier defense in front of the Temple, see the [Smart Router Cathedral](./smart-router-cathedral.mdx) (which is a separate metaphor — the five-tier router that decides *whether* a request reaches `sanctum-mlx` at all).
 
@@ -67,7 +67,7 @@ This routes around the [Council Router](./council-router.mdx) (which can hang on
 Three rules carry the rest — and a fourth, named after a cat, decides the ties:
 
 1. **Heterogeneous on purpose.** [Neurodiversity is Paramount](./neurodiversity-doctrine.mdx). Three model families across the bench. One outage doesn't take the whole Council.
-2. **Cloud for the hard thinking, local for the workhorse seats.** Yoda and Mundi lead with Opus, Windu with Gemini; Qui-Gon and Cilghal lead with the local kyber and the Devstral lane. Every seat keeps the Temple as a fallback, so the bench keeps working when the cloud doesn't.
+2. **Cloud for the hard thinking, local for the workhorse seats.** Yoda leads with Opus, Mundi with Grok, Windu with Gemini; Qui-Gon and Cilghal lead with the `:3301` Ornith coder lane and the local kyber. Every seat keeps the Temple as a fallback, so the bench keeps working when the cloud doesn't.
 3. **Silent on green, alert-only on red.** Every briefing now follows this. If you are getting a Force Flow ping, something actually needs you.
 
 <Aside type="tip" title="The dead cat tiebreaker">
