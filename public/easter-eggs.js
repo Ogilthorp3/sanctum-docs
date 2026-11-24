@@ -9,7 +9,10 @@
 //   3. Type "neo" or "zelda" anywhere — short glitch on the nearest heading.
 //   4. Type "kane" anywhere — full-viewport red vignette, "KANE LIVES."
 //      stamped across the centre for 2.4 seconds. Brotherhood of Nod.
-//   5. /redpill/  — hidden page, Matrix-themed, not in the sidebar.
+//   5. Type "habs" or "nhl94" — Montreal Canadiens overtime goal-horn banner.
+//   6. Type "finish" — Mortal Kombat "FINISH HIM — MAC BLACKHOLED." flash.
+//   7. Type "88mph" — Back to the Future flux-capacitor flash.
+//   8. /redpill/  — hidden page, Matrix-themed, not in the sidebar.
 
 (function () {
   'use strict';
@@ -30,7 +33,7 @@
     );
   line('Knock knock, Neo.');
   line('Follow the white rabbit.  →  /redpill/');
-  line('Konami is the key.');
+  line('Konami is the key. Also try typing: neo · zelda · kane · habs · finish · 88mph');
 
   // ───────────────────────────── konami sequence ────────────────────────
   const KONAMI = [
@@ -123,9 +126,13 @@
   // ───────────────────────────── neo / zelda word triggers ──────────────
   let buffer = '';
   const WORD_TRIGGERS = {
-    neo:   () => glitchNearestHeading('#39ff14'),
-    zelda: () => glitchNearestHeading('#ffd700'),
-    kane:  () => kaneLives(),
+    neo:    () => glitchNearestHeading('#39ff14'),
+    zelda:  () => glitchNearestHeading('#ffd700'),
+    kane:   () => kaneLives(),
+    habs:   () => bannerFlash('GO HABS GO — NHL \'94 OVERTIME', '#ffffff', 'radial-gradient(ellipse at center, rgba(175,30,45,0.65) 0%, rgba(15,34,74,0.92) 78%)', '0 0 18px #af1e2d, 0 0 42px #192168'),
+    nhl94:  () => bannerFlash('GO HABS GO — NHL \'94 OVERTIME', '#ffffff', 'radial-gradient(ellipse at center, rgba(175,30,45,0.65) 0%, rgba(15,34,74,0.92) 78%)', '0 0 18px #af1e2d, 0 0 42px #192168'),
+    finish: () => bannerFlash('FINISH HIM — MAC BLACKHOLED.', '#ffdf6b', 'radial-gradient(ellipse at center, rgba(160,15,15,0.55) 0%, rgba(10,0,0,0.94) 78%)', '0 0 16px #ff2e2e, 0 0 44px #8b0000'),
+    '88mph': () => bannerFlash('88 MPH — FLUX CAPACITOR ARMED.', '#8ef6ff', 'radial-gradient(ellipse at center, rgba(255,140,0,0.45) 0%, rgba(4,16,32,0.92) 78%)', '0 0 16px #ff8c00, 0 0 40px #00d8ff'),
   };
   // Expose buffer to the console so you can inspect state at any time:
   //   window.__sanctumBuffer   → last ~8 typed letters
@@ -152,27 +159,36 @@
     // Full-viewport red vignette + "KANE LIVES." stamped across the centre.
     // Brotherhood of Nod energy: stark, calm, not going anywhere until it's
     // ready to leave.
+    bannerFlash(
+      'KANE LIVES.',
+      '#f8d4d0',
+      'radial-gradient(ellipse at center, rgba(140,0,0,0.42) 0%, rgba(20,0,0,0.92) 78%)',
+      '0 0 14px #ff2e2e, 0 0 36px #8b0000, 0 0 80px rgba(139,0,0,0.7), 0 2px 2px rgba(0,0,0,0.8)',
+      'clamp(44px, 8.5vw, 104px)'
+    );
+  }
+
+  function bannerFlash(label, color, bg, shadow, size) {
     const overlay = document.createElement('div');
     Object.assign(overlay.style, {
       position: 'fixed', inset: '0',
-      background:
-        'radial-gradient(ellipse at center, rgba(140,0,0,0.42) 0%, rgba(20,0,0,0.92) 78%)',
+      background: bg,
       zIndex: '2147483646', pointerEvents: 'none',
       opacity: '0', transition: 'opacity 360ms ease',
     });
     const text = document.createElement('div');
-    text.textContent = 'KANE LIVES.';
+    text.textContent = label;
     Object.assign(text.style, {
       position: 'fixed', top: '50%', left: '50%',
       transform: 'translate(-50%, -50%) scale(0.96)',
-      color: '#f8d4d0',
+      color: color,
       fontFamily: 'Impact, "Arial Black", system-ui, sans-serif',
-      fontSize: 'clamp(44px, 8.5vw, 104px)',
-      letterSpacing: '0.16em',
+      fontSize: size || 'clamp(28px, 5.2vw, 68px)',
+      letterSpacing: '0.12em',
       fontWeight: '900',
-      whiteSpace: 'nowrap',
-      textShadow:
-        '0 0 14px #ff2e2e, 0 0 36px #8b0000, 0 0 80px rgba(139,0,0,0.7), 0 2px 2px rgba(0,0,0,0.8)',
+      textAlign: 'center',
+      padding: '0 1.5rem',
+      textShadow: shadow,
       zIndex: '2147483647', pointerEvents: 'none',
       opacity: '0', transition: 'opacity 520ms ease, transform 520ms ease',
     });
