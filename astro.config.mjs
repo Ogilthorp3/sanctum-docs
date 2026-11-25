@@ -322,6 +322,14 @@ export default defineConfig({
 								{ label: 'Language Maturity', slug: 'architecture/language-maturity' },
 							],
 						},
+						{
+							label: '7. Annex & Side Projects',
+							collapsed: true,
+							items: [
+								{ label: 'Finance Window', slug: 'architecture/finance-window' },
+								{ label: 'Great Hauses Chess Engine', slug: 'architecture/great-hauses' },
+							],
+						},
 					],
 				},
 				{
