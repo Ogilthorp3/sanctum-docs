@@ -378,6 +378,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-25 — Nine Gates and the 1.0 Beta Seal', slug: 'operations/2026-11-25-nine-gates-and-the-beta-seal' },
 								{ label: '2026-11-22 — The Manor Knocked a Hundred and Seventy-Four Times', slug: 'operations/2026-11-22-the-manor-knocked-a-hundred-and-seventy-four-times' },
 								{ label: '2026-11-21 — Thirteen Knocks From the Pine Outpost', slug: 'operations/2026-11-21-thirteen-knocks-from-the-pine-outpost' },
 								{ label: '2026-11-20 — A Hundred Seams and One Closed Door', slug: 'operations/2026-11-20-a-hundred-seams-and-one-closed-door' },

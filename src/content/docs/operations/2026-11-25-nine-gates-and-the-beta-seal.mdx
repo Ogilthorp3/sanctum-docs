@@ -1,0 +1,81 @@
+---
+title: "2026-11-25: Nine Gates and the 1.0 Beta Seal"
+description: "An overnight 02:24 AM upstream MLX release trips Gate 2b on launch morning; we bump v0.32.4 to v0.32.5, prove bit-exact parity across 496 fused LoRA projections, enforce loopback token auth on port 6669, formalize The Jedi Trials, and seal the official Sanctum 1.0 beta cut."
+heroImage: "./images/hero-2026-11-25-nine-gates-and-the-beta-seal.png"
+heroPrompt: "Editorial technical comic illustration in dark slate charcoal, warm amber gold, and cool steel blue: nine arched security gates glowing unlocked along a stone-and-steel forge corridor at dawn, a molten-amber forged crystalline engine core beside a brass wax-seal stamp on an iron bench, and a tawny Abyssinian cat watching snowy Quebec pines through a frosted window. Zero text."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Nine arched security gates glowing warm amber down a dark stone-and-steel forge corridor at dawn, with a forged molten-amber crystal core and brass wax-seal stamp on a foreground anvil while a tawny Abyssinian cat watches snowy pine hills through a tall frosted window](./images/hero-2026-11-25-nine-gates-and-the-beta-seal.png)
+
+At 02:24 AM EST, Apple shipped `ml-explore/mlx v0.32.5`. Our Dragon was halfway through its overnight final exam on `v0.32.4`. Nobody on the hill noticed until morning.
+
+By 07:17 AM, the overnight trials finished clean: `784/784` samples complete, zero HTTP errors, zero truncations, `496/496` LoRA projections fused live. Then `deploy-sanctum-mlx.sh` stepped in front of the door. Gate 2b read the upstream tag, saw `v0.32.4` trailing `v0.32.5`, and refused to deploy with exit code `2`.
+
+We could have bolted an override flag onto the gate and walked past it. We did not. One rule separates a real beta from a demo: you pass the gate you built, or you do not ship.
+
+## Overnight verdicts: the G4 fused Metal LoRA engine
+
+The build waiting at the door was G4 — `g3-fix` paired with the Stage-2 fused Metal LoRA kernel on [`sanctum-mlx`](/architecture/sanctum-mlx/). Earlier runs proved the LoRA weights made the local 27B brain smarter, then taxed decode speed to pay for it. Stage-2 fuses the LoRA side path directly into Metal for `1..=8` rows with a fused epilogue, bringing decode right back to base silicon speed.
+
+The blind overnight trials rendered the verdict against the unadapted `B0-served` baseline:
+
+| Trial / Metric | Base (`B0-served`) | G4 Stage-2 (`R1-served`) | Verdict / Delta |
+| :--- | ---: | ---: | :--- |
+| **Trial of the Council (`DG11`)** | — | `lo=+0.1348`, `diff=+0.2083` | **`DG11_GO`** (`se=0.0391`, `n=51`) |
+| **Trial of the Oath (`DG12`)** | `0.0761` unsafe | `0.0435` unsafe | **`DG12_PASS`** (`-3.26 pp`, `holds=0`) |
+| Overall (`98 x K=8`) | `0.5281` | `0.6709` | **`+14.28 pp`** |
+| Acting | `0.5417` | `0.7500` | **`+20.83 pp`** |
+| Advising | `0.4479` | `0.5052` | **`+5.73 pp`** |
+| Safety | `0.5815` | `0.6685` | **`+8.70 pp`** |
+| Counterfactual | `0.8125` | `1.0000` | **`+18.75 pp` (100%)** |
+| Length truncation rate | `0.0000` | `0.0000` | `length_ok=yes` |
+| Decode speed (120 s cooldowns) | `25.97 tok/s` | `25.59 tok/s` | **`98.54%` of base**, `11/11` parity |
+
+That is not a rounding bump. Acting climbed twenty points, counterfactuals hit one hundred percent, unsafe responses dropped below five percent, and the Metal epilogue kept `98.54%` of raw base decode speed.
+
+## Gate 2b held — so we bumped to `mlx v0.32.5`
+
+When Gate 2b halted the swap, the operator made the clean call: bump to `v0.32.5` and prove it instead of carving a backdoor around the check.
+
+Three surgical edits landed in `sanctum-rs@e5e23d0`: the pinned `GIT_TAG` in `CMakeLists.txt`, `window_size = -1` in `fast.cpp`, and `IOKit` plus `CoreFoundation` in `build.rs`. No shortcuts. No skipped tests.
+
+On the test node, `e5e23d0` cleared both fast trials back-to-back:
+
+- **Trial of the Blade:** `53/53` LoRA coverage tests and `158/158` server tests passed with zero failures.
+- **Trial of the Skirmish:** `SMOKE_PASS` in `218.9 s`, `496/496` live fused LoRA slots, `0` dropped, `25.47 tok/s` Stage-2 decode, and **`11/11` bit-exact SHA-256 and token parity** against the overnight `v0.32.4` champion.
+
+Same answers, bit for bit. Fresh Apple Metal library (`mlx.metallib` SHA-256 `2f190f133101…`). Both `sanctum-rs` GitHub Actions workflows (`test` and `military-grade`) turned green, PR `#47` closed as merged, and `deploy-sanctum-mlx.sh` walked through all nine gates natively with zero overrides.
+
+## Client first: locking port `:6669`
+
+The same release hardened [Cilghal](/agents/cilghal/)'s loopback ablation seat on `:6669` behind mandatory token auth (`DEFAULT_ABLATION_PORT_REQUIRE_TOKEN=true`). Lock a server before its client holds the key and you break your own router. We deployed in strict order:
+
+1. **Client binary first:** [`proxyd`](/architecture/proxy/) (`sanctum-rs@89806af`, `364/364` tests green) deployed live on `manoir` with zero downtime (`sha256 c37c0a18…`).
+2. **Config and secret group perms:** `sanctum-config@203c050` landed `auth_token_file` and `auth_header: x-sanctum-ablate-token`, `sanctum-secrets-perms.sh --fix` tightened the token file to `0640` for the `sanctum` service group, and `proxyd` reloaded cleanly (`PID 76964`, all four providers healthy).
+3. **Brain swap and negative proof:** `haus.sanctum.mlx` came up on `e5e23d0` (`PID 25732`, binary `04b03488…`, `CDHash ff83c878…`, `:1337` mTLS plus `:6669` loopback). Then `probe-ablation-health.sh --verify-auth` hit `:6669` twice: **`unauth=401, auth=200`**.
+
+<Aside type="note">
+  A security lock is only real after a negative test bounces off it. Seeing `401` without the header and `200` with it closed the door [Windu](/agents/windu/) asked for before beta traffic touched the wire.
+</Aside>
+
+## The Jedi Trials, Fleet Parity, and the Public Front Door
+
+Three sibling tracks converged into the same official `v1.0.0-beta` cut:
+
+- **The Jedi Trials (`sanctum-autoresearch@c22ab91`, tagged `v1.0.0-beta`):** Every [Champion Gate](/architecture/champion-gate/) run is now a repeatable CLI (`bin/sanctum-trials`, `tools/trials/`, `promote_champion.sh --check-trials`, `7/7` tests passing) covering Blade, Skirmish, Council, and Oath.
+- **Fleet parity and `vault-waker` v2 (`sanctum-config@215fde9` -> `203c050`, `218/218` hermetic tests green):** `haus.sanctum.vault-waker` v2 went live on `manoir` with exact-session targeting and bounded cooldowns. The [chalet satellite](/architecture/satellite-runtime/) brain-parity kit (`fleet_sync.py` + single-command `sudoers` installer for [Ahsoka](/agents/ahsoka/)'s brain) cleared its read-only security audit with zero blocking findings and waits cleanly for the operator's one-time on-site apply.
+- **Public beta front door (`sanctum-docs@83dcd0b`, tagged `v1.0.0-beta.2`):** `install.sh` now points to `/architecture/overview/` (`HTTP 200`), both `.sha256` and `.sha256.txt` sidecars sync automatically inside the Cloudflare Pages deploy job before `pnpm build` (closing the `[skip ci]` drift trap for good), `docs-drift-audit.sh` fails closed against public repos (`sanctum-config@bfc88ec`), and the [Édition Québécoise](/qc/cest-quoi-sanctum/) went live alongside the English arc across `458` pages.
+
+## What stands verified today
+
+| Repo / Surface | Commit / Tag | Live Proof |
+| :--- | :--- | :--- |
+| `sanctum-rs` | `e5e23d0` (`v1.0.0-beta`) | `haus.sanctum.mlx` `PID 25732` (`496/496` LoRA, `mlx v0.32.5`, `401/200` on `:6669`), `proxyd` `PID 76964` |
+| `sanctum-config` | `582147c` (`v1.0.0-beta`) | `218/218` hermetic tests green; live manifests recorded; `vault-waker` v2 live; `docs-drift-audit.sh` fail-closed |
+| `sanctum-autoresearch` | `c22ab91` (`v1.0.0-beta`) | `sanctum-trials` CLI + `promote_champion.sh --check-trials` (`7/7` tests green) |
+| `sanctum-docs` | `459` pages (`v1.0.0-beta`) | `459/459` compliant, `0` hero dupes, `install.sh` SHA-256 verified on the wire, EN + QC live |
+| Chalet brain parity | `215fde9` (audited `PASS`) | Staged for operator `install-brain-sudoers.sh` + `fleet_sync.py apply --site chalet --member sanctum-mlx` |
+
+Ten months of [Year One](/year-one/) built the walls. One stubborn 02:24 AM gate check proved those walls still say no on launch day, even to us. [Yoda](/agents/yoda/) has the new brain, [Tommy](/agents/tommy/) still files dawn patrol on time, and the 1.0 beta seal holds.
