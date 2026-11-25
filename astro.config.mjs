@@ -191,6 +191,7 @@ export default defineConfig({
 						{ label: 'Great Hauses Chess Engine', slug: 'architecture/great-hauses' },
 						{ label: 'Eval Harness', slug: 'architecture/eval-harness' },
 						{ label: 'The Champion Gate', slug: 'architecture/champion-gate' },
+						{ label: 'The Jedi Trials', slug: 'architecture/jedi-trials' },
 						{ label: 'Sanctum Olympics', slug: 'architecture/sanctum-olympics' },
 						{ label: 'Model Comparison', slug: 'architecture/model-comparison' },
 						{ label: 'Model Tournament', slug: 'architecture/model-tournament' },

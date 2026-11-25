@@ -12,7 +12,7 @@ Serving a Jedi Council from a Python runtime felt like asking a padawan to carry
 The adapters are the entire point. Without them, the base model is a generalist that has never heard of Yoda, doesn't know port 1337, and would cheerfully tell you that bridge100 is a card game. The LoRA weights are the difference between a language model and a Council member — and until the server could absorb them, the whole rewrite was a very fast way to run the wrong personality.
 
 <Aside type="note">
-This page records the original 27B-dense work from April 2026, and the numbers below are that run. The same `lora.rs` later merged the **Qwen3.6-35B-A3B** MoE's adapters unchanged: the merge logic is parameter-name-based, so it generalized to the MoE checkpoint for free (Phase 4/5, May 2026). Since the summer of 2026 the haus applies adapters at runtime instead: merging the dragon-v4 adapter into an 8-bit copy of the model scored slightly worse on voice than applying it live (4.67 against 4.94) and needed 27 GB resident against 15.6 GB. The brain has served plain **Qwen3.8-27B-4bit** with no adapter since 2026-10-02. Where it matters, the current figure is noted inline.
+This page begins with the original April 2026 load-time merge (`lora.rs`), which later carried the **Qwen3.6-35B-A3B** MoE adapters unchanged. For 4-bit quantized models, load-time merge requires dequantizing, adding the delta, and requantizing — trading away voice quality or ballooning RAM. In November 2026 we solved runtime LoRA properly with the **Stage-2 Fused Metal LoRA Kernel + QMM Epilogue** (below), which now runs **Qwen3.8-27B-4bit** + the `r1` adapter (`496/496` fused projections) in production at **`98.54%` of raw base decode speed**.
 </Aside>
 
 Now it can load them. In Rust. Without Python. Without the GIL. Without the 300MB of overhead that comes from asking an interpreted language to do the job of a compiled one. It shipped 2026-04-08 and merged the council's adapters in production on the Mac Mini (`com.sanctum.mlx`, port 1337) until runtime application replaced it in the summer of 2026.
@@ -99,20 +99,42 @@ The original 27B-dense binary OOM'd on the 64GB Mac Mini — it loaded the whole
 
 Same tok/s because the Metal GPU is the bottleneck — both runtimes are feeding the same silicon. Rust wins on everything around the inference: startup, memory, determinism. The 250MB of saved overhead doesn't matter much on a 128GB machine, but it matters a great deal on the 64GB Mac Mini that's also running `haus.sanctum.mlx-coder` (the `:3301` coder seat), `sanctum-tts` on `:8008` (fronting the `cbx-yoda` worker on `:8011`), and whatever else decided to be important today.
 
+## Stage-2: Fused Metal LoRA Kernel + QMM Epilogue (v1.0 Beta)
+
+Load-time merging works cleanly on FP16 checkpoints, but on 4-bit quantized models the dequantize-add-requantize round-trip introduces quantization error, while moving to an 8-bit base doubled resident RAM. Keeping the LoRA matrices separate at runtime preserved exact adapter math — and promptly cut 27B decode speed nearly in half (`13.52 tok/s`, `52.06%` of base) across `496` adapted projections (`linear_attn.*`, `mlp.*`, `self_attn.*`).
+
+In `sanctum-rs@e5e23d0` (shipped in `v1.0.0-beta`), we closed that gap in two stages:
+
+1. **Stage-1 (`a_t` decode path):** Pre-transposed `A` weights eliminated redundant layout conversions on single-token decode, climbing to `22.80 tok/s` (`87.79%` of base).
+2. **Stage-2 (fused Metal LoRA kernel + QMM epilogue):** `vendor/mlx-rs/mlx-rs/src/ops/lora_kernel.rs` and `simd_qmm.rs` arm a custom fused Metal side path for `1..=8` decode rows and fuse `B @ (A @ x)` directly into the quantized matmul epilogue — eliminating intermediate buffer round-trips and handling MLX's `const constant` small-buffer address space natively.
+
+Measured across an interleaved 4-arm sweep on **Qwen3.8-27B-4bit** + the `r1` adapter (`r=16, alpha=32`, 120 s thermal cooldowns between arms):
+
+| Configuration | Decode tok/s | % of Base | Notes |
+|---|---:|---:|---|
+| Base (unadapted `Qwen3.8-27B-4bit`) | `25.97` | `100.0%` | Interleaved reference (`25.92`, `26.01`) |
+| Naive runtime LoRA (`SANCTUM_LORA_KERNEL=0 SANCTUM_LORA_AT=0`) | `13.52` | `52.06%` | Baseline runtime penalty |
+| Stage-1 `a_t` path (`SANCTUM_LORA_KERNEL=0`) | `22.80` | `87.79%` | Still below the `90%` Trial of Velocity bar |
+| Stage-2 fused kernel standalone (`SANCTUM_LORA_EPILOGUE=0`) | `25.02` | `96.34%` | `11/11` bit-exact parity vs epilogue |
+| **Stage-2 fused + QMM epilogue (default)** | **`25.59`** | **`98.54%`** | **`1.89x` speedup**, live on `manoir.local` + chalet |
+
+Every layer remains reversible via clean runtime kill switches (`SANCTUM_LORA_KERNEL=0`, `SANCTUM_LORA_EPILOGUE=0`, `SANCTUM_LORA_AT=0`), and the build cleared [The Jedi Trials](/architecture/jedi-trials/) (`DG11_GO` `+20.83 pp` acting, `100%` counterfactual, `DG12_PASS` `-3.26 pp` safer, plus `11/11` bit-exact SHA-256 parity across the `mlx v0.32.4 -> v0.32.5` bump in [Nine Gates and the 1.0 Beta Seal](/operations/2026-11-25-nine-gates-and-the-beta-seal/)).
+
 ## Tests
 
-23 tests across 3 suites:
+The original April 2026 suite started at 23 merge tests; the Stage-2 release now runs **53 LoRA coverage tests** (including 4-bit quantized epilogue parity and small-buffer Metal address-space coverage) alongside **158 server tests**:
 
 | Suite | Tests | Coverage |
 |-------|-------|----------|
-| Unit (lib) | 16 | Config parsing, LoRA math, quantize roundtrip, real adapter validation |
-| E2E integration | 6 | Model load, tokenizer, 248-pair merge, weight hash verification, inference |
-| Weight verification | 1 | Hash before/after confirms weights actually changed |
+| LoRA & kernel (`--lib lora`) | 53 | Config parsing, 496-projection attach census, Stage-2 Metal kernel + QMM epilogue math |
+| Server (`--bin sanctum-mlx`) | 158 | Auth, `:6669` token enforcement, manifest verification, cache isolation, stream teardown |
+| Greedy parity (`fast_smoke.py`) | 11 prompts | Bit-exact SHA-256 and token parity (`11/11` A-vs-A, epilogue-vs-standalone, `v0.32.4 -> v0.32.5`) |
 
 ```bash
-cd sanctum-mlx && cargo test -- --test-threads=1
+cargo test --release -p sanctum-mlx --lib lora -- --test-threads=1
+cargo test --release -p sanctum-mlx --bin sanctum-mlx -- --test-threads=1
 ```
 
 The `--test-threads=1` matters — parallel Metal GPU tests cause SIGTRAP from resource contention. One at a time, like civilized Jedi. The alternative is watching the GPU throw a tantrum because two tests tried to compile shaders simultaneously, which is entertaining exactly once.
 
-The padawan carried the Death Star plans. It just needed better shoes.
+The padawan carried the Death Star plans. It just needed better shoes — and eventually, a custom Metal epilogue.
