@@ -238,7 +238,8 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
        SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS active_24h,
        SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS active_7d,
        SUM(CASE WHEN last_seen_at >= ? THEN 1 ELSE 0 END) AS active_30d,
-       COALESCE(SUM(memory_gb), 0) AS total_ram_gb
+       COALESCE(SUM(memory_gb), 0) AS total_ram_gb,
+       MIN(first_seen_date) AS seed_zero_since
      FROM nodes`
   )
     .bind(cutoff24h, cutoff7d, cutoff30d)
@@ -345,6 +346,8 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       zero_pii: true,
       source_url: SOURCE_URL,
       total_nodes: totalNodes,
+      seed_zero_online: totalNodes > 0,
+      seed_zero_since: summary?.seed_zero_since || null,
       onboard_completed: Number(summary?.onboard_completed || 0),
       active_24h: Number(summary?.active_24h || 0),
       active_7d: Number(summary?.active_7d || 0),

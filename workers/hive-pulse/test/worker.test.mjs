@@ -92,12 +92,14 @@ function createMockDb() {
           if (sql.includes("AS active_24h")) {
             const [c24, c7, c30] = args;
             let onboard = 0, a24 = 0, a7 = 0, a30 = 0, ram = 0;
+            let earliest = null;
             for (const n of nodes.values()) {
               if (n.onboard_completed === 1) onboard += 1;
               if (n.last_seen_at >= c24) a24 += 1;
               if (n.last_seen_at >= c7) a7 += 1;
               if (n.last_seen_at >= c30) a30 += 1;
               ram += n.memory_gb;
+              if (!earliest || n.first_seen_date < earliest) earliest = n.first_seen_date;
             }
             return {
               total_nodes: nodes.size,
@@ -106,6 +108,7 @@ function createMockDb() {
               active_7d: a7,
               active_30d: a30,
               total_ram_gb: ram,
+              seed_zero_since: earliest,
             };
           }
           throw new Error(`Unhandled first SQL: ${sql}`);
@@ -252,6 +255,8 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
   assert.equal(aRes.status, 200);
   const analytics = await aRes.json();
   assert.equal(analytics.total_nodes, 1);
+  assert.equal(analytics.seed_zero_online, true);
+  assert.equal(analytics.seed_zero_since, "2026-11-26");
   assert.equal(analytics.onboard_completed, 1);
   assert.equal(analytics.total_ram_gb, 64);
   assert.deepEqual(analytics.by_chip, { "Apple M4 Pro": 1 });

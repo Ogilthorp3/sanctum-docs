@@ -1,0 +1,228 @@
+---
+interface Props {
+  lang?: 'en' | 'qc';
+}
+
+const { lang = 'en' } = Astro.props;
+const isQc = lang === 'qc';
+
+const copy = isQc
+  ? {
+      badge: 'LA HIVE SANCTUM · EN DIRECT',
+      seed: 'Seed #0 en ligne',
+      macs: 'Macs souverains',
+      ram: 'RAM Apple Silicon',
+      active: 'Actifs (7j)',
+      countries: 'Pays',
+      ramUnit: 'Go',
+      tbUnit: 'To',
+      footer: 'Compteur opt-in zéro PII · Embarque avec',
+      audit: 'Auditer le Worker ↗',
+    }
+  : {
+      badge: 'THE SANCTUM HIVE · LIVE',
+      seed: 'Seed #0 online',
+      macs: 'Sovereign Macs',
+      ram: 'Apple Silicon RAM',
+      active: 'Active (7d)',
+      countries: 'Countries',
+      ramUnit: 'GB',
+      tbUnit: 'TB',
+      footer: 'Zero-PII opt-in counter · Join with',
+      audit: 'Audit the Worker ↗',
+    };
+---
+
+<div
+  class="hive-counter-card not-content"
+  data-hive-counter
+  data-ram-unit={copy.ramUnit}
+  data-tb-unit={copy.tbUnit}
+>
+  <div class="hive-counter-header">
+    <span class="hive-counter-title">
+      <span class="hive-pulse-dot" aria-hidden="true"></span>
+      <span>{copy.badge}</span>
+    </span>
+    <span class="hive-seed-pill" data-hive-seed>{copy.seed}</span>
+  </div>
+
+  <div class="hive-counter-grid">
+    <div class="hive-stat">
+      <span class="hive-stat-val" data-hive-nodes>1</span>
+      <span class="hive-stat-lbl">{copy.macs}</span>
+    </div>
+    <div class="hive-stat">
+      <span class="hive-stat-val hive-stat-amber" data-hive-ram>64 {copy.ramUnit}</span>
+      <span class="hive-stat-lbl">{copy.ram}</span>
+    </div>
+    <div class="hive-stat">
+      <span class="hive-stat-val hive-stat-green" data-hive-active>1</span>
+      <span class="hive-stat-lbl">{copy.active}</span>
+    </div>
+    <div class="hive-stat">
+      <span class="hive-stat-val" data-hive-countries>1</span>
+      <span class="hive-stat-lbl">{copy.countries}</span>
+    </div>
+  </div>
+
+  <div class="hive-counter-footer">
+    <span>
+      {copy.footer} <code>sanctum hive join</code>
+    </span>
+    <a
+      href="https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse"
+      target="_blank"
+      rel="noreferrer"
+    >
+      {copy.audit}
+    </a>
+  </div>
+</div>
+
+<script is:inline>
+  (function () {
+    const cards = document.querySelectorAll('[data-hive-counter]');
+    if (!cards.length) return;
+    fetch('https://hive.sanctum.run/analytics', { mode: 'cors' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (!data || !data.ok) return;
+        const nodes = Number(data.total_nodes || 0);
+        const active7d = Number(data.active_7d || 0);
+        const ramGb = Number(data.total_ram_gb || 0);
+        const countries = Object.keys(data.by_country || {}).filter((k) => k !== 'ZZ').length;
+        cards.forEach((card) => {
+          const ramUnit = card.getAttribute('data-ram-unit') || 'GB';
+          const tbUnit = card.getAttribute('data-tb-unit') || 'TB';
+          const ramStr = ramGb >= 1024 ? `${(ramGb / 1024).toFixed(2)} ${tbUnit}` : `${ramGb} ${ramUnit}`;
+          const nEl = card.querySelector('[data-hive-nodes]');
+          const rEl = card.querySelector('[data-hive-ram]');
+          const aEl = card.querySelector('[data-hive-active]');
+          const cEl = card.querySelector('[data-hive-countries]');
+          if (nEl) nEl.textContent = nodes.toLocaleString();
+          if (rEl) rEl.textContent = ramStr;
+          if (aEl) aEl.textContent = active7d.toLocaleString();
+          if (cEl) cEl.textContent = String(countries || (nodes > 0 ? 1 : 0));
+        });
+      })
+      .catch(() => {
+        /* keep Seed #0 fallback silently when offline */
+      });
+  })();
+</script>
+
+<style>
+  .hive-counter-card {
+    margin: 1.5rem auto 2rem;
+    max-width: 780px;
+    border-radius: 14px;
+    border: 1px solid rgba(212, 149, 46, 0.32);
+    background: linear-gradient(135deg, rgba(22, 24, 32, 0.92), rgba(14, 16, 24, 0.96));
+    padding: 1rem 1.25rem;
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.28);
+  }
+  .hive-counter-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    margin-bottom: 0.85rem;
+  }
+  .hive-counter-title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #e5e7eb;
+  }
+  .hive-pulse-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: #34d399;
+    box-shadow: 0 0 8px #34d399;
+    animation: hive-pulse 2.2s ease-in-out infinite;
+  }
+  @keyframes hive-pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.88); }
+  }
+  .hive-seed-pill {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.7rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: 9999px;
+    background: rgba(212, 149, 46, 0.14);
+    border: 1px solid rgba(212, 149, 46, 0.35);
+    color: #f3c26b;
+  }
+  .hive-counter-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.75rem;
+    padding: 0.5rem 0 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+  @media (max-width: 600px) {
+    .hive-counter-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+  .hive-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .hive-stat-val {
+    font-size: 1.45rem;
+    font-weight: 700;
+    line-height: 1.2;
+    color: #f9fafb;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .hive-stat-amber {
+    color: #f3c26b;
+  }
+  .hive-stat-green {
+    color: #34d399;
+  }
+  .hive-stat-lbl {
+    font-size: 0.72rem;
+    color: #9ca3af;
+    margin-top: 0.15rem;
+  }
+  .hive-counter-footer {
+    margin-top: 0.7rem;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.74rem;
+    color: #9ca3af;
+  }
+  .hive-counter-footer code {
+    font-size: 0.72rem;
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #e5e7eb;
+  }
+  .hive-counter-footer a {
+    color: #f3c26b;
+    text-decoration: none;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.72rem;
+  }
+  .hive-counter-footer a:hover {
+    text-decoration: underline;
+  }
+</style>
