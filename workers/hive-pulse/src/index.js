@@ -233,7 +233,7 @@ export async function handleLatestJson(request, env, ctx, nowMs = Date.now()) {
       signal_cli_version: env.SIGNAL_CLI_VERSION || SIGNAL_CLI_VERSION,
     },
     200,
-    { "Cache-Control": "no-store" }
+    { "Cache-Control": "public, max-age=300, s-maxage=300" }
   );
 }
 
@@ -378,8 +378,27 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       daily_version_checks: dailyVersionChecks,
     },
     200,
-    { "Cache-Control": "public, max-age=60" }
+    { "Cache-Control": "public, max-age=120, s-maxage=120" }
   );
+}
+
+async function handleAnalyticsCached(request, env, ctx) {
+  const cache = typeof caches !== "undefined" ? caches.default : null;
+  const cacheKey = cache ? new Request("https://hive.sanctum.run/analytics", { method: "GET" }) : null;
+  if (cache && cacheKey) {
+    const hit = await cache.match(cacheKey);
+    if (hit) return hit;
+  }
+  const resp = await handleAnalytics(env);
+  if (cache && cacheKey && resp.status === 200) {
+    const putPromise = cache.put(cacheKey, resp.clone()).catch(() => {});
+    if (ctx && typeof ctx.waitUntil === "function") {
+      ctx.waitUntil(putPromise);
+    } else {
+      await putPromise;
+    }
+  }
+  return resp;
 }
 
 export default {
@@ -415,7 +434,7 @@ export default {
     }
 
     if (request.method === "GET" && path === "/analytics") {
-      return handleAnalytics(env);
+      return handleAnalyticsCached(request, env, ctx);
     }
 
     return jsonResponse({ ok: false, error: "not_found" }, 404);
