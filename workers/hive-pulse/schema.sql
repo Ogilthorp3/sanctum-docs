@@ -4,6 +4,8 @@
 
 CREATE TABLE IF NOT EXISTS nodes (
   node_id TEXT PRIMARY KEY,
+  seat_number INTEGER,
+  claim_code TEXT,
   first_seen_date TEXT NOT NULL,
   first_seen_at TEXT NOT NULL,
   last_seen_at TEXT NOT NULL,
@@ -19,6 +21,8 @@ CREATE TABLE IF NOT EXISTS nodes (
 
 CREATE INDEX IF NOT EXISTS idx_nodes_last_seen ON nodes(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_nodes_first_date ON nodes(first_seen_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_unique_positive_seat ON nodes(seat_number) WHERE seat_number > 0;
+CREATE INDEX IF NOT EXISTS idx_nodes_claim_code ON nodes(claim_code);
 
 CREATE TABLE IF NOT EXISTS daily_version_checks (
   date TEXT NOT NULL,

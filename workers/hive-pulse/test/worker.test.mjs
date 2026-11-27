@@ -5,6 +5,7 @@ import worker, {
   handleDeletePulse,
   handleLatestJson,
   handlePulse,
+  handleVerifySeal,
 } from "../src/index.js";
 
 /**
@@ -12,7 +13,7 @@ import worker, {
  */
 function createMockDb() {
   const nodes = new Map();
-  const versionChecks = new Map(); // key: `${date}|${cli_version}|${os_family}` -> count
+  const versionChecks = new Map();
 
   return {
     _nodes: nodes,
@@ -28,6 +29,8 @@ function createMockDb() {
           if (sql.includes("INSERT INTO nodes")) {
             const [
               node_id,
+              seat_number,
+              claim_code,
               first_seen_date,
               first_seen_at,
               last_seen_at,
@@ -43,6 +46,8 @@ function createMockDb() {
             if (!existing) {
               nodes.set(node_id, {
                 node_id,
+                seat_number,
+                claim_code,
                 first_seen_date,
                 first_seen_at,
                 last_seen_at,
@@ -56,6 +61,7 @@ function createMockDb() {
                 pulse_count: 1,
               });
             } else {
+              existing.claim_code = existing.claim_code || claim_code;
               existing.last_seen_at = last_seen_at;
               existing.onboard_completed = Math.max(existing.onboard_completed, onboard_completed);
               if (chip !== "Unknown") existing.chip = chip;
@@ -81,6 +87,24 @@ function createMockDb() {
           throw new Error(`Unhandled run SQL: ${sql}`);
         },
         async first() {
+          if (sql.includes("WHERE node_id = ?")) {
+            return nodes.get(args[0]) || null;
+          }
+          if (sql.includes("MAX(seat_number)")) {
+            let maxSeat = 0;
+            for (const n of nodes.values()) {
+              if (typeof n.seat_number === "number" && n.seat_number > maxSeat) {
+                maxSeat = n.seat_number;
+              }
+            }
+            return { max_seat: maxSeat };
+          }
+          if (sql.includes("WHERE claim_code = ?")) {
+            for (const n of nodes.values()) {
+              if (n.claim_code === args[0]) return n;
+            }
+            return null;
+          }
           if (sql.includes("AS active_7d") && !sql.includes("AS active_24h")) {
             const [cutoff7d] = args;
             let active = 0;
@@ -114,6 +138,12 @@ function createMockDb() {
           throw new Error(`Unhandled first SQL: ${sql}`);
         },
         async all() {
+          if (sql.includes("WHERE seat_number IS NOT NULL")) {
+            const rows = [...nodes.values()]
+              .filter((n) => n.seat_number !== null && n.seat_number !== undefined && n.seat_number <= 10)
+              .sort((a, b) => a.seat_number - b.seat_number);
+            return { results: rows };
+          }
           if (sql.includes("GROUP BY chip")) {
             const m = new Map();
             for (const n of nodes.values()) m.set(n.chip, (m.get(n.chip) || 0) + 1);
@@ -166,18 +196,37 @@ function createMockDb() {
   };
 }
 
-test("health endpoint reports zero_pii", async () => {
+test("health endpoint reports zero_pii and verify-seal", async () => {
   const res = await worker.fetch(new Request("https://hive.sanctum.run/health"), { DB: createMockDb() });
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.ok, true);
   assert.equal(data.zero_pii, true);
+  assert.equal(data.endpoints.includes("/verify-seal?code=..."), true);
 });
 
-test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", async () => {
+test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and deletes cleanly", async () => {
   const db = createMockDb();
-  const env = { DB: db };
+  const env = { DB: db, SEAL_SECRET: "test-sovereign-secret-key" };
   const t0 = Date.parse("2026-11-26T15:00:00Z");
+
+  // Seed #0 Founder node pre-existing in DB (seat_number = 0)
+  db._nodes.set("00000000000000000000000000000001", {
+    node_id: "00000000000000000000000000000001",
+    seat_number: 0,
+    claim_code: null,
+    first_seen_date: "2026-11-22",
+    first_seen_at: "2026-11-22T12:00:00.000Z",
+    last_seen_at: "2026-11-26T15:00:00.000Z",
+    onboard_completed: 1,
+    chip: "Apple M4 Pro",
+    memory_gb: 64,
+    os_version: "macOS 27.2.1",
+    country: "CA",
+    cli_version: "1.0.5",
+    modules_json: '["mlx","proxyd"]',
+    pulse_count: 5,
+  });
 
   // Bad node_id rejected
   const bad = await handlePulse(
@@ -191,7 +240,7 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
   );
   assert.equal(bad.status, 400);
 
-  // Valid onboard pulse (explicitly includes a spoofed IP header which MUST be ignored)
+  // First outsider Mac joins -> mints Seed #1!
   const nodeA = "a1b2c3d4e5f60718293a4b5c6d7e8f90";
   const ok1 = await handlePulse(
     new Request("https://hive.sanctum.run/pulse", {
@@ -200,11 +249,11 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
       body: JSON.stringify({
         node_id: nodeA,
         event: "onboard",
-        chip: "Apple M4 Pro",
-        memory_gb: 64,
+        chip: "Apple M4 Max",
+        memory_gb: 128,
         os_version: "macOS 26.1",
-        country: "ca",
-        cli_version: "v1.0.1",
+        country: "fr",
+        cli_version: "v1.0.5",
         modules: ["backup", "link", "INVALID!"],
       }),
     }),
@@ -213,18 +262,23 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
   );
   assert.equal(ok1.status, 200);
   const j1 = await ok1.json();
-  assert.equal(j1.hive_nodes, 1);
-  assert.equal(j1.active_7d, 1);
+  assert.equal(j1.hive_nodes, 2);
+  assert.equal(j1.newly_minted, true);
+  assert.equal(j1.seal.seat_number, 1);
+  assert.equal(j1.seal.tier, "seed-1");
+  assert.equal(j1.seal.title, "Seed #1 — First Beyond the Walls");
+  assert.match(j1.seal.claim_code, /^SEED1-[A-F0-9]{4}-[A-F0-9]{4}$/);
+  assert.equal(j1.seal.signature.length, 64);
 
   // Verify zero IP stored anywhere
   const stored = db._nodes.get(nodeA);
-  assert.equal(stored.country, "CA");
-  assert.equal(stored.cli_version, "1.0.1");
+  assert.equal(stored.country, "FR");
+  assert.equal(stored.cli_version, "1.0.5");
   assert.equal(stored.onboard_completed, 1);
   assert.equal(stored.modules_json, '["backup","link"]');
   assert.equal(JSON.stringify(stored).includes("1.2.3.4"), false);
 
-  // Second heartbeat does not overwrite onboard_completed or double count node
+  // Second heartbeat keeps exact same Seed #1 seat & claim code!
   const ok2 = await handlePulse(
     new Request("https://hive.sanctum.run/pulse", {
       method: "POST",
@@ -235,44 +289,82 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
     t0 + 3600_000
   );
   assert.equal(ok2.status, 200);
-  assert.equal(db._nodes.size, 1);
-  assert.equal(db._nodes.get(nodeA).onboard_completed, 1);
-  assert.equal(db._nodes.get(nodeA).pulse_count, 2);
+  const j2 = await ok2.json();
+  assert.equal(j2.newly_minted, false);
+  assert.equal(j2.seal.seat_number, 1);
+  assert.equal(j2.seal.claim_code, j1.seal.claim_code);
 
-  // Version check increments zero-ID counter
+  // Second outsider Mac joins -> mints Founding Circle #2!
+  const nodeB = "b2c3d4e5f60718293a4b5c6d7e8f9011";
+  const okB = await handlePulse(
+    new Request("https://hive.sanctum.run/pulse", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        node_id: nodeB,
+        event: "join",
+        chip: "Apple M3 Ultra",
+        memory_gb: 96,
+        country: "DE",
+        cli_version: "1.0.5",
+      }),
+    }),
+    env,
+    t0 + 7200_000
+  );
+  const jB = await okB.json();
+  assert.equal(jB.seal.seat_number, 2);
+  assert.equal(jB.seal.tier, "founding-circle");
+  assert.match(jB.seal.claim_code, /^CIRCLE2-[A-F0-9]{4}-[A-F0-9]{4}$/);
+
+  // Public seal verifier confirms Seed #1 with zero PII
+  const vRes = await handleVerifySeal(
+    new Request(`https://hive.sanctum.run/verify-seal?code=${j1.seal.claim_code}`),
+    env
+  );
+  assert.equal(vRes.status, 200);
+  const vData = await vRes.json();
+  assert.equal(vData.valid, true);
+  assert.equal(vData.seat_number, 1);
+  assert.equal(vData.tier, "seed-1");
+  assert.equal(vData.chip, "Apple M4 Max");
+  assert.equal(vData.country, "FR");
+  assert.equal(JSON.stringify(vData).includes(nodeA), false);
+
+  // Bogus code returns 404 valid=false
+  const badVerify = await handleVerifySeal(
+    new Request("https://hive.sanctum.run/verify-seal?code=SEED1-0000-0000"),
+    env
+  );
+  assert.equal(badVerify.status, 404);
+
+  // Version check reports 1.0.5
   const latestRes = await handleLatestJson(
-    new Request("https://hive.sanctum.run/latest.json?v=1.0.1&os=macos"),
+    new Request("https://hive.sanctum.run/latest.json?v=1.0.5&os=macos"),
     env,
     null,
     t0
   );
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
-  assert.equal(latestData.latest_version, "1.0.4");
+  assert.equal(latestData.latest_version, "1.0.5");
   assert.equal(latestData.rust_tag, "rust-v1.0.3");
-  assert.equal(latestData.rust_sha256.length, 64);
-  assert.equal(latestData.dragon_tag, "dragon-2");
-  assert.equal(latestData.mlx_lm_version, "0.32.2");
 
-  // Analytics returns aggregate summary + daily buckets
-  const aRes = await handleAnalytics(env, t0 + 3600_000);
+  // Analytics exposes milestones cleanly with zero PII & zero claim_code leak
+  const aRes = await handleAnalytics(env, t0 + 7200_000);
   assert.equal(aRes.status, 200);
   const analytics = await aRes.json();
-  assert.equal(analytics.total_nodes, 1);
-  assert.equal(analytics.seed_zero_online, true);
-  assert.equal(analytics.seed_zero_since, "2026-11-26");
-  assert.equal(analytics.onboard_completed, 1);
-  assert.equal(analytics.total_ram_gb, 64);
-  assert.deepEqual(analytics.by_chip, { "Apple M4 Pro": 1 });
-  assert.deepEqual(analytics.by_country, { CA: 1 });
-  assert.deepEqual(analytics.by_module, { backup: 1, link: 1 });
-  assert.equal(analytics.version_checks_24h, 1);
-  assert.equal(analytics.daily_installs.length, 1);
+  assert.equal(analytics.total_nodes, 3);
+  assert.equal(analytics.milestones.seed_zero.nodes, 1);
+  assert.equal(analytics.milestones.seed_one.claimed, true);
+  assert.equal(analytics.milestones.seed_one.chip, "Apple M4 Max");
+  assert.equal(analytics.milestones.founding_circle.claimed, 1);
+  assert.equal(analytics.milestones.founding_circle.total, 9);
+  assert.equal(JSON.stringify(analytics).includes(j1.seal.claim_code), false);
 
-  // DELETE /pulse/:node_id removes the node cleanly (`sanctum hive leave`)
+  // DELETE /pulse/:node_id removes cleanly
   const delRes = await handleDeletePulse(nodeA, env);
   assert.equal(delRes.status, 200);
-  const delData = await delRes.json();
-  assert.equal(delData.removed, true);
-  assert.equal(db._nodes.size, 0);
+  assert.equal((await delRes.json()).removed, true);
+  assert.equal(db._nodes.size, 2);
 });

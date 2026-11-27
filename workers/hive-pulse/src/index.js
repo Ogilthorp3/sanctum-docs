@@ -1,17 +1,20 @@
 /**
  * Sovereign Sanctum Hive Pulse — Cloudflare Worker (hive.sanctum.run)
  *
- * Privacy-first, zero-PII aggregate counter for the Sanctum Hive.
+ * Privacy-first, zero-PII aggregate counter & Sovereign Seal minter for the Sanctum Hive.
  * - NEVER reads, logs, hashes, or stores CF-Connecting-IP, X-Forwarded-For,
  *   User-Agent, hostnames, usernames, file paths, or prompts.
  * - Opt-in nodes identify only via a locally generated anonymous hex ID
  *   (Ed25519 pubkey hash or random token) and can erase themselves anytime via
  *   DELETE /pulse/:node_id (`sanctum hive leave`).
+ * - First sovereign node beyond Seed #0 (Founder's Fleet) automatically mints
+ *   `Seed #1 — First Beyond the Walls`, and seats #2–#10 mint `Founding Circle`,
+ *   complete with an HMAC-SHA256 verifiable, zero-PII Sovereign Seal.
  * - Public aggregate stats are open at GET /analytics for both operators and
  *   the public sanctum.run Hive counter.
  */
 
-const LATEST_VERSION = "1.0.4";
+const LATEST_VERSION = "1.0.5";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";
@@ -27,6 +30,7 @@ const OPENCLAW_VERSION = "2026.11.10";
 const SIGNAL_CLI_VERSION = "0.14.10";
 
 const NODE_ID_RE = /^[a-f0-9]{16,64}$/i;
+const CLAIM_CODE_RE = /^[A-Z0-9-]{8,32}$/;
 const COUNTRY_RE = /^[A-Z]{2}$/;
 const VERSION_RE = /^[0-9A-Za-z._+-]{1,24}$/;
 const MODULE_RE = /^[a-z0-9_-]{1,32}$/;
@@ -98,6 +102,107 @@ function isoTimestampHoursAgo(nowMs, hours) {
   return new Date(nowMs - hours * 3_600_000).toISOString();
 }
 
+function bytesToHex(buf) {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256Hex(text) {
+  const data = new TextEncoder().encode(text);
+  const digest = await crypto.subtle.digest("SHA-256", data);
+  return bytesToHex(digest);
+}
+
+async function hmacSha256Hex(secret, message) {
+  const enc = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  const sig = await crypto.subtle.sign("HMAC", key, enc.encode(message));
+  return bytesToHex(sig);
+}
+
+export function describeSeat(seatNumber) {
+  const seat = Number(seatNumber ?? 0);
+  if (seat <= 0) {
+    return {
+      seat_number: 0,
+      tier: "seed-0",
+      title: "Seed #0 — Founder's Fleet",
+      short_badge: "SEED #0",
+      motto: "Where the Sanctum wall was raised.",
+    };
+  }
+  if (seat === 1) {
+    return {
+      seat_number: 1,
+      tier: "seed-1",
+      title: "Seed #1 — First Beyond the Walls",
+      short_badge: "SEED #1",
+      motto: "First sovereign Mac to answer from beyond the Founder's Fleet.",
+    };
+  }
+  if (seat <= 10) {
+    return {
+      seat_number: seat,
+      tier: "founding-circle",
+      title: `Founding Circle #${seat}`,
+      short_badge: `FOUNDING #${seat}`,
+      motto: "Among the first ten sovereign nodes of the Sanctum Hive.",
+    };
+  }
+  if (seat <= 100) {
+    return {
+      seat_number: seat,
+      tier: "vanguard",
+      title: `Beta Vanguard #${seat}`,
+      short_badge: `VANGUARD #${seat}`,
+      motto: "Early sovereign pioneer of the Sanctum public beta.",
+    };
+  }
+  return {
+    seat_number: seat,
+    tier: "sovereign",
+    title: `Sovereign Node #${seat}`,
+    short_badge: `NODE #${seat}`,
+    motto: "Local silicon, zero cloud leash.",
+  };
+}
+
+function formatClaimCode(seatNumber, sigHex) {
+  const s = sigHex.slice(0, 8).toUpperCase();
+  const partA = s.slice(0, 4);
+  const partB = s.slice(4, 8);
+  if (seatNumber <= 0) return `SEED0-${partA}-${partB}`;
+  if (seatNumber === 1) return `SEED1-${partA}-${partB}`;
+  if (seatNumber <= 10) return `CIRCLE${seatNumber}-${partA}-${partB}`;
+  if (seatNumber <= 100) return `VANGUARD${seatNumber}-${partA}`;
+  return `HIVE${seatNumber}-${partA}`;
+}
+
+async function mintSealObject({ env, nodeId, seatNumber, firstSeenAt, chip, memoryGb, country, existingCode }) {
+  const meta = describeSeat(seatNumber);
+  const secret = env.SEAL_SECRET || "sanctum-hive-public-commitment-v1";
+  const payloadStr = `sanctum-seal-v1:${nodeId}:${meta.seat_number}:${firstSeenAt}`;
+  const signature = await hmacSha256Hex(secret, payloadStr);
+  const claimCode = existingCode || formatClaimCode(meta.seat_number, signature);
+  const publicHash = (
+    await sha256Hex(`sanctum-public-v1:${meta.seat_number}:${firstSeenAt}:${chip}:${memoryGb}:${country}`)
+  ).slice(0, 16);
+
+  return {
+    ...meta,
+    minted_at: firstSeenAt,
+    claim_code: claimCode,
+    signature,
+    public_hash: publicHash,
+    verify_url: `https://hive.sanctum.run/verify-seal?code=${encodeURIComponent(claimCode)}`,
+  };
+}
+
 export async function handlePulse(request, env, nowMs = Date.now()) {
   const len = Number(request.headers.get("content-length") || "0");
   if (len > 8192) {
@@ -137,37 +242,90 @@ export async function handlePulse(request, env, nowMs = Date.now()) {
   const nowIso = new Date(nowMs).toISOString();
   const today = nowIso.slice(0, 10);
 
-  await env.DB.prepare(
-    `INSERT INTO nodes (
-       node_id, first_seen_date, first_seen_at, last_seen_at,
-       onboard_completed, chip, memory_gb, os_version, country,
-       cli_version, modules_json, pulse_count
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
-     ON CONFLICT(node_id) DO UPDATE SET
-       last_seen_at = excluded.last_seen_at,
-       onboard_completed = MAX(nodes.onboard_completed, excluded.onboard_completed),
-       chip = CASE WHEN excluded.chip != 'Unknown' THEN excluded.chip ELSE nodes.chip END,
-       memory_gb = CASE WHEN excluded.memory_gb > 0 THEN excluded.memory_gb ELSE nodes.memory_gb END,
-       os_version = CASE WHEN excluded.os_version != 'Unknown' THEN excluded.os_version ELSE nodes.os_version END,
-       country = CASE WHEN excluded.country != 'ZZ' THEN excluded.country ELSE nodes.country END,
-       cli_version = CASE WHEN excluded.cli_version != 'unknown' THEN excluded.cli_version ELSE nodes.cli_version END,
-       modules_json = CASE WHEN excluded.modules_json != '[]' THEN excluded.modules_json ELSE nodes.modules_json END,
-       pulse_count = nodes.pulse_count + 1`
+  const existing = await env.DB.prepare(
+    "SELECT seat_number, claim_code, first_seen_at, chip, memory_gb, country FROM nodes WHERE node_id = ?"
   )
-    .bind(
-      rawId,
-      today,
-      nowIso,
-      nowIso,
-      onboardCompleted,
-      chip,
-      memoryGb,
-      osVersion,
-      country,
-      cliVersion,
-      modulesJson
-    )
-    .run();
+    .bind(rawId)
+    .first();
+
+  let assignedSeat;
+  let mintedAt;
+  let existingCode = null;
+  let isNewlyMinted = false;
+
+  if (existing) {
+    assignedSeat = Number(existing.seat_number ?? 0);
+    mintedAt = existing.first_seen_at || nowIso;
+    existingCode = existing.claim_code || null;
+  } else {
+    isNewlyMinted = true;
+    mintedAt = nowIso;
+  }
+
+  let seal = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (!existing) {
+      const maxRow = await env.DB.prepare("SELECT COALESCE(MAX(seat_number), 0) AS max_seat FROM nodes").first();
+      assignedSeat = Number(maxRow?.max_seat ?? 0) + 1;
+    }
+
+    const effectiveChip = chip !== "Unknown" ? chip : (existing?.chip || "Unknown");
+    const effectiveRam = memoryGb > 0 ? memoryGb : Number(existing?.memory_gb || 0);
+    const effectiveCountry = country !== "ZZ" ? country : (existing?.country || "ZZ");
+
+    seal = await mintSealObject({
+      env,
+      nodeId: rawId,
+      seatNumber: assignedSeat,
+      firstSeenAt: mintedAt,
+      chip: effectiveChip,
+      memoryGb: effectiveRam,
+      country: effectiveCountry,
+      existingCode,
+    });
+
+    try {
+      await env.DB.prepare(
+        `INSERT INTO nodes (
+           node_id, seat_number, claim_code, first_seen_date, first_seen_at, last_seen_at,
+           onboard_completed, chip, memory_gb, os_version, country,
+           cli_version, modules_json, pulse_count
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+         ON CONFLICT(node_id) DO UPDATE SET
+           claim_code = COALESCE(nodes.claim_code, excluded.claim_code),
+           last_seen_at = excluded.last_seen_at,
+           onboard_completed = MAX(nodes.onboard_completed, excluded.onboard_completed),
+           chip = CASE WHEN excluded.chip != 'Unknown' THEN excluded.chip ELSE nodes.chip END,
+           memory_gb = CASE WHEN excluded.memory_gb > 0 THEN excluded.memory_gb ELSE nodes.memory_gb END,
+           os_version = CASE WHEN excluded.os_version != 'Unknown' THEN excluded.os_version ELSE nodes.os_version END,
+           country = CASE WHEN excluded.country != 'ZZ' THEN excluded.country ELSE nodes.country END,
+           cli_version = CASE WHEN excluded.cli_version != 'unknown' THEN excluded.cli_version ELSE nodes.cli_version END,
+           modules_json = CASE WHEN excluded.modules_json != '[]' THEN excluded.modules_json ELSE nodes.modules_json END,
+           pulse_count = nodes.pulse_count + 1`
+      )
+        .bind(
+          rawId,
+          assignedSeat,
+          seal.claim_code,
+          today,
+          mintedAt,
+          nowIso,
+          onboardCompleted,
+          chip,
+          memoryGb,
+          osVersion,
+          country,
+          cliVersion,
+          modulesJson
+        )
+        .run();
+      break;
+    } catch (err) {
+      if (attempt === 2 || !String(err).includes("UNIQUE")) {
+        throw err;
+      }
+    }
+  }
 
   const cutoff7d = isoTimestampHoursAgo(nowMs, 24 * 7);
   const counts = await env.DB.prepare(
@@ -184,8 +342,55 @@ export async function handlePulse(request, env, nowMs = Date.now()) {
     event,
     hive_nodes: Number(counts?.total_nodes || 0),
     active_7d: Number(counts?.active_7d || 0),
+    newly_minted: isNewlyMinted,
+    seal,
     zero_pii: true,
   });
+}
+
+export async function handleVerifySeal(request, env) {
+  const url = new URL(request.url);
+  const rawCode = (url.searchParams.get("code") || "").trim().toUpperCase();
+  if (!CLAIM_CODE_RE.test(rawCode)) {
+    return jsonResponse({ ok: false, valid: false, error: "invalid_claim_code" }, 400);
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT seat_number, first_seen_date, first_seen_at, chip, memory_gb, country
+     FROM nodes
+     WHERE claim_code = ?
+     LIMIT 1`
+  )
+    .bind(rawCode)
+    .first();
+
+  if (!row) {
+    return jsonResponse({ ok: true, valid: false, zero_pii: true }, 404);
+  }
+
+  const meta = describeSeat(row.seat_number);
+  const publicHash = (
+    await sha256Hex(
+      `sanctum-public-v1:${meta.seat_number}:${row.first_seen_at}:${row.chip}:${row.memory_gb}:${row.country}`
+    )
+  ).slice(0, 16);
+
+  return jsonResponse(
+    {
+      ok: true,
+      valid: true,
+      zero_pii: true,
+      ...meta,
+      minted_date: row.first_seen_date,
+      minted_at: row.first_seen_at,
+      chip: row.chip,
+      memory_gb: Number(row.memory_gb || 0),
+      country: row.country,
+      public_hash: publicHash,
+    },
+    200,
+    { "Cache-Control": "public, max-age=60, s-maxage=60" }
+  );
 }
 
 export async function handleDeletePulse(nodeId, env) {
@@ -287,6 +492,15 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
     await env.DB.prepare("SELECT modules_json FROM nodes").all()
   ).results || [];
 
+  const milestoneRows = (
+    await env.DB.prepare(
+      `SELECT seat_number, first_seen_date, first_seen_at, chip, memory_gb, country
+       FROM nodes
+       WHERE seat_number IS NOT NULL AND seat_number <= 10
+       ORDER BY seat_number ASC`
+    ).all()
+  ).results || [];
+
   const byModule = {};
   for (const row of moduleRows) {
     try {
@@ -298,6 +512,42 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       }
     } catch {
       /* ignore */
+    }
+  }
+
+  let seedZeroNodes = 0;
+  let seedZeroRam = 0;
+  let seedOne = null;
+  const foundingSeats = [];
+
+  for (const row of milestoneRows) {
+    const seat = Number(row.seat_number ?? 0);
+    if (seat <= 0) {
+      seedZeroNodes += 1;
+      seedZeroRam += Number(row.memory_gb || 0);
+    } else if (seat === 1) {
+      const publicHash = (
+        await sha256Hex(
+          `sanctum-public-v1:1:${row.first_seen_at}:${row.chip}:${row.memory_gb}:${row.country}`
+        )
+      ).slice(0, 12);
+      seedOne = {
+        claimed: true,
+        seat_number: 1,
+        chip: row.chip,
+        ram_gb: Number(row.memory_gb || 0),
+        country: row.country,
+        since: row.first_seen_date,
+        public_hash: publicHash,
+      };
+    } else if (seat <= 10) {
+      foundingSeats.push({
+        seat_number: seat,
+        chip: row.chip,
+        ram_gb: Number(row.memory_gb || 0),
+        country: row.country,
+        since: row.first_seen_date,
+      });
     }
   }
 
@@ -368,6 +618,19 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       total_nodes: totalNodes,
       seed_zero_online: totalNodes > 0,
       seed_zero_since: summary?.seed_zero_since || null,
+      milestones: {
+        seed_zero: {
+          nodes: seedZeroNodes,
+          ram_gb: seedZeroRam,
+          since: summary?.seed_zero_since || null,
+        },
+        seed_one: seedOne || { claimed: false, seat_number: 1 },
+        founding_circle: {
+          claimed: foundingSeats.length,
+          total: 9,
+          seats: foundingSeats,
+        },
+      },
       onboard_completed: Number(summary?.onboard_completed || 0),
       active_24h: Number(summary?.active_24h || 0),
       active_7d: Number(summary?.active_7d || 0),
@@ -421,7 +684,14 @@ export default {
         ok: true,
         service: "sanctum-hive-pulse",
         zero_pii: true,
-        endpoints: ["/health", "/analytics", "/latest.json", "POST /pulse", "DELETE /pulse/:node_id"],
+        endpoints: [
+          "/health",
+          "/analytics",
+          "/latest.json",
+          "/verify-seal?code=...",
+          "POST /pulse",
+          "DELETE /pulse/:node_id",
+        ],
         source_url: SOURCE_URL,
       });
     }
@@ -437,6 +707,10 @@ export default {
 
     if (request.method === "GET" && path === "/latest.json") {
       return handleLatestJson(request, env, ctx);
+    }
+
+    if (request.method === "GET" && path === "/verify-seal") {
+      return handleVerifySeal(request, env);
     }
 
     if (request.method === "GET" && path === "/analytics") {
