@@ -152,7 +152,11 @@ step "sanctum-cli"
 if command -v sanctum &>/dev/null; then
     INSTALLED_VERSION=$(sanctum --version 2>/dev/null || echo "?")
     ok "sanctum-cli already installed ($INSTALLED_VERSION)"
-    detail "Run 'sanctum update' to pull the latest."
+    say "Checking for latest sanctum-cli via Homebrew…"
+    brew update >/dev/null 2>&1 || true
+    brew upgrade ogilthorp3/sanctum/sanctum-cli >/dev/null 2>&1 || true
+    UPDATED_VERSION=$(sanctum --version 2>/dev/null || echo "$INSTALLED_VERSION")
+    ok "sanctum-cli current ($UPDATED_VERSION)"
 else
     say "Installing sanctum-cli from the Ogilthorp3/sanctum tap."
     detail "Tap repo:    https://github.com/Ogilthorp3/homebrew-sanctum"
@@ -160,7 +164,7 @@ else
     detail "License:     FSL-1.1-Apache-2.0 (source-available)"
     printf "\n"
     brew install ogilthorp3/sanctum/sanctum-cli
-    ok "sanctum-cli installed"
+    ok "sanctum-cli installed ($(sanctum --version 2>/dev/null || echo 'latest'))"
 fi
 
 # ── Node.js Foundation .pkg (TCC stability — optional but recommended) ───
@@ -293,10 +297,12 @@ printf '%s\n' "$RESET"
 
 say "You're ready. When you have a moment, run:"
 printf "\n"
-detail "  ${BOLD}sanctum onboard --recipe family${RESET}    ${DIM}— first-run wizard${RESET}"
-detail "  ${BOLD}sanctum self-test${RESET}                   ${DIM}— verify everything's healthy${RESET}"
-detail "  ${BOLD}sanctum status${RESET}                      ${DIM}— one-line snapshot${RESET}"
-detail "  ${BOLD}sanctum doctor${RESET}                      ${DIM}— deep diagnostic${RESET}"
+detail "  ${BOLD}sanctum onboard --recipe family${RESET}    ${DIM}— first-run wizard (backups + AI keys)${RESET}"
+detail "  ${BOLD}sanctum dragon install${RESET}             ${DIM}— local Dragon 27B champion (or 9B on 16 GB)${RESET}"
+detail "  ${BOLD}sanctum yoda setup${RESET}                 ${DIM}— Yoda on Signal (OpenClaw + signal-cli)${RESET}"
+detail "  ${BOLD}sanctum update${RESET}                     ${DIM}— one-command update (CLI + Dragon + Yoda)${RESET}"
+detail "  ${BOLD}sanctum status${RESET}                     ${DIM}— one-line snapshot${RESET}"
+detail "  ${BOLD}sanctum doctor${RESET}                     ${DIM}— deep diagnostic${RESET}"
 printf "\n"
 detail "Quick start:  https://sanctum.run/getting-started/quick-start/"
 detail "Architecture: https://sanctum.run/architecture/overview/"

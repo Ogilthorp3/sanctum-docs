@@ -248,7 +248,9 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
   );
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
-  assert.equal(latestData.latest_version, "1.0.1");
+  assert.equal(latestData.latest_version, "1.0.2");
+  assert.equal(latestData.dragon_tag, "dragon-2");
+  assert.equal(latestData.mlx_lm_version, "0.32.2");
 
   // Analytics returns aggregate summary + daily buckets
   const aRes = await handleAnalytics(env, t0 + 3600_000);

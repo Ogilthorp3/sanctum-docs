@@ -11,10 +11,17 @@
  *   the public sanctum.run Hive counter.
  */
 
-const LATEST_VERSION = "1.0.1";
+const LATEST_VERSION = "1.0.2";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";
+const DRAGON_TAG = "dragon-2";
+const DRAGON_ADAPTER = "qwen-haus-dragon-193d2d7407ec";
+const DRAGON_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/dragon-2/sanctum-dragon-guest.zip";
+const DRAGON_SHA256 = "1defbb9c13269bc6bfa40e83cae38e92716dc915a46ac385a1e2c3a61f52bf61";
+const MLX_LM_VERSION = "0.32.2";
+const OPENCLAW_VERSION = "2026.11.10";
+const SIGNAL_CLI_VERSION = "0.14.10";
 
 const NODE_ID_RE = /^[a-f0-9]{16,64}$/i;
 const COUNTRY_RE = /^[A-Z]{2}$/;
@@ -217,6 +224,13 @@ export async function handleLatestJson(request, env, ctx, nowMs = Date.now()) {
       min_supported: env.MIN_SUPPORTED_VERSION || MIN_SUPPORTED_VERSION,
       release_url: RELEASE_URL,
       upgrade_cmd: "sanctum update",
+      dragon_tag: env.DRAGON_TAG || DRAGON_TAG,
+      dragon_adapter: env.DRAGON_ADAPTER || DRAGON_ADAPTER,
+      dragon_url: env.DRAGON_URL || DRAGON_URL,
+      dragon_sha256: env.DRAGON_SHA256 || DRAGON_SHA256,
+      mlx_lm_version: env.MLX_LM_VERSION || MLX_LM_VERSION,
+      openclaw_version: env.OPENCLAW_VERSION || OPENCLAW_VERSION,
+      signal_cli_version: env.SIGNAL_CLI_VERSION || SIGNAL_CLI_VERSION,
     },
     200,
     { "Cache-Control": "no-store" }
