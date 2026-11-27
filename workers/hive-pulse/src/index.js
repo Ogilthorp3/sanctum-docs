@@ -14,7 +14,7 @@
  *   the public sanctum.run Hive counter.
  */
 
-const LATEST_VERSION = "1.0.6";
+const LATEST_VERSION = "1.0.7";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";
@@ -35,6 +35,17 @@ const COUNTRY_RE = /^[A-Z]{2}$/;
 const VERSION_RE = /^[0-9A-Za-z._+-]{1,24}$/;
 const MODULE_RE = /^[a-z0-9_-]{1,32}$/;
 const VALID_EVENTS = new Set(["onboard", "heartbeat", "backup", "status", "join"]);
+const VALID_FUNNEL_STEPS = new Set([
+  "bootstrap_started",
+  "brew_ready",
+  "clt_missing",
+  "cli_installed",
+  "cli_failed",
+  "bootstrap_completed",
+  "haus_completed",
+  "yoda_completed",
+  "onboard_completed",
+]);
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -403,6 +414,43 @@ export async function handleDeletePulse(nodeId, env) {
   return jsonResponse({ ok: true, removed: changes > 0 });
 }
 
+export async function handleInstallEvent(request, env, nowMs = Date.now()) {
+  const len = Number(request.headers.get("content-length") || "0");
+  if (len > 2048) {
+    return jsonResponse({ ok: false, error: "payload_too_large" }, 413);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return jsonResponse({ ok: false, error: "invalid_json" }, 400);
+  }
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    return jsonResponse({ ok: false, error: "expected_object" }, 400);
+  }
+  const step = typeof body.step === "string" ? body.step.trim().toLowerCase() : "";
+  if (!VALID_FUNNEL_STEPS.has(step)) {
+    return jsonResponse({ ok: false, error: "invalid_step" }, 400);
+  }
+  const cliVersion = cleanVersion(body.cli_version || "unknown");
+  const osMajor = cleanStr(body.os_major, "unknown", 24);
+  // 2-letter country code only (explicit opt-in field or Cloudflare edge country — NEVER IP)
+  const cfCountry = request.cf && typeof request.cf.country === "string" ? request.cf.country : "ZZ";
+  const country = cleanCountry(body.country || cfCountry);
+  const today = new Date(nowMs).toISOString().slice(0, 10);
+
+  await env.DB.prepare(
+    `INSERT INTO install_funnel (date, step, cli_version, os_major, country, count)
+     VALUES (?, ?, ?, ?, ?, 1)
+     ON CONFLICT(date, step, cli_version, os_major, country) DO UPDATE SET
+       count = install_funnel.count + 1`
+  )
+    .bind(today, step, cliVersion, osMajor, country)
+    .run();
+
+  return jsonResponse({ ok: true, step, zero_pii: true });
+}
+
 export async function handleLatestJson(request, env, ctx, nowMs = Date.now()) {
   const url = new URL(request.url);
   const cliVersion = cleanVersion(url.searchParams.get("v") || "unknown");
@@ -578,6 +626,67 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       .all()
   ).results || [];
 
+  // Aggregate zero-PII install funnel counters (graceful if table not migrated in older tests)
+  let funnelRows = [];
+  try {
+    funnelRows = (
+      await env.DB.prepare(
+        `SELECT date, step, cli_version, os_major, country, count
+         FROM install_funnel
+         WHERE date >= ?
+         ORDER BY date ASC`
+      )
+        .bind(sinceDate)
+        .all()
+    ).results || [];
+  } catch {
+    funnelRows = [];
+  }
+
+  const funnelTotals = {};
+  const funnel7d = {};
+  for (const s of VALID_FUNNEL_STEPS) {
+    funnelTotals[s] = 0;
+    funnel7d[s] = 0;
+  }
+  const funnelByCountry = {};
+  const funnelByOs = {};
+  const funnelByVersion = {};
+  const funnelDailyMap = {};
+  for (const row of funnelRows) {
+    const d = String(row.date || "");
+    const step = String(row.step || "");
+    const cnt = Number(row.count || 0);
+    if (!VALID_FUNNEL_STEPS.has(step) || cnt <= 0) continue;
+    funnelTotals[step] = (funnelTotals[step] || 0) + cnt;
+    if (d >= date7d) {
+      funnel7d[step] = (funnel7d[step] || 0) + cnt;
+    }
+    if (step === "cli_installed" || step === "bootstrap_started") {
+      if (step === "cli_installed") {
+        const cc = String(row.country || "ZZ");
+        const osM = String(row.os_major || "unknown");
+        const ver = String(row.cli_version || "unknown");
+        funnelByCountry[cc] = (funnelByCountry[cc] || 0) + cnt;
+        funnelByOs[osM] = (funnelByOs[osM] || 0) + cnt;
+        funnelByVersion[ver] = (funnelByVersion[ver] || 0) + cnt;
+      }
+    }
+    const dayBucket = funnelDailyMap[d] || {
+      date: d,
+      bootstrap_started: 0,
+      clt_missing: 0,
+      cli_installed: 0,
+      cli_failed: 0,
+      bootstrap_completed: 0,
+    };
+    if (Object.prototype.hasOwnProperty.call(dayBucket, step)) {
+      dayBucket[step] += cnt;
+    }
+    funnelDailyMap[d] = dayBucket;
+  }
+  const funnelDaily = Object.values(funnelDailyMap).sort((a, b) => a.date.localeCompare(b.date));
+
   const totalNodes = Number(summary?.total_nodes || 0);
   const totalRamGb = Number(summary?.total_ram_gb || 0);
 
@@ -645,6 +754,14 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       by_module: byModule,
       daily_installs: dailyInstalls,
       daily_version_checks: dailyVersionChecks,
+      install_funnel: {
+        totals: funnelTotals,
+        last_7d: funnel7d,
+        by_country: funnelByCountry,
+        by_os: funnelByOs,
+        by_version: funnelByVersion,
+        daily: funnelDaily,
+      },
     },
     200,
     { "Cache-Control": "public, max-age=120, s-maxage=120" }
@@ -690,6 +807,7 @@ export default {
           "/latest.json",
           "/verify-seal?code=...",
           "POST /pulse",
+          "POST /install-event",
           "DELETE /pulse/:node_id",
         ],
         source_url: SOURCE_URL,
@@ -698,6 +816,10 @@ export default {
 
     if (request.method === "POST" && path === "/pulse") {
       return handlePulse(request, env);
+    }
+
+    if (request.method === "POST" && path === "/install-event") {
+      return handleInstallEvent(request, env);
     }
 
     if (request.method === "DELETE" && path.startsWith("/pulse/")) {

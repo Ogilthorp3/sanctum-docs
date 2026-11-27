@@ -39,6 +39,28 @@ warn()   { printf '%s  !%s %s\n' "$AMBER" "$RESET" "$*"; }
 fail()   { printf '%s  ✗%s %s\n' "$RED" "$RESET" "$*"; }
 step()   { printf '\n%s◆%s %s%s%s\n' "$AMBER" "$RESET" "$BOLD" "$*" "$RESET"; }
 
+# ── Zero-PII Aggregate Install Counter (opt-outable) ─────────────────────
+# Sends ONLY an anonymous step name + macOS major version + CLI version to
+# https://hive.sanctum.run/install-event (aggregate daily count — ZERO IP,
+# ZERO machine ID, ZERO username, ZERO hostname). Skips automatically in CI
+# or when SANCTUM_NO_TELEMETRY=1 / DO_NOT_TRACK=1 is set.
+INSTALL_OS_MAJOR="macOS $(sw_vers -productVersion 2>/dev/null | cut -d. -f1 || echo unknown)"
+report_install_step() {
+    local step_name="$1"
+    local cli_ver="${2:-unknown}"
+    if [ "${SANCTUM_NO_TELEMETRY:-0}" = "1" ] || [ "${DO_NOT_TRACK:-0}" = "1" ] \
+       || [ "${CI:-false}" = "true" ] || [ "${GITHUB_ACTIONS:-false}" = "true" ] \
+       || [ "${SANCTUM_OWNER_TEST:-0}" = "1" ]; then
+        return 0
+    fi
+    (
+        curl -fsS --proto '=https' --tlsv1.2 --max-time 3 \
+            -H 'Content-Type: application/json' \
+            -d "{\"step\":\"${step_name}\",\"cli_version\":\"${cli_ver}\",\"os_major\":\"${INSTALL_OS_MAJOR}\"}" \
+            https://hive.sanctum.run/install-event >/dev/null 2>&1 || true
+    ) &
+}
+
 verify_node_codesign() {
     local node_path="$1"
     local sign_info
@@ -94,6 +116,8 @@ if [ "$(uname -m)" != "arm64" ]; then
 fi
 ok "macOS on Apple Silicon (uname=$(uname -m))"
 detail "macOS 15 or later. The local brain needs 32 GB; the rest installs on less."
+detail "Anonymous install counter active (zero PII; set SANCTUM_NO_TELEMETRY=1 to opt out)."
+report_install_step "bootstrap_started"
 
 # ── Homebrew ─────────────────────────────────────────────────────────────
 step "Homebrew"
@@ -112,6 +136,7 @@ if [ -n "$BREW_BIN" ]; then
     BREW_VER="$("$BREW_BIN" --version 2>/dev/null || true)"
     BREW_VER="${BREW_VER%%$'\n'*}"
     ok "Homebrew already installed (${BREW_VER:-unknown})"
+    report_install_step "brew_ready"
 else
     say "Installing Homebrew — Apple will ask for your password once."
     detail "Homebrew is the macOS package manager. It installs into /opt/homebrew/"
@@ -125,9 +150,11 @@ else
         eval "$(/usr/local/bin/brew shellenv)"
     else
         fail "Homebrew installation finished but brew binary was not found."
+        report_install_step "cli_failed"
         exit 1
     fi
     ok "Homebrew installed"
+    report_install_step "brew_ready"
 fi
 
 # ── Command Line Tools (Apple) ───────────────────────────────────────────
@@ -141,6 +168,7 @@ else
     detail "open an installer dialog — accept it, wait for the install (~2 min),"
     detail "then re-run this installer."
     printf "\n"
+    report_install_step "clt_missing"
     xcode-select --install || true
     fail "Re-run: curl -fsSL --proto '=https' --proto-redir '=https' --tlsv1.2 https://sanctum.run/install.sh | bash"
     exit 1
@@ -149,6 +177,7 @@ fi
 # ── sanctum-cli via the tap ──────────────────────────────────────────────
 step "sanctum-cli"
 
+SANCTUM_VER_CLEAN="unknown"
 if command -v sanctum &>/dev/null; then
     INSTALLED_VERSION=$(sanctum --version 2>/dev/null || echo "?")
     ok "sanctum-cli already installed ($INSTALLED_VERSION)"
@@ -156,15 +185,29 @@ if command -v sanctum &>/dev/null; then
     brew update >/dev/null 2>&1 || true
     brew upgrade ogilthorp3/sanctum/sanctum-cli >/dev/null 2>&1 || true
     UPDATED_VERSION=$(sanctum --version 2>/dev/null || echo "$INSTALLED_VERSION")
+    SANCTUM_VER_CLEAN="${UPDATED_VERSION#sanctum }"
     ok "sanctum-cli current ($UPDATED_VERSION)"
+    report_install_step "cli_installed" "$SANCTUM_VER_CLEAN"
 else
     say "Installing sanctum-cli from the Ogilthorp3/sanctum tap."
     detail "Tap repo:    https://github.com/Ogilthorp3/homebrew-sanctum"
     detail "Source:      https://github.com/Ogilthorp3/sanctum-cli"
     detail "License:     FSL-1.1-Apache-2.0 (source-available)"
     printf "\n"
-    brew install ogilthorp3/sanctum/sanctum-cli
-    ok "sanctum-cli installed ($(sanctum --version 2>/dev/null || echo 'latest'))"
+    if ! brew install ogilthorp3/sanctum/sanctum-cli; then
+        report_install_step "cli_failed"
+        fail "Homebrew install of sanctum-cli failed. Please share the error at https://github.com/Ogilthorp3/sanctum-cli/issues"
+        exit 1
+    fi
+    INSTALLED_VERSION="$(sanctum --version 2>/dev/null || echo '')"
+    if [ -z "$INSTALLED_VERSION" ]; then
+        report_install_step "cli_failed"
+        fail "sanctum binary did not respond after install."
+        exit 1
+    fi
+    SANCTUM_VER_CLEAN="${INSTALLED_VERSION#sanctum }"
+    ok "sanctum-cli installed ($INSTALLED_VERSION)"
+    report_install_step "cli_installed" "$SANCTUM_VER_CLEAN"
 fi
 
 # ── Node.js Foundation .pkg (TCC stability — optional but recommended) ───
@@ -255,6 +298,7 @@ EOF
 fi
 
 # ── Hand-off ─────────────────────────────────────────────────────────────
+report_install_step "bootstrap_completed" "$SANCTUM_VER_CLEAN"
 step "Full Rust Sanctum Engine, Yoda on Signal & Onboarding"
 
 say "Bootstrap complete. Turn this Mac into a full Sanctum hub:"
@@ -264,19 +308,29 @@ detail "                              Msg-Bus, Chitti, Thalamus, Triage, Pressur
 detail "                              per-machine mTLS PKI, Dragon 27B + Coder 9B (64 GB+)"
 detail "  2. sanctum yoda setup     — Yoda on Signal wired to Rust proxyd :4040 → sanctum-mlx"
 detail "  3. sanctum onboard        — Cloudflare R2 encrypted backups + canary + optional AI keys"
+detail "  4. sanctum hive join      — Claim your zero-PII Sovereign Seal (Seed #1 / Founding Circle)"
 printf "\n"
 
+HIVE_PROMPT="$(printf '%s  0/3 Join the zero-PII Sanctum Hive & claim your Sovereign Seal (%ssanctum hive join%s)? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
 HAUS_PROMPT="$(printf '%s  1/3 Install the full Rust Sanctum engine (%ssanctum haus install%s) now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
 YODA_PROMPT="$(printf '%s  2/3 Set up Yoda on Signal (%ssanctum yoda setup%s) now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
 ONBOARD_PROMPT="$(printf '%s  3/3 Run %ssanctum onboard --recipe family%s now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
 if [ -t 0 ]; then
+    read -r -p "$HIVE_PROMPT" hive_ans || hive_ans="n"
+    if [[ "${hive_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum hive join || true
+    fi
     read -r -p "$HAUS_PROMPT" haus_ans || haus_ans="n"
     if [[ "${haus_ans:-y}" =~ ^[Yy] ]]; then
-        sanctum haus install || true
+        if sanctum haus install; then
+            report_install_step "haus_completed" "$SANCTUM_VER_CLEAN"
+        fi
     fi
     read -r -p "$YODA_PROMPT" yoda_ans || yoda_ans="n"
     if [[ "${yoda_ans:-y}" =~ ^[Yy] ]]; then
-        sanctum yoda setup || true
+        if sanctum yoda setup; then
+            report_install_step "yoda_completed" "$SANCTUM_VER_CLEAN"
+        fi
     fi
     read -r -p "$ONBOARD_PROMPT" answer || answer="n"
     if [[ "${answer:-y}" =~ ^[Yy] ]]; then
@@ -284,13 +338,21 @@ if [ -t 0 ]; then
         exec sanctum onboard --recipe family
     fi
 elif (: < /dev/tty) 2>/dev/null; then
+    read -r -p "$HIVE_PROMPT" hive_ans < /dev/tty || hive_ans="n"
+    if [[ "${hive_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum hive join < /dev/tty || true
+    fi
     read -r -p "$HAUS_PROMPT" haus_ans < /dev/tty || haus_ans="n"
     if [[ "${haus_ans:-y}" =~ ^[Yy] ]]; then
-        sanctum haus install < /dev/tty || true
+        if sanctum haus install < /dev/tty; then
+            report_install_step "haus_completed" "$SANCTUM_VER_CLEAN"
+        fi
     fi
     read -r -p "$YODA_PROMPT" yoda_ans < /dev/tty || yoda_ans="n"
     if [[ "${yoda_ans:-y}" =~ ^[Yy] ]]; then
-        sanctum yoda setup < /dev/tty || true
+        if sanctum yoda setup < /dev/tty; then
+            report_install_step "yoda_completed" "$SANCTUM_VER_CLEAN"
+        fi
     fi
     read -r -p "$ONBOARD_PROMPT" answer < /dev/tty || answer="n"
     if [[ "${answer:-y}" =~ ^[Yy] ]]; then

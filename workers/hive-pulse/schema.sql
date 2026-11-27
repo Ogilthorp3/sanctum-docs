@@ -31,3 +31,17 @@ CREATE TABLE IF NOT EXISTS daily_version_checks (
   checks INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (date, cli_version, os_family)
 );
+
+-- Zero-PII aggregate install funnel counters (date + step + version + OS major + country).
+-- Never stores IP addresses, machine IDs, hostnames, usernames, or user-agents.
+CREATE TABLE IF NOT EXISTS install_funnel (
+  date TEXT NOT NULL,
+  step TEXT NOT NULL,
+  cli_version TEXT NOT NULL DEFAULT 'unknown',
+  os_major TEXT NOT NULL DEFAULT 'unknown',
+  country TEXT NOT NULL DEFAULT 'ZZ',
+  count INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (date, step, cli_version, os_major, country)
+);
+
+CREATE INDEX IF NOT EXISTS idx_install_funnel_date ON install_funnel(date);
