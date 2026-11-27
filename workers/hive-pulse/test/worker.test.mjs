@@ -248,7 +248,9 @@ test("pulse rejects invalid node_id and accepts valid onboard + heartbeat", asyn
   );
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
-  assert.equal(latestData.latest_version, "1.0.2");
+  assert.equal(latestData.latest_version, "1.0.3");
+  assert.equal(latestData.rust_tag, "rust-v1.0.3");
+  assert.equal(latestData.rust_sha256.length, 64);
   assert.equal(latestData.dragon_tag, "dragon-2");
   assert.equal(latestData.mlx_lm_version, "0.32.2");
 

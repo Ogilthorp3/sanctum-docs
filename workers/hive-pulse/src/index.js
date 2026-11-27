@@ -11,10 +11,13 @@
  *   the public sanctum.run Hive counter.
  */
 
-const LATEST_VERSION = "1.0.2";
+const LATEST_VERSION = "1.0.3";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";
+const RUST_TAG = "rust-v1.0.3";
+const RUST_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/rust-v1.0.3/sanctum-rust-suite-arm64.tar.gz";
+const RUST_SHA256 = "8c1bd11514762f401444d78d9c4723023607ca7f7ac1f132eb0b0c258bc2639e";
 const DRAGON_TAG = "dragon-2";
 const DRAGON_ADAPTER = "qwen-haus-dragon-193d2d7407ec";
 const DRAGON_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/dragon-2/sanctum-dragon-guest.zip";
@@ -224,6 +227,9 @@ export async function handleLatestJson(request, env, ctx, nowMs = Date.now()) {
       min_supported: env.MIN_SUPPORTED_VERSION || MIN_SUPPORTED_VERSION,
       release_url: RELEASE_URL,
       upgrade_cmd: "sanctum update",
+      rust_tag: env.RUST_TAG || RUST_TAG,
+      rust_url: env.RUST_URL || RUST_URL,
+      rust_sha256: env.RUST_SHA256 || RUST_SHA256,
       dragon_tag: env.DRAGON_TAG || DRAGON_TAG,
       dragon_adapter: env.DRAGON_ADAPTER || DRAGON_ADAPTER,
       dragon_url: env.DRAGON_URL || DRAGON_URL,

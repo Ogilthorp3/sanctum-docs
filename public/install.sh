@@ -255,31 +255,50 @@ EOF
 fi
 
 # ── Hand-off ─────────────────────────────────────────────────────────────
-step "Onboarding"
+step "Full Rust Sanctum Engine, Yoda on Signal & Onboarding"
 
-say "Bootstrap complete. The rest of setup is interactive."
-detail "Next command runs sanctum-cli's family-recipe onboarding wizard:"
-detail "  • estimate the backup scope (~5 GB after dedup)"
-detail "  • walk through Cloudflare R2 cloud-bucket setup (free tier)"
-detail "  • run a dry-run + first real backup"
-detail "  • restore a known file as a canary to prove the round-trip"
+say "Bootstrap complete. Turn this Mac into a full Sanctum hub:"
+detail "  1. sanctum haus install   — 32 signed sanctum-rs Rust services (sanctum-mlx, proxyd,"
+detail "                              Presidio, Memory Vault, Castellan, Force Flow, Watchdog,"
+detail "                              Msg-Bus, Chitti, Thalamus, Triage, Pressure Valve, Chi),"
+detail "                              per-machine mTLS PKI, Dragon 27B + Coder 9B (64 GB+)"
+detail "  2. sanctum yoda setup     — Yoda on Signal wired to Rust proxyd :4040 → sanctum-mlx"
+detail "  3. sanctum onboard        — Cloudflare R2 encrypted backups + canary + optional AI keys"
 printf "\n"
 
-ONBOARD_PROMPT="$(printf '%s  Run %ssanctum onboard --recipe family%s now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
+HAUS_PROMPT="$(printf '%s  1/3 Install the full Rust Sanctum engine (%ssanctum haus install%s) now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
+YODA_PROMPT="$(printf '%s  2/3 Set up Yoda on Signal (%ssanctum yoda setup%s) now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
+ONBOARD_PROMPT="$(printf '%s  3/3 Run %ssanctum onboard --recipe family%s now? %s[Y/n]%s: ' "$WHITE" "$BOLD" "${RESET}${WHITE}" "$DIM" "$RESET")"
 if [ -t 0 ]; then
+    read -r -p "$HAUS_PROMPT" haus_ans || haus_ans="n"
+    if [[ "${haus_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum haus install || true
+    fi
+    read -r -p "$YODA_PROMPT" yoda_ans || yoda_ans="n"
+    if [[ "${yoda_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum yoda setup || true
+    fi
     read -r -p "$ONBOARD_PROMPT" answer || answer="n"
     if [[ "${answer:-y}" =~ ^[Yy] ]]; then
         cleanup
         exec sanctum onboard --recipe family
     fi
 elif (: < /dev/tty) 2>/dev/null; then
+    read -r -p "$HAUS_PROMPT" haus_ans < /dev/tty || haus_ans="n"
+    if [[ "${haus_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum haus install < /dev/tty || true
+    fi
+    read -r -p "$YODA_PROMPT" yoda_ans < /dev/tty || yoda_ans="n"
+    if [[ "${yoda_ans:-y}" =~ ^[Yy] ]]; then
+        sanctum yoda setup < /dev/tty || true
+    fi
     read -r -p "$ONBOARD_PROMPT" answer < /dev/tty || answer="n"
     if [[ "${answer:-y}" =~ ^[Yy] ]]; then
         cleanup
         exec sanctum onboard --recipe family < /dev/tty
     fi
 else
-    detail "Non-interactive shell detected (no TTY) — skipping onboarding prompt."
+    detail "Non-interactive shell detected (no TTY) — skipping interactive prompts."
 fi
 
 # ── Manual hand-off ──────────────────────────────────────────────────────
@@ -297,11 +316,12 @@ printf '%s\n' "$RESET"
 
 say "You're ready. When you have a moment, run:"
 printf "\n"
+detail "  ${BOLD}sanctum haus install${RESET}               ${DIM}— full Rust engine (32 signed sanctum-rs binaries + Dragon)${RESET}"
 detail "  ${BOLD}sanctum onboard --recipe family${RESET}    ${DIM}— first-run wizard (backups + AI keys)${RESET}"
-detail "  ${BOLD}sanctum dragon install${RESET}             ${DIM}— local Dragon 27B champion (or 9B on 16 GB)${RESET}"
-detail "  ${BOLD}sanctum yoda setup${RESET}                 ${DIM}— Yoda on Signal (OpenClaw + signal-cli)${RESET}"
-detail "  ${BOLD}sanctum update${RESET}                     ${DIM}— one-command update (CLI + Dragon + Yoda)${RESET}"
-detail "  ${BOLD}sanctum status${RESET}                     ${DIM}— one-line snapshot${RESET}"
+detail "  ${BOLD}sanctum yoda setup${RESET}                 ${DIM}— Yoda on Signal (wired to Rust proxyd :4040 → sanctum-mlx)${RESET}"
+detail "  ${BOLD}sanctum council${RESET}                    ${DIM}— open the Jedi Council chamber${RESET}"
+detail "  ${BOLD}sanctum update${RESET}                     ${DIM}— one-command update (CLI + Rust suite + Dragon + Yoda)${RESET}"
+detail "  ${BOLD}sanctum haus status${RESET}                ${DIM}— live health of all Rust services${RESET}"
 detail "  ${BOLD}sanctum doctor${RESET}                     ${DIM}— deep diagnostic${RESET}"
 printf "\n"
 detail "Quick start:  https://sanctum.run/getting-started/quick-start/"
