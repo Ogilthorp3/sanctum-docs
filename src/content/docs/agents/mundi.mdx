@@ -61,7 +61,7 @@ The footnote is doing a lot of work.
 
 ### Investment Monitoring
 
-Mundi tracks haushold investment portfolios and financial accounts, providing consolidated views across positions. He does not give investment advice — he is an agent running on a `council-routine` tier, not a fiduciary — but he surfaces data, flags significant movements, and produces periodic summaries.
+Mundi tracks haushold investment portfolios and financial accounts, providing consolidated views across positions. He does not give investment advice — he is a finance monitoring agent on `council-finance`, not a fiduciary — but he surfaces data, flags significant movements, and produces periodic summaries.
 
 <Aside type="caution">
 Mundi is a monitoring agent, not a financial advisor. His output is informational. He cannot execute trades, move money, or make binding financial decisions. If your haus's AI starts buying equities, something has gone very wrong and you should check your agent permissions before checking your portfolio.
@@ -74,9 +74,9 @@ Mundi is a monitoring agent, not a financial advisor. His output is informationa
 | Agent name | `mundi` |
 | Agent type | `specialist` |
 | Host | VM (Ubuntu 24.04, systemd user service) |
-| Model tier | `council-routine` |
-| Primary model | Council MLX (Local) |
-| Fallback | Council MLX (local) |
+| Model seat | `council-finance` (via `proxyd` `:4040`) |
+| Primary model | Grok (`grok-best` → `grok-4.7`) via local `sanctum-grok-proxy` (`:4200`, xAI OAuth subscription, `$0` metered) |
+| Fallback ladder | `grok-latest-metered` (OpenRouter) → `glm-53` → `deepseek-v3` → `council-brain` → `council-mlx` (local) |
 | Workspace | `~/.openclaw/workspace-mundi/` |
 | Skills | Finance toolkit |
 | Plugins | sanctum-memory (local, :42069) + Jina Reranker |
@@ -94,7 +94,7 @@ mundi:
   host: vm
   role: finance
   workspace: "~/.openclaw/workspace-mundi"
-  model: council-routine
+  model: council-finance
   skills:
     - finance-toolkit
   reports:
@@ -113,7 +113,7 @@ mundi:
 The daily rollup runs at 23:00 because Mundi believes in closing the books before midnight. The weekly runs Monday morning because bad news pairs well with coffee.
 
 <Aside type="note">
-Mundi's `council-routine` tier means he runs on Council MLX local with cloud fallbacks. He does not get Claude. Financial reporting does not require frontier reasoning — it requires arithmetic and the willingness to deliver uncomfortable truths. The local 27B model handles both.
+Mundi's `council-finance` seat rides the local Rust `sanctum-grok-proxy` (`http://127.0.0.1:4200`, xAI Grok OAuth subscription, `$0` per-token), matching the subscription-first proxy architecture used for Claude Max (`:3456`) and Gemini AGY (`:6543`). If the subscription hits a cap, `proxyd` fails over cleanly to `grok-latest-metered` and down to local `council-mlx` (`Qwen3.8-27B-4bit`).
 </Aside>
 
 ## Sample Monthly Report
