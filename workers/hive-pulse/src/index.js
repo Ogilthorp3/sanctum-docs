@@ -18,9 +18,10 @@ const LATEST_VERSION = "1.0.7";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";
-const RUST_TAG = "rust-v1.0.3";
-const RUST_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/rust-v1.0.3/sanctum-rust-suite-arm64.tar.gz";
-const RUST_SHA256 = "8c1bd11514762f401444d78d9c4723023607ca7f7ac1f132eb0b0c258bc2639e";
+const RUST_TAG = "rust-v1.0.4";
+const RUST_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/rust-v1.0.4/sanctum-rust-suite-arm64.tar.gz";
+const RUST_SHA256 = "be281c45a02810b3ffa07052fe8e90f3e542941e9a811b8693b6b3acea1740a8";
+const RUST_SERVICES_COUNT = 32;
 const DRAGON_TAG = "dragon-2";
 const DRAGON_ADAPTER = "qwen-haus-dragon-193d2d7407ec";
 const DRAGON_URL = "https://github.com/Ogilthorp3/homebrew-sanctum/releases/download/dragon-2/sanctum-dragon-guest.zip";
@@ -724,6 +725,9 @@ export async function handleAnalytics(env, nowMs = Date.now()) {
       generated_at: new Date(nowMs).toISOString(),
       zero_pii: true,
       source_url: SOURCE_URL,
+      latest_version: env.LATEST_VERSION || LATEST_VERSION,
+      rust_tag: env.RUST_TAG || RUST_TAG,
+      rust_services: RUST_SERVICES_COUNT,
       total_nodes: totalNodes,
       seed_zero_online: totalNodes > 0,
       seed_zero_since: summary?.seed_zero_since || null,

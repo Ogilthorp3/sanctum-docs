@@ -1,7 +1,26 @@
 ---
+import fs from 'node:fs';
+import path from 'node:path';
+
 interface Props {
   lang?: 'en' | 'qc';
 }
+
+function readWorkerConstant(name: string, fallback: string): string {
+  try {
+    const workerSrc = fs.readFileSync(
+      path.resolve(process.cwd(), 'workers/hive-pulse/src/index.js'),
+      'utf-8'
+    );
+    const m = workerSrc.match(new RegExp(`const\\s+${name}\\s*=\\s*["']([^"']+)["']`));
+    return m ? m[1] : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const buildCliVersion = readWorkerConstant('LATEST_VERSION', '1.0.7');
+const buildRustServices = 32;
 
 const { lang = 'en' } = Astro.props;
 const isQc = lang === 'qc';
@@ -9,7 +28,9 @@ const isQc = lang === 'qc';
 const copy = isQc
   ? {
       badge: 'LA HIVE SANCTUM · EN DIRECT',
-      seed: 'Seed #0 en ligne · v1.0.6 + 32 services Rust',
+      seedPrefix: 'Seed #0 en ligne',
+      seedSuffix: 'services Rust',
+      seed: `Seed #0 en ligne · v${buildCliVersion} + ${buildRustServices} services Rust`,
       macs: 'Macs souverains',
       ram: 'RAM Apple Silicon',
       active: 'Actifs (7j)',
@@ -27,7 +48,9 @@ const copy = isQc
     }
   : {
       badge: 'THE SANCTUM HIVE · LIVE',
-      seed: 'Seed #0 online · v1.0.6 + 32 Rust services',
+      seedPrefix: 'Seed #0 online',
+      seedSuffix: 'Rust services',
+      seed: `Seed #0 online · v${buildCliVersion} + ${buildRustServices} Rust services`,
       macs: 'Sovereign Macs',
       ram: 'Apple Silicon RAM',
       active: 'Active (7d)',
@@ -50,6 +73,9 @@ const copy = isQc
   data-hive-counter
   data-ram-unit={copy.ramUnit}
   data-tb-unit={copy.tbUnit}
+  data-seed-prefix={copy.seedPrefix}
+  data-seed-suffix={copy.seedSuffix}
+  data-rust-services={String(buildRustServices)}
 >
   <div class="hive-counter-header">
     <span class="hive-counter-title">
@@ -136,6 +162,15 @@ const copy = isQc
           if (rEl) rEl.textContent = ramStr;
           if (aEl) aEl.textContent = active7d.toLocaleString();
           if (cEl) cEl.textContent = String(countries || (nodes > 0 ? 1 : 0));
+
+          const seedEl = card.querySelector('[data-hive-seed]');
+          if (seedEl && data.latest_version) {
+            const prefix = card.getAttribute('data-seed-prefix') || 'Seed #0 online';
+            const suffix = card.getAttribute('data-seed-suffix') || 'Rust services';
+            const svcs = Number(data.rust_services || card.getAttribute('data-rust-services') || 32);
+            const ver = String(data.latest_version).replace(/^v/i, '');
+            seedEl.textContent = `${prefix} · v${ver} + ${svcs} ${suffix}`;
+          }
 
           const ms = data.milestones || {};
           const mBox = card.querySelector('.hive-milestones');

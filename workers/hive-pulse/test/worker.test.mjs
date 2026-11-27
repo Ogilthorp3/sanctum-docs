@@ -369,12 +369,15 @@ test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and dele
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
   assert.equal(latestData.latest_version, "1.0.7");
-  assert.equal(latestData.rust_tag, "rust-v1.0.3");
+  assert.equal(latestData.rust_tag, "rust-v1.0.4");
 
-  // Analytics exposes milestones cleanly with zero PII & zero claim_code leak
+  // Analytics exposes milestones + live release metadata cleanly with zero PII & zero claim_code leak
   const aRes = await handleAnalytics(env, t0 + 7200_000);
   assert.equal(aRes.status, 200);
   const analytics = await aRes.json();
+  assert.equal(analytics.latest_version, "1.0.7");
+  assert.equal(analytics.rust_tag, "rust-v1.0.4");
+  assert.equal(analytics.rust_services, 32);
   assert.equal(analytics.total_nodes, 3);
   assert.equal(analytics.milestones.seed_zero.nodes, 1);
   assert.equal(analytics.milestones.seed_one.claimed, true);
