@@ -193,6 +193,25 @@ docker restart presidio-analyzer presidio-anonymizer
 If the Presidio containers are down, PII scrubbing silently stops working and requests go through unscrubbed. The watchdog checks for this, but it's worth knowing: the absence of a safety net looks exactly like the presence of one until you fall.
 </Aside>
 
+## Post-Quantum & Crypto-Apocalypse Defense (S1–S4)
+
+Mathematical breakthroughs rarely wait for industry migration schedules. Sanctum is engineered against four escalating cryptographic failure scenarios — not just RSA or ECC falling to a quantum computer, but even a worst-case collapse of modern lattice schemes:
+
+| Scenario | Threat | Sanctum Defense |
+|---|---|---|
+| **S1 — RSA broken** | Shor / factoring breakthrough | **Zero RSA anywhere** — all active certificates are ECDSA (`P-256` / `P-384`) or `ML-DSA-65`; `sanctum haus` mints ECDSA `P-384` (365-day leaves). |
+| **S2 — ECC broken** | Discrete-log breakthrough (P-256 / Curve25519) | Hybrid **`X25519MLKEM768`** TLS 1.3 (`rustls-post-quantum` + `aws-lc-rs`) on `:1111`, `:4040`, `:1337`; fail-closed **`mlkem768x25519-sha256`** SSH KEX + hybrid **`ssh-mldsa44-ed25519`** auth; Tailnet perimeter guard in front of WebAuthn. |
+| **S3 — Lattices broken** | Structural break of ML-KEM / ML-DSA | Hybrid combiners retain full classical + symmetric security; **NIST FIPS 205 `SLH-DSA-SHA2-128s`** stateless hash-based composite signatures in `sanctum-vault` (`ed25519+slh-dsa-sha2-128s`) and the `sanctum-cli` mesh signer (`CompositeSlhDsaEd25519Signer`). |
+| **S4 — Crypto Apocalypse** | Simultaneous RSA + ECC + Lattice collapse | Pure symmetric & information-theoretic layers: **`sanctum-pq-terminator --psk-file`** (256-bit out-of-band PSK `AES-256-GCM` + `HMAC-SHA256` outer tunnel), **`sanctum-vault-armor` v2** (information-theoretic `GF(256)` Shamir symmetric witness layer alongside TOPRF + ML-KEM-768), **`sanctum-vault` `X-Wing-S4-v2`** triple-family combiner + `RecoveryContainerV2` (independent per-recipient KEKs + offline 256-bit device mix key), and AES-256-GCM + Argon2id backups. |
+
+Verify live posture on any node at any time:
+
+```bash
+sanctum crypto audit          # human-readable 4-scenario scorecard
+sanctum crypto audit --json   # machine-readable telemetry
+sanctum crypto audit --strict # fail-closed CI / watchdog gate
+```
+
 ## Seven Layers, One Haus
 
 Count them again. No internet for the VM, pf on the LAN, hardened SSH, encrypted secrets, daily rotation, bound interfaces, scrubbed PII. Pull any one layer and the others take the weight — that was the whole [FileVault argument](#filevault--deliberately-disabled), and it is the whole design. Security here is not a wall. It is a stack of imperfect layers, each covering for the last, watched by a haus that does not sleep and a [council](/architecture/agents/) that reconvenes on every reboot.
