@@ -1,0 +1,55 @@
+---
+title: "2026-11-27: Four Rings and the Honest Funnel"
+description: "Closing all four post-quantum threat scenarios (S1–S4) across seven repositories, proving why fifty release downloads were mostly CI and founder noise, shipping a zero-PII install completion funnel, and fixing an Apple OpenSSH config split with dual-parser tests."
+heroImage: "./images/hero-2026-11-27-quantum-and-telemetry-gaps.png"
+heroPrompt: "Editorial technical comic illustration in dark slate charcoal, warm amber gold, and cool steel blue inside a stone-and-steel alpine watchtower vault overlooking snowy Quebec pines at twilight: on a heavy iron workbench, a concentric brass-and-steel four-ring cryptographic lockbox glowing warm amber sits beside a transparent glass funnel separating bright golden sparks from drifting cold blue dust motes, while a green-eyed tawny Abyssinian cat watches the glass funnel intently. Zero text."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Inside a stone-and-steel watchtower vault overlooking snowy pines at twilight, a four-ring brass and crystalline cryptographic lockbox glowing warm amber sits beside a transparent glass funnel separating bright golden sparks from cold blue dust motes on an iron workbench while a green-eyed tawny Abyssinian cat watches closely](./images/hero-2026-11-27-quantum-and-telemetry-gaps.png)
+
+Two questions landed on the same afternoon. First: if new breakthroughs in factoring, discrete logs, or lattice reduction shatter public-key math tomorrow, what actually survives inside Sanctum? Second: GitHub showed fifty beta downloads, yet zero bug reports had arrived and Seed #1 sat unclaimed.
+
+Strange silence.
+
+Both questions demanded the same habit. Stop guessing. Measure the real surface, seal every open seam, and replace flattering counts with evidence from disk.
+
+## Four rings against the crypto-apocalypse (`S1`–`S4`)
+
+We audited Sanctum against four escalating failure models in [Security](/operations/security/): RSA broken (`S1`), ECC broken (`S2`), lattices broken (`S3`), and full public-key collapse where only AES-256 and SHA-256 stand (`S4`). Earlier builds already ran hybrid `X25519MLKEM768` TLS 1.3 and `sntrup761x25519` SSH key exchange. Still, eight concrete seams remained across seven repositories.
+
+We closed all eight in one coordinated sweep across Rust, Python, TypeScript, and operator config:
+
+| Layer / Repo | Commit / Release | What Hardened | Verification |
+| :--- | :--- | :--- | :--- |
+| `sanctum-rs` | `2c87787` | Added `--psk-file` outer `S4` symmetric armor to `sanctum-pq-terminator`, upgraded local TLS fallback to EC P-384, proved live `ML-DSA-65` TLS 1.3 handshakes, and shipped `sanctum-vault-armor` v2 with GF(256) Shamir symmetric witnesses | `9/9` terminator tests + `16/16` vault-armor tests green; live `:1111` HTTPS `200` on `X25519MLKEM768` |
+| `sanctum-vault` | `f3e1a7c` | Shipped `RecoveryContainerV2` (independent per-recipient KEKs, hardened Secure Enclave policy, paper-only cloud-safe export), `X-Wing-S4-v2` triple-family combiner, and pure-Rust NIST FIPS 205 `SLH-DSA-SHA2-128s` composite manifests (`fips205 0.5.0`) | `107+` unit tests + `ci/no-mock-gate-in-release.sh` green |
+| `sanctum-cli` | `80114d0` (`v1.0.7`) | Switched local PKI minting to ECDSA P-384 (365-day leaves), added `CompositeSlhDsaEd25519Signer`, and shipped `sanctum crypto audit` covering `S1`–`S4` | `2,866` pytest + ruff + mypy green; Sigstore-signed release + 3 arm64 Homebrew bottles (`homebrew-sanctum@895cefa`) |
+| `command-center` | `1189a6d` | Enforced strict Tailnet perimeter guarding around P-256 WebAuthn login, exposed live crypto posture on `/auth/status`, and upgraded the Beta Pulse dashboard | `125/125` vitest + production build green; live `/auth/status` confirms `perimeterEnforced: true` |
+
+Now `sanctum crypto audit --json` on `manoir` clears all four threat models (`S1: PASS`, `S2: PASS`, `S3: PASS`, `S4: PASS`). Even better, it stays blunt. It still flags legacy 1825-day leaf certs and older binaries on secondary nodes instead of painting over them with a false green badge.
+
+## Why fifty downloads meant zero strangers
+
+Fifty downloads with zero bug reports looked flattering. Then we checked the logs. Cross-checking GitHub Actions runs, Cloudflare edge path analytics, and `hive.sanctum.run` broke the illusion in five minutes:
+
+- **CI inflated the headline.** Every `Test Formula` and `Build Homebrew Bottles` workflow in `homebrew-sanctum` pulled the release tarball on macOS runners, padding the counter on every version bump.
+- **Our own fleet padded the rest.** Three Founder Apple Silicon Macs upgrading from `v1.0.0` through `v1.0.7` plus automated `.whl` scrapers filled out the count, while every `curl /install.sh` hit over fourteen days (`37/37`) came from Canada.
+- **Zero strangers had joined.** Exactly three Founder nodes (`Seed #0`) and zero external Hive nodes had checked in, which explained the silence cleanly: nobody outside the walls had hit a bug because our counter had mostly been counting us.
+
+Blind guesses stop here. We built a **Zero-PII Install Completion Funnel** across three layers and updated [Tommy's privacy ledger](/operations/privacy/) so code and docs stay matched to the letter:
+
+1. **Cloudflare Worker (`hive.sanctum.run`):** Added an `install_funnel` D1 aggregate table and `POST /install-event` storing only `(date, step, cli_version, os_major, country, count)` — zero IPs, zero user agents, zero device IDs — proven by `3/3` Worker unit tests including negative checks against IP storage and bad payloads.
+2. **Installer (`sanctum.run/install.sh`):** Sends non-blocking milestone counts (`bootstrap_started`, `clt_missing`, `cli_installed`, `bootstrap_completed`), skips automatically in CI or owner smoke runs, and honors `SANCTUM_NO_TELEMETRY=1` and `DO_NOT_TRACK=1`.
+3. **Collector and Command Center (`beta-pulse-collect.py` v3 + `BetaPulseView.tsx`):** Separated Homebrew bottles cleanly from Rust suite tarballs, subtracted estimated CI and founder traffic into an explicit **Install Truth Funnel** and **Noise Audit**, and verified the schema with `6/6` hermetic collector tests.
+
+## The OpenSSH parser split we caught and locked down
+
+One regression slipped through during SSH hardening. We owe it an honest note.
+
+Adding `HostKeyAlgorithms ssh-mldsa44-ed25519,ssh-ed25519` to shared `ssh/config` worked under Homebrew OpenSSH `10.6p2`, yet broke Apple's stock `/usr/bin/ssh` (`10.5p1`) because OpenSSH validates `HostKeyAlgorithms` globally and Apple's build only knows the `@openssh.com` suffix. Background LaunchAgents invoking `/usr/bin/ssh` failed immediately until a sibling session caught the mismatch, removed the version-divergent line (`sanctum-config@f5c81b4`), and added dual-parser assertions to `tests/test-ssh-usekeychain.sh` (`7/7` passing across both `/usr/bin/ssh -G` and `/opt/homebrew/bin/ssh -G`).
+
+<Aside type="note">
+  A counter that counts your own CI runners is worse than no counter at all. A config tested against one of two installed SSH binaries is half a test. Both fixes obey the same rule: test the exact boundary that can break, verify from disk, and let the ledger tell the truth.
+</Aside>

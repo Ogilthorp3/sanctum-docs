@@ -18,14 +18,21 @@ Five rows. Then the details, for anyone who — on a privacy page especially —
 | Sanctum's own audit logs, agent memory, R2D2 history | `~/.sanctum/` on your Mac | You. Period. |
 | LLM inference (Claude / Gemini / local) | Local cathedrals when configured; otherwise via the API of the model vendor you chose | Vendor, per their terms. Local stays local. |
 | Backup snapshots | The cloud bucket you configured (Cloudflare R2 / Backblaze B2 / Google Drive) | You + the cloud vendor + anyone you give the encryption key to. **Backups are encrypted with a key only you control.** |
-| Telemetry from sanctum-cli itself | Nothing. There is no phone-home. | — |
-| Install analytics | Nothing. The old installer had an opt-in pixel; we removed it. | — |
+| Update check (`sanctum-cli`) | `GET https://hive.sanctum.run/latest.json?v=<ver>&os=macos` — daily aggregate count only, zero ID/IP. Opt out with `SANCTUM_NO_UPDATE_CHECK=1`. | Public aggregate counter (`GET /analytics`). |
+| Installer funnel (`install.sh`) | `POST https://hive.sanctum.run/install-event` — step name, CLI version, macOS major, 2-letter country only. Zero IP, zero machine ID, skipped in CI. Opt out with `SANCTUM_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`. | Public aggregate counter (`GET /analytics`). |
+| Hive Pulse (opt-in) | `POST https://hive.sanctum.run/pulse` — only if you say yes during `sanctum onboard` or run `sanctum hive join`. Random/Ed25519 hex ID, hardware summary, zero IP. Erase anytime via `sanctum hive leave`. | Public aggregate counter (`GET /analytics`). |
 
-## What sanctum-cli sends, and to where
+## What crosses the threshold, and how to shut every door
 
-**Nothing**, unless you explicitly configure it. No analytics pixel. No anonymous-usage telemetry. No opt-out backdoor that's actually opt-out-after-an-error-once. The `~/.sanctum/telemetry/cli.jsonl` file mentioned in the source is a *local* command-log — it stays on your Mac and is gitignored.
+Nothing about your files, prompts, chats, credentials, hostnames, usernames, or IP address ever leaves your Mac for Sanctum. Not once. The `~/.sanctum/telemetry/cli.jsonl` file mentioned in the source is a *local* command-log that stays strictly on your Mac, remains gitignored by default, and never crosses your network boundary under any configuration or fallback path.
 
-When you DO configure things, two doors open, and both are locked from your side:
+Three tiny, publicly auditable, **zero-PII** endpoints live on [`hive.sanctum.run`](https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse) so the public beta can separate real external installs from GitHub Actions CI runs and founder updates without ever collecting an IP address, machine identifier, username, or behavioral profile. Every single one is open source. Every single one can be silenced with one environment variable:
+
+- **Installer completion funnel (`POST /install-event`)** — during `curl -fsSL https://sanctum.run/install.sh | bash`, the script sends four aggregate step counts (`bootstrap_started`, `clt_missing`, `cli_installed`, `bootstrap_completed`) with CLI version, macOS major version, and 2-letter country code so we know whether strangers actually finish installing without ever reading or storing your IP, hostname, username, or any device ID. Skips automatically in CI. Opt out anytime with `SANCTUM_NO_TELEMETRY=1` or `DO_NOT_TRACK=1`.
+- **Version check (`GET /latest.json`)** — increments one daily aggregate count per CLI version and OS family so `sanctum doctor` knows when a new release is out. Zero ID, zero IP. Opt out with `SANCTUM_NO_UPDATE_CHECK=1`.
+- **Hive Pulse (`POST /pulse`, strictly opt-in)** — only runs if you explicitly opt in during `sanctum onboard` or run `sanctum hive join`. Uses a locally generated anonymous hex ID and can be erased immediately with `sanctum hive leave` (`DELETE /pulse/:node_id`).
+
+When you configure your own infrastructure, two more doors open, and both are locked from your side:
 
 - **Cloud backup** — your sanctum data is encrypted on your Mac with restic (AES-256, your operator-chosen passphrase) and uploaded to whichever bucket you set up during `sanctum onboard`. Cloudflare R2 / Backblaze B2 / Google Drive can see the ciphertext blobs. None of them can read the contents without your passphrase. The full recovery story lives in [Backup & Restore](/operations/backup-restore/).
 - **LLM providers** — if you chat with Claude / Gemini, those prompts go to Anthropic / Google per their terms. Local cathedrals (Yoda 35B on `:1337`, Coder-14B on `:1338`) keep the prompt and the reply on your Mac. Nothing leaves.
@@ -46,7 +53,7 @@ If your Mac is compromised, don't deliberate. Run `sanctum keys backup` immediat
 
 ## What we explicitly do not do
 
-- **No analytics.** Not anonymous, not aggregate, not "to improve product." Nothing.
+- **No tracking, no PII, no IP storage.** Our open Worker at `hive.sanctum.run` never reads, hashes, or stores `CF-Connecting-IP`, `X-Forwarded-For`, `User-Agent`, usernames, hostnames, or file paths, and every counter can be silenced with one environment variable (`SANCTUM_NO_TELEMETRY=1`, `SANCTUM_NO_UPDATE_CHECK=1`).
 - **No third-party crash reporting.** Crashes land in `~/.sanctum/logs/`. We don't see them unless you paste them in a bug report.
 - **No central account.** You don't sign in to Sanctum. There's no "Sanctum login" anywhere.
 - **No recovery path through us.** If you lose your encryption keys + the `sanctum keys backup` bundle, the data is gone. There is no `sanctum forgot-password` because there is no party who could reset something.

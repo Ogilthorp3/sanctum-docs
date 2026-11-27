@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import worker, {
   handleAnalytics,
   handleDeletePulse,
+  handleInstallEvent,
   handleLatestJson,
   handlePulse,
   handleVerifySeal,
@@ -14,10 +15,12 @@ import worker, {
 function createMockDb() {
   const nodes = new Map();
   const versionChecks = new Map();
+  const installFunnel = new Map();
 
   return {
     _nodes: nodes,
     _versionChecks: versionChecks,
+    _installFunnel: installFunnel,
     prepare(sql) {
       let args = [];
       const stmt = {
@@ -82,6 +85,12 @@ function createMockDb() {
             const [date, cli_version, os_family] = args;
             const k = `${date}|${cli_version}|${os_family}`;
             versionChecks.set(k, (versionChecks.get(k) || 0) + 1);
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (sql.includes("INSERT INTO install_funnel")) {
+            const [date, step, cli_version, os_major, country] = args;
+            const k = `${date}|${step}|${cli_version}|${os_major}|${country}`;
+            installFunnel.set(k, (installFunnel.get(k) || 0) + 1);
             return { success: true, meta: { changes: 1 } };
           }
           throw new Error(`Unhandled run SQL: ${sql}`);
@@ -188,6 +197,17 @@ function createMockDb() {
                 .map(([date, checks]) => ({ date, checks })),
             };
           }
+          if (sql.includes("FROM install_funnel")) {
+            const [since] = args;
+            const results = [];
+            for (const [k, count] of installFunnel.entries()) {
+              const [date, step, cli_version, os_major, country] = k.split("|");
+              if (date < since) continue;
+              results.push({ date, step, cli_version, os_major, country, count });
+            }
+            results.sort((a, b) => a.date.localeCompare(b.date));
+            return { results };
+          }
           throw new Error(`Unhandled all SQL: ${sql}`);
         },
       };
@@ -196,13 +216,14 @@ function createMockDb() {
   };
 }
 
-test("health endpoint reports zero_pii and verify-seal", async () => {
+test("health endpoint reports zero_pii, verify-seal, and install-event", async () => {
   const res = await worker.fetch(new Request("https://hive.sanctum.run/health"), { DB: createMockDb() });
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.equal(data.ok, true);
   assert.equal(data.zero_pii, true);
   assert.equal(data.endpoints.includes("/verify-seal?code=..."), true);
+  assert.equal(data.endpoints.includes("POST /install-event"), true);
 });
 
 test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and deletes cleanly", async () => {
@@ -338,16 +359,16 @@ test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and dele
   );
   assert.equal(badVerify.status, 404);
 
-  // Version check reports 1.0.6
+  // Version check reports 1.0.7
   const latestRes = await handleLatestJson(
-    new Request("https://hive.sanctum.run/latest.json?v=1.0.6&os=macos"),
+    new Request("https://hive.sanctum.run/latest.json?v=1.0.7&os=macos"),
     env,
     null,
     t0
   );
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
-  assert.equal(latestData.latest_version, "1.0.6");
+  assert.equal(latestData.latest_version, "1.0.7");
   assert.equal(latestData.rust_tag, "rust-v1.0.3");
 
   // Analytics exposes milestones cleanly with zero PII & zero claim_code leak
@@ -367,4 +388,82 @@ test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and dele
   assert.equal(delRes.status, 200);
   assert.equal((await delRes.json()).removed, true);
   assert.equal(db._nodes.size, 2);
+});
+
+test("install-event records zero-PII aggregate funnel steps, rejects invalid input, and aggregates in /analytics", async () => {
+  const db = createMockDb();
+  const env = { DB: db };
+  const t0 = Date.parse("2026-11-27T18:00:00Z");
+
+  // Invalid step rejected with 400
+  const badStep = await handleInstallEvent(
+    new Request("https://hive.sanctum.run/install-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step: "not_a_real_step" }),
+    }),
+    env,
+    t0
+  );
+  assert.equal(badStep.status, 400);
+
+  // Oversized payload rejected with 413
+  const tooBig = await handleInstallEvent(
+    new Request("https://hive.sanctum.run/install-event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": "4096" },
+      body: JSON.stringify({ step: "bootstrap_started" }),
+    }),
+    env,
+    t0
+  );
+  assert.equal(tooBig.status, 413);
+
+  // Valid funnel progression (with CF-Connecting-IP header that MUST NEVER be stored)
+  const steps = [
+    { step: "bootstrap_started", cli_version: "unknown", os_major: "macOS 26", country: "FR" },
+    { step: "clt_missing", cli_version: "unknown", os_major: "macOS 26", country: "FR" },
+    { step: "cli_installed", cli_version: "v1.0.7", os_major: "macOS 26", country: "FR" },
+    { step: "bootstrap_completed", cli_version: "1.0.7", os_major: "macOS 26", country: "FR" },
+    { step: "bootstrap_started", cli_version: "unknown", os_major: "macOS 15", country: "US" },
+    { step: "cli_installed", cli_version: "1.0.7", os_major: "macOS 15", country: "US" },
+  ];
+
+  for (const payload of steps) {
+    const res = await handleInstallEvent(
+      new Request("https://hive.sanctum.run/install-event", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.42" },
+        body: JSON.stringify(payload),
+      }),
+      env,
+      t0
+    );
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.ok, true);
+    assert.equal(body.zero_pii, true);
+  }
+
+  // Zero IP stored anywhere in mock D1
+  const serialized = JSON.stringify([...db._installFunnel.entries()]);
+  assert.equal(serialized.includes("198.51.100.42"), false);
+
+  // Analytics exposes exact funnel aggregates
+  const aRes = await handleAnalytics(env, t0 + 60_000);
+  assert.equal(aRes.status, 200);
+  const analytics = await aRes.json();
+  assert.equal(analytics.install_funnel.totals.bootstrap_started, 2);
+  assert.equal(analytics.install_funnel.totals.clt_missing, 1);
+  assert.equal(analytics.install_funnel.totals.cli_installed, 2);
+  assert.equal(analytics.install_funnel.totals.bootstrap_completed, 1);
+  assert.equal(analytics.install_funnel.last_7d.cli_installed, 2);
+  assert.equal(analytics.install_funnel.by_country.FR, 1);
+  assert.equal(analytics.install_funnel.by_country.US, 1);
+  assert.equal(analytics.install_funnel.by_os["macOS 26"], 1);
+  assert.equal(analytics.install_funnel.by_os["macOS 15"], 1);
+  assert.equal(analytics.install_funnel.by_version["1.0.7"], 2);
+  assert.equal(analytics.install_funnel.daily.length, 1);
+  assert.equal(analytics.install_funnel.daily[0].date, "2026-11-27");
+  assert.equal(analytics.install_funnel.daily[0].cli_installed, 2);
 });
