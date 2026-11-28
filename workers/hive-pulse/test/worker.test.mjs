@@ -359,23 +359,23 @@ test("pulse mints Seed #1 + Founding Circle #2 seals, verifies offline, and dele
   );
   assert.equal(badVerify.status, 404);
 
-  // Version check reports 1.0.7
+  // Version check reports 1.0.8
   const latestRes = await handleLatestJson(
-    new Request("https://hive.sanctum.run/latest.json?v=1.0.7&os=macos"),
+    new Request("https://hive.sanctum.run/latest.json?v=1.0.8&os=macos"),
     env,
     null,
     t0
   );
   assert.equal(latestRes.status, 200);
   const latestData = await latestRes.json();
-  assert.equal(latestData.latest_version, "1.0.7");
+  assert.equal(latestData.latest_version, "1.0.8");
   assert.equal(latestData.rust_tag, "rust-v1.0.4");
 
   // Analytics exposes milestones + live release metadata cleanly with zero PII & zero claim_code leak
   const aRes = await handleAnalytics(env, t0 + 7200_000);
   assert.equal(aRes.status, 200);
   const analytics = await aRes.json();
-  assert.equal(analytics.latest_version, "1.0.7");
+  assert.equal(analytics.latest_version, "1.0.8");
   assert.equal(analytics.rust_tag, "rust-v1.0.4");
   assert.equal(analytics.rust_services, 32);
   assert.equal(analytics.total_nodes, 3);

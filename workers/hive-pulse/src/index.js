@@ -14,7 +14,7 @@
  *   the public sanctum.run Hive counter.
  */
 
-const LATEST_VERSION = "1.0.7";
+const LATEST_VERSION = "1.0.8";
 const MIN_SUPPORTED_VERSION = "1.0.0";
 const RELEASE_URL = "https://github.com/Ogilthorp3/sanctum-cli/releases/latest";
 const SOURCE_URL = "https://github.com/Ogilthorp3/sanctum-docs/tree/main/workers/hive-pulse";

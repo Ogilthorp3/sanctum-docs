@@ -1,0 +1,82 @@
+---
+title: Hive Compute Grid
+description: Collective Apple Silicon GPU and unified RAM collaboration across sovereign Sanctum Hauses — zero-RCE signed work packets, Byzantine quorum verification, DiLoCo federated LoRA training, reciprocal GPU-second credits, and Trusted-Circle pipeline inference.
+heroImage: "./images/hero-hive-compute-grid.png"
+heroPrompt: "Editorial technical comic illustration in dark slate charcoal, warm amber gold, and cool steel blue at snowy alpine dusk showing five pine-ridge timber-and-stone cottages with glowing amber prism cores linked by amber and steel-blue geodesic energy threads into a hovering crystalline polyhedron, watched from a foreground stone terrace by a tawny green-eyed Abyssinian cat beside a glowing brass-and-glass holocron. Zero text."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Five snowy alpine cottages on pine ridges with glowing amber prism cores linked across the twilight sky by amber and steel-blue light threads into a hovering crystalline polyhedron, watched from a stone terrace by a green-eyed tawny Abyssinian cat beside a glowing holocron](./images/hero-hive-compute-grid.png)
+
+One Apple Silicon Mac runs [Yoda](/agents/yoda/)'s 27B brain in a closet. Ten Macs in a [Sanctum Hive](/architecture/hive-topology/) hold half a terabyte of unified memory, yet most nights nine of them sit idle while [Tommy](/agents/tommy/) watches dawn patrol and a tenth grinds alone through a ten-hour research sweep or LoRA fine-tune.
+
+Pooling that silicon across the public internet sounds trivial until physics and [Windu](/agents/windu/)'s security rules walk into the room. Naive GPU-sharing schemes try to split every matrix multiplication across 60-millisecond cable modems, stall on every single layer, and quietly invite strangers to execute arbitrary Python inside your living room.
+
+We built the opposite. Respect the wire, refuse remote code execution mathematically, verify every result against Byzantine liars, and let honest Apple Silicon Macs trade idle overnight GPU cycles for daytime burst compute with zero tokens and zero cloud leashes.
+
+## Match the workload to network physics
+
+The Hive Compute Grid divides collective AI work into three distinct tiers based strictly on what the network between participating Macs can actually carry:
+
+| Tier | Workload Pattern | Network Boundary | Practical Over WAN? | Status in Sanctum |
+| :--- | :--- | :--- | :---: | :--- |
+| **Tier 1 — Async Swarm & DiLoCo** | Parallel inference sweeps, verifiable benchmarks, multi-agent research, and **DiLoCo** federated LoRA rounds (100–500 local steps per Mac, ~30 MB outer delta) | Any residential broadband (20–150 ms) | **Yes (100%)** | **Shipped (`sanctum hive swarm`, `v1.0.8`)** |
+| **Tier 2 — Pipeline-Parallel Giant Models** | Layer-sharded 400B–671B inference across 4–8 Macs passing ~16 KB activation tensors between layer stages | Fast WAN (`<40 ms`) or Tailnet + `--psk-file` | **Yes (~3–10 tok/s)** | **Protocol reserved (`TRUSTED_CIRCLE` only)** |
+| **Tier 3 — Tensor-Parallel Training** | Per-layer `AllReduce` across every attention head and MLP block | **Thunderbolt 5 RDMA** (80 Gbps, `<10 µs`) | **No (physics)** | **Same-desk clusters (`mlx.distributed` / `JACCL`)** |
+
+Start where residential broadband shines. Tier 1 lets [Ahsoka](/agents/ahsoka/) at the chalet and [Qui-Gon](/agents/quigon/) on the hub pool twenty 64 GB Macs into 1.28 TB of collective Apple Silicon capacity for open research, massive evaluations, and shared LoRA adapters without fighting millisecond latency.
+
+## Zero-RCE by construction, not by promise
+
+Every distributed compute project eventually meets an attacker who tries to smuggle a shell command inside a job payload. Firewalls help, yet the only durable defense is refusing to accept or execute code at all.
+
+The `sanctum hive swarm` protocol enforces four hard layers before a packet ever touches Metal silicon:
+
+1. **Strict allowlist + zero-RCE payload guard:** Every `WorkPacket` is validated against a closed per-task key allowlist (`inference_map`, `eval_benchmark`, `diloco_step`, `pipeline_stage`), capped at 64 KiB, and rejected instantly if any nested field names an execution verb (`cmd`, `shell`, `exec`, `eval`, `script`, `path`), null byte, or `../` traversal sequence.
+2. **Post-quantum domain-separated signatures:** Creators and workers sign canonical JSON manifests using `Ed25519 + NIST FIPS 205 SLH-DSA-SHA2-128s` (surviving every threat scenario documented in [Security](/operations/security/), including simultaneous RSA, ECC, and lattice collapse), with distinct domain prefixes so a signed packet can never replay as a project or result.
+3. **Sandboxed local inference only:** Workers run `SwarmWorker` exclusively against local [`sanctum-mlx`](/architecture/sanctum-mlx/) over loopback mTLS (`:1337`) or deterministic benchmark evaluators — never spawning a subprocess and never writing outside the local workspace.
+4. **Trust Zone isolation (`open_hive` vs `trusted_circle`):** Open Hive jobs handle public science, open evaluations, and shared open-weights LoRA rounds. `pipeline_stage` workloads are mathematically forbidden in `open_hive` because activation inversion attacks are real; private multi-Mac inference runs strictly inside an explicit `trusted_circle` of pinned public keys behind `sanctum-pq-terminator --psk-file`.
+
+## Byzantine verification and DiLoCo federated LoRA
+
+Never trust a stranger's answer. Not once.
+
+For deterministic benchmarks and high-stakes synthesis, a project sets `--redundancy 3` so three distinct Macs claim independent TTL-bounded leases on the same packet (auto-requeued if a laptop sleeps mid-job). When quorum lands, the coordinator reconciles consensus, awards GPU-second credits to the matching majority, slashes the outlier's reputation (`-0.25`), and automatically quarantines repeat liars onto `probation` once reputation drops below `0.40`.
+
+Federated LoRA training uses the same discipline through **DiLoCo** (Distributed Low-Communication Training):
+
+- **Zero private data leaves any Mac.** Each node runs 100–500 local optimization steps on Apple Silicon and uploads only a signed outer-gradient `DiLoCoDelta` manifest (`delta_hash`, `num_samples`, `eval_loss_before`, `eval_loss_after`, `delta_l2_norm`).
+- **Local improvement gate:** Any delta where `eval_loss_after >= eval_loss_before` is rejected on arrival before touching the round bucket.
+- **Trimmed-median norm guard:** When three or more deltas arrive in a round, any poisoned gradient whose L2 norm exceeds `3.0x` the round median is filtered out and slashed before deterministic sample-weighted FedAvg mixing weights are emitted — ready to pass through the local [Champion Gate](/architecture/champion-gate/) before any node promotes the resulting adapter.
+
+## Reciprocal compute credits — zero coins, zero cloud
+
+Crypto "DePIN" grids drown real engineering in tokenomics, gas fees, and speculative noise. Sanctum borrows from BitTorrent instead.
+
+Every verified packet and accepted DiLoCo delta credits the worker's `CreditAccount` with exact measured `gpu_seconds` while debiting the project creator by the same amount. Contributors who donate overnight Apple Silicon cycles rise to `vanguard` and `contributor` priority tiers so their own daytime burst projects schedule ahead of zero-contribution freeloaders — no blockchain, no wallet, no middleman.
+
+## Operator commands (Apple-simple)
+
+```bash
+# 1. Mint this Mac's PQ (Ed25519 + FIPS 205 SLH-DSA) compute identity (mode 0600)
+sanctum hive swarm init
+
+# 2. Run the 5-gate self-proving multi-node drill (add --live-mlx to prove real Metal inference)
+sanctum hive swarm drill --live-mlx
+
+# 3. Start a loopback-locked coordinator (place behind sanctum-pq-terminator --psk-file for remote peers)
+sanctum hive swarm serve --port 8788
+
+# 4. Submit a signed, zero-RCE project across the Hive with 3-node Byzantine quorum
+sanctum hive swarm submit --title "Quebec Bench" --prompts-file prompts.json --redundancy 3
+
+# 5. Contribute idle local sanctum-mlx GPU cycles and inspect reciprocal credits
+sanctum hive swarm work --mlx-url https://127.0.0.1:1337/v1/chat/completions
+sanctum hive swarm status
+sanctum hive swarm ledger
+```
+
+<Aside type="note">
+  A distributed grid is only as honest as its failure path. Running `sanctum hive swarm drill --live-mlx` proves all five guarantees on your own Mac in seconds: FIPS 205 `SLH-DSA` signing, zero-RCE shell rejection, 3-node Byzantine slashing, DiLoCo gradient-explosion filtering, and a live signed inference packet over loopback mTLS to `sanctum-mlx`.
+</Aside>

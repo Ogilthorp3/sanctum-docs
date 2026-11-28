@@ -212,6 +212,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'architecture/overview' },
 						{ label: 'Node Topology', slug: 'architecture/node-topology' },
 						{ label: 'Hive Topology', slug: 'architecture/hive-topology' },
+						{ label: 'Hive Compute Grid', slug: 'architecture/hive-compute-grid' },
 						{ label: 'Config System', slug: 'architecture/config-system' },
 						{
 							label: '1. The Brain & Routing',
