@@ -406,6 +406,7 @@ export default defineConfig({
 							label: 'Field Notes',
 							collapsed: true,
 							items: [
+								{ label: '2026-11-27 — Six Flags and the Reactive Glass', slug: 'operations/2026-11-27-six-flags-and-the-reactive-glass' },
 								{ label: '2026-11-27 — Four Rings and the Honest Funnel', slug: 'operations/2026-11-27-four-rings-and-the-honest-funnel' },
 								{ label: '2026-11-25 — Nine Gates and the 1.0 Beta Seal', slug: 'operations/2026-11-25-nine-gates-and-the-beta-seal' },
 								{ label: '2026-11-22 — The Manor Knocked a Hundred and Seventy-Four Times', slug: 'operations/2026-11-22-the-manor-knocked-a-hundred-and-seventy-four-times' },

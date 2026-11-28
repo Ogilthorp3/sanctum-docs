@@ -1,0 +1,73 @@
+---
+title: "2026-11-27: Six Flags and the Reactive Glass"
+description: "Shipping a single-roundtrip Safari reactive-form driver, a bilingual RBC Safari provider, Plaid Link update mode, and an IPv4-first VoIP.ms HITL path while enforcing the hard glass wall before every final click."
+heroImage: "./images/hero-2026-11-27-six-flags-reactive-glass.png"
+heroPrompt: "Hand-drawn monochrome graphite pencil sketch on deep charcoal-black drafting paper with a single localized luminous teal glow halo: on a wooden drafting desk seen from a three-quarter overhead angle, six neatly folded linen signal flags sit stacked in a brass tray beside a clear beveled optical glass drafting template resting over precision technical grid lines; on the right edge, an antique brass signet seal stands untouched beneath an inverted glass bell jar glowing faintly with a crisp teal rim light, marking the boundary only a human hand crosses. Fine architectural crosshatching, crisp pencil linework, dark negative space, zero text."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![Monochrome graphite pencil sketch on dark drafting paper showing six folded linen signal flags in a brass tray beside a beveled glass drafting template over technical grid lines, while an antique brass signet seal rests untouched under a teal-rimmed glass bell jar](./images/hero-2026-11-27-six-flags-reactive-glass.png)
+
+Six flags waited in the queue. Every one sat behind a portal built to hate headless browsers. Banking SPAs in Angular, Cloudflare-shielded billing pages, multi-portal tax notices, and expired aggregator tokens all greet Playwright with the same polite wall.
+
+We stopped fighting the glass. Instead, we moved the workflow into the operator's real Safari window.
+
+By the end of the sweep, all six flags were off the board. Four reusable tools landed in `openclaw-skills`. Better yet, the boundary between autonomous prep and human sign-off became code, not etiquette.
+
+## Why headless automation hits a wall on real portals
+
+Headless Chromium still earns its keep on public docs and unauthenticated apps (see [Agent Browser](/guides/agent-browser/)). Real financial and government portals play by different rules.
+
+- **Trust lives in the live browser.** Passkeys, Touch ID, hardware-backed cookies, and Safari AutoFill stay inside the signed-in macOS session. Ephemeral profiles never see them.
+- **Anti-bot walls are not bugs.** Cloudflare challenges and bank push-MFA exist to stop unattended scripts. Sanctum's rule never bends: no CAPTCHA bypass, no spoofed checks, and zero unattended clicks on payment or commit buttons.
+- **Naive DOM scripts silently fail.** Assigning `input.value` on an Angular or React checkout form leaves the reactive control untouched. Validation stays red. The submit button stays dead.
+
+That gap stalled [Qui-Gon](/agents/quigon/) and [Mundi](/agents/mundi/) for months. Agents either dropped raw links in the operator's lap or fought brittle scripts that snapped on the first French label.
+
+## Four tools built across the live sweep
+
+One-off patches rot by Monday. We hardened the reusable layer across four skills instead:
+
+| Skill / Module | What Shipped | Verification |
+| :--- | :--- | :--- |
+| `safari-session/tools/safari-form.py` | Single-roundtrip reactive-form driver (`probe` and `fill`) over `apple-safari.py` using native HTML prototype value setters (`HTMLInputElement`, `HTMLTextAreaElement`, `HTMLSelectElement`), `focus`/`input`/`change`/`blur` dispatch, live readback, alert scraping, and hard-coded `BANNED_BUTTON_TOKENS` refusal across English and French commit verbs | `19/19` unit tests in `safari-session/tests/test_safari_form.py` (blocking `Confirm`, `Confirmer`, `Submit`, `Soumettre`, `Send`, `Envoyer`, `Pay Now`, `Payer`, `Sign`, `Signer`, `Place Order`, `Authorize`) |
+| `personal-finance/providers/rbc/` | Bilingual FR/EN Safari provider (`accounts`, `payees`, `add-payee`, `prepare-add-client`, `prepare-transfer`, `record`) wired into `finance.py` and `providers/window.py`; auto-detects `index-fr` vs `index-en` from the active tab, parses localized currency strings, checks live account balance before staging, and locks local payee configs to `0600` | `28/28` provider and window-vetting tests in `test_finance_providers.py` + `test_rbc_provider.py` |
+| `plaid/tools/plaid-link.py` | Added `--update` re-authentication mode for `ITEM_LOGIN_REQUIRED` items (reads the existing Keychain `access_token`, omits `products`, skips `/item/public_token/exchange`, preserves the transaction cursor with zero duplicate billed Items) and fixed a Link modal race by triggering `handler.open()` inside `onLoad` | `3/3` unit tests in `plaid/tests/test_plaid_link_update.py` plus live production re-auth and incremental transaction pull |
+| `voip-ms/tools/{voipms-api.sh,voipms-dashboard.sh}` | Added `-4` IPv4 forcing to `voipms-api.sh` (eliminating intermittent IPv6 `curl` timeouts) and added a `safari [path]` shortcut to `voipms-dashboard.sh` that snapshots Safari tabs before opening `voip.ms/m/automatic-billing.php` for human billing updates | `bash -n` syntax checks green plus live `getBalance` JSON response under one second |
+
+```bash
+# Probe any reactive form in the operator's active Safari tab
+~/Projects/openclaw-skills/safari-session/tools/safari-form.py probe --match royalbank
+
+# Stage non-commit fields in one roundtrip (commit buttons raise ValueError)
+~/Projects/openclaw-skills/safari-session/tools/safari-form.py fill \
+  --match synxis \
+  --spec-json '{"fields":[{"id":"firstName","value":"Neo"}]}'
+
+# Re-authenticate an expired Plaid Item without creating a duplicate link
+python3 ~/Projects/openclaw-skills/plaid/tools/plaid-link.py \
+  --label bank-primary --update --safari
+```
+
+<Aside type="caution">
+  Never run `plaid-link.py` without `--update` on an institution that only needs a password or MFA refresh. A fresh Link token with `products` creates a second billed Item, resets your sync cursor, and leaves Mundi untangling phantom duplicates at midnight.
+</Aside>
+
+## The glass bell jar stays over the seal
+
+The sharpest feature in `safari-form.py` is refusal. Every spec hits `assert_spec_safe()` before a byte of JavaScript reaches Safari. Pass a `click_safe` label with any commit, transfer, payment, or signature token in English or French, and the driver aborts locally with `ValueError`. Even inside `providers/rbc/provider.py`, staging stops cold on the filled form and returns readback JSON. Nothing clicks confirm.
+
+Three habits made the pattern stick across every portal:
+
+1. **Snapshot first, prune last.** Each Safari run saves a tab snapshot via `safari.sh snapshot` before touching Window 1. Once verified done, `safari.sh prune` closes only the tabs we added and leaves the operator's workspace untouched.
+2. **Read the live DOM before blaming the script.** When a third-party bank payee form threw a generic technical error on a commercial destination account, `safari-form.py` surfaced the `<rbc-alert>` banner and field readback immediately. That proved the bank rail itself rejected commercial accounts — not our script, and not the French UI.
+3. **Store verified portal topology on disk.** Guessing legal-entity routing wastes hours. We audited the live multi-entity portals directly and persisted clean structured state for [Mundi](/agents/mundi/), preserving the [Security](/operations/security/) line between read-only financial counsel and human-executed payments.
+
+## Six flags folded, one line held
+
+Automation brings the operator to the final pane in seconds. Discipline stops it an inch before the button. Every Council agent now shares the same contract: gather every read-only artifact, prefill every safe field, prove the readback from the live DOM, and stop at the glass bell jar. Only the human hand lifts the signet seal.
+
+<Aside type="note">
+  All `50` targeted tests across `personal-finance`, `safari-session`, and `plaid` pass in `2.24s`, shell syntax checks on `voip-ms` pass cleanly, and the six signal flags that opened the sweep sit folded off the board.
+</Aside>
