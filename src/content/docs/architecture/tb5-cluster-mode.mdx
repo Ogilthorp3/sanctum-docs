@@ -1,0 +1,76 @@
+---
+title: TB5 Cluster Mode
+description: Pooling an asymmetric Apple Silicon pair (64 GB M4 Pro + 128 GB M4 Max = 192 GB unified RAM) across 80 Gb/s Thunderbolt 5 with sanctum hive tb5, native Rust mlx::distributed bindings in sanctum-mlx, safe Yoda RAM handoff, and JACCL RDMA readiness.
+heroImage: "./images/hero-tb5-cluster-mode.png"
+heroPrompt: "Editorial technical comic illustration in dark slate charcoal, warm amber gold, and cool steel blue showing a compact brushed-aluminum Mac mini desktop and an open dark aluminum MacBook Pro sitting on a dark slate engineering desk connected by a glowing braided Thunderbolt 5 amber-and-blue conduit rising into a crystalline faceted architectural neural tower split into a one-third steel-blue base and a two-thirds amber-gold upper spire, watched by a tawny green-eyed Abyssinian cat sitting on the desk edge. Zero text."
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+![A brushed-aluminum Mac mini and an open MacBook Pro on a dark slate desk linked by a glowing braided Thunderbolt 5 cable feeding a crystalline faceted neural spire split one-third steel blue and two-thirds warm amber gold, watched from the desk edge by a green-eyed tawny Abyssinian cat](./images/hero-tb5-cluster-mode.png)
+
+A single 64 GB Mac mini runs [Yoda](/agents/yoda/)'s 27B brain effortlessly. A 128 GB MacBook Pro sits inches away. Both hold unified Apple Silicon memory, yet each hits its own wall the second you reach for a 123B dense checkpoint or a 235B 4-bit Mixture-of-Experts model. Meanwhile, an 80 Gb/s Thunderbolt 5 cable between them carries nothing.
+
+**TB5 Cluster Mode (`sanctum hive tb5`)** fixes that in one command. It fuses both Macs into a single **192 GB unified memory pool (~819 GB/s combined bandwidth)**. Local `sanctum-mlx` daemons park cleanly so Jetsam never fires. The instant your session ends, Yoda wakes back up unconditionally.
+
+## Asymmetric physics: why 64 GB + 128 GB defaults to pipeline
+
+Pairing two Macs with unequal RAM exposes a classic trap.
+
+| Sharding Mode | Memory Split | Usable VRAM (64 GB + 128 GB) | Effective Bandwidth | Sweet-Spot Models |
+| :--- | :---: | :---: | :---: | :--- |
+| **Asymmetric Pipeline (`pipeline`, default)** | **32% / 68%** (proportional layers) | **~145 GB** (47 GB + 98 GB) | Single-stage (~546 GB/s max) | **Qwen3-235B-A22B-4bit (~132 GB)**, 120B–253B MoE |
+| **Symmetric Tensor (`tensor`)** | **50% / 50%** (`AllReduce` per block) | **~94 GB** (`2 × 47 GB` cap) | **~819 GB/s combined** | **Mistral-Large-123B-4bit (~70 GB)**, Qwen3-Next-80B (~46 GB), Llama-3.3-70B (~40 GB) |
+
+Symmetric tensor parallelism halves every weight matrix identically across both ranks. That caps the pool at twice the smaller Mac's usable VRAM (`~94 GB`), stranding ~51 GB on the 128 GB MacBook Pro.
+
+Asymmetric pipeline parallelism solves this cleanly without wasting a single gigabyte of unified memory. It slices transformer layers proportionally to each Mac's real VRAM (`30` layers on the 64 GB M4 Pro and `64` layers on the 128 GB M4 Max for a 94-layer 235B model), passing a single ~16 KB activation vector over Thunderbolt 5 per forward pass to unlock the full **~145 GB** envelope cleanly and deterministically.
+
+## Transport ladder: `ring` today, `jaccl` RDMA in one switch
+
+Thunderbolt 5 networking (`bridge0`, `80 Gb/s`) supports two native MLX collective transports on macOS:
+
+1. **`ring` over TB5 IP (`bridge0`):** Zero kernel configuration required. Works immediately over the dedicated point-to-point bridge (`10.0.5.1 <-> 10.0.5.2`) once macOS Application Firewall allows inbound sockets for the MLX runtime binary.
+2. **`jaccl` over Thunderbolt 5 RDMA (`<10 µs`):** Apple's zero-copy RDMA fabric bypasses the TCP stack between GPUs. `sanctum hive tb5 status` probes `/usr/bin/rdma_ctl status` on both Macs and auto-selects `jaccl` once both have run `rdma_ctl enable` in macOS Recovery.
+
+## Native Rust foundation inside `sanctum-mlx`
+
+[Sanctum MLX](/architecture/sanctum-mlx/) stays 100% standalone on single-node production seats. Under the hood, the workspace now carries native Rust bindings to C++ `mlx::distributed`:
+
+- **`mlx-rs::distributed` (`vendor/mlx-rs/mlx-rs/src/distributed.rs`):** Safe Rust RAII `Group` handle plus `is_available`, `init`, `all_sum`, `all_gather`, `send`, `recv`, and `recv_like` over `mlx-c`'s `mlx/c/distributed.h` — compiled and verified directly on Metal GPU.
+- **`sanctum_mlx::distributed` (`services/sanctum-mlx/src/distributed.rs`):** Deterministic `compute_asymmetric_layer_ranges(total_layers, &[47, 98])`, `LayerRange::parse("30..94")`, and live `probe_native_posture` behind optional `--distributed-backend` and `--layer-range` flags.
+- **Zero-regression Yoda contract:** Omit those flags and `sanctum-mlx` runs zero distributed calls. [Yoda](/agents/yoda/) and [Ahsoka](/agents/ahsoka/) stay byte-identical.
+
+## Safe RAM handoff with Castellan and Yoda
+
+Loading 132 GB of weights while Yoda still pins 20 GB of wired Metal buffers on the Mac mini invites macOS Jetsam. `sanctum hive tb5 up` guards against that explicitly:
+
+1. **Atomic state ledger:** Writes the cluster PID, model, mode, backend, and parked LaunchAgent labels (`haus.sanctum.mlx`, `haus.sanctum.mlx-coder`) to `~/.sanctum/state/tb5-cluster.json`.
+2. **Deadman restore:** On launch failure or `sanctum hive tb5 down`, all distributed ranks stop cleanly and every parked LaunchAgent bootstraps and kickstarts back to warm readiness.
+3. **Firewall diagnostics, never bypasses:** `sanctum hive tb5 status --probe-tcp` tests **bidirectional** TB5 TCP using each Mac's real MLX runtime binary. When macOS Application Firewall blocks an unsigned Homebrew or `uv` Python binary — or Stealth Mode drops ICMP ping — the probe flags the blocked direction and prints the exact `socketfilterfw` allowlist command.
+
+## Operator commands (Apple-simple)
+
+```bash
+# 1. Inspect live 80 Gb/s TB5 link, RDMA status, 192 GB VRAM pool & bidirectional TCP health
+sanctum hive tb5 status --probe-tcp
+
+# 2. Prove live 2-Mac GPU all_sum latency and 64 MB bulk bandwidth across Thunderbolt 5
+sanctum hive tb5 bench
+
+# 3. Preview asymmetric pipeline launch command without touching Yoda
+sanctum hive tb5 up --model mlx-community/Qwen3-235B-A22B-4bit --dry-run
+
+# 4. Park local Yoda MLX cleanly and boot the 192 GB cluster on http://127.0.0.1:1340/v1
+sanctum hive tb5 up --model mlx-community/Qwen3-235B-A22B-4bit
+
+# 5. Force 50/50 tensor-parallel speed (~819 GB/s combined) for 70B–123B models
+sanctum hive tb5 up --model mlx-community/Mistral-Large-Instruct-2411-4bit --mode tensor
+
+# 6. Tear down the 192 GB cluster and unconditionally wake Yoda back up
+sanctum hive tb5 down
+```
+
+<Aside type="tip">
+  If macOS Application Firewall blocks inbound `ring` sockets on either Mac during `--probe-tcp`, whitelist the resolved MLX runtime binary once (`PY="$(readlink -f "$HOME/.local/share/uv/tools/mlx-lm/bin/python3")" && sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add "$PY" --unblockapp "$PY"`). To unlock sub-10-microsecond `jaccl` RDMA across Thunderbolt 5, boot each Mac into macOS Recovery once and run `rdma_ctl enable`.
+</Aside>
